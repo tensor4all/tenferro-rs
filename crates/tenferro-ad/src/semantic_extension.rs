@@ -397,10 +397,6 @@ impl SemanticExtensionRuleSet {
         Self::default()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.linearize.is_empty() && self.linear_transpose.is_empty() && self.primal_vjp.is_empty()
-    }
-
     /// Register one semantic linearize rule.
     ///
     /// # Errors

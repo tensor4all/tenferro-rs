@@ -7,7 +7,6 @@ use tenferro_tensor::{Error as TensorError, Tensor};
 #[test]
 fn eager_public_tensor_accessors_are_fallible_source_contract() {
     let eager_source = include_str!("../../src/eager.rs");
-    let eager_builder_source = include_str!("../../src/eager_builder.rs");
 
     for forbidden in [
         "pub fn data(&self) -> &Tensor",
@@ -25,15 +24,6 @@ fn eager_public_tensor_accessors_are_fallible_source_contract() {
         assert!(
             !eager_source.contains(forbidden),
             "eager public API must not expose infallible tensor access/import path: {forbidden}"
-        );
-    }
-    for forbidden in [
-        "pub struct EagerPrimitiveBuilder",
-        "pub fn tensor(&self, id: LocalValueId) -> Arc<Tensor>",
-    ] {
-        assert!(
-            !eager_builder_source.contains(forbidden),
-            "eager primitive builder must stay internal and fallible: {forbidden}"
         );
     }
 }

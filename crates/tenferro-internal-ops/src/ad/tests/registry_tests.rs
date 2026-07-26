@@ -1,7 +1,7 @@
+use crate::ad::ADRuleKind;
 use computegraph::graph::GraphBuilder;
 use computegraph::types::OperationRole;
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
-use tidu::ADRuleKind;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::registry::primitive_ad_rule;

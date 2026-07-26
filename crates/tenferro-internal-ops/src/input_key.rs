@@ -1,6 +1,3 @@
-#[cfg(feature = "autodiff")]
-use tidu::{ADKey, DiffPassId};
-
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum TensorInputKey {
     User {
@@ -9,7 +6,7 @@ pub enum TensorInputKey {
     #[cfg(feature = "autodiff")]
     Tangent {
         of: Box<TensorInputKey>,
-        pass: DiffPassId,
+        pass: u64,
     },
 }
 
@@ -52,11 +49,9 @@ impl TensorInputKey {
             TensorInputKey::Tangent { of, .. } => of.primal_root(),
         }
     }
-}
 
-#[cfg(feature = "autodiff")]
-impl ADKey for TensorInputKey {
-    fn tangent_of(&self, pass: DiffPassId) -> Self {
+    #[cfg(feature = "autodiff")]
+    pub fn tangent_of(&self, pass: u64) -> Self {
         TensorInputKey::Tangent {
             of: Box::new(self.clone()),
             pass,

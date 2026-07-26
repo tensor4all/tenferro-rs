@@ -161,7 +161,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
 /// Apply a core standard op in the traced graph.
 ///
 /// This is an internal crate-boundary helper used by eager AD recording to keep
-/// a semantic traced graph beside the existing eager/tidu trace. Extension ops
+/// a semantic traced graph beside the existing eager trace. Extension ops
 /// must use [`apply`] instead.
 ///
 /// # Examples

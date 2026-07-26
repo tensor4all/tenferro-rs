@@ -1,6 +1,6 @@
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{PadConfig, SliceConfig};
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::ad::context::{ShapeGuardContext, ShapeGuardError};
 use crate::ad::support::{is_differentiable_dtype, linear_transpose_input_active};

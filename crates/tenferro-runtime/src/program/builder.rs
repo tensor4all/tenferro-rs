@@ -521,6 +521,49 @@ fn validate_output_count(expected: usize, actual: usize) -> Result<(), ProgramBu
 }
 
 impl FrozenProgram {
+    /// Return ordered input metadata after resolving bound input dimensions.
+    ///
+    /// Bound tensor shapes are process-local and intentionally live outside the
+    /// semantic identity, but AD/runtime caches that prepare shape-specialized
+    /// programs must distinguish those concrete shapes.
+    #[doc(hidden)]
+    pub fn input_metadata_with_bound_shapes(&self) -> Box<[ProgramValueMetadata]> {
+        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = self
+            .program
+            .inputs
+            .iter()
+            .map(|input| {
+                self.bindings.tensor_for_input(*input).map(|tensor| {
+                    tensor
+                        .shape()
+                        .iter()
+                        .map(|&size| DimExpr::Const(size))
+                        .collect()
+                })
+            })
+            .collect();
+
+        self.program
+            .inputs
+            .iter()
+            .map(|input| {
+                let metadata = self.program.values[input.slot as usize].clone();
+                ProgramValueMetadata::from_extents(
+                    metadata.dtype(),
+                    metadata.shape().iter().map(|extent| match extent {
+                        ShapeExtent::Exact(expr) => ShapeExtent::Exact(
+                            resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
+                        ),
+                        ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
+                            resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
+                        ),
+                        ShapeExtent::Unknown => ShapeExtent::Unknown,
+                    }),
+                )
+            })
+            .collect()
+    }
+
     /// Return a clone of this frozen program with tensor bindings copied from
     /// `source` onto this program's input prefix.
     ///

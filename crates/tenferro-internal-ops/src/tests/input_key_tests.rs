@@ -2,8 +2,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "autodiff")]
-use tidu::{ADKey, DiffPassId};
-
 use crate::input_key::TensorInputKey;
 
 #[test]
@@ -25,7 +23,7 @@ fn tensor_input_key_clone_eq_and_hash_are_stable() {
 #[cfg(feature = "autodiff")]
 fn tensor_input_key_tangent_of_derives_a_unique_key() {
     let key = TensorInputKey::User { id: 3 };
-    let tangent = key.tangent_of(42 as DiffPassId);
+    let tangent = key.tangent_of(42);
     assert_eq!(
         tangent,
         TensorInputKey::Tangent {

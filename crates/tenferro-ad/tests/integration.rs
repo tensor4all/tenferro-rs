@@ -77,3 +77,5 @@ mod sym_dim;
 mod symbolic_grad;
 #[path = "integration/symbolic_input.rs"]
 mod symbolic_input;
+#[path = "integration/unification_retirement_contract.rs"]
+mod unification_retirement_contract;

@@ -4,10 +4,11 @@ use crate::ad::support::{
     dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
 };
 use crate::ad::transpose_input::{metadata_value_refs, TransposeInputRef};
+use crate::ad::zeros::build_zero_like;
+use crate::ad::ADRuleResult;
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{CompareDir, DType};
-use tidu::ADRuleResult;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -16,13 +17,7 @@ fn emit_fixed_unary(
     op: StdTensorOp,
     input: ValueRef<StdTensorOp>,
 ) -> LocalValueId {
-    builder.add_operation(
-        op,
-        vec![input],
-        OperationRole::Linearized {
-            active_mask: vec![false],
-        },
-    )[0]
+    builder.add_operation(op, vec![input], OperationRole::Primary)[0]
 }
 
 fn emit_fixed_binary(
@@ -31,13 +26,7 @@ fn emit_fixed_binary(
     lhs: ValueRef<StdTensorOp>,
     rhs: ValueRef<StdTensorOp>,
 ) -> LocalValueId {
-    builder.add_operation(
-        op,
-        vec![lhs, rhs],
-        OperationRole::Linearized {
-            active_mask: vec![false, false],
-        },
-    )[0]
+    builder.add_operation(op, vec![lhs, rhs], OperationRole::Primary)[0]
 }
 
 fn emit_fixed_neg(
@@ -401,10 +390,67 @@ pub fn linearize_abs(
 
 pub fn linearize_sign(
     builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     match tangent_in[0] {
-        Some(dx) => vec![Some(emit_zero_from_active(builder, dx))],
+        Some(dx) => {
+            let input_ref = ValueRef::External(primal_in[0].clone());
+            let input_dtype = dtype_of_or_real(ctx, &input_ref);
+            if !is_complex_dtype(input_dtype) {
+                return vec![Some(emit_zero_from_active(builder, dx))];
+            }
+
+            let input_rank = ctx.rank_of(&input_ref).unwrap_or(0);
+            let zero = build_zero_like(builder, input_dtype, input_ref.clone(), input_rank);
+            let zero_mask = emit_fixed_compare(
+                builder,
+                CompareDir::Eq,
+                input_ref.clone(),
+                ValueRef::Local(zero),
+            );
+            let sign_x = emit_fixed_unary(builder, StdTensorOp::Sign, input_ref.clone());
+            let abs_x = emit_fixed_unary(builder, StdTensorOp::Abs, input_ref);
+            let conj_sign_x = emit_fixed_unary(builder, StdTensorOp::Conj, ValueRef::Local(sign_x));
+            let abs_tangent_complex =
+                emit_linear_mul_fixed(builder, ValueRef::Local(conj_sign_x), dx);
+            let abs_tangent = project_linear_to_dtype(
+                builder,
+                abs_tangent_complex,
+                input_dtype,
+                abs_output_dtype(input_dtype),
+            );
+            let tangent_over_abs = emit_linear_div_fixed(builder, dx, ValueRef::Local(abs_x));
+            let sign_times_abs_tangent =
+                emit_linear_mul_fixed(builder, ValueRef::Local(sign_x), abs_tangent);
+            let correction =
+                emit_linear_div_fixed(builder, sign_times_abs_tangent, ValueRef::Local(abs_x));
+            let neg_correction = builder.add_operation(
+                StdTensorOp::Neg,
+                vec![ValueRef::Local(correction)],
+                OperationRole::Linearized {
+                    active_mask: vec![true],
+                },
+            )[0];
+            let derivative = builder.add_operation(
+                StdTensorOp::Add,
+                vec![
+                    ValueRef::Local(tangent_over_abs),
+                    ValueRef::Local(neg_correction),
+                ],
+                OperationRole::Linearized {
+                    active_mask: vec![true, true],
+                },
+            )[0];
+            let zero_derivative = emit_zero_from_active(builder, derivative);
+            vec![Some(emit_linear_select(
+                builder,
+                ValueRef::Local(zero_mask),
+                zero_derivative,
+                derivative,
+            ))]
+        }
         None => vec![None],
     }
 }

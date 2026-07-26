@@ -17,7 +17,7 @@ use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
 #[cfg(feature = "autodiff")]
-use crate::ad::ExtensionAdDispatcher;
+use crate::ad::{ADRuleError, ADRuleKind, ExtensionAdDispatcher};
 use crate::dim_expr::{DimExpr, DimExprEvalError};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
@@ -96,12 +96,12 @@ pub enum ShapeGuardError {
 pub type ShapeGuardResult<T> = Result<T, ShapeGuardFailure>;
 
 #[cfg(feature = "autodiff")]
-impl From<ShapeGuardFailure> for tidu::ADRuleError {
+impl From<ShapeGuardFailure> for ADRuleError {
     fn from(err: ShapeGuardFailure) -> Self {
         err.record_for_ad_boundary();
-        tidu::ADRuleError::invalid_input(
+        ADRuleError::invalid_input(
             "tenferro.shape_guard",
-            tidu::ADRuleKind::Jvp,
+            ADRuleKind::Jvp,
             err.typed_source().to_string(),
         )
     }
@@ -521,7 +521,7 @@ impl ShapeGuardContext {
     /// Take the first typed shape-guard failure recorded while crossing an AD
     /// callback boundary.
     ///
-    /// `tidu` currently exposes only a message-bearing callback error. AD
+    /// AD callbacks expose only a message-bearing error. AD
     /// frontends call this after the callback returns and attach the typed
     /// value to their public runtime error.
     #[doc(hidden)]

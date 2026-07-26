@@ -16,6 +16,7 @@ name = "tenferro_runtime"
 
 [features]
 default = ["cpu-faer"]
+__bench_unification_run_compiled_api = []
 cpu-faer = ["tenferro-cpu/cpu-faer"]
 cpu-blas = ["tenferro-cpu/cpu-blas"]
 cpu-tblis = ["tenferro-cpu/cpu-tblis"]
@@ -42,6 +43,7 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features =
 [[bench]]
 name = "elementwise_fusion"
 harness = false
+required-features = ["__bench_unification_run_compiled_api"]
 
 [[test]]
 name = "integration"

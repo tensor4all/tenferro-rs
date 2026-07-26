@@ -23,6 +23,53 @@ fn run_compiled_one(program: &CompiledGraph, inputs: &[&Tensor]) -> Tensor {
 }
 
 #[test]
+fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
+    let runtime = cpu_runtime();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
+    let y = (&x + &x).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let first = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let second = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let prepared = runtime.prepare_compiled(&program, &[&first]).unwrap();
+
+    let mut outputs = runtime.run_prepared(&prepared, &[&first]).unwrap();
+    assert_eq!(
+        outputs.pop().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 4.0]
+    );
+    let mut outputs = runtime.run_prepared(&prepared, &[&second]).unwrap();
+    assert_eq!(
+        outputs.pop().unwrap().as_slice::<f64>().unwrap(),
+        &[6.0, 8.0]
+    );
+
+    let other_runtime = cpu_runtime();
+    assert!(other_runtime.run_prepared(&prepared, &[&first]).is_err());
+}
+
+#[test]
+fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
+    let source = include_str!("../../src/runtime/execution.rs");
+
+    assert!(
+        source.contains("type RuntimeInputRefs<'a> = SmallVec"),
+        "Runtime::run_prepared should keep short input reference lists inline"
+    );
+    assert!(
+        source.contains("type RuntimeInputShapes<'a> = SmallVec"),
+        "Runtime::run_prepared should keep short input shape lists inline"
+    );
+    assert!(
+        !source.contains("inputs.to_vec()"),
+        "Runtime::run_prepared should not allocate a heap Vec just to copy input refs"
+    );
+}
+
+#[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();

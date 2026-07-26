@@ -5,11 +5,11 @@ use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::{ADRuleError, PrimitiveTransposeInput};
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ShapeExtent, SymDim, TensorMeta};
-use tidu::{ADRuleError, PrimitiveTransposeInput};
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }

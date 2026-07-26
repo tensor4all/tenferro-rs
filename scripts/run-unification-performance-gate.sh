@@ -195,19 +195,17 @@ for entry in "${BENCHMARKS[@]}"; do
   fi
 
   printf 'status:      present\n'
-  bench_env=()
-  bench_rustflags="${RUSTFLAGS:-}"
+  bench_features="$features"
   bench_api="default"
   if [[ "$package" == "tenferro-linalg" && "$bench" == "linalg_vjp_gate" ]]; then
     if grep -q "with_semantic_extension_rules" "$ROOT_DIR/crates/tenferro-ad/src/context.rs" \
       && grep -q "semantic_ad_rules" "$ROOT_DIR/crates/tenferro-linalg/src/lib.rs"; then
       bench_api="semantic-ad"
-      if [[ -n "$bench_rustflags" ]]; then
-        bench_rustflags+=" --cfg tenferro_linalg_semantic_ad_api"
+      if [[ -n "$bench_features" ]]; then
+        bench_features+=",__bench_unification_semantic_ad_api"
       else
-        bench_rustflags="--cfg tenferro_linalg_semantic_ad_api"
+        bench_features="__bench_unification_semantic_ad_api"
       fi
-      bench_env=(env "RUSTFLAGS=$bench_rustflags")
     else
       bench_api="legacy-extension-ad"
     fi
@@ -218,27 +216,40 @@ for entry in "${BENCHMARKS[@]}"; do
   run_log="$OUTPUT_DIR/${LABEL}-${package}-${bench}-run.log"
   build_cmd=(cargo bench -p "$package")
   run_cmd=("${run_prefix[@]}" cargo bench -p "$package")
-  if [[ -n "$features" ]]; then
-    build_cmd+=(--features "$features")
-    run_cmd+=(--features "$features")
+
+  if [[ "$package" == "tenferro-runtime" && "$bench" == "elementwise_fusion" ]]; then
+    runtime_api="graph-executor"
+    if grep -R -q "pub struct Runtime" "$ROOT_DIR/crates/tenferro-runtime/src" \
+      && grep -R -q "run_compiled" "$ROOT_DIR/crates/tenferro-runtime/src"; then
+      runtime_api="run-compiled"
+      if [[ -n "$bench_features" ]]; then
+        bench_features+=",__bench_unification_run_compiled_api"
+      else
+        bench_features="__bench_unification_run_compiled_api"
+      fi
+    fi
+    printf 'runtime api: %s\n' "$runtime_api"
+    printf 'elementwise_fusion_runtime_api=%s\n' "$runtime_api" >>"$manifest"
+  fi
+
+  if [[ -n "$bench_features" ]]; then
+    build_cmd+=(--features "$bench_features")
+    run_cmd+=(--features "$bench_features")
   fi
   build_cmd+=(--bench "$bench" --no-run)
   run_cmd+=(--bench "$bench" -- "${criterion_args[@]}")
 
   printf 'build:       %s\n' "${build_cmd[*]}"
   printf 'run:         %s\n' "${run_cmd[*]}"
-  if ((${#bench_env[@]} > 0)); then
-    printf 'rustflags:   %s\n' "$bench_rustflags"
-  fi
 
   if [[ "$MODE" == "run" ]]; then
     (
       cd "$ROOT_DIR"
-      "${bench_env[@]}" "${build_cmd[@]}"
+      "${build_cmd[@]}"
     ) 2>&1 | tee "$build_log"
     (
       cd "$ROOT_DIR"
-      "${bench_env[@]}" "${run_cmd[@]}"
+      "${run_cmd[@]}"
     ) 2>&1 | tee "$run_log"
   fi
 done

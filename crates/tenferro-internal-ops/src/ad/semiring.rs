@@ -1,5 +1,5 @@
+use crate::ad::ADRuleResult;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{

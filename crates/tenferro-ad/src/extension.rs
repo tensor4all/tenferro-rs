@@ -188,14 +188,16 @@ fn finish_eager_extension_outputs(
     recorded
         .traces
         .into_iter()
+        .zip(recorded.semantic_traces)
         .zip(outputs)
-        .map(|(trace, output)| {
-            EagerTensor::new_result(
+        .map(|((trace, semantic_trace), output)| {
+            EagerTensor::new_result_arc_with_semantic_trace(
                 Arc::clone(&ctx),
                 trace.key,
-                output.as_ref().clone(),
+                output,
                 trace.requires_grad,
                 trace.trace,
+                semantic_trace,
                 metadata_scopes.clone(),
             )
         })

@@ -26,7 +26,6 @@ tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops", default-f
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "57a2e7ebe7738ca2f8b5c96f4c6ce4e467b20495" }
 
 [dev-dependencies]
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, features = ["cpu-faer"] }

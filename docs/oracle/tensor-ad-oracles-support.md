@@ -1,22 +1,38 @@
 # Tensor AD Oracles Support Coverage
 
 This file is a checked-in support snapshot derived from the vendored
-`third_party/tensor-ad-oracles` subtree. The root-facade replay harness and
-local generation registry are not active CI gates in the current workspace.
+`third_party/tensor-ad-oracles` subtree. The crate-local replay harness lives
+under `crates/tenferro-linalg/tests/oracle_replay` and is env-gated for local
+or nightly execution rather than default PR CI.
 
 ## Summary
 
 - Total published records: 9585
-- Supported success records: 2673
-- Supported success records with HVP payloads: 1896
+- Supported success records: 2090
+- Supported success records with HVP payloads: 1339
 - Expected error records: 2
-- Unsupported success records: 6910
+- Unsupported success records: 7493
+
+## Local Replay
+
+The default test target validates the harness and representative cases without
+replaying the whole database. Full replay is opt-in:
+
+```console
+RUST_TEST_THREADS=1 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=48 \
+  cargo test -p tenferro-linalg --features autodiff --test oracle_replay \
+  oracle_replays_supported_db_cases_when_requested -- --nocapture
+```
+
+`ORACLE_REPLAY_JOBS` controls record-level parallelism. The harness uses plain
+OS worker threads instead of an outer Rayon pool because replayed cases execute
+CPU backend kernels that may use backend-owned Rayon scopes internally.
 
 ## Crate-Local AD Coverage Outside Replay
 
-The support tables below describe the inactive oracle replay adapter snapshot.
-Some active AD manifest entries are instead guarded by crate-local
-finite-difference tests until a crate-local replay harness is restored.
+The support tables below describe the active env-gated oracle replay adapter
+snapshot. Some AD manifest entries are also guarded by crate-local
+finite-difference tests because the public oracle family is not yet replayable.
 
 | manifest op | coverage type | public path | test |
 | --- | --- | --- | --- |
@@ -35,27 +51,16 @@ finite-difference tests until a crate-local replay harness is restored.
 | --- | --- | --- | ---: |
 | cholesky | identity | identity | 48 |
 | cholesky_ex | identity | identity | 48 |
-| cond | identity | identity | 3 |
-| cross | identity | identity | 3 |
 | det | identity | identity | 36 |
-| full_pivot_lu | identity | identity | 12 |
-| eig | values_vectors_abs | eig_values_vectors_abs | 16 |
 | eigh | values_vectors_abs | eigh_values_vectors_abs | 32 |
-| householder_product | identity | identity | 8 |
+| full_pivot_lu | identity | identity | 4 |
 | inv | identity | identity | 24 |
 | inv_ex | identity | identity | 24 |
 | lstsq_grad_oriented | identity | identity | 42 |
 | lu | identity | identity | 80 |
-| lu_factor | identity | identity | 20 |
-| lu_factor_ex | identity | identity | 20 |
-| lu_solve | identity | identity | 324 |
-| matrix_norm | identity | identity | 48 |
-| matrix_power | identity | identity | 18 |
-| multi_dot | identity | identity | 7 |
-| norm | identity | identity | 208 |
+| matrix_norm | identity | identity | 40 |
+| norm | identity | identity | 176 |
 | pinv | identity | identity | 72 |
-| pinv_hermitian | identity | identity | 8 |
-| pinv_singular | identity | identity | 48 |
 | qr | identity | identity | 36 |
 | slogdet | identity | identity | 36 |
 | solve | identity | identity | 24 |
@@ -65,10 +70,6 @@ finite-difference tests until a crate-local replay harness is restored.
 | svd | u_abs | svd_u_abs | 216 |
 | svd | uvh_product | svd_uvh_product | 216 |
 | svd | vh_abs | svd_vh_abs | 216 |
-| tensorinv | identity | identity | 2 |
-| tensorsolve | identity | identity | 4 |
-| vander | identity | identity | 10 |
-| vecdot | identity | identity | 44 |
 | vector_norm | identity | identity | 48 |
 
 ## Expected Errors
@@ -107,19 +108,19 @@ finite-difference tests until a crate-local replay harness is restored.
 | clamp_max | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | clamp_min | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | complex | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
-| cond | identity | identity | 9 | tenferro replay currently supports this family only for float64 |
+| cond | identity | identity | 12 | tenferro has no public traced condition-number API to replay this oracle family yet |
 | conj | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | conj_physical | identity | identity | 4 | tenferro replay does not implement this oracle family yet |
 | copysign | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
 | cos | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | cosh | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
-| cross | identity | identity | 9 | tenferro replay currently supports this family only for float64 |
+| cross | identity | identity | 12 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | deg2rad | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
 | diagonal | identity | identity | 60 | tenferro replay does not implement this tensor-construction oracle family yet |
 | digamma | identity | identity | 6 | tenferro replay does not implement this oracle family yet |
 | div_no_rounding_mode | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | double | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
-| eig | values_vectors_abs | eig_values_vectors_abs | 16 | tenferro replay currently supports this family only for float32/float64 |
+| eig | values_vectors_abs | eig_values_vectors_abs | 32 | tenferro Eig AD support is values-only; eigenvector observables are unsupported by the manifest |
 | eigvals | identity | identity | 32 | tenferro replay does not implement this scalar-output oracle family yet |
 | eigvalsh | identity | identity | 32 | tenferro replay does not implement this scalar-output oracle family yet |
 | erf | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
@@ -135,7 +136,8 @@ finite-difference tests until a crate-local replay harness is restored.
 | fmin | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | frac | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
 | frexp | identity | identity | 6 | tenferro replay does not implement this oracle family yet |
-| householder_product | identity | identity | 24 | tenferro replay currently supports this family only for float64 |
+| full_pivot_lu | identity | identity | 8 | tenferro replay currently supports this family only for square float32/float64/complex64/complex128 inputs |
+| householder_product | identity | identity | 32 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | hypot | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | i0 | identity | identity | 6 | tenferro replay does not implement this oracle family yet |
 | imag | identity | identity | 6 | tenferro replay does not implement this oracle family yet |
@@ -150,18 +152,18 @@ finite-difference tests until a crate-local replay harness is restored.
 | logaddexp | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | logit | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
 | lstsq_grad_oriented | identity | identity | 102 | tenferro replay currently supports only the real-valued m>=n least-squares subset excluding unsupported driver-specific oracle cases |
-| lu_factor | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
-| lu_factor_ex | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
-| lu_solve | identity | identity | 924 | tenferro replay currently supports this family only for float64 |
-| matrix_norm | identity | identity | 208 | tenferro replay currently supports only the rank-2 scalar-output matrix_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=Fro |
-| matrix_power | identity | identity | 54 | tenferro replay currently supports this family only for float64 |
+| lu_factor | identity | identity | 80 | tenferro lu_factor is a prepared factor carrier whose AD rule is intentionally unsupported |
+| lu_factor_ex | identity | identity | 80 | tenferro lu_factor is a prepared factor carrier whose AD rule is intentionally unsupported |
+| lu_solve | identity | identity | 1248 | tenferro has no public traced lu_solve replay adapter for this oracle family yet |
+| matrix_norm | identity | identity | 216 | tenferro replay currently supports only the rank-2 scalar-output matrix_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=Fro |
+| matrix_power | identity | identity | 72 | tenferro has no public traced matrix_power API to replay this oracle family yet |
 | max_binary | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | maximum | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | mean | identity | identity | 80 | tenferro replay does not implement this oracle family yet |
 | min_binary | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | minimum | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | mul | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
-| multi_dot | identity | identity | 21 | tenferro replay currently supports this family only for float64 |
+| multi_dot | identity | identity | 28 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | mvlgamma_mvlgamma_p_1 | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
 | mvlgamma_mvlgamma_p_3 | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
 | mvlgamma_mvlgamma_p_5 | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
@@ -187,10 +189,10 @@ finite-difference tests until a crate-local replay harness is restored.
 | nn_functional_softsign | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_tanhshrink | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_threshold | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
-| norm | identity | identity | 200 | tenferro replay currently supports only the whole-tensor torch.linalg.norm subset expressible by current NormKind AD rules; remaining dim-aware and unsupported ord/rank cases are not replayed yet |
+| norm | identity | identity | 232 | tenferro replay currently supports only the whole-tensor torch.linalg.norm subset expressible by current NormKind AD rules; remaining dim-aware and unsupported ord/rank cases are not replayed yet |
 | pinv | identity | identity | 24 | tenferro replay currently supports this family only for float64/complex64/complex128 |
-| pinv_hermitian | identity | identity | 24 | tenferro replay currently supports this family only for float64 |
-| pinv_singular | identity | identity | 144 | tenferro replay currently supports this family only for float64 |
+| pinv_hermitian | identity | identity | 32 | tenferro has no matching public traced linalg API to replay this oracle family yet |
+| pinv_singular | identity | identity | 192 | tenferro replay does not expose the two-input pinv_singular oracle family |
 | polar | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | polygamma_polygamma_n_0 | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
 | polygamma_polygamma_n_1 | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
@@ -238,14 +240,14 @@ finite-difference tests until a crate-local replay harness is restored.
 | svdvals | identity | identity | 144 | tenferro replay does not implement this scalar-output oracle family yet |
 | tan | identity | identity | 4 | tenferro replay does not implement this oracle family yet |
 | tanh | identity | identity | 4 | tenferro replay does not implement this oracle family yet |
-| tensorinv | identity | identity | 6 | tenferro replay currently supports this family only for float64 |
-| tensorsolve | identity | identity | 12 | tenferro replay currently supports this family only for float64 |
+| tensorinv | identity | identity | 8 | tenferro has no matching public traced linalg API to replay this oracle family yet |
+| tensorsolve | identity | identity | 16 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | tropical_einsum_maxplus | identity | identity | 1 | tenferro replay does not implement this oracle family yet |
 | true_divide | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | trunc | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
-| vander | identity | identity | 30 | tenferro replay currently supports this family only for float64 |
+| vander | identity | identity | 40 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | var | identity | identity | 56 | tenferro replay does not implement this oracle family yet |
 | var_unbiased | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
-| vecdot | identity | identity | 132 | tenferro replay currently supports this family only for float64 |
+| vecdot | identity | identity | 176 | tenferro has no matching public traced linalg API to replay this oracle family yet |
 | vector_norm | identity | identity | 672 | tenferro replay currently supports only the rank-1 scalar-output vector_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=P(2) |
 | xlogy | identity | identity | 18 | tenferro replay does not implement this oracle family yet |

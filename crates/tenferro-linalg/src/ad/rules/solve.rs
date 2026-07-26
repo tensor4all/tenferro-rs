@@ -1,10 +1,10 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::ad::context::ShapeGuardContext;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::extension::LinalgOp;
 

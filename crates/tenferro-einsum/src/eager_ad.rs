@@ -587,22 +587,11 @@ fn execute_eager_einsum_program(
                 instr.outputs.len()
             )));
         }
-        let input_values: Vec<EagerTensor> = instr
+        let input_refs: Vec<&EagerTensor> = instr
             .inputs
             .iter()
-            .map(|&slot| {
-                slots
-                    .get(slot)
-                    .and_then(Option::as_ref)
-                    .cloned()
-                    .ok_or_else(|| {
-                        runtime_missing(format!(
-                            "expanded eager einsum missing value for slot {slot}"
-                        ))
-                    })
-            })
+            .map(|&slot| slot_tensor(&slots, slot))
             .collect::<Result<_>>()?;
-        let input_refs: Vec<&EagerTensor> = input_values.iter().collect();
         let output =
             tenferro_ad::extension::apply_standard_op(instr.operation.clone(), &input_refs)?;
         slots[instr.outputs[0]] = Some(output);

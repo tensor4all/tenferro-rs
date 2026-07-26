@@ -21,6 +21,7 @@ pub use crate::metadata::{
     register_scoped_value_metadata, registered_meta, tensor_meta_from_tensor,
     RegisteredGraphAnalysis,
 };
+use crate::program::FrozenProgram;
 use crate::shape_constraint::ConstraintScopeChain;
 pub use crate::shape_constraint::ShapeConstraintScope;
 use crate::sym_dim::SymDim;
@@ -352,6 +353,15 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result
 
 pub fn allocate_input_key() -> TensorInputKey {
     next_input_key()
+}
+
+pub fn allocate_shape_tensor_id() -> u64 {
+    next_traced_id()
+}
+
+pub fn frozen_input_tensor(frozen: &FrozenProgram, input_index: usize) -> Option<Arc<Tensor>> {
+    let input = *frozen.program.inputs().get(input_index)?;
+    frozen.bindings.tensor_for_input(input)
 }
 
 ///

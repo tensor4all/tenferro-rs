@@ -493,6 +493,40 @@ impl Runtime {
         super::execution::run_compiled(self, program, inputs)
     }
 
+    /// Prepare a compiled graph for repeated execution with the same runtime.
+    ///
+    /// Preparation validates the supplied input metadata, selects a runtime
+    /// engine, and caches the staged execution plan. Use [`Self::run_prepared`]
+    /// for steady-state execution when the same compiled graph is run many
+    /// times.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, preparation, and runtime-state errors as
+    /// [`Self::run_compiled`] before backend execution begins.
+    pub fn prepare_compiled(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<super::execution::PreparedCompiledGraph> {
+        super::execution::prepare_compiled(self, program, inputs)
+    }
+
+    /// Run a graph previously prepared by [`Self::prepare_compiled`].
+    ///
+    /// # Errors
+    ///
+    /// Returns metadata validation errors for incompatible inputs, or a runtime
+    /// state error if the prepared handle belongs to a different runtime or a
+    /// stale runtime epoch.
+    pub fn run_prepared(
+        &self,
+        prepared: &super::execution::PreparedCompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<Vec<Tensor>> {
+        super::execution::run_prepared(self, prepared, inputs)
+    }
+
     /// Run a compiled graph and preserve lazy owned output views.
     ///
     /// # Examples

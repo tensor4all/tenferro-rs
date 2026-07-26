@@ -29,9 +29,9 @@
 //! Closing the core op vocabulary under AD is a Stage 7 prerequisite (the
 //! tropical fused backward emits `Gather` / `Scatter` on this vocabulary).
 
+use crate::ad::ADRuleResult;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{GatherConfig, ScatterConfig};
-use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::zeros::{build_zero_like, SymbolicZero};

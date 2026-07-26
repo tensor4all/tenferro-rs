@@ -8,6 +8,7 @@ use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
+use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
@@ -20,6 +21,36 @@ use crate::runtime::{
     PreparedOperationHandle, Runtime, RuntimeCacheOwner,
 };
 use crate::{Error, Result};
+
+type RuntimeInputRefs<'a> = SmallVec<[&'a Tensor; 8]>;
+type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
+type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
+type RuntimeShapeScratch = SmallVec<[usize; 8]>;
+
+/// Runtime-prepared compiled graph execution handle.
+///
+/// This handle keeps the prepared execution staging and selected engine bridge
+/// outside steady-state execution. It is tied to the runtime epoch that created
+/// it and becomes stale after runtime reconfiguration.
+#[derive(Clone)]
+pub struct PreparedCompiledGraph {
+    runtime_id: super::RuntimeId,
+    epoch: super::RuntimeEpoch,
+    program: CompiledGraph,
+    prepared: Arc<super::preparation::PreparedProgram>,
+    executor: Arc<dyn ErasedTensorBackendExecutor>,
+}
+
+impl fmt::Debug for PreparedCompiledGraph {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedCompiledGraph")
+            .field("runtime_id", &self.runtime_id)
+            .field("epoch", &self.epoch)
+            .field("program", &self.program)
+            .finish_non_exhaustive()
+    }
+}
 
 #[allow(
     dead_code,
@@ -35,11 +66,23 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         operations: &[PreparedOperationHandle],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>>;
+    fn execute_tensor_refs(
+        &self,
+        program: &ExecProgram,
+        operations: &[PreparedOperationHandle],
+        inputs: &[&Tensor],
+    ) -> Result<Vec<Tensor>>;
     fn execute_values(
         &self,
         program: &ExecProgram,
         operations: &[PreparedOperationHandle],
         inputs: Vec<Tensor>,
+    ) -> Result<Vec<TensorValue>>;
+    fn execute_value_refs(
+        &self,
+        program: &ExecProgram,
+        operations: &[PreparedOperationHandle],
+        inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>>;
 }
 
@@ -79,7 +122,8 @@ struct TensorBackendExecutorState<B: TensorBackend + 'static> {
     backend: B,
     backend_cache: B::RuntimeCache,
     extension_caches: ExtensionCacheStore,
-    slot_workspace: Vec<Option<ExecSlot>>,
+    slot_workspace: Vec<Option<ExecSlot<'static>>>,
+    borrowed_slot_workspace_capacity: usize,
 }
 
 struct TensorBackendExecutor<B: TensorBackend + 'static> {
@@ -105,6 +149,7 @@ where
                     backend_cache: B::RuntimeCache::default(),
                     extension_caches: ExtensionCacheStore::new(),
                     slot_workspace: Vec::new(),
+                    borrowed_slot_workspace_capacity: 0,
                 }),
                 active_thread: None,
                 execution_poisoned: false,
@@ -256,6 +301,7 @@ where
             backend_cache,
             extension_caches,
             slot_workspace,
+            borrowed_slot_workspace_capacity: _,
         } = lease.state_mut();
         let mut extension_dispatch = ExtensionExecutionDispatch {
             operations,
@@ -269,6 +315,42 @@ where
             backend_cache,
             Some(&mut extension_dispatch),
         )
+    }
+
+    fn execute_tensor_refs(
+        &self,
+        program: &ExecProgram,
+        operations: &[PreparedOperationHandle],
+        inputs: &[&Tensor],
+    ) -> Result<Vec<Tensor>> {
+        validate_exec_input_count(program, inputs.len())?;
+        let inputs = inputs
+            .iter()
+            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+            .collect();
+        let mut lease = self.lease_state("Runtime::run_compiled")?;
+        let TensorBackendExecutorState {
+            backend,
+            backend_cache,
+            extension_caches,
+            borrowed_slot_workspace_capacity,
+            ..
+        } = lease.state_mut();
+        let mut extension_dispatch = ExtensionExecutionDispatch {
+            operations,
+            caches: extension_caches,
+        };
+        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
+        let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
+            backend,
+            program,
+            inputs,
+            &mut slot_workspace,
+            backend_cache,
+            Some(&mut extension_dispatch),
+        );
+        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
+        result
     }
 
     fn execute_values(
@@ -285,6 +367,7 @@ where
             backend_cache,
             extension_caches,
             slot_workspace,
+            borrowed_slot_workspace_capacity: _,
         } = lease.state_mut();
         let mut extension_dispatch = ExtensionExecutionDispatch {
             operations,
@@ -298,6 +381,42 @@ where
             backend_cache,
             Some(&mut extension_dispatch),
         )
+    }
+
+    fn execute_value_refs(
+        &self,
+        program: &ExecProgram,
+        operations: &[PreparedOperationHandle],
+        inputs: &[&Tensor],
+    ) -> Result<Vec<TensorValue>> {
+        validate_exec_input_count(program, inputs.len())?;
+        let inputs = inputs
+            .iter()
+            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+            .collect();
+        let mut lease = self.lease_state("Runtime::run_compiled_values")?;
+        let TensorBackendExecutorState {
+            backend,
+            backend_cache,
+            extension_caches,
+            borrowed_slot_workspace_capacity,
+            ..
+        } = lease.state_mut();
+        let mut extension_dispatch = ExtensionExecutionDispatch {
+            operations,
+            caches: extension_caches,
+        };
+        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
+        let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
+            backend,
+            program,
+            inputs,
+            &mut slot_workspace,
+            backend_cache,
+            Some(&mut extension_dispatch),
+        );
+        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
+        result
     }
 }
 
@@ -321,11 +440,43 @@ pub(super) fn run_compiled(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
-    let inputs = resolve_input_tensors(program, inputs)?;
+    let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute(prepared.root().staging(), prepared.operations(), inputs)
+    executor.execute_tensor_refs(prepared.root().staging(), prepared.operations(), &inputs)
+}
+
+pub(super) fn prepare_compiled(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<PreparedCompiledGraph> {
+    let inputs = resolve_input_refs(program, inputs)?;
+    let signature = input_signature(&inputs)?;
+    let prepared = prepare(runtime, program, &signature)?;
+    let executor = execution_engine(runtime, prepared.root().as_ref())?;
+    Ok(PreparedCompiledGraph {
+        runtime_id: runtime.id(),
+        epoch: prepared.root().epoch(),
+        program: program.clone(),
+        prepared,
+        executor,
+    })
+}
+
+pub(super) fn run_prepared(
+    runtime: &Runtime,
+    prepared: &PreparedCompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
+    let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    prepared.executor.execute_tensor_refs(
+        prepared.prepared.root().staging(),
+        prepared.prepared.operations(),
+        &inputs,
+    )
 }
 
 pub(super) fn run_compiled_values(
@@ -333,11 +484,39 @@ pub(super) fn run_compiled_values(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<TensorValue>> {
-    let inputs = resolve_input_tensors(program, inputs)?;
+    let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute_values(prepared.root().staging(), prepared.operations(), inputs)
+    executor.execute_value_refs(prepared.root().staging(), prepared.operations(), &inputs)
+}
+
+fn validate_prepared_runtime(
+    runtime: &Runtime,
+    prepared: &PreparedCompiledGraph,
+    caller: &'static str,
+) -> Result<()> {
+    if runtime.id() != prepared.runtime_id {
+        return Err(Error::runtime_state(
+            caller,
+            ErrorPhase::Execution,
+            "prepared compiled graph belongs to a different runtime",
+        ));
+    }
+    let epoch = runtime
+        .epoch()
+        .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
+    if epoch != prepared.epoch {
+        return Err(Error::runtime_state(
+            caller,
+            ErrorPhase::Execution,
+            format!(
+                "prepared epoch {:?} does not match current epoch {:?}",
+                prepared.epoch, epoch
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn prepare(
@@ -390,25 +569,28 @@ fn execution_engine(
     })
 }
 
-fn input_signature(inputs: &[Tensor]) -> Result<InputSignature> {
-    let reads: Vec<_> = inputs.iter().map(TensorRead::from_tensor).collect();
+fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {
+    let reads: RuntimeInputReads<'_> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect();
     InputSignature::from_reads(&reads).map_err(|source| prepare_error(Arc::new(source)))
 }
 
-fn resolve_input_tensors(program: &CompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+fn resolve_input_refs<'a>(
+    program: &'a CompiledGraph,
+    inputs: &'a [&'a Tensor],
+) -> Result<RuntimeInputRefs<'a>> {
     let resolved = if inputs.is_empty() {
         semantic_default_inputs(program)?
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>()
     } else {
-        inputs.iter().map(|tensor| (*tensor).clone()).collect()
+        inputs.iter().copied().collect()
     };
     validate_ordered_input_metadata(program, &resolved)?;
     Ok(resolved)
 }
 
-fn semantic_default_inputs(program: &CompiledGraph) -> Result<Vec<&Tensor>> {
+fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputRefs<'_>> {
     program
         .program()
         .inputs()
@@ -426,7 +608,7 @@ fn semantic_default_inputs(program: &CompiledGraph) -> Result<Vec<&Tensor>> {
         .collect()
 }
 
-fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[Tensor]) -> Result<()> {
+fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) -> Result<()> {
     let expected = program.input_count();
     if inputs.len() != expected {
         return Err(Error::GraphInputCountMismatch {
@@ -434,7 +616,7 @@ fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[Tensor]) -
             actual: inputs.len(),
         });
     }
-    let input_shapes: Vec<_> = inputs.iter().map(Tensor::shape).collect();
+    let input_shapes: RuntimeInputShapes<'_> = inputs.iter().map(|tensor| tensor.shape()).collect();
     for (input_value, actual) in program.program().inputs().iter().zip(inputs) {
         let metadata = program
             .program()
@@ -454,7 +636,7 @@ fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[Tensor]) -
                 actual: actual.shape().len(),
             });
         }
-        let mut expected_shape = actual.shape().to_vec();
+        let mut expected_shape: RuntimeShapeScratch = actual.shape().iter().copied().collect();
         let mut exact_mismatch = false;
         for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual.shape()).enumerate()
         {
@@ -491,7 +673,7 @@ fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[Tensor]) -
         }
         if exact_mismatch {
             return Err(Error::PlaceholderShapeMismatch {
-                expected: expected_shape,
+                expected: expected_shape.into_vec(),
                 actual: actual.shape().to_vec(),
             });
         }

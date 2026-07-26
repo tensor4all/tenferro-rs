@@ -35,19 +35,83 @@ pub mod transpose_input;
 mod zeros;
 
 #[cfg(feature = "autodiff")]
-use computegraph::graph::GraphBuilder;
-#[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-#[cfg(feature = "autodiff")]
-use tidu::{
-    ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveTransposeInput,
-    PrimitiveValue,
-};
-
-#[cfg(feature = "autodiff")]
 use crate::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
+#[cfg(feature = "autodiff")]
+use computegraph::graph::GraphBuilder;
+#[cfg(feature = "autodiff")]
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ADRuleKind {
+    Jvp,
+    Transpose,
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ADRuleError {
+    #[error("unsupported AD rule {rule:?} for {op}")]
+    Unsupported { op: String, rule: ADRuleKind },
+    #[error("invalid AD rule input for {op} ({rule:?}): {message}")]
+    InvalidInput {
+        op: String,
+        rule: ADRuleKind,
+        message: String,
+    },
+}
+
+#[cfg(feature = "autodiff")]
+impl ADRuleError {
+    pub fn unsupported(op: impl Into<String>, rule: ADRuleKind) -> Self {
+        Self::Unsupported {
+            op: op.into(),
+            rule,
+        }
+    }
+
+    pub fn invalid_input(
+        op: impl Into<String>,
+        rule: ADRuleKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::InvalidInput {
+            op: op.into(),
+            rule,
+            message: message.into(),
+        }
+    }
+
+    pub const fn rule(&self) -> ADRuleKind {
+        match self {
+            Self::Unsupported { rule, .. } | Self::InvalidInput { rule, .. } => *rule,
+        }
+    }
+}
+
+#[cfg(feature = "autodiff")]
+pub type ADRuleResult<T> = std::result::Result<T, ADRuleError>;
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Debug)]
+pub enum PrimitiveTransposeInput<Op: computegraph::GraphOperation> {
+    Residual(ValueKey<Op>),
+    Linear {
+        key: ValueKey<Op>,
+        primal: Option<ValueKey<Op>>,
+    },
+}
+
+#[cfg(feature = "autodiff")]
+impl<Op: computegraph::GraphOperation> PrimitiveTransposeInput<Op> {
+    pub fn key(&self) -> &ValueKey<Op> {
+        match self {
+            Self::Residual(key) | Self::Linear { key, .. } => key,
+        }
+    }
+}
 
 #[cfg(feature = "autodiff")]
 fn missing_primitive_kind(op: &StdTensorOp, rule: ADRuleKind) -> ADRuleError {
@@ -88,22 +152,6 @@ pub trait PrimitiveRuleBuilder {
         inputs: Vec<ValueRef<StdTensorOp>>,
         role: OperationRole,
     ) -> Vec<LocalValueId>;
-}
-
-#[cfg(feature = "autodiff")]
-impl<B> PrimitiveRuleBuilder for B
-where
-    B: PrimitiveBuilder<StdTensorOp> + ?Sized,
-{
-    fn add_operation(
-        &mut self,
-        operation: StdTensorOp,
-        inputs: Vec<ValueRef<StdTensorOp>>,
-        role: OperationRole,
-    ) -> Vec<LocalValueId> {
-        let inputs = inputs.into_iter().map(PrimitiveValue::from).collect();
-        PrimitiveBuilder::add_primitive(self, operation, inputs, role)
-    }
 }
 
 #[cfg(feature = "autodiff")]

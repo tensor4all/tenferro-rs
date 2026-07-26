@@ -10,7 +10,6 @@ use tenferro_runtime::{
     ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
     DType, GraphCompiler, SymDim, Tensor, TracedTensor,
 };
-use tidu::ADKey;
 
 use crate::support::{cpu_runtime, run_compiled_one};
 

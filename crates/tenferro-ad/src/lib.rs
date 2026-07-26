@@ -29,11 +29,9 @@
 //! assert_eq!(dx.rank, 0);
 //! ```
 
-mod ad_rule_error;
 mod context;
 mod eager;
 mod eager_backend;
-mod eager_builder;
 pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
@@ -72,8 +70,7 @@ pub mod error {
 
 pub(crate) mod metadata {
     pub use tenferro_runtime::ad_support::{
-        metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_graph_metadata,
-        register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
-        GlobalMetadataScope,
+        metadata_scopes_for_scope, push_metadata_scope, register_scoped_metadata_batch,
+        register_scoped_value_metadata, tensor_meta_from_tensor, GlobalMetadataScope,
     };
 }

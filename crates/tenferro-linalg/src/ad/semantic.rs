@@ -9,6 +9,7 @@ use tenferro_ad::semantic_extension::{
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
 };
 use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::PrimitiveTransposeInput;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::shape_extent::ShapeExtent;
@@ -17,7 +18,6 @@ use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
 use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
-use tidu::PrimitiveTransposeInput;
 
 use super::LinalgAdRule;
 use crate::extension::{LinalgExtensionOp, LinalgOp};
@@ -135,9 +135,38 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::LinearTranspose)?;
         match op.op() {
-            LinalgOp::TriangularSolve { .. }
-            | LinalgOp::LuSolvePrepared { .. }
-            | LinalgOp::FullPivLuSolve { .. } => semantic_custom_transpose(
+            LinalgOp::TriangularSolve {
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            } => semantic_triangular_solve_transpose(
+                request.primal_inputs(),
+                request.primal_outputs(),
+                request.cotangent_outputs(),
+                request.active_inputs(),
+                builder,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            ),
+            LinalgOp::LuSolvePrepared { .. } => {
+                let active_inputs = lu_solve_prepared_transpose_active_inputs(
+                    request.active_inputs(),
+                    SemanticAdRuleRole::LinearTranspose,
+                )?;
+                semantic_custom_transpose(
+                    request.op(),
+                    request.primal_inputs(),
+                    request.primal_outputs(),
+                    request.cotangent_outputs(),
+                    &active_inputs,
+                    builder,
+                    SemanticAdRuleRole::LinearTranspose,
+                )
+            }
+            LinalgOp::FullPivLuSolve { .. } => semantic_custom_transpose(
                 request.op(),
                 request.primal_inputs(),
                 request.primal_outputs(),
@@ -161,6 +190,112 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
             ),
         }
     }
+}
+
+fn lu_solve_prepared_transpose_active_inputs(
+    active_inputs: &[bool],
+    role: SemanticAdRuleRole,
+) -> Result<[bool; 4], SemanticAdError> {
+    let active_inputs: [bool; 4] = active_inputs.try_into().map_err(|_| {
+        semantic_internal(
+            role,
+            format!(
+                "lu_solve_prepared semantic transpose expected 4 active inputs, got {}",
+                active_inputs.len()
+            ),
+        )
+    })?;
+    Ok([active_inputs[0], false, false, active_inputs[3]])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn semantic_triangular_solve_transpose(
+    primal_inputs: &[ProgramValue],
+    primal_outputs: &[ProgramValue],
+    cotangent_outputs: &[AdValue],
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> Result<Box<[AdValue]>, SemanticAdError> {
+    let role = SemanticAdRuleRole::LinearTranspose;
+    if primal_inputs.len() != 2
+        || primal_outputs.len() != 1
+        || cotangent_outputs.len() != 1
+        || active_inputs.len() != 2
+    {
+        return Err(semantic_internal(
+            role,
+            "triangular_solve semantic transpose received malformed arity",
+        ));
+    }
+    let Some(ct) = cotangent_outputs.first().copied().and_then(AdValue::value) else {
+        return Ok(vec![AdValue::Absent; 2].into_boxed_slice());
+    };
+
+    let mut result = vec![AdValue::Absent; 2];
+    if !active_inputs[0] && !active_inputs[1] {
+        return Ok(result.into_boxed_slice());
+    }
+
+    let matrix_rank = builder.value_metadata(primal_inputs[0])?.shape().len();
+    let rhs_rank = builder.value_metadata(primal_inputs[1])?.shape().len();
+    if matrix_rank < 2 || rhs_rank < 2 {
+        return Err(semantic_internal(
+            role,
+            "triangular_solve semantic transpose expects matrix operands",
+        ));
+    }
+    if matrix_rank != rhs_rank {
+        return Err(semantic_internal(
+            role,
+            "triangular_solve semantic transpose expects equal-rank operands",
+        ));
+    }
+
+    let conjugated_a = conjugate_if_complex(builder, primal_inputs[0])?;
+    let rhs_cotangent = builder.add_extension(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a: !transpose_a,
+            unit_diagonal,
+        })),
+        &[conjugated_a, ct],
+    )?[0];
+
+    if active_inputs[1] {
+        result[1] = AdValue::Value(rhs_cotangent);
+    }
+    if active_inputs[0] {
+        let matrix_cotangent = semantic_solve_matrix_cotangent(
+            builder,
+            rhs_cotangent,
+            primal_outputs[0],
+            left_side,
+            transpose_a,
+            matrix_rank,
+        )?;
+        let k = if unit_diagonal {
+            if lower {
+                -1
+            } else {
+                1
+            }
+        } else {
+            0
+        };
+        let projected = if lower {
+            builder.add_op(CoreSemanticOp::Tril { k }, &[matrix_cotangent])?[0]
+        } else {
+            builder.add_op(CoreSemanticOp::Triu { k }, &[matrix_cotangent])?[0]
+        };
+        result[0] = AdValue::Value(projected);
+    }
+
+    Ok(result.into_boxed_slice())
 }
 
 fn semantic_linearized_transpose(
@@ -1048,6 +1183,71 @@ fn transpose_matrix_dot(
     Ok(result)
 }
 
+fn semantic_solve_matrix_cotangent(
+    builder: &mut SemanticProgramBuilder,
+    rhs_cotangent: ProgramValue,
+    solution: ProgramValue,
+    left_side: bool,
+    transpose_a: bool,
+    rank: usize,
+) -> Result<ProgramValue, SemanticAdError> {
+    let negative_rhs_cotangent = builder.add_op(CoreSemanticOp::Neg, &[rhs_cotangent])?[0];
+    let solution_h = matrix_adjoint(builder, solution, rank)?;
+    let config = semantic_matrix_multiply_config(rank)?;
+    let matrix_cotangent = if left_side {
+        builder.add_op(
+            CoreSemanticOp::DotGeneral {
+                config: config.clone(),
+            },
+            &[negative_rhs_cotangent, solution_h],
+        )?[0]
+    } else {
+        builder.add_op(
+            CoreSemanticOp::DotGeneral { config },
+            &[solution_h, negative_rhs_cotangent],
+        )?[0]
+    };
+    if transpose_a {
+        semantic_matrix_transpose(builder, matrix_cotangent, rank)
+    } else {
+        Ok(matrix_cotangent)
+    }
+}
+
+fn semantic_matrix_multiply_config(
+    rank: usize,
+) -> Result<tenferro_tensor::DotGeneralConfig, SemanticAdError> {
+    if rank < 2 {
+        return Err(semantic_internal(
+            SemanticAdRuleRole::LinearTranspose,
+            "matrix multiply semantic helper expects rank >= 2",
+        ));
+    }
+    let batch_dims: Vec<usize> = (2..rank).collect();
+    Ok(tenferro_tensor::DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: batch_dims.clone(),
+        rhs_batch_dims: batch_dims,
+    })
+}
+
+fn semantic_matrix_transpose(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+    rank: usize,
+) -> Result<ProgramValue, SemanticAdError> {
+    if rank < 2 {
+        return Err(semantic_internal(
+            SemanticAdRuleRole::LinearTranspose,
+            "matrix transpose semantic helper expects rank >= 2",
+        ));
+    }
+    let mut perm: Vec<_> = (0..rank).collect();
+    perm.swap(0, 1);
+    Ok(builder.add_op(CoreSemanticOp::Transpose { perm }, &[value])?[0])
+}
+
 fn matrix_adjoint(
     builder: &mut SemanticProgramBuilder,
     value: ProgramValue,
@@ -1186,7 +1386,7 @@ fn semantic_linalg_op(
         })
 }
 
-fn legacy_error(role: SemanticAdRuleRole, error: tidu::ADRuleError) -> SemanticAdError {
+fn legacy_error(role: SemanticAdRuleRole, error: tenferro_ops::ad::ADRuleError) -> SemanticAdError {
     SemanticAdError::Rule {
         family_id: LINALG_EXTENSION_FAMILY_ID,
         role,

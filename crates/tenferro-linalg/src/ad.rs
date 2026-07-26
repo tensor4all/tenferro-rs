@@ -28,9 +28,9 @@ use std::sync::Arc;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ad::extension::ExtensionOp;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 #[cfg(test)]
@@ -1164,6 +1164,63 @@ mod tests {
             .unwrap();
         let cotangent = run_one(&runtime, &compiled, &[&matrix, &rhs, &output_cotangent]).unwrap();
         assert_eq!(cotangent.as_slice::<f64>().unwrap(), &[0.375, 0.25]);
+    }
+
+    #[test]
+    fn triangular_solve_semantic_vjp_reuses_imported_primal_solution() {
+        use tenferro_ad::AdContext;
+        use tenferro_ops::dim_expr::DimExpr;
+        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
+
+        let mut builder = SemanticProgramBuilder::new();
+        let matrix = builder
+            .input(ProgramInputSpec::new(
+                DType::F64,
+                [DimExpr::Const(4), DimExpr::Const(4)],
+            ))
+            .unwrap();
+        let rhs = builder
+            .input(ProgramInputSpec::new(
+                DType::F64,
+                [DimExpr::Const(4), DimExpr::Const(2)],
+            ))
+            .unwrap();
+        let solution = builder
+            .add_extension(
+                Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
+                    left_side: true,
+                    lower: true,
+                    transpose_a: false,
+                    unit_diagonal: false,
+                })),
+                &[matrix, rhs],
+            )
+            .unwrap()[0];
+        let source = builder.finish(&[solution]).unwrap();
+        let ad = AdContext::builder()
+            .with_semantic_extension_rules(semantic_ad_rules().expect("linalg semantic AD rules"))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+        let triangular_solve_count = vjp
+            .frozen()
+            .program
+            .operations()
+            .filter(|operation| match operation.op() {
+                SemanticOpRef::Extension(extension) => extension
+                    .as_any()
+                    .downcast_ref::<LinalgExtensionOp>()
+                    .is_some_and(|op| matches!(op.op(), LinalgOp::TriangularSolve { .. })),
+                _ => false,
+            })
+            .count();
+
+        assert_eq!(
+            triangular_solve_count, 2,
+            "semantic VJP should contain only the imported primal solve and the adjoint solve"
+        );
     }
 
     #[test]

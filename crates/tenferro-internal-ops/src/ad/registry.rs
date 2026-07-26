@@ -1,7 +1,7 @@
 use crate::ad::PrimitiveRuleBuilder;
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey};
 use tenferro_core_ops::PrimitiveOpKind;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use super::context::ShapeGuardContext;
 use super::transpose_input::{fixed_value_refs, metadata_value_refs, TransposeInputRef};
@@ -509,13 +509,15 @@ fn linearize_abs(
 
 fn linearize_sign(
     _op: &StdTensorOp,
-    _builder: &mut dyn PrimitiveRuleBuilder,
-    _primal_in: &[ValueKey<StdTensorOp>],
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(elementwise::linearize_sign(_builder, tangent_in))
+    Ok(elementwise::linearize_sign(
+        builder, primal_in, tangent_in, ctx,
+    ))
 }
 
 fn linearize_maximum(

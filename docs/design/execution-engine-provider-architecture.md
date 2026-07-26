@@ -860,6 +860,17 @@ must not allocate in steady state. Variable-rank fields should use one
 repository-wide representation at the boundary rather than repeatedly convert
 between `Vec`, `SmallVec`, and slices.
 
+Public execution boundaries accept slices such as `&[T]`, `&[&Tensor]`, or
+borrowed request views. Hot-path internals may stage short input, shape, slot,
+and output lists in `SmallVec` when the inline bound covers the common case and
+benchmarks do not show a regression. Repeated execution workspaces, scratch
+buffers, and backend resource pools belong to the runtime or engine owner and
+should be reused through that owner rather than allocated per call. A per-call
+heap `Vec` in `Runtime::run_prepared`, segment execution, shape validation, or
+operation-family dispatch is suspicious in review unless the code documents a
+bounded exception, a reuse barrier such as borrowed lifetime ownership, or
+benchmark evidence that the alternative regresses.
+
 The prototype for issue #1432 is stored on branch
 `codex/issue-1432-provider-overhead` at commit `1b6223ce`. Its release-mode
 microbenchmarks measured approximately:

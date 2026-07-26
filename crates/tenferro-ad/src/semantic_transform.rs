@@ -518,7 +518,7 @@ fn linearize_core(
             let tangent = multiply_ad_value(builder, tangent_inputs[0], coefficient)?;
             convert_ad_value(builder, tangent, input_dtype, abs_output_dtype(input_dtype))?
         }
-        CoreSemanticOp::Sign => AdValue::Absent,
+        CoreSemanticOp::Sign => linearize_sign(builder, primal_inputs[0], tangent_inputs[0])?,
         CoreSemanticOp::Maximum | CoreSemanticOp::Minimum => {
             linearize_extrema(builder, op, primal_inputs, tangent_inputs)?
         }
@@ -1391,6 +1391,71 @@ fn convert_ad_value(
         return Ok(value);
     }
     unary_ad_value(builder, CoreSemanticOp::Convert { from, to }, value)
+}
+
+fn linearize_sign(
+    builder: &mut SemanticProgramBuilder,
+    primal_input: ProgramValue,
+    tangent: AdValue,
+) -> Result<AdValue, SemanticAdTransformError> {
+    let AdValue::Value(tangent) = tangent else {
+        return Ok(AdValue::Absent);
+    };
+    let input_dtype = builder.value_metadata(primal_input)?.dtype();
+    if !is_complex_dtype(input_dtype) {
+        return zero_from_ad_value(builder, AdValue::Value(tangent)).map_err(Into::into);
+    }
+
+    let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_input])?[0];
+    let abs = builder.add_op(CoreSemanticOp::Abs, &[primal_input])?[0];
+    let real_dtype = abs_output_dtype(input_dtype);
+    let abs_as_input_dtype = builder.add_op(
+        CoreSemanticOp::Convert {
+            from: real_dtype,
+            to: input_dtype,
+        },
+        &[abs],
+    )?[0];
+    let conj_sign = builder.add_op(CoreSemanticOp::Conj, &[sign])?[0];
+    let abs_tangent_complex = builder.add_op(CoreSemanticOp::Mul, &[tangent, conj_sign])?[0];
+    let abs_tangent = match convert_ad_value(
+        builder,
+        AdValue::Value(abs_tangent_complex),
+        input_dtype,
+        real_dtype,
+    )? {
+        AdValue::Value(value) => value,
+        AdValue::Absent => return Ok(AdValue::Absent),
+    };
+    let abs_tangent_as_input_dtype = builder.add_op(
+        CoreSemanticOp::Convert {
+            from: real_dtype,
+            to: input_dtype,
+        },
+        &[abs_tangent],
+    )?[0];
+    let tangent_over_abs = builder.add_op(CoreSemanticOp::Div, &[tangent, abs_as_input_dtype])?[0];
+    let sign_times_abs_tangent =
+        builder.add_op(CoreSemanticOp::Mul, &[sign, abs_tangent_as_input_dtype])?[0];
+    let correction = builder.add_op(
+        CoreSemanticOp::Div,
+        &[sign_times_abs_tangent, abs_as_input_dtype],
+    )?[0];
+    let derivative = builder.add_op(CoreSemanticOp::Sub, &[tangent_over_abs, correction])?[0];
+
+    let one = one_like(builder, primal_input, SemanticTransformRole::Jvp)?;
+    let zero = builder.add_op(CoreSemanticOp::Sub, &[one, one])?[0];
+    let zero_mask = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_input, zero],
+    )?[0];
+    let zero_derivative = builder.add_op(CoreSemanticOp::Sub, &[derivative, derivative])?[0];
+    Ok(AdValue::Value(
+        builder.add_op(
+            CoreSemanticOp::Select,
+            &[zero_mask, zero_derivative, derivative],
+        )?[0],
+    ))
 }
 
 fn zero_from_ad_value(

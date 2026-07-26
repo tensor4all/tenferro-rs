@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use tenferro_ops::ad::ExtensionAdDispatcher;
 use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
@@ -54,7 +53,6 @@ pub struct AdContextCacheStats {
 #[derive(Clone, Debug)]
 pub struct AdContext {
     semantic_extension_rules: SemanticExtensionRuleSet,
-    extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Arc<AdTransformCache>,
 }
 
@@ -72,10 +70,12 @@ impl AdContext {
         AdContextBuilder::default()
     }
 
-    pub(crate) fn core_with_transform_cache(ad_transform_cache: Arc<AdTransformCache>) -> Self {
+    pub(crate) fn with_rules_and_transform_cache(
+        semantic_extension_rules: SemanticExtensionRuleSet,
+        ad_transform_cache: Arc<AdTransformCache>,
+    ) -> Self {
         Self {
-            semantic_extension_rules: SemanticExtensionRuleSet::default(),
-            extension_ad_dispatcher: None,
+            semantic_extension_rules,
             ad_transform_cache,
         }
     }
@@ -173,10 +173,6 @@ impl AdContext {
             .put_semantic(key, input, Arc::new(transformed.clone()))
             .map_err(SemanticAdTransformError::Cache)?;
         Ok(transformed)
-    }
-
-    pub(crate) fn extension_ad_dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {
-        self.extension_ad_dispatcher.as_ref().map(Arc::clone)
     }
 
     pub(crate) fn ad_transform_cache(&self) -> Arc<AdTransformCache> {
@@ -334,7 +330,7 @@ impl AdContext {
         crate::traced::grad_with_rules_and_cache(
             output,
             wrt,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -368,7 +364,7 @@ impl AdContext {
         crate::traced::grad_optional_with_rules_and_cache(
             output,
             wrt,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -405,7 +401,7 @@ impl AdContext {
             output,
             wrt,
             tangent,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -441,7 +437,7 @@ impl AdContext {
             output,
             wrt,
             tangent,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -483,7 +479,7 @@ impl AdContext {
             output,
             wrt,
             cotangent,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -519,7 +515,7 @@ impl AdContext {
             output,
             wrt,
             cotangent,
-            self.extension_ad_dispatcher.as_ref(),
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -598,7 +594,6 @@ impl AdContextBuilder {
     pub fn build(self) -> std::result::Result<AdContext, std::convert::Infallible> {
         Ok(AdContext {
             semantic_extension_rules: self.semantic_extension_rules,
-            extension_ad_dispatcher: None,
             ad_transform_cache: Arc::new(AdTransformCache::new()),
         })
     }

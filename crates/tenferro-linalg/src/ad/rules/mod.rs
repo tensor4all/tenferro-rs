@@ -27,10 +27,10 @@ use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
 };
+use tenferro_ops::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 mod solve;
 mod support;
@@ -581,7 +581,10 @@ pub(crate) fn linearize_svd(
         vec![true, false],
         matrix_rank,
     );
-    let ds = s_active.then(|| extract_diag_linear(builder, ds_mat));
+    let ds = s_active.then(|| {
+        let ds = extract_diag_linear(builder, ds_mat);
+        convert_linear_to_dtype(builder, ds, dtype, s_dtype)
+    });
 
     if !u_active && !vt_active {
         return Ok(vec![None, ds, None]);
@@ -605,43 +608,53 @@ pub(crate) fn linearize_svd(
     let s_diff = fixed_sub(builder, ValueRef::Local(s_dim), ValueRef::Local(s_dim_t));
     let s_gap = fixed_mul(builder, ValueRef::Local(s_sum), ValueRef::Local(s_diff));
     let s_gap_sq = fixed_mul(builder, ValueRef::Local(s_gap), ValueRef::Local(s_gap));
-    let eps_sq = fixed_scale(
+    let eps_sq = fixed_scale_with_dtype(
         builder,
         ValueRef::Local(ones_mat),
         eps * eps,
         matrix_shape(k.clone(), k.clone(), batch_shape),
+        s_dtype,
     );
     let safe_gap = fixed_add(builder, ValueRef::Local(s_gap_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(s_gap), ValueRef::Local(safe_gap));
+    let s_dim_linear_dtype =
+        convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_dim), s_dtype, dtype);
+    let s_dim_t_linear_dtype =
+        convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_dim_t), s_dtype, dtype);
+    let f_linear_dtype = convert_fixed_ref_to_dtype(builder, ValueRef::Local(f), s_dtype, dtype);
 
     let du = if u_active {
         let s_ones = one_like_fixed(builder, s_dtype, s.clone(), matrix_rank - 1);
         let s_sq = fixed_mul(builder, s.clone(), s.clone());
-        let s_eps_sq = fixed_scale(
+        let s_eps_sq = fixed_scale_with_dtype(
             builder,
             ValueRef::Local(s_ones),
             eps * eps,
             vector_shape(k.clone(), batch_shape),
+            s_dtype,
         );
         let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
         let s_inv = fixed_div(builder, s.clone(), ValueRef::Local(safe_s_sq));
         let s_inv_mat = embed_diag_fixed(builder, ValueRef::Local(s_inv));
+        let s_inv_mat =
+            convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_inv_mat), s_dtype, dtype);
 
         let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank, dtype);
         let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
         // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
-        let d_udv_diag = hadamard_fixed_linear(builder, ValueRef::Local(s_inv_mat), anti_hermitian);
-        let d_udv_diag = linear_scale(
+        let d_udv_diag = hadamard_fixed_linear(builder, s_inv_mat, anti_hermitian);
+        let d_udv_diag = linear_scale_with_dtype(
             builder,
             d_udv_diag,
             0.5,
             matrix_shape(k.clone(), k.clone(), batch_shape),
+            dtype,
         );
 
-        let dss = hadamard_fixed_linear(builder, ValueRef::Local(s_dim), ds_mat);
+        let dss = hadamard_fixed_linear(builder, s_dim_linear_dtype.clone(), ds_mat);
         let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
         let du_inner_sum = linear_add(builder, dss, dss_h);
-        let du_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), du_inner_sum);
+        let du_inner = hadamard_fixed_linear(builder, f_linear_dtype.clone(), du_inner_sum);
         let du_inner = linear_add(builder, du_inner, d_udv_diag);
         let mut du = matmul_linear(
             builder,
@@ -680,7 +693,9 @@ pub(crate) fn linearize_svd(
                 matrix_shape(m, &k, batch_shape),
                 vector_to_matrix_broadcast_dims(batch_shape.len()),
             );
-            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            let s_broadcast =
+                convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_broadcast), s_dtype, dtype);
+            let correction = linear_div_fixed(builder, proj, s_broadcast);
             du = linear_add(builder, du, correction);
         }
         Some(du)
@@ -689,10 +704,10 @@ pub(crate) fn linearize_svd(
     };
 
     let dvt = if vt_active {
-        let sds = hadamard_fixed_linear(builder, ValueRef::Local(s_dim_t), ds_mat);
+        let sds = hadamard_fixed_linear(builder, s_dim_t_linear_dtype, ds_mat);
         let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank, dtype);
         let dv_inner_sum = linear_add(builder, sds, sds_h);
-        let dv_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), dv_inner_sum);
+        let dv_inner = hadamard_fixed_linear(builder, f_linear_dtype, dv_inner_sum);
         let mut dv = matmul_linear(
             builder,
             ValueRef::Local(v),
@@ -731,7 +746,9 @@ pub(crate) fn linearize_svd(
                 matrix_shape(n, &k, batch_shape),
                 vector_to_matrix_broadcast_dims(batch_shape.len()),
             );
-            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            let s_broadcast =
+                convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_broadcast), s_dtype, dtype);
+            let correction = linear_div_fixed(builder, proj, s_broadcast);
             dv = linear_add(builder, dv, correction);
         }
 
@@ -786,7 +803,14 @@ pub(crate) fn linearize_svd_values(
         vec![true, false],
         matrix_rank,
     );
-    Ok(vec![Some(extract_diag_linear(builder, ds_mat))])
+    let values_dtype = real_values_dtype(dtype);
+    let ds = extract_diag_linear(builder, ds_mat);
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        ds,
+        dtype,
+        values_dtype,
+    ))])
 }
 
 pub(crate) fn linearize_eigh(
@@ -867,11 +891,12 @@ pub(crate) fn linearize_eigh(
     );
     let diff = fixed_sub(builder, ValueRef::Local(w_row), ValueRef::Local(w_col));
     let diff_sq = fixed_mul(builder, ValueRef::Local(diff), ValueRef::Local(diff));
-    let eps_sq = fixed_scale(
+    let eps_sq = fixed_scale_with_dtype(
         builder,
         ValueRef::Local(ones_mat),
         eps * eps,
         matrix_shape(n.clone(), n.clone(), batch_shape),
+        w_dtype,
     );
     let safe_diff = fixed_add(builder, ValueRef::Local(diff_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(diff), ValueRef::Local(safe_diff));
@@ -938,7 +963,22 @@ pub(crate) fn linearize_eigh_values(
         matrix_rank,
     );
 
-    Ok(vec![Some(extract_diag_linear(builder, projected))])
+    let values_dtype = real_values_dtype(dtype);
+    let dw = extract_diag_linear(builder, projected);
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        dw,
+        dtype,
+        values_dtype,
+    ))])
+}
+
+fn real_values_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::C64 => DType::F64,
+        DType::C32 => DType::F32,
+        other => other,
+    }
 }
 
 pub(crate) fn linearize_cholesky(
@@ -1002,7 +1042,13 @@ pub(crate) fn linearize_cholesky(
         },
     )[0];
     let diag_s = extract_diag_linear(builder, s);
-    let half_diag = linear_scale(builder, diag_s, 0.5, vector_shape(n.clone(), batch_shape));
+    let half_diag = linear_scale_with_dtype(
+        builder,
+        diag_s,
+        0.5,
+        vector_shape(n.clone(), batch_shape),
+        dtype,
+    );
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     let phi_s = linear_add(builder, strict_lower, half_diag_mat);
     let dl = matmul_linear(
@@ -1096,8 +1142,13 @@ pub(crate) fn linearize_qr(
             },
         )[0];
         let sym_diag = extract_diag_linear(builder, sym);
-        let half_sym_diag =
-            linear_scale(builder, sym_diag, 0.5, vector_shape(m.clone(), batch_shape));
+        let half_sym_diag = linear_scale_with_dtype(
+            builder,
+            sym_diag,
+            0.5,
+            vector_shape(m.clone(), batch_shape),
+            dtype,
+        );
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -1248,7 +1299,8 @@ pub(crate) fn linearize_qr(
             },
         )[0];
         let sym_diag = extract_diag_linear(builder, sym);
-        let half_sym_diag = linear_scale(builder, sym_diag, 0.5, vector_shape(k, batch_shape));
+        let half_sym_diag =
+            linear_scale_with_dtype(builder, sym_diag, 0.5, vector_shape(k, batch_shape), dtype);
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -1344,7 +1396,13 @@ pub(crate) fn linearize_qr(
         },
     )[0];
     let sym_diag = extract_diag_linear(builder, sym);
-    let half_sym_diag = linear_scale(builder, sym_diag, 0.5, vector_shape(n.clone(), batch_shape));
+    let half_sym_diag = linear_scale_with_dtype(
+        builder,
+        sym_diag,
+        0.5,
+        vector_shape(n.clone(), batch_shape),
+        dtype,
+    );
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 

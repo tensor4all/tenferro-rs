@@ -34,6 +34,7 @@ pub use error::{
     PlacementConstraintError, PrepareError, ProviderContractError, RankRequirement,
     RegistrationKey, RuntimeConfigError, RuntimeReconfigureError, SpecializationError,
 };
+pub use execution::PreparedCompiledGraph;
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{

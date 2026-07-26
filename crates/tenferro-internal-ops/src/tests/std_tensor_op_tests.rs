@@ -1,4 +1,5 @@
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::ADRuleKind;
 use crate::dim_expr::DimExpr;
 use crate::ext_op::ExtensionOp;
 use crate::std_tensor_op::StdTensorOp;
@@ -13,7 +14,6 @@ use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
-use tidu::{ADRuleKind, Primitive};
 
 use crate::input_key::TensorInputKey;
 
@@ -449,7 +449,7 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
         ValueKey::Input(TensorInputKey::User { id: 11 }),
     ];
 
-    let result = StdTensorOp::add()
+    let result = StdTensorOp::Add
         .jvp_rule(
             &mut builder,
             &primal_in,
@@ -482,7 +482,7 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
         ValueRef::External(ValueKey::Input(TensorInputKey::User { id: 11 })),
     ];
 
-    let result = StdTensorOp::add()
+    let result = StdTensorOp::Add
         .transpose_rule(
             &mut builder,
             &[Some(ct)],

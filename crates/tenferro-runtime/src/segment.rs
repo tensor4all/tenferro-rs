@@ -184,7 +184,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<ExecSlot>>,
+    slots: &mut Vec<Option<ExecSlot<'static>>>,
     backend_cache: &mut B::RuntimeCache,
     extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
@@ -205,8 +205,8 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
 >(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot>,
-    slots: &mut Vec<Option<ExecSlot>>,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
     mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
@@ -299,8 +299,8 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 >(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot>,
-    slots: &mut Vec<Option<ExecSlot>>,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
     mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<TensorValue>> {
@@ -395,8 +395,8 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot>,
-    slots: &mut Vec<Option<ExecSlot>>,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
@@ -444,8 +444,8 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
 fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot>,
-    slots: &mut Vec<Option<ExecSlot>>,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<TensorValue>> {
     let result = (|| {
@@ -508,7 +508,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
 
 fn execute_fused_segment(
     exec: &mut dyn BackendSession,
-    slots: &mut [Option<ExecSlot>],
+    slots: &mut [Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
     output_slots: &[usize],
@@ -556,7 +556,7 @@ fn execute_fused_segment(
 
 fn execute_fused_value_segment(
     exec: &mut dyn BackendSession,
-    slots: &mut [Option<ExecSlot>],
+    slots: &mut [Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
     output_slots: &[usize],
@@ -644,7 +644,7 @@ fn has_multi_instruction_fused_segment(program: &ExecProgram) -> bool {
 
 fn try_execute_broadcast_multiply_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot>],
+    slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
 ) -> Result<Option<Tensor>> {
@@ -758,7 +758,7 @@ fn aligned_broadcast_dims(source_shape: &[usize], target_shape: &[usize]) -> Opt
 }
 
 fn read_slot<'slot, 'input>(
-    slots: &'slot [Option<ExecSlot>],
+    slots: &'slot [Option<ExecSlot<'_>>],
     slot: usize,
 ) -> Result<TensorRead<'slot>>
 where
@@ -773,7 +773,7 @@ where
 
 fn try_execute_single_broadcast_multiply_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot>],
+    slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
 ) -> Result<Option<Tensor>> {
@@ -838,7 +838,7 @@ fn try_execute_single_broadcast_multiply_segment(
 
 fn try_execute_terminal_broadcast_multiply_value_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot>],
+    slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
     terminal_slots: &[bool],
@@ -893,7 +893,7 @@ fn try_execute_terminal_broadcast_multiply_value_segment(
 
 fn try_execute_terminal_single_broadcast_multiply_value_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot>],
+    slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
     terminal_slots: &[bool],
@@ -1085,7 +1085,7 @@ fn build_fused_segment(
 }
 
 fn collect_segment_inputs<'a>(
-    slots: &'a [Option<ExecSlot>],
+    slots: &'a [Option<ExecSlot<'_>>],
     input_slots: &[usize],
 ) -> Result<Vec<&'a Tensor>> {
     input_slots
@@ -1100,7 +1100,7 @@ fn collect_segment_inputs<'a>(
 }
 
 fn reclaim_segment_inputs_exec(
-    slots: &mut [Option<ExecSlot>],
+    slots: &mut [Option<ExecSlot<'_>>],
     input_slots: &[usize],
     last_use: &[bool],
     exec: &mut dyn tenferro_tensor::BackendSession,

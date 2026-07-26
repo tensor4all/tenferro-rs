@@ -6,7 +6,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
-use tenferro_tensor::{DType, Error, Tensor, TensorRead};
+use tenferro_tensor::{DType, Error, ErrorKind, Tensor, TensorRead};
 
 use crate::backend::LinalgBackend;
 
@@ -552,6 +552,34 @@ pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
     if op.op() == LinalgOp::Cholesky {
         return Ok(vec![ctx.backend_mut().cholesky_read(inputs[0].clone())?]);
     }
+    if let LinalgOp::TriangularSolve {
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+    } = op.op()
+    {
+        match ctx.backend_mut().triangular_solve_read(
+            inputs[0].clone(),
+            inputs[1].clone(),
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        ) {
+            Ok(output) => return Ok(vec![output]),
+            Err(error) if error.kind() == ErrorKind::Unsupported => {}
+            Err(error) => return Err(error),
+        }
+    }
+    execute_linalg_extension_materialized_reads(op, inputs, ctx)
+}
+
+fn execute_linalg_extension_materialized_reads<B: LinalgBackend + 'static>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     // Linalg backends currently operate on compact tensors; materialization is
     // explicit here so borrowed views cannot silently bypass backend errors.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {

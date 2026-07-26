@@ -13,9 +13,9 @@ description = "Linear algebra traced APIs, eager helpers, extension runtime, and
 
 [features]
 default = ["cpu-faer"]
+__bench_unification_semantic_ad_api = []
 autodiff = [
     "dep:computegraph",
-    "dep:tidu",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
@@ -84,7 +84,6 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features =
 cblas-sys = { workspace = true, optional = true }
 cblas-inject = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }
-tidu = { workspace = true, optional = true }
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
@@ -99,6 +98,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [[bench]]
 name = "lu_ad_breakdown"
@@ -108,8 +109,13 @@ required-features = ["autodiff"]
 [[bench]]
 name = "linalg_vjp_gate"
 harness = false
-required-features = ["autodiff"]
+required-features = ["autodiff", "__bench_unification_semantic_ad_api"]
 
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "oracle_replay"
+path = "tests/oracle_replay.rs"
+required-features = ["autodiff"]

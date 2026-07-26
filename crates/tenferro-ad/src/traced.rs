@@ -1,44 +1,27 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ad_rule_error::{ad_rule_error, ad_rule_error_with_context};
-use computegraph::graph::Graph;
-use computegraph::resolve::resolve;
-use computegraph::resolve::{ResolvedView, ValueDef};
-use computegraph::types::ValueKey;
-use tenferro_ops::ad::ExtensionAdDispatcher;
+use computegraph::graph::GraphBuilder;
+use computegraph::{LocalValueId, OperationRole, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::{SymDim, TensorMeta};
 use tenferro_runtime::ad_support::{
-    checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
-    extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,
-    linear_input_key, metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new,
-    ones_tensor, push_metadata_scope, register_scoped_graph_analysis, registered_meta,
-    resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
-    tensor_meta_from_tensor, ConstraintScopeTransfer, RegisteredGraphAnalysis, TracedTensorParts,
+    allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, frozen_input_tensor,
+    inputs_map as tensor_inputs_map, leaf_input_key, metadata_scopes as tensor_metadata_scopes,
+    metadata_scopes_with_new, ones_tensor, register_scoped_graph_analysis,
+    shape_hint as tensor_shape_hint, tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts,
 };
-use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Result, Runtime, Tensor, TracedTensor};
-use tidu::{linear_transpose, linearize, ADRuleError};
-
-#[path = "traced/optimizer.rs"]
-mod optimizer;
-#[path = "traced/primal_transpose.rs"]
-mod primal_transpose;
-
-use optimizer::OptimizedLinearGraph;
-use primal_transpose::{try_primal_transpose, PrimalTransposeGraph};
-
-use crate::transform_cache::{
-    AdTransformCache, CachedTracedVjpTransform, TracedAdTransformCacheKey, TracedAdTransformKind,
+use tenferro_runtime::program::{FrozenProgram, ProgramValue, ProgramValueMetadata, SemanticOpRef};
+use tenferro_runtime::{
+    CompiledGraph, Error, ErrorPhase, GraphCompiler, Result, Runtime, Tensor, TracedTensor,
 };
 
-static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
-
-fn next_pass_id() -> u64 {
-    NEXT_DIFF_PASS_ID.fetch_add(1, Ordering::Relaxed)
-}
+use crate::semantic_extension::{SemanticAdError, SemanticExtensionRuleSet};
+use crate::semantic_transform::{
+    semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
+};
+use crate::transform_cache::{AdTransformCache, SemanticAdTransformCacheKey};
 
 pub(crate) fn next_input_key() -> TensorInputKey {
     tenferro_runtime::ad_support::allocate_input_key()
@@ -50,164 +33,31 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
         .unwrap_or_else(|| vec![0; tensor.rank])
 }
 
-fn shape_guard_context(
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
-    active_values: Option<Arc<HashSet<ValueKey<StdTensorOp>>>>,
-    roots: &[Arc<Graph<StdTensorOp>>],
-) -> ShapeGuardContext {
-    let mut ctx = ShapeGuardContext::with_global_metadata();
-    register_shape_sources(&mut ctx, roots);
-    let ctx = match extension_ad_dispatcher {
-        Some(dispatcher) => ctx.with_extension_ad_dispatcher(Arc::clone(dispatcher)),
-        None => ctx,
-    };
-    match active_values {
-        Some(keys) => ctx.with_linearize_active_values(keys),
-        None => ctx,
-    }
-}
-
-fn register_shape_sources(ctx: &mut ShapeGuardContext, roots: &[Arc<Graph<StdTensorOp>>]) {
-    let mut seen = HashSet::new();
-    for graph in roots {
-        register_graph_shape_sources(ctx, graph, &mut seen);
-    }
-}
-
-fn register_graph_shape_sources(
-    ctx: &mut ShapeGuardContext,
-    graph: &Arc<Graph<StdTensorOp>>,
-    seen: &mut HashSet<*const Graph<StdTensorOp>>,
-) {
-    if !seen.insert(Arc::as_ptr(graph)) {
-        return;
-    }
-    for parent in graph.parents() {
-        register_graph_shape_sources(ctx, parent, seen);
-    }
-    for &input_id in graph.inputs() {
-        let key = graph.values()[input_id].key.clone();
-        let Ok(meta) = registered_meta(&key) else {
-            continue;
-        };
-        let Some(shape) = meta.bound_shape() else {
-            continue;
-        };
-        for tensor_id in shape
-            .iter()
-            .flat_map(|dim| dim.referenced_tensor_ids().into_iter())
-        {
-            ctx.insert_shape_source(tensor_id, key.clone());
-        }
-    }
-}
-
-fn linearize_active_value_keys(
-    view: &ResolvedView<StdTensorOp>,
-    outputs: &[ValueKey<StdTensorOp>],
-    aliases: &std::collections::HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-) -> Arc<HashSet<ValueKey<StdTensorOp>>> {
-    let mut active = HashSet::new();
-    let mut stack: Vec<ValueKey<StdTensorOp>> = outputs.to_vec();
-    while let Some(key) = stack.pop() {
-        if !active.insert(key.clone()) {
-            continue;
-        }
-        let Some(val_def) = view.resolve_value(&key) else {
-            continue;
-        };
-        match val_def {
-            ValueDef::Produced { input_keys, .. } => {
-                for input_key in input_keys {
-                    stack.push(input_key.clone());
-                }
-            }
-            ValueDef::Input { key: input_key } => {
-                if let Some(aliased) = aliases.get(&input_key) {
-                    stack.push(aliased.clone());
-                }
-            }
-        }
-    }
-    Arc::new(active)
-}
-
-fn graph_has_registered_primal_vjp(
-    view: &ResolvedView<StdTensorOp>,
-    outputs: &[ValueKey<StdTensorOp>],
-    aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
-) -> bool {
-    let Some(extension_ad_dispatcher) = extension_ad_dispatcher else {
-        return false;
-    };
-    let mut seen = HashSet::new();
-    let mut stack = outputs.to_vec();
-    while let Some(key) = stack.pop() {
-        if !seen.insert(key.clone()) {
-            continue;
-        }
-        if let ValueKey::Derived { operation, .. } = &key {
-            if let StdTensorOp::Extension(ext) = operation.operation() {
-                if extension_ad_dispatcher.has_primal_vjp(ext.family_id()) {
-                    return true;
-                }
-            }
-        }
-        let Some(val_def) = view.resolve_value(&key) else {
-            continue;
-        };
-        match val_def {
-            ValueDef::Produced { input_keys, .. } => {
-                for input_key in input_keys {
-                    stack.push(input_key);
-                }
-            }
-            ValueDef::Input { key: input_key } => {
-                if let Some(aliased) = aliases.get(&input_key) {
-                    stack.push(aliased.clone());
-                }
-            }
-        }
-    }
-    false
-}
-
-fn is_not_applicable_custom_vjp(err: &ADRuleError) -> bool {
-    matches!(err, ADRuleError::Unsupported { .. })
-}
-
 pub(crate) fn grad_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
-    grad_with_optional_rules(output, wrt, extension_ad_dispatcher, ad_transform_cache)
+    grad_with_optional_rules(output, wrt, rules, ad_transform_cache)
 }
 
 pub(crate) fn jvp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    jvp_optional_impl(
-        output,
-        wrt,
-        tangent,
-        extension_ad_dispatcher,
-        ad_transform_cache,
-    )?
-    .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
+    jvp_optional_impl(output, wrt, tangent, rules, ad_transform_cache)?
+        .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
 }
 
 pub(crate) fn grad_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     if output.rank != 0 {
@@ -218,72 +68,45 @@ pub(crate) fn grad_optional_with_rules_and_cache(
 
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-    vjp_optional_impl(
-        output,
-        wrt,
-        &seed,
-        extension_ad_dispatcher,
-        "grad",
-        ad_transform_cache,
-    )
+    vjp_optional_impl(output, wrt, &seed, rules, "grad", ad_transform_cache)
 }
 
 pub(crate) fn jvp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
-    jvp_optional_impl(
-        output,
-        wrt,
-        tangent,
-        extension_ad_dispatcher,
-        ad_transform_cache,
-    )
+    jvp_optional_impl(output, wrt, tangent, rules, ad_transform_cache)
 }
 
 pub(crate) fn vjp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(
-        output,
-        wrt,
-        cotangent,
-        extension_ad_dispatcher,
-        "vjp",
-        ad_transform_cache,
-    )?
-    .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
+    vjp_optional_impl(output, wrt, cotangent, rules, "vjp", ad_transform_cache)?
+        .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
 }
 
 pub(crate) fn vjp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
-    vjp_optional_impl(
-        output,
-        wrt,
-        cotangent,
-        extension_ad_dispatcher,
-        "vjp",
-        ad_transform_cache,
-    )
+    vjp_optional_impl(output, wrt, cotangent, rules, "vjp", ad_transform_cache)
 }
 
 fn grad_with_optional_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     if output.rank != 0 {
@@ -295,15 +118,8 @@ fn grad_with_optional_rules(
     let ones = ones_tensor(output.dtype, vec![])?;
     let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
     let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_optional_impl(
-        output,
-        wrt,
-        &seed,
-        extension_ad_dispatcher,
-        "grad",
-        ad_transform_cache,
-    )?
-    .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
+    vjp_optional_impl(output, wrt, &seed, rules, "grad", ad_transform_cache)?
+        .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
 }
 
 fn single_runtime_output(mut outputs: Vec<Tensor>, op: &'static str) -> Result<Tensor> {
@@ -609,7 +425,8 @@ pub trait TracedTensorAdExt {
 
 impl TracedTensorAdExt for TracedTensor {
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
-        grad_with_optional_rules(self, wrt, None, None)
+        let rules = SemanticExtensionRuleSet::default();
+        grad_with_optional_rules(self, wrt, &rules, None)
     }
 
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
@@ -621,7 +438,8 @@ impl TracedTensorAdExt for TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![])?;
         let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-        vjp_optional_impl(self, wrt, &seed, None, "grad", None)
+        let rules = SemanticExtensionRuleSet::default();
+        vjp_optional_impl(self, wrt, &seed, &rules, "grad", None)
     }
 
     fn checkpoint(&mut self, compiler: &mut GraphCompiler, runtime: &Runtime) -> Result<()> {
@@ -650,7 +468,8 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        jvp_optional_impl(self, wrt, tangent, None, None)
+        let rules = SemanticExtensionRuleSet::default();
+        jvp_optional_impl(self, wrt, tangent, &rules, None)
     }
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
@@ -665,7 +484,8 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        vjp_optional_impl(self, wrt, cotangent, None, "vjp", None)
+        let rules = SemanticExtensionRuleSet::default();
+        vjp_optional_impl(self, wrt, cotangent, &rules, "vjp", None)
     }
 }
 
@@ -673,74 +493,10 @@ fn jvp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    let output_key = output.graph().values()[output.val].key.clone();
-    let checkpoint_chain = tensor_checkpoint_chain(output);
-    let aliases = checkpoint_chain
-        .as_ref()
-        .map(|chain| chain.collect_aliases())
-        .unwrap_or_default();
-    let checkpoint_graphs = checkpoint_chain
-        .as_ref()
-        .map(|chain| chain.collect_graphs())
-        .unwrap_or_default();
-    let mut roots = tensor_resolve_roots(output);
-    roots.extend(checkpoint_graphs.iter().cloned());
-    let view = resolve(roots);
-    let active_values =
-        linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
-    let cache_key = ad_transform_cache.map(|_| {
-        TracedAdTransformCacheKey::new(
-            TracedAdTransformKind::Jvp,
-            &view.roots,
-            &output_key,
-            &wrt_input_key,
-            &aliases,
-        )
-    });
-    let linear = match (ad_transform_cache, cache_key) {
-        (Some(cache), Some(key)) => {
-            if let Some(linear) = cache.get_traced_linearized(&key)? {
-                linear
-            } else {
-                let mut ad_ctx =
-                    shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
-                let linear = linearize(
-                    &view,
-                    std::slice::from_ref(&output_key),
-                    std::slice::from_ref(&wrt_input_key),
-                    next_pass_id(),
-                    &mut ad_ctx,
-                    &aliases,
-                )
-                .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
-                let linear = Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached());
-                cache.put_traced_linearized(key, Arc::clone(&linear))?;
-                linear
-            }
-        }
-        _ => {
-            let mut ad_ctx =
-                shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
-            let linear = linearize(
-                &view,
-                std::slice::from_ref(&output_key),
-                std::slice::from_ref(&wrt_input_key),
-                next_pass_id(),
-                &mut ad_ctx,
-                &aliases,
-            )
-            .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
-            Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached())
-        }
-    };
-    let Some(tangent_output) = linear.tangent_outputs()[0] else {
-        return Ok(None);
-    };
-    let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
     let tangent_data = tangent.attached_data().cloned().ok_or_else(|| {
         Error::invalid_argument(
             "jvp",
@@ -749,396 +505,474 @@ fn jvp_optional_impl(
             "jvp tangent must have concrete tensor data",
         )
     })?;
-    let analysis = register_scoped_graph_analysis(
-        linear.as_graph(),
-        vec![(
-            ValueKey::Input(tangent_input_key.clone()),
-            tensor_meta_from_tensor(tangent_data.as_ref()),
-        )],
-    )?;
-
-    let mut inputs_map = (*tensor_inputs_map(output)).clone();
-    if let Some(chain) = &checkpoint_chain {
-        inputs_map.extend(chain.collect_inputs());
-    }
-    inputs_map.insert(tangent_input_key, tangent_data);
-
-    let mut extra_roots = vec![Arc::clone(output.graph())];
-    extra_roots.extend(checkpoint_graphs);
-    extra_roots.extend(tensor_extra_roots(output));
-    let inherited_constraint_scopes = [
-        ConstraintScopeTransfer::from_tensor(output),
-        ConstraintScopeTransfer::from_tensor(wrt),
-        ConstraintScopeTransfer::from_tensor(tangent),
-    ];
-
-    Ok(Some(tensor_from_parts(TracedTensorParts {
-        rank: output.rank,
-        dtype: output.dtype,
-        graph: Arc::clone(linear.graph()),
-        val: tangent_output,
-        data: None,
-        shape_hint: tensor_shape_hint(output),
-        inputs_map: Arc::new(inputs_map),
-        extra_roots,
-        checkpoint_chain,
-        metadata_scopes: metadata_scopes_with_new(
-            analysis.metadata,
-            [
-                tensor_metadata_scopes(output),
-                tensor_metadata_scopes(wrt),
-                tensor_metadata_scopes(tangent),
-            ],
-        ),
-        constraint_scope_transfer: ConstraintScopeTransfer::with_new(
-            analysis.constraints,
-            inherited_constraint_scopes.iter(),
-        ),
-    })))
-}
-
-enum VjpTransposeGraph {
-    Primal(PrimalTransposeGraph),
-    Linear(Arc<CachedTracedVjpTransform>),
-}
-
-struct ActiveLinearVjp {
-    transposed: Arc<CachedTracedVjpTransform>,
-    residual_analysis: RegisteredGraphAnalysis,
-}
-
-impl VjpTransposeGraph {
-    fn as_graph(&self) -> &computegraph::graph::Graph<StdTensorOp> {
-        match self {
-            Self::Primal(graph) => graph.as_graph(),
-            Self::Linear(graph) => graph.transposed().as_graph(),
-        }
-    }
-
-    fn tangent_inputs(&self) -> &[(TensorInputKey, computegraph::LocalValueId)] {
-        match self {
-            Self::Primal(graph) => graph.tangent_inputs(),
-            Self::Linear(graph) => graph.transposed().tangent_inputs(),
-        }
-    }
-
-    fn tangent_outputs(&self) -> &[Option<computegraph::LocalValueId>] {
-        match self {
-            Self::Primal(graph) => graph.tangent_outputs(),
-            Self::Linear(graph) => graph.transposed().tangent_outputs(),
-        }
-    }
-
-    fn into_graph_arc(self) -> Arc<computegraph::graph::Graph<StdTensorOp>> {
-        match self {
-            Self::Primal(graph) => Arc::new(graph.into_graph()),
-            Self::Linear(graph) => Arc::clone(graph.transposed().graph()),
-        }
-    }
-}
-
-fn compute_linear_vjp_transform(
-    view: &ResolvedView<StdTensorOp>,
-    output_key: &ValueKey<StdTensorOp>,
-    wrt_input_key: &TensorInputKey,
-    aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
-    active_values: Arc<HashSet<ValueKey<StdTensorOp>>>,
-    wrt: &TracedTensor,
-) -> Result<tidu::ADRuleResult<Option<ActiveLinearVjp>>> {
-    let mut linear_ad_ctx =
-        shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
-    let linear = match linearize(
-        view,
-        std::slice::from_ref(output_key),
-        std::slice::from_ref(wrt_input_key),
-        next_pass_id(),
-        &mut linear_ad_ctx,
-        aliases,
-    ) {
-        Ok(linear) => linear,
-        Err(err) => {
-            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
-                return Err(Error::ad_rule_source("vjp", source));
-            }
-            return Ok(Err(err));
-        }
+    let source = GraphCompiler::new().compile(output)?;
+    let Some(wrt_input_index) = source.input_key_index(&wrt_input_key) else {
+        return Ok(None);
     };
-    if linear.tangent_outputs()[0].is_none() {
-        return Ok(Ok(None));
-    }
 
-    let linear_seed_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
-    let linear_analysis = register_scoped_graph_analysis(
-        linear.as_graph(),
-        vec![(
-            ValueKey::Input(linear_seed_key),
-            registered_meta(&wrt.graph().values()[wrt.val].key)?,
-        )],
+    let mut active_inputs = vec![false; source.input_count()];
+    active_inputs[wrt_input_index] = true;
+    let derivative = semantic_jvp_with_cache(
+        source.frozen_program(),
+        &active_inputs,
+        rules,
+        ad_transform_cache,
     )?;
-    linear_ad_ctx.refresh_global_metadata();
-    let transposed = match linear_transpose(&linear, &mut linear_ad_ctx) {
-        Ok(transposed) => OptimizedLinearGraph::from_tidu(transposed).into_cached(),
-        Err(err) => {
-            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
-                return Err(Error::ad_rule_source("vjp", source));
-            }
-            return Ok(Err(err));
-        }
+    let Some(seed_input_index) = derivative
+        .derivative_input_indices()
+        .get(wrt_input_index)
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
     };
-    let (_linear_graph, residual_graph) = linear.into_graphs();
-    let residual_analysis =
-        register_scoped_graph_analysis(residual_graph.as_ref(), std::iter::empty())?;
-    drop(linear_analysis);
-    Ok(Ok(Some(ActiveLinearVjp {
-        transposed: Arc::new(CachedTracedVjpTransform::new(residual_graph, transposed)),
-        residual_analysis,
-    })))
+    let Some(derivative_output_index) = derivative
+        .derivative_output_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
+    };
+
+    derivative_tensor_from_program(
+        &source,
+        &derivative,
+        derivative_output_index,
+        &[(seed_input_index, tangent_data)],
+        [output, wrt, tangent],
+        tensor_shape_hint(output),
+        "jvp",
+    )
+    .map(Some)
 }
 
 fn vjp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
+    rules: &SemanticExtensionRuleSet,
     transform: &'static str,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    let output_key = output.graph().values()[output.val].key.clone();
-    let checkpoint_chain = tensor_checkpoint_chain(output);
-    let aliases = checkpoint_chain
-        .as_ref()
-        .map(|chain| chain.collect_aliases())
-        .unwrap_or_default();
-    let checkpoint_graphs = checkpoint_chain
-        .as_ref()
-        .map(|chain| chain.collect_graphs())
-        .unwrap_or_default();
-    let mut roots = tensor_resolve_roots(output);
-    roots.extend(checkpoint_graphs.iter().cloned());
-    let view = resolve(roots);
-
-    let active_values =
-        linearize_active_value_keys(&view, std::slice::from_ref(&output_key), &aliases);
-    let cache_key = ad_transform_cache.map(|_| {
-        TracedAdTransformCacheKey::new(
-            TracedAdTransformKind::Vjp,
-            &view.roots,
-            &output_key,
-            &wrt_input_key,
-            &aliases,
-        )
-    });
-    if graph_has_registered_primal_vjp(
-        &view,
-        std::slice::from_ref(&output_key),
-        &aliases,
-        extension_ad_dispatcher,
-    ) {
-        let mut primal_ad_ctx = shape_guard_context(extension_ad_dispatcher, None, &view.roots);
-        primal_ad_ctx.refresh_global_metadata();
-        match try_primal_transpose(
-            &view,
-            std::slice::from_ref(&output_key),
-            std::slice::from_ref(&wrt_input_key),
-            &aliases,
-            &mut primal_ad_ctx,
-            next_pass_id(),
-        ) {
-            Ok(transposed) => {
-                if transposed
-                    .tangent_outputs()
-                    .first()
-                    .and_then(|slot| *slot)
-                    .is_some()
-                {
-                    let transposed = VjpTransposeGraph::Primal(transposed);
-                    return build_vjp_tensor(
-                        output,
-                        wrt,
-                        cotangent,
-                        transposed,
-                        None,
-                        checkpoint_chain,
-                        checkpoint_graphs,
-                    );
-                }
-                return Ok(None);
-            }
-            Err(err) if !is_not_applicable_custom_vjp(&err) => {
-                return Err(ad_rule_error_with_context(
-                    transform,
-                    err,
-                    &mut primal_ad_ctx,
-                ));
-            }
-            Err(err) => {
-                if let Some(source) = primal_ad_ctx.take_deferred_shape_error() {
-                    return Err(Error::ad_rule_source(transform, source));
-                }
-                let _ = err;
-            }
-        }
-    }
-
-    let linear_attempt = match (ad_transform_cache, cache_key) {
-        (Some(cache), Some(key)) => {
-            if let Some(cached) = cache.get_traced_vjp(&key)? {
-                let residual_analysis =
-                    register_scoped_graph_analysis(cached.residual_graph(), std::iter::empty())?;
-                Ok(Some(ActiveLinearVjp {
-                    transposed: cached,
-                    residual_analysis,
-                }))
-            } else {
-                let computed = compute_linear_vjp_transform(
-                    &view,
-                    &output_key,
-                    &wrt_input_key,
-                    &aliases,
-                    extension_ad_dispatcher,
-                    active_values,
-                    wrt,
-                )?;
-                if let Ok(Some(active)) = &computed {
-                    cache.put_traced_vjp(key, Arc::clone(&active.transposed))?;
-                }
-                computed
-            }
-        }
-        _ => compute_linear_vjp_transform(
-            &view,
-            &output_key,
-            &wrt_input_key,
-            &aliases,
-            extension_ad_dispatcher,
-            active_values,
-            wrt,
-        )?,
-    };
-
-    let (transposed, residual_analysis) = match linear_attempt {
-        Ok(None) => return Ok(None),
-        Ok(Some(active)) => (
-            VjpTransposeGraph::Linear(active.transposed),
-            Some(active.residual_analysis),
-        ),
-        Err(linear_err) => return Err(ad_rule_error(transform, linear_err)),
-    };
-
-    build_vjp_tensor(
-        output,
-        wrt,
-        cotangent,
-        transposed,
-        residual_analysis,
-        checkpoint_chain,
-        checkpoint_graphs,
-    )
-}
-
-fn build_vjp_tensor(
-    output: &TracedTensor,
-    wrt: &TracedTensor,
-    cotangent: &TracedTensor,
-    transposed: VjpTransposeGraph,
-    residual_analysis: Option<RegisteredGraphAnalysis>,
-    checkpoint_chain: Option<Arc<tenferro_runtime::ad_support::CheckpointNode>>,
-    checkpoint_graphs: Vec<Arc<Graph<StdTensorOp>>>,
-) -> Result<Option<TracedTensor>> {
-    let cotangent_input_key =
-        linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
     let cotangent_data = cotangent.attached_data().cloned().ok_or_else(|| {
         Error::invalid_argument(
-            "vjp",
+            transform,
             ErrorPhase::GraphBuild,
             "cotangent",
             "vjp cotangent must have concrete tensor data",
         )
     })?;
-    let transposed_analysis = register_scoped_graph_analysis(
-        transposed.as_graph(),
-        vec![(
-            ValueKey::Input(cotangent_input_key.clone()),
-            tensor_meta_from_tensor(cotangent_data.as_ref()),
-        )],
-    )?;
-    let Some(cotangent_output) = transposed.tangent_outputs()[0] else {
+    let source = GraphCompiler::new().compile(output)?;
+    let Some(wrt_input_index) = source.input_key_index(&wrt_input_key) else {
         return Ok(None);
     };
 
-    let mut inputs_map = (*tensor_inputs_map(output)).clone();
-    if let Some(chain) = &checkpoint_chain {
-        inputs_map.extend(chain.collect_inputs());
-    }
-    inputs_map.insert(cotangent_input_key.clone(), cotangent_data);
-
-    let mut extra_roots = vec![Arc::clone(output.graph())];
-    if let VjpTransposeGraph::Linear(cached) = &transposed {
-        extra_roots.push(Arc::clone(cached.residual_graph()));
-    }
-    extra_roots.extend(checkpoint_graphs);
-    extra_roots.extend(tensor_extra_roots(output));
-
-    let (residual_metadata_scope, residual_constraint_scope) = match residual_analysis {
-        Some(analysis) => (Some(analysis.metadata), Some(analysis.constraints)),
-        None => (None, None),
+    let mut active_inputs = vec![false; source.input_count()];
+    active_inputs[wrt_input_index] = true;
+    let active_outputs = vec![true; source.output_count()];
+    let derivative = semantic_vjp_with_cache(
+        source.frozen_program(),
+        &active_inputs,
+        &active_outputs,
+        rules,
+        ad_transform_cache,
+    )?;
+    let Some(seed_input_index) = derivative
+        .derivative_input_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
     };
-    let RegisteredGraphAnalysis {
-        metadata: transposed_metadata_scope,
-        constraints: transposed_constraint_scope,
-    } = transposed_analysis;
-    let inherited_constraint_scopes = [
-        ConstraintScopeTransfer::from_tensor(output),
-        ConstraintScopeTransfer::from_tensor(wrt),
-        ConstraintScopeTransfer::from_tensor(cotangent),
-    ];
-    let inherited_constraint_scope = match residual_constraint_scope {
-        Some(scope) => ConstraintScopeTransfer::with_new(scope, inherited_constraint_scopes.iter()),
-        None => ConstraintScopeTransfer::merge(inherited_constraint_scopes.iter()),
+    let Some(derivative_output_index) = derivative
+        .derivative_output_indices()
+        .get(wrt_input_index)
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
     };
-    let constraint_scope_transfer = ConstraintScopeTransfer::with_new(
-        transposed_constraint_scope,
-        [&inherited_constraint_scope],
-    );
 
-    Ok(Some(tensor_from_parts(TracedTensorParts {
-        rank: wrt.rank,
-        dtype: wrt.dtype,
-        graph: transposed.into_graph_arc(),
-        val: cotangent_output,
+    derivative_tensor_from_program(
+        &source,
+        &derivative,
+        derivative_output_index,
+        &[(seed_input_index, cotangent_data)],
+        [output, wrt, cotangent],
+        tensor_shape_hint(wrt),
+        transform,
+    )
+    .map(Some)
+}
+
+fn semantic_jvp_with_cache(
+    source: &FrozenProgram,
+    active_inputs: &[bool],
+    rules: &SemanticExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
+) -> Result<SemanticAdProgram> {
+    let key = SemanticAdTransformCacheKey::jvp(source, active_inputs);
+    if let Some(cache) = ad_transform_cache {
+        if let Some(cached) = cache.get_semantic(&key, source)? {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(source)
+                .map_err(|source| {
+                    Error::runtime_state_source(
+                        "semantic traced jvp cache",
+                        ErrorPhase::GraphBuild,
+                        source,
+                    )
+                });
+        }
+    }
+    let derivative =
+        semantic_jvp(source, active_inputs, rules).map_err(semantic_transform_error("jvp"))?;
+    if let Some(cache) = ad_transform_cache {
+        cache.put_semantic(key, source, Arc::new(derivative.clone()))?;
+    }
+    Ok(derivative)
+}
+
+fn semantic_vjp_with_cache(
+    source: &FrozenProgram,
+    active_inputs: &[bool],
+    active_outputs: &[bool],
+    rules: &SemanticExtensionRuleSet,
+    ad_transform_cache: Option<&AdTransformCache>,
+) -> Result<SemanticAdProgram> {
+    let key = SemanticAdTransformCacheKey::vjp(source, active_inputs, active_outputs);
+    if let Some(cache) = ad_transform_cache {
+        if let Some(cached) = cache.get_semantic(&key, source)? {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(source)
+                .map_err(|source| {
+                    Error::runtime_state_source(
+                        "semantic traced vjp cache",
+                        ErrorPhase::GraphBuild,
+                        source,
+                    )
+                });
+        }
+    }
+    let derivative = semantic_vjp(source, active_inputs, active_outputs, rules)
+        .map_err(semantic_transform_error("vjp"))?;
+    if let Some(cache) = ad_transform_cache {
+        cache.put_semantic(key, source, Arc::new(derivative.clone()))?;
+    }
+    Ok(derivative)
+}
+
+fn semantic_transform_error(
+    transform: &'static str,
+) -> impl FnOnce(SemanticAdTransformError) -> Error {
+    move |source| {
+        semantic_transform_validation_error(transform, &source).unwrap_or_else(|| {
+            Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source)
+        })
+    }
+}
+
+fn semantic_transform_validation_error(
+    transform: &'static str,
+    source: &SemanticAdTransformError,
+) -> Option<Error> {
+    let SemanticAdTransformError::Extension(SemanticAdError::Rule { source, .. }) = source else {
+        return None;
+    };
+    let tenferro_ops::ad::ADRuleError::InvalidInput { op, message, .. } =
+        source.downcast_ref::<tenferro_ops::ad::ADRuleError>()?
+    else {
+        return None;
+    };
+    Some(Error::invalid_argument(
+        transform,
+        ErrorPhase::GraphBuild,
+        "semantic_ad_rule",
+        format!("{op}: {message}"),
+    ))
+}
+
+fn derivative_tensor_from_program(
+    source: &CompiledGraph,
+    derivative: &SemanticAdProgram,
+    derivative_output_index: usize,
+    seed_tensors: &[(usize, Arc<Tensor>)],
+    inherited_tensors: [&TracedTensor; 3],
+    fallback_shape_hint: Option<Vec<SymDim>>,
+    transform: &'static str,
+) -> Result<TracedTensor> {
+    let frozen = derivative.frozen();
+    let input_shapes = symbolic_input_shapes(frozen)?;
+    let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
+    let input_metas = frozen
+        .program
+        .inputs()
+        .iter()
+        .copied()
+        .map(|value| tensor_meta_for_value(frozen, value, &input_shape_refs, transform))
+        .collect::<Result<Vec<_>>>()?;
+
+    let output_value = *frozen
+        .program
+        .outputs()
+        .get(derivative_output_index)
+        .ok_or_else(|| {
+            Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                format!(
+                    "derivative output index {derivative_output_index} is outside {} outputs",
+                    frozen.program.outputs().len()
+                ),
+            )
+        })?;
+    let output_meta = tensor_meta_for_value(frozen, output_value, &input_shape_refs, transform)?;
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let mut value_map = HashMap::<ProgramValue, LocalValueId>::new();
+    let mut input_keys = Vec::with_capacity(frozen.program.inputs().len());
+    for (input_index, input) in frozen.program.inputs().iter().copied().enumerate() {
+        let key = if input_index < source.input_keys().len() {
+            source.input_keys()[input_index].clone()
+        } else {
+            allocate_input_key()
+        };
+        let local = builder.add_input(key.clone());
+        value_map.insert(input, local);
+        input_keys.push(key);
+    }
+
+    for operation in frozen.program.operations() {
+        let inputs = operation
+            .inputs()
+            .iter()
+            .copied()
+            .map(|value| {
+                value_map
+                    .get(&value)
+                    .copied()
+                    .map(ValueRef::Local)
+                    .ok_or_else(|| missing_program_value(transform, "operation input"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let op = match operation.op() {
+            SemanticOpRef::Core(op) => StdTensorOp::from(op),
+            SemanticOpRef::Extension(op) => StdTensorOp::Extension(op.clone_arc()),
+            _ => {
+                return Err(Error::runtime_state(
+                    transform,
+                    ErrorPhase::GraphBuild,
+                    "unsupported semantic operation variant in derivative graph",
+                ));
+            }
+        };
+        let outputs = builder.add_operation(op, inputs, OperationRole::Primary);
+        if outputs.len() != operation.outputs().len() {
+            return Err(Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                format!(
+                    "semantic operation expected {} outputs, graph builder produced {}",
+                    operation.outputs().len(),
+                    outputs.len()
+                ),
+            ));
+        }
+        for (value, local) in operation.outputs().iter().copied().zip(outputs) {
+            value_map.insert(value, local);
+        }
+    }
+
+    let graph_outputs = frozen
+        .program
+        .outputs()
+        .iter()
+        .copied()
+        .map(|value| {
+            value_map
+                .get(&value)
+                .copied()
+                .ok_or_else(|| missing_program_value(transform, "program output"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let val = *graph_outputs.get(derivative_output_index).ok_or_else(|| {
+        Error::runtime_state(
+            transform,
+            ErrorPhase::GraphBuild,
+            "derivative output index missing after graph conversion",
+        )
+    })?;
+    builder.set_outputs(graph_outputs);
+    let graph = Arc::new(builder.build());
+
+    let mut inputs_map = (*tensor_inputs_map(inherited_tensors[0])).clone();
+    for (input_index, key) in input_keys.iter().enumerate() {
+        if let Some(tensor) = frozen_input_tensor(frozen, input_index) {
+            inputs_map.insert(key.clone(), tensor);
+        }
+    }
+    for (seed_input_index, tensor) in seed_tensors {
+        let meta = input_metas.get(*seed_input_index).ok_or_else(|| {
+            Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                format!("seed input index {seed_input_index} is outside derivative inputs"),
+            )
+        })?;
+        validate_seed_tensor(transform, *seed_input_index, tensor.as_ref(), meta)?;
+        let key = input_keys.get(*seed_input_index).ok_or_else(|| {
+            Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                format!("seed input key {seed_input_index} is outside derivative inputs"),
+            )
+        })?;
+        inputs_map.insert(key.clone(), Arc::clone(tensor));
+    }
+
+    let graph_input_metadata = graph
+        .inputs()
+        .iter()
+        .copied()
+        .zip(input_metas)
+        .map(|(input, meta)| (graph.values()[input].key.clone(), meta));
+    let analysis = register_scoped_graph_analysis(graph.as_ref(), graph_input_metadata)?;
+    let inherited_constraint_scopes = inherited_tensors.map(ConstraintScopeTransfer::from_tensor);
+
+    Ok(tensor_from_parts(TracedTensorParts {
+        rank: output_meta.rank(),
+        dtype: output_meta.dtype,
+        graph,
+        val,
         data: None,
-        shape_hint: tensor_shape_hint(wrt),
+        shape_hint: output_meta.exact_shape().or(fallback_shape_hint),
         inputs_map: Arc::new(inputs_map),
-        extra_roots,
-        checkpoint_chain,
-        metadata_scopes: {
-            let mut scopes = if let Some(scope) = residual_metadata_scope {
-                metadata_scopes_with_new(
-                    scope,
-                    [
-                        tensor_metadata_scopes(output),
-                        tensor_metadata_scopes(wrt),
-                        tensor_metadata_scopes(cotangent),
-                    ],
+        extra_roots: Vec::new(),
+        checkpoint_chain: None,
+        metadata_scopes: metadata_scopes_with_new(
+            analysis.metadata,
+            inherited_tensors.map(tensor_metadata_scopes),
+        ),
+        constraint_scope_transfer: ConstraintScopeTransfer::with_new(
+            analysis.constraints,
+            inherited_constraint_scopes.iter(),
+        ),
+    }))
+}
+
+fn missing_program_value(transform: &'static str, role: &'static str) -> Error {
+    Error::runtime_state(
+        transform,
+        ErrorPhase::GraphBuild,
+        format!("semantic derivative graph references missing {role}"),
+    )
+}
+
+fn symbolic_input_shapes(frozen: &FrozenProgram) -> Result<Vec<Vec<SymDim>>> {
+    frozen
+        .program
+        .inputs()
+        .iter()
+        .copied()
+        .map(|value| {
+            let meta = frozen.program.value_metadata(value).map_err(|source| {
+                Error::runtime_state_source(
+                    "semantic traced AD input metadata",
+                    ErrorPhase::GraphBuild,
+                    source,
                 )
-            } else {
-                let mut scopes: Vec<Arc<crate::metadata::GlobalMetadataScope>> = Vec::new();
-                for inherited in [
-                    tensor_metadata_scopes(output),
-                    tensor_metadata_scopes(wrt),
-                    tensor_metadata_scopes(cotangent),
-                ] {
-                    for scope in inherited {
-                        scopes.push(Arc::clone(scope));
-                    }
-                }
-                scopes
-            };
-            push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));
-            scopes
-        },
-        constraint_scope_transfer,
-    })))
+            })?;
+            let tensor_id = allocate_shape_tensor_id();
+            Ok((0..meta.shape().len())
+                .map(|axis| SymDim::tensor_axis(tensor_id, axis))
+                .collect())
+        })
+        .collect()
+}
+
+fn tensor_meta_for_value(
+    frozen: &FrozenProgram,
+    value: ProgramValue,
+    input_shapes: &[&[SymDim]],
+    transform: &'static str,
+) -> Result<TensorMeta> {
+    let meta = frozen
+        .program
+        .value_metadata(value)
+        .map_err(|source| Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source))?;
+    Ok(program_metadata_to_tensor_meta(meta, input_shapes))
+}
+
+fn program_metadata_to_tensor_meta(
+    metadata: &ProgramValueMetadata,
+    input_shapes: &[&[SymDim]],
+) -> TensorMeta {
+    let extents = metadata
+        .shape()
+        .iter()
+        .cloned()
+        .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, input_shapes)))
+        .collect();
+    TensorMeta::with_extents(metadata.dtype(), extents)
+}
+
+fn validate_seed_tensor(
+    transform: &'static str,
+    input_index: usize,
+    tensor: &Tensor,
+    expected: &TensorMeta,
+) -> Result<()> {
+    let actual_dtype = tensor.dtype();
+    if actual_dtype != expected.dtype {
+        return Err(Error::invalid_argument(
+            transform,
+            ErrorPhase::GraphBuild,
+            "seed",
+            format!(
+                "seed input {input_index} dtype mismatch: expected {:?}, got {:?}",
+                expected.dtype, actual_dtype
+            ),
+        ));
+    }
+    let actual_shape = tensor.shape();
+    if actual_shape.len() != expected.rank() {
+        return Err(Error::invalid_argument(
+            transform,
+            ErrorPhase::GraphBuild,
+            "seed",
+            format!(
+                "seed input {input_index} rank mismatch: expected {}, got {}",
+                expected.rank(),
+                actual_shape.len()
+            ),
+        ));
+    }
+    if let Some(expected_shape) = expected
+        .exact_shape()
+        .filter(|shape| shape.iter().all(|dim| dim.constant_value().is_some()))
+        .map(|shape| {
+            shape
+                .into_iter()
+                .map(|dim| dim.constant_value().expect("filtered constant shape"))
+                .collect::<Vec<_>>()
+        })
+    {
+        if expected_shape != actual_shape {
+            return Err(Error::invalid_argument(
+                transform,
+                ErrorPhase::GraphBuild,
+                "seed",
+                format!(
+                    "seed input {input_index} shape mismatch: expected {:?}, got {:?}",
+                    expected_shape, actual_shape
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
