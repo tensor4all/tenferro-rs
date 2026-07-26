@@ -205,11 +205,13 @@ store type-indexed CUDA handles or plans through
 `CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
 and resource owner.
 
-The CUDA extension cache has a bounded default capacity of 16 type entries.
-Applications can configure it with
-`CudaBackend::set_cuda_extension_cache_max_entries`, clear it with
-`CudaBackend::clear_cuda_extension_cache`, and inspect retained entries and
-logical retained bytes with `CudaBackend::cuda_extension_cache_stats`.
+The CUDA extension cache has bounded defaults for type entries and logical
+retained bytes. Applications can configure it with
+`CudaBackend::set_cuda_extension_cache_max_entries` and
+`CudaBackend::set_cuda_extension_cache_max_retained_bytes`, clear it with
+`CudaBackend::clear_cuda_extension_cache`, and inspect retained entries,
+logical retained bytes, and event counters with
+`CudaBackend::cuda_extension_cache_stats`.
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
 

@@ -13,6 +13,10 @@ fn limits(max_entries: usize) -> ExtensionCacheLimits {
     ExtensionCacheLimits::new(NonZeroUsize::new(max_entries).unwrap())
 }
 
+fn limits_with_bytes(max_entries: usize, max_retained_bytes: usize) -> ExtensionCacheLimits {
+    limits(max_entries).with_max_retained_bytes(NonZeroUsize::new(max_retained_bytes).unwrap())
+}
+
 #[test]
 fn selector_matches_all_family_and_cache_scopes() {
     let plans = key(FAMILY_A, PLANS, 1);
@@ -99,7 +103,7 @@ fn dynamic_retained_bytes_follow_mutated_cache_entries() {
 
 #[test]
 fn store_stats_saturate_retained_bytes() {
-    let mut store = ExtensionCacheStore::new();
+    let mut store = ExtensionCacheStore::with_limits(limits_with_bytes(4, usize::MAX));
     store.put(key(FAMILY_A, PLANS, 1), 1_u64, usize::MAX);
     store.put(key(FAMILY_A, PLANS, 2), 2_u64, usize::MAX);
 
@@ -107,6 +111,26 @@ fn store_stats_saturate_retained_bytes() {
         store.stats(ExtensionCacheSelector::All).retained_bytes,
         usize::MAX
     );
+}
+
+#[test]
+fn store_evicts_lru_entries_by_retained_byte_limit() {
+    let mut store = ExtensionCacheStore::with_limits(limits_with_bytes(8, 64));
+    let first = key(FAMILY_A, PLANS, 1);
+    let second = key(FAMILY_A, PLANS, 2);
+
+    assert_eq!(store.limits().max_retained_bytes().unwrap().get(), 64);
+
+    store.put(first, 1_u64, 40);
+    store.put(second, 2_u64, 40);
+
+    assert!(store.get::<u64>(&first).is_none());
+    assert_eq!(store.get::<u64>(&second), Some(&2));
+
+    let stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.retained_bytes, 40);
+    assert_eq!(stats.evictions, 1);
 }
 
 #[test]

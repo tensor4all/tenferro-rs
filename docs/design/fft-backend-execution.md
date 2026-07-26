@@ -80,8 +80,9 @@ Every backend receives `FftExecutionCache`, which exposes one bounded typed
 does not contain RustFFT-typed fields. Each backend stores private
 `Send + Sync + 'static` entries through `FftExecutionCache::store_mut` under a
 stable `ExtensionCacheKey` namespace. The global entry bound and LRU order are
-shared across namespaces, so a caller's capacity is a true upper bound for the
-whole executor rather than a per-backend multiplier.
+shared across namespaces, and the global logical retained-byte bound applies
+across those same entries. A caller's limits are true upper bounds for the
+whole executor rather than per-backend multipliers.
 
 Backends must include every field that changes plan or workspace identity in
 the discriminator and should retain the unhashed identity in the typed value

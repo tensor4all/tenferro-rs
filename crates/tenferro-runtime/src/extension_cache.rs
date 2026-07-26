@@ -13,6 +13,14 @@ use tenferro_tensor::CacheStats;
 
 /// Default number of type-erased extension cache entries retained per owner.
 pub const DEFAULT_EXTENSION_CACHE_CAPACITY: usize = 256;
+/// Default logical retained-byte bound for extension cache entries.
+pub const DEFAULT_EXTENSION_CACHE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
+
+const DEFAULT_EXTENSION_CACHE_RETAINED_BYTES_NONZERO: NonZeroUsize =
+    match NonZeroUsize::new(DEFAULT_EXTENSION_CACHE_RETAINED_BYTES) {
+        Some(value) => value,
+        None => NonZeroUsize::MIN,
+    };
 
 /// A stable key for one extension-owned runtime cache entry.
 ///
@@ -96,10 +104,11 @@ impl ExtensionCacheSelector {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtensionCacheLimits {
     max_entries: NonZeroUsize,
+    max_retained_bytes: Option<NonZeroUsize>,
 }
 
 impl ExtensionCacheLimits {
-    /// Build limits from a maximum entry count.
+    /// Build limits from a maximum entry count and the default byte bound.
     ///
     /// # Examples
     ///
@@ -109,14 +118,40 @@ impl ExtensionCacheLimits {
     ///
     /// let limits = ExtensionCacheLimits::new(NonZeroUsize::new(4).unwrap());
     /// assert_eq!(limits.max_entries().get(), 4);
+    /// assert!(limits.max_retained_bytes().is_some());
     /// ```
     pub const fn new(max_entries: NonZeroUsize) -> Self {
-        Self { max_entries }
+        Self {
+            max_entries,
+            max_retained_bytes: Some(DEFAULT_EXTENSION_CACHE_RETAINED_BYTES_NONZERO),
+        }
     }
 
     /// Maximum entries retained by the store.
     pub const fn max_entries(self) -> NonZeroUsize {
         self.max_entries
+    }
+
+    /// Maximum logical retained bytes, when configured.
+    pub const fn max_retained_bytes(self) -> Option<NonZeroUsize> {
+        self.max_retained_bytes
+    }
+
+    /// Return limits with a new logical retained-byte bound.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_runtime::ExtensionCacheLimits;
+    ///
+    /// let limits = ExtensionCacheLimits::default()
+    ///     .with_max_retained_bytes(NonZeroUsize::new(1024).unwrap());
+    /// assert_eq!(limits.max_retained_bytes().unwrap().get(), 1024);
+    /// ```
+    pub const fn with_max_retained_bytes(mut self, max_retained_bytes: NonZeroUsize) -> Self {
+        self.max_retained_bytes = Some(max_retained_bytes);
+        self
     }
 }
 
@@ -125,6 +160,7 @@ impl Default for ExtensionCacheLimits {
         Self {
             max_entries: NonZeroUsize::new(DEFAULT_EXTENSION_CACHE_CAPACITY)
                 .unwrap_or(NonZeroUsize::MIN),
+            max_retained_bytes: Some(DEFAULT_EXTENSION_CACHE_RETAINED_BYTES_NONZERO),
         }
     }
 }
@@ -269,13 +305,9 @@ impl ExtensionCacheStore {
 
     /// Resize the store and evict least-recently-used entries if needed.
     pub fn set_limits(&mut self, limits: ExtensionCacheLimits) {
-        while self.entries.len() > limits.max_entries().get() {
-            if let Some((key, _)) = self.entries.pop_lru() {
-                self.record_eviction(&key);
-            }
-        }
-        self.entries.resize(limits.max_entries());
         self.limits = limits;
+        self.evict_to_limits();
+        self.entries.resize(limits.max_entries());
     }
 
     /// Current entry count.
@@ -447,6 +479,31 @@ impl ExtensionCacheStore {
                 self.record_eviction(&removed_key);
             }
         }
+        self.evict_to_limits();
+    }
+
+    fn evict_to_limits(&mut self) {
+        while self.entries.len() > self.limits.max_entries().get()
+            || self.retained_bytes_exceeds_limit()
+        {
+            let Some((key, _)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.record_eviction(&key);
+        }
+    }
+
+    fn retained_bytes_exceeds_limit(&self) -> bool {
+        self.limits
+            .max_retained_bytes
+            .is_some_and(|limit| self.retained_bytes() > limit.get())
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(_, entry)| entry.value.retained_bytes())
+            .fold(0usize, usize::saturating_add)
     }
 
     fn event_stats(&self, selector: ExtensionCacheSelector) -> ExtensionCacheEventStats {

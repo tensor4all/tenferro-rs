@@ -251,6 +251,8 @@ use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
+).with_max_retained_bytes(
+    NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
 )).unwrap();
 
 let runtime = Runtime::builder().build().unwrap();

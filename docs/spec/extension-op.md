@@ -267,11 +267,11 @@ MUST be represented as semantic payload instead.
 
 Extension crates that need plan caches or vendor handles MUST own them in an
 explicit runtime/cache object outside the semantic payload contract. That owner
-MUST be bounded by default and SHOULD expose clear, capacity, and stats APIs
-consistent with the workspace cache ownership rules. The op payload MAY hold an
-`Arc` to the extension-owned cache object only when that cache is a performance
-detail and two equal payloads remain interchangeable when their cache handles
-differ.
+MUST be bounded by default by both entry count and logical retained bytes, and
+SHOULD expose clear, limit-configuration, and stats APIs consistent with the
+workspace cache ownership rules. The op payload MAY hold an `Arc` to the
+extension-owned cache object only when that cache is a performance detail and
+two equal payloads remain interchangeable when their cache handles differ.
 
 There is no monolithic core runtime owner for arbitrary extension cache state.
 `EagerRuntime`, `GraphCompiler`, and `Runtime` own explicit bounded cache
