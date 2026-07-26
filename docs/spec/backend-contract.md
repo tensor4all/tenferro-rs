@@ -232,7 +232,10 @@ einsum, and FFT provide those modules from their owning crates.
 `Runtime::run_compiled` is the public execution entry point for a
 `CompiledGraph`. Runtime preparation owns backend selection, registered
 extension modules, and cache ownership required to preserve dispatch
-invariants.
+invariants. The synchronous runtime path executes the prepared root schedule
+one node at a time and dispatches each semantic operation through the selected
+same-storage engine bridge. Placements that require transfers are rejected
+until the async/transfer scheduler is implemented.
 
 The segmented internal path groups fusible backend instructions:
 
@@ -254,10 +257,10 @@ Segmented execution exists to:
 - preserve the same observable behavior as unsegmented execution
 
 The unsegmented internal path evaluates one instruction at a time and is used
-for parity checks and narrow owner-scoped extension-module composition. It is
-not a general public execution surface. Extension instructions must run through
-a registered `ExtensionModule`; missing module registration is an error, not
-a fallback to a host/reference path.
+by the current scheduled runtime loop, parity checks, and narrow owner-scoped
+extension-module composition. It is not a general public execution surface.
+Extension instructions must run through a registered `ExtensionModule`; missing
+module registration is an error, not a fallback to a host/reference path.
 
 The engine uses `last_use` metadata to reclaim buffers via
 `BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.

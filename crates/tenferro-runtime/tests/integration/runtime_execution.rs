@@ -2,7 +2,7 @@ use std::any::Any;
 use std::error::Error as StdError;
 use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{
@@ -18,6 +18,7 @@ use tenferro_runtime::{
     PreparedOperation, PreparedOperationBinding, ReductionRuntime, Runtime, RuntimeCacheOwner,
     RuntimeConfigError, SpecializationProjection, StorageClass, TracedTensor,
 };
+use tenferro_tensor::{AllocationDomainId, SharedTensorAllocationDomain};
 use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -74,6 +75,23 @@ fn runtime_with_cpu(backend: &CpuBackend) -> Result<Runtime, RuntimeConfigError>
 struct ExtensionCounters {
     prepare: AtomicUsize,
     execute: AtomicUsize,
+    last_execute_domain: Mutex<Option<AllocationDomainId>>,
+}
+
+#[derive(Debug)]
+struct TestAllocationDomain(AllocationDomainId);
+
+impl SharedTensorAllocationDomain for TestAllocationDomain {
+    fn id(&self) -> AllocationDomainId {
+        self.0
+    }
+
+    fn allocate(&self, _dtype: DType, _shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "test-allocation-domain",
+            "allocation not implemented for runtime execution tests",
+        ))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +233,11 @@ impl PreparedOperation for CountingPreparedOperation {
             .map_err(|source| {
                 Error::runtime_state_source("counting_extension", ErrorPhase::Execution, source)
             })?;
+        *self
+            .counters
+            .last_execute_domain
+            .lock()
+            .expect("domain lock") = backend.allocation_domain();
         Ok(vec![backend.with_backend_session(|session| {
             session.to_contiguous_read(inputs[0].clone())
         })?])
@@ -261,6 +284,46 @@ fn runtime_with_counting_extension(
     builder.build()
 }
 
+fn cpu_registration_with_id(
+    backend: &CpuBackend,
+    engine_id: &str,
+    include_core_capabilities: bool,
+    include_execution_bridge: bool,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let backend = Arc::new(backend.clone());
+    let mut capabilities = CoreCapabilityBundle::builder();
+    if include_core_capabilities {
+        let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
+        let reduction: Arc<dyn ReductionRuntime> = backend.clone();
+        let indexing: Arc<dyn IndexingRuntime> = backend.clone();
+        let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
+        let layout: Arc<dyn LayoutRuntime> = backend.clone();
+        capabilities
+            .elementwise(elementwise)
+            .reduction(reduction)
+            .indexing(indexing)
+            .dot_general(dot_general)
+            .layout(layout);
+    }
+
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
+    EngineRegistration::new(
+        EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        ExecutionContextIdentity::of::<CpuBackend>(),
+        HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
+        Arc::from(vec![storage.clone()]),
+        storage,
+        capabilities.build(),
+    )
+    .map(|registration| {
+        if include_execution_bridge {
+            registration.with_tensor_backend_executor(backend.as_ref().clone())
+        } else {
+            registration
+        }
+    })
+}
+
 #[test]
 fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Box<dyn StdError>> {
     let backend = CpuBackend::new();
@@ -287,6 +350,62 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
         "second run should reuse the prepared program instead of preparing again"
     );
     assert_eq!(counters.execute.load(Ordering::SeqCst), 2);
+
+    Ok(())
+}
+
+#[test]
+fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
+) -> Result<(), Box<dyn StdError>> {
+    let core_domain = AllocationDomainId::fresh();
+    let extension_domain = AllocationDomainId::fresh();
+    let core_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
+    let extension_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
+    let counters = Arc::new(ExtensionCounters::default());
+    let extension_engine_id = "tenferro-test.extension-engine.v1";
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_id(
+        &core_backend,
+        "tenferro-test.core-engine.v1",
+        true,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_id(
+        &extension_backend,
+        extension_engine_id,
+        false,
+        true,
+    )?)?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.per-op-module")
+            .map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let sum = (&x + &x)?;
+    let y = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
+        .pop()
+        .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(output[0].as_slice::<f64>()?, &[6.0, 10.0]);
+    assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *counters.last_execute_domain.lock().expect("domain lock"),
+        Some(extension_domain),
+        "extension prepared operation must execute on the selected extension engine"
+    );
 
     Ok(())
 }

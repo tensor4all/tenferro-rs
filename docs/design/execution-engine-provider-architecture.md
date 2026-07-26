@@ -31,11 +31,12 @@ program artifacts, runtime preparation snapshots and caches, synchronous
 runtime registration, extension cache storage, semantic AD transforms, and the
 XLA compiled-graph public boundary.
 
-The production dispatch loop and per-op placement are not implemented yet and
-are tracked by #1456. Async `Runtime::submit`, `ExecutionHandle`, transfer
-provider registration, and event-domain scheduling are tracked by #1471 and
-must start from the production dispatch path rather than building a second
-metadata-only layer.
+#1456 adds the first production dispatch checkpoint: prepared programs retain a
+crate-private `ScheduledGraph`, synchronous `Runtime::run_compiled*` walks that
+schedule, and each semantic operation runs on its selected same-storage engine
+bridge. Async `Runtime::submit`, `ExecutionHandle`, transfer provider
+registration, and event-domain scheduling remain #1471 scope and must extend
+this production dispatch path rather than building a second metadata-only layer.
 
 Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
 subgraphs, and PJRT executable caching remain separate follow-up work.
@@ -298,11 +299,16 @@ keeping the compiler artifact backend-neutral:
   synchronous runtime-owned execution path. They derive input signatures,
   prepare through the runtime cache using the compiled graph's compiler
   options, validate the public input contract and semantic shape guards, and
-  execute through the engine registration's erased tensor backend bridge.
+  execute the prepared root `ScheduledGraph`.
+- Same-storage per-operation placement is part of the synchronous execution
+  path: each semantic operation carries its prepared binding, and the scheduled
+  loop leases the erased tensor backend bridge for that operation's selected
+  engine. Placements that require transfers are rejected until #1471 supplies
+  transfer execution.
 - The previous `GraphExecutor<B>` facade is retired. Public execution goes
   through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
   prepare from the backend-neutral `CompiledGraph` and execute through the
-  runtime-owned engine bridge.
+  runtime-owned schedule.
 - `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
   an engine registration. `tenferro-cpu::runtime_engine_registration` provides
   the CPU registration with direct core preparation capabilities, cache-owner
@@ -687,7 +693,11 @@ workspace. All providers obey the engine-selected `ParallelMode`.
 ## Prepared Graphs and Common Execution
 
 `PreparedGraph` contains a common `ScheduledGraph` plus runtime-binding
-metadata. The schedule is shared by CPU, GPU, extension, transfer, and
+metadata. The production CPU/runtime path currently stores this state in the
+crate-private prepared-program root. Same-storage `Operation` nodes are already
+the synchronous `Runtime::run_compiled*` execution source; `Transfer`,
+`Collective`, cross-domain event scheduling, and asynchronous admission remain
+#1471 work. The schedule is shared by CPU, GPU, extension, transfer, and
 multi-device execution. Its nodes are conceptually:
 
 ```rust
@@ -703,10 +713,13 @@ pub enum ScheduledNode {
 ```
 
 The schedule also records value slots, the dependency DAG, buffer lifetimes,
-output bindings, and event dependencies. Each `PreparedOperation` is
-self-contained: it retains the resolved engine/provider and algorithm plan.
-There is one dynamic operation dispatch and no family-id, provider-registry, or
-capability lookup in the execution loop.
+output bindings, and event dependencies. Each prepared operation binding is
+self-contained enough for same-storage execution: it retains the resolved
+engine/provider and algorithm plan. The current extension hook is still the
+public `PreparedOperation::execute` trait method, so extension execution uses
+that prepared operation while avoiding family-id or provider-registry lookup in
+the scheduled loop. A narrower internal operation object can replace that hook
+only as a deliberate public-boundary cleanup.
 
 Provider code receives an `ErasedExecutionContext` and performs one safe
 `TypeId` check/downcast to its typed context. Preparation validates the same

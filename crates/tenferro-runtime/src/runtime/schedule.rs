@@ -12,7 +12,6 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use crate::error::ErrorPhase;
-#[cfg(test)]
 use crate::exec::ExecProgram;
 use crate::Error;
 
@@ -107,6 +106,17 @@ impl ScheduledOperation {
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
     }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            self.input_values
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())?,
+            self.output_values
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())?,
+        ])
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +174,12 @@ impl ScheduledTransfer {
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
     }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        self.dependencies
+            .len()
+            .checked_mul(std::mem::size_of::<EventDependency>())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +202,12 @@ impl ScheduledCollective {
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
     }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        self.dependencies
+            .len()
+            .checked_mul(std::mem::size_of::<EventDependency>())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +219,12 @@ pub(crate) struct ScheduledBarrier {
 impl ScheduledBarrier {
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
+    }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        self.dependencies
+            .len()
+            .checked_mul(std::mem::size_of::<EventDependency>())
     }
 }
 
@@ -215,6 +243,15 @@ impl ScheduledNode {
             Self::Transfer(node) => node.completion(),
             Self::Collective(node) => node.completion(),
             Self::Barrier(node) => node.completion(),
+        }
+    }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Operation(node) => node.retained_bytes(),
+            Self::Transfer(node) => node.retained_bytes(),
+            Self::Collective(node) => node.retained_bytes(),
+            Self::Barrier(node) => node.retained_bytes(),
         }
     }
 }
@@ -254,7 +291,6 @@ pub(crate) struct ScheduledGraph {
 }
 
 impl ScheduledGraph {
-    #[cfg(test)]
     pub(crate) fn from_exec_program(program: &ExecProgram) -> Self {
         let nodes = program
             .instructions
@@ -334,6 +370,39 @@ impl ScheduledGraph {
             .any(|node| matches!(node, ScheduledNode::Collective(_)))
     }
 
+    pub(crate) fn nodes(&self) -> &[ScheduledNode] {
+        &self.nodes
+    }
+
+    pub(crate) fn retained_bytes(&self) -> Option<usize> {
+        let node_payload_bytes = self
+            .nodes
+            .iter()
+            .try_fold(0usize, |sum, node| sum.checked_add(node.retained_bytes()?))?;
+        checked_sum([
+            std::mem::size_of::<ScheduledGraph>(),
+            self.nodes
+                .len()
+                .checked_mul(std::mem::size_of::<ScheduledNode>())?,
+            node_payload_bytes,
+            self.input_slots
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())?,
+            self.output_slots
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())?,
+            self.value_count.checked_mul(std::mem::size_of::<usize>())?,
+            std::mem::size_of::<BufferPlan>(),
+            self.buffer_plan
+                .output_slots
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())?,
+            self.segments
+                .len()
+                .checked_mul(std::mem::size_of::<ScheduleSegment>())?,
+        ])
+    }
+
     #[cfg(test)]
     pub(crate) fn execute_for_test(&self) -> Result<(), ScheduleExecutionError> {
         if self.contains_collective() {
@@ -378,3 +447,9 @@ impl fmt::Display for ScheduleExecutionError {
 }
 
 impl StdError for ScheduleExecutionError {}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value))
+}

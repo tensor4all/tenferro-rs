@@ -13,9 +13,12 @@ use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
 use crate::error::ErrorPhase;
-use crate::exec::{ExecProgram, ExecSlot, ExtensionExecutionDispatch};
+use crate::exec::{
+    DispatchMode, ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
+};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
+use crate::runtime::schedule::{ScheduledGraph, ScheduledNode};
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
     PreparedOperationHandle, Runtime, RuntimeCacheOwner,
@@ -26,6 +29,12 @@ type RuntimeInputRefs<'a> = SmallVec<[&'a Tensor; 8]>;
 type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
 type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = SmallVec<[usize; 8]>;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RuntimeOutputMode {
+    Tensor,
+    Value,
+}
 
 /// Runtime-prepared compiled graph execution handle.
 ///
@@ -38,7 +47,7 @@ pub struct PreparedCompiledGraph {
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
     prepared: Arc<super::preparation::PreparedProgram>,
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
+    execution: Arc<PreparedExecutionEngines>,
 }
 
 impl fmt::Debug for PreparedCompiledGraph {
@@ -83,6 +92,25 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         program: &ExecProgram,
         operations: &[PreparedOperationHandle],
         inputs: &[&Tensor],
+    ) -> Result<Vec<TensorValue>>;
+    fn execute_slot_instruction<'input>(
+        &self,
+        instruction_index: usize,
+        instruction: &ExecInstruction,
+        operations: &[PreparedOperationHandle],
+        slots: &mut [Option<ExecSlot<'input>>],
+        output_mode: RuntimeOutputMode,
+        terminal_slots: &[bool],
+    ) -> Result<()>;
+    fn collect_slot_outputs<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<Tensor>>;
+    fn collect_slot_output_values<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
     ) -> Result<Vec<TensorValue>>;
 }
 
@@ -418,6 +446,82 @@ where
         *borrowed_slot_workspace_capacity = slot_workspace.capacity();
         result
     }
+
+    fn execute_slot_instruction<'input>(
+        &self,
+        instruction_index: usize,
+        instruction: &ExecInstruction,
+        operations: &[PreparedOperationHandle],
+        slots: &mut [Option<ExecSlot<'input>>],
+        output_mode: RuntimeOutputMode,
+        terminal_slots: &[bool],
+    ) -> Result<()> {
+        let mut lease = self.lease_state("Runtime::run_compiled scheduled instruction")?;
+        let TensorBackendExecutorState {
+            backend,
+            backend_cache,
+            extension_caches,
+            ..
+        } = lease.state_mut();
+        let mut extension_dispatch = ExtensionExecutionDispatch {
+            operations,
+            caches: extension_caches,
+        };
+
+        if matches!(output_mode, RuntimeOutputMode::Value)
+            && backend.with_backend_session(|exec| {
+                crate::exec::try_execute_terminal_value_instruction(
+                    exec,
+                    slots,
+                    instruction,
+                    terminal_slots,
+                )
+            })?
+        {
+            // Already handled as a metadata-only TensorValue.
+        } else if crate::exec::is_host_instruction(instruction) {
+            crate::exec::execute_host_instruction(backend, slots, instruction)?;
+        } else if crate::exec::is_ffi_instruction(instruction) {
+            crate::exec::execute_ffi_instruction_cached(
+                backend,
+                backend_cache,
+                slots,
+                instruction,
+                DispatchMode::Unsegmented,
+                Some(instruction_index),
+                Some(&mut extension_dispatch),
+            )?;
+        } else {
+            let result = backend.with_backend_session(|exec| {
+                crate::exec::execute_backend_op(exec, slots, instruction)
+            })?;
+            slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+        }
+        crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
+        Ok(())
+    }
+
+    fn collect_slot_outputs<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<Tensor>> {
+        let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
+        let backend = &mut lease.state_mut().backend;
+        backend.with_backend_session(|exec| crate::exec::collect_outputs_from(program, slots, exec))
+    }
+
+    fn collect_slot_output_values<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<TensorValue>> {
+        let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
+        let backend = &mut lease.state_mut().backend;
+        backend.with_backend_session(|exec| {
+            crate::exec::collect_output_values_from(program, slots, exec)
+        })
+    }
 }
 
 fn cache_owner_error(error: Error) -> CacheOwnerError {
@@ -435,6 +539,12 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
     }
 }
 
+#[derive(Debug)]
+struct PreparedExecutionEngines {
+    root: Arc<dyn ErasedTensorBackendExecutor>,
+    operations: Box<[Arc<dyn ErasedTensorBackendExecutor>]>,
+}
+
 pub(super) fn run_compiled(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -443,8 +553,14 @@ pub(super) fn run_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute_tensor_refs(prepared.root().staging(), prepared.operations(), &inputs)
+    let execution = execution_engines(runtime, &prepared)?;
+    execute_scheduled_tensor_refs(
+        &execution,
+        prepared.root().staging(),
+        prepared.root().schedule(),
+        prepared.operations(),
+        &inputs,
+    )
 }
 
 pub(super) fn prepare_compiled(
@@ -455,13 +571,13 @@ pub(super) fn prepare_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
+    let execution = Arc::new(execution_engines(runtime, &prepared)?);
     Ok(PreparedCompiledGraph {
         runtime_id: runtime.id(),
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
-        executor,
+        execution,
     })
 }
 
@@ -472,8 +588,10 @@ pub(super) fn run_prepared(
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    prepared.executor.execute_tensor_refs(
+    execute_scheduled_tensor_refs(
+        &prepared.execution,
         prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
         &inputs,
     )
@@ -487,8 +605,14 @@ pub(super) fn run_compiled_values(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute_value_refs(prepared.root().staging(), prepared.operations(), &inputs)
+    let execution = execution_engines(runtime, &prepared)?;
+    execute_scheduled_value_refs(
+        &execution,
+        prepared.root().staging(),
+        prepared.root().schedule(),
+        prepared.operations(),
+        &inputs,
+    )
 }
 
 fn validate_prepared_runtime(
@@ -529,13 +653,14 @@ fn prepare(
         .map_err(prepare_error)
 }
 
-fn execution_engine(
+fn execution_engines(
     runtime: &Runtime,
-    root: &super::preparation::PreparedProgramRoot,
-) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
+    prepared: &Arc<super::preparation::PreparedProgram>,
+) -> Result<PreparedExecutionEngines> {
     let snapshot = runtime.snapshot().map_err(|source| {
         Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
     })?;
+    let root = prepared.root();
     if snapshot.epoch() != root.epoch() {
         return Err(Error::runtime_state(
             "Runtime::run_compiled",
@@ -547,23 +672,190 @@ fn execution_engine(
             ),
         ));
     }
-    let engine = snapshot.engine(root.engine_id()).ok_or_else(|| {
+    let storage_class = root.resolved_placement().storage_class();
+    let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let mut operation_executors = Vec::with_capacity(prepared.operations().len());
+    for operation in prepared.operations() {
+        let engine_id = operation.binding().engine_id();
+        let engine = snapshot.engine(engine_id).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!("prepared operation engine {engine_id:?} is no longer registered"),
+            )
+        })?;
+        if !engine.storage_classes().contains(storage_class) {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared operation engine {engine_id:?} uses storage outside {:?}; transfer execution is not implemented yet",
+                    storage_class.as_str()
+                ),
+            ));
+        }
+        operation_executors.push(execution_engine_from_snapshot(&snapshot, engine_id)?);
+    }
+    Ok(PreparedExecutionEngines {
+        root: root_executor,
+        operations: operation_executors.into_boxed_slice(),
+    })
+}
+
+fn execution_engine_from_snapshot(
+    snapshot: &super::RuntimeConfigSnapshot,
+    engine_id: &super::EngineId,
+) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
+    let engine = snapshot.engine(engine_id).ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
-            format!(
-                "prepared engine {:?} is no longer registered",
-                root.engine_id()
-            ),
+            format!("prepared engine {engine_id:?} is no longer registered"),
         )
     })?;
     engine.execution_engine().cloned().ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
+            format!("engine {engine_id:?} has no runtime execution bridge"),
+        )
+    })
+}
+
+fn execute_scheduled_tensor_refs(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
+    schedule.validate_for_runtime()?;
+    let inputs = inputs
+        .iter()
+        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+        .collect();
+    execute_scheduled_slots(
+        execution,
+        program,
+        schedule,
+        operations,
+        inputs,
+        RuntimeOutputMode::Tensor,
+    )
+    .and_then(|mut slots| execution.root.collect_slot_outputs(program, &mut slots))
+}
+
+fn execute_scheduled_value_refs(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: &[&Tensor],
+) -> Result<Vec<TensorValue>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scheduled value executor")?;
+    schedule.validate_for_runtime()?;
+    let inputs = inputs
+        .iter()
+        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+        .collect();
+    execute_scheduled_slots(
+        execution,
+        program,
+        schedule,
+        operations,
+        inputs,
+        RuntimeOutputMode::Value,
+    )
+    .and_then(|mut slots| {
+        execution
+            .root
+            .collect_slot_output_values(program, &mut slots)
+    })
+}
+
+fn execute_scheduled_slots<'input>(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: Vec<ExecSlot<'input>>,
+    output_mode: RuntimeOutputMode,
+) -> Result<Vec<Option<ExecSlot<'input>>>> {
+    let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
+        crate::exec::terminal_output_slots(program)
+    } else {
+        Vec::new()
+    };
+    let mut slots = Vec::new();
+    let result = (|| {
+        crate::exec::initialize_exec_slots_in(program, inputs, &mut slots)?;
+        if schedule.nodes().len() != program.instructions.len() {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "scheduled graph has {} nodes for {} execution instructions",
+                    schedule.nodes().len(),
+                    program.instructions.len()
+                ),
+            ));
+        }
+        for (instruction_index, node) in schedule.nodes().iter().enumerate() {
+            match node {
+                ScheduledNode::Operation(_) => {
+                    let instruction = &program.instructions[instruction_index];
+                    instruction_executor(execution, instruction)?.execute_slot_instruction(
+                        instruction_index,
+                        instruction,
+                        operations,
+                        &mut slots,
+                        output_mode,
+                        &terminal_slots,
+                    )?;
+                }
+                ScheduledNode::Transfer(_) => {
+                    return Err(Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        "transfer node execution is not implemented before U3",
+                    ));
+                }
+                ScheduledNode::Collective(_) => {
+                    return Err(Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        "collective node execution is not implemented",
+                    ));
+                }
+                ScheduledNode::Barrier(_) => {}
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        slots.clear();
+        return Err(error);
+    }
+    Ok(slots)
+}
+
+fn instruction_executor<'a>(
+    execution: &'a PreparedExecutionEngines,
+    instruction: &ExecInstruction,
+) -> Result<&'a Arc<dyn ErasedTensorBackendExecutor>> {
+    let Some(operation_index) = instruction.semantic_operation_index else {
+        return Ok(&execution.root);
+    };
+    execution.operations.get(operation_index).ok_or_else(|| {
+        Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
             format!(
-                "engine {:?} has no runtime execution bridge",
-                root.engine_id()
+                "instruction references semantic operation {operation_index}, but prepared program has {} operations",
+                execution.operations.len()
             ),
         )
     })
