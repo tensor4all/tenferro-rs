@@ -4,7 +4,10 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{DType, DotGeneralConfig};
 
-use crate::ad::context::{resolve_and_guard, resolve_dim, ShapeGuard, ShapeGuardContext};
+use crate::ad::context::{
+    lookup_global_metadata, register_scoped_global_metadata_batch, resolve_and_guard, resolve_dim,
+    ShapeGuard, ShapeGuardContext,
+};
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::shape_extent::ShapeExtent;
@@ -120,6 +123,51 @@ fn global_metadata_registry_does_not_read_poisoned_inner_state_contract() {
         source.contains("MetadataRegistryError::LockPoisoned"),
         "global AD metadata registry should expose an explicit poison error"
     );
+}
+
+#[test]
+fn global_metadata_registry_restores_shadowed_scope_after_drop() {
+    let key = input_key(720);
+    let original = meta(DType::F64, &[2]);
+    let replacement = meta(DType::F64, &[3]);
+
+    let original_scope =
+        register_scoped_global_metadata_batch([(key.clone(), original.clone())]).unwrap();
+    assert_eq!(
+        lookup_global_metadata(&key).unwrap(),
+        Some(original.clone())
+    );
+
+    {
+        let _replacement_scope =
+            register_scoped_global_metadata_batch([(key.clone(), replacement.clone())]).unwrap();
+        assert_eq!(
+            lookup_global_metadata(&key).unwrap(),
+            Some(replacement.clone())
+        );
+    }
+
+    assert_eq!(lookup_global_metadata(&key).unwrap(), Some(original));
+    drop(original_scope);
+    assert_eq!(lookup_global_metadata(&key).unwrap(), None);
+}
+
+#[test]
+fn global_metadata_registry_drop_order_does_not_remove_live_shadow() {
+    let key = input_key(721);
+    let original = meta(DType::F64, &[2]);
+    let replacement = meta(DType::F64, &[3]);
+
+    let original_scope =
+        register_scoped_global_metadata_batch([(key.clone(), original.clone())]).unwrap();
+    let replacement_scope =
+        register_scoped_global_metadata_batch([(key.clone(), replacement.clone())]).unwrap();
+
+    drop(original_scope);
+    assert_eq!(lookup_global_metadata(&key).unwrap(), Some(replacement));
+
+    drop(replacement_scope);
+    assert_eq!(lookup_global_metadata(&key).unwrap(), None);
 }
 
 #[test]

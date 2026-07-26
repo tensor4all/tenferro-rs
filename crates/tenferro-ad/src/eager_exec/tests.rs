@@ -289,8 +289,9 @@ fn extension_op_requires_installed_extension_module_runtime() {
     .unwrap_err();
 
     let message = err.to_string();
+    assert!(message.contains("missing extension module"), "{message}");
     assert!(
-        message.contains("requires a Runtime with an installed ExtensionModule"),
+        message.contains("install an ExtensionModule on the Runtime"),
         "{message}"
     );
     assert!(

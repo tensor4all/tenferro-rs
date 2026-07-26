@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager_with_extension_context;
@@ -323,8 +323,16 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 }
 
 fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
+    static MODULE: OnceLock<Arc<dyn ExtensionModule>> = OnceLock::new();
+    if let Some(module) = MODULE.get() {
+        return Ok(Arc::clone(module));
+    }
+
     let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
-    extension_module::<tenferro_cpu::CpuBackend>(engine_id).map_err(eager_runtime_config_error)
+    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id)
+        .map_err(eager_runtime_config_error)?;
+    let _ = MODULE.set(Arc::clone(&module));
+    Ok(MODULE.get().cloned().unwrap_or(module))
 }
 
 fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {

@@ -2,6 +2,7 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use num_complex::Complex64;
 use tenferro_ad::semantic_extension::{
     AdValue, SemanticAdError, SemanticExtensionRuleSet, SemanticLinearTransposeRequest,
     SemanticLinearTransposeRule, SemanticLinearizeRequest, SemanticLinearizeResult,
@@ -251,7 +252,17 @@ fn semantic_jvp_appends_ordered_tangent_inputs_and_returns_only_tangents() {
     assert_eq!(transformed.frozen().program.outputs().len(), 1);
     assert_eq!(transformed.derivative_input_indices(), &[Some(1)]);
     assert_eq!(transformed.derivative_output_indices(), &[Some(0)]);
-    assert_eq!(transformed.frozen().program.operations().count(), 2);
+    assert_eq!(transformed.frozen().program.operations().count(), 1);
+    assert!(matches!(
+        transformed
+            .frozen()
+            .program
+            .operations()
+            .last()
+            .unwrap()
+            .op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
     assert_eq!(transformed.frozen().bindings.len(), 1);
 }
 
@@ -263,7 +274,7 @@ fn semantic_vjp_accumulates_repeated_input_cotangents() {
     assert_eq!(transformed.frozen().program.inputs().len(), 2);
     assert_eq!(transformed.derivative_input_indices(), &[Some(1)]);
     assert_eq!(transformed.derivative_output_indices(), &[Some(0)]);
-    assert_eq!(transformed.frozen().program.operations().count(), 2);
+    assert_eq!(transformed.frozen().program.operations().count(), 1);
     assert!(matches!(
         transformed
             .frozen()
@@ -339,7 +350,7 @@ fn semantic_core_jvp_linearizes_product_rule_and_accumulates_terms() {
     assert_eq!(transformed.derivative_input_indices(), &[Some(1)]);
     assert_eq!(transformed.derivative_output_indices(), &[Some(0)]);
     let operations: Vec<_> = transformed.frozen().program.operations().collect();
-    assert_eq!(operations.len(), 4);
+    assert_eq!(operations.len(), 3);
     assert!(matches!(
         operations.last().unwrap().op(),
         tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
@@ -700,7 +711,7 @@ fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
                 tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::DotGeneral { .. })
             ))
             .count(),
-        3
+        2
     );
 
     let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
@@ -714,7 +725,7 @@ fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
                 tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::DotGeneral { .. })
             ))
             .count(),
-        3
+        2
     );
     assert!(
         vjp.frozen()
@@ -727,6 +738,58 @@ fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
             .count()
             >= 2
     );
+}
+
+#[test]
+fn semantic_core_complex_sign_jvp_executes_numerically() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(3)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Sign, &[input]).unwrap()[0];
+    let source = builder.finish(&[output]).unwrap();
+
+    let jvp = ad_context().jvp_program(&source, &[true]).unwrap();
+    assert_eq!(jvp.derivative_output_indices(), &[Some(0)]);
+
+    let input_values = vec![
+        Complex64::new(3.0, 4.0),
+        Complex64::new(1.0, -1.0),
+        Complex64::new(0.0, 0.0),
+    ];
+    let tangent_values = vec![
+        Complex64::new(0.5, -0.25),
+        Complex64::new(-0.3, 0.8),
+        Complex64::new(1.0, -2.0),
+    ];
+    let input_tensor = Tensor::from_vec_col_major(vec![3], input_values.clone()).unwrap();
+    let tangent_tensor = Tensor::from_vec_col_major(vec![3], tangent_values.clone()).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let actual = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input_tensor, &tangent_tensor])
+        .unwrap();
+
+    let expected = input_values
+        .iter()
+        .zip(tangent_values.iter())
+        .map(|(&x, &dx)| {
+            let abs = x.norm();
+            if abs == 0.0 {
+                return Complex64::new(0.0, 0.0);
+            }
+            let sign = x / abs;
+            let abs_tangent = (sign.conj() * dx).re;
+            dx / abs - sign * (abs_tangent / abs)
+        })
+        .collect::<Vec<_>>();
+    for (actual, expected) in actual.as_slice::<Complex64>().unwrap().iter().zip(expected) {
+        assert!(
+            (*actual - expected).norm() <= 1e-12,
+            "actual={actual:?} expected={expected:?}"
+        );
+    }
 }
 
 #[test]

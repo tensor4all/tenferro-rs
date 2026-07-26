@@ -326,6 +326,112 @@ pub(crate) fn linearize_lu(
     Ok(vec![None, dl, du, None])
 }
 
+pub(crate) fn linearize_logabsdet_from_lu_factor(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let Some((trace, dtype)) = linearize_logdet_trace(
+        builder,
+        primal_in,
+        tangent_in,
+        ctx,
+        "linearize_logabsdet_from_lu_factor",
+    )?
+    else {
+        return Ok(vec![None]);
+    };
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        trace,
+        dtype,
+        real_values_dtype(dtype),
+    ))])
+}
+
+pub(crate) fn linearize_signdet_from_lu_factor(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !ctx.is_value_active_in_linearize(&primal_out[0]) {
+        return Ok(vec![None]);
+    }
+    let Some((trace, dtype)) = linearize_logdet_trace(
+        builder,
+        primal_in,
+        tangent_in,
+        ctx,
+        "linearize_signdet_from_lu_factor",
+    )?
+    else {
+        return Ok(vec![None]);
+    };
+    if !matches!(dtype, DType::C32 | DType::C64) {
+        return Ok(vec![None]);
+    }
+
+    let real_dtype = real_values_dtype(dtype);
+    let trace_real = convert_linear_to_dtype(builder, trace, dtype, real_dtype);
+    let trace_real_as_complex = convert_linear_to_dtype(builder, trace_real, real_dtype, dtype);
+    let phase_trace = linear_sub(builder, trace, trace_real_as_complex);
+    Ok(vec![Some(hadamard_fixed_linear(
+        builder,
+        ValueRef::External(primal_out[0].clone()),
+        phase_trace,
+    ))])
+}
+
+fn linearize_logdet_trace(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+    op_name: &'static str,
+) -> ADRuleResult<Option<(LocalValueId, DType)>> {
+    let Some(da) = tangent_in[0] else {
+        return Ok(None);
+    };
+
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
+        return Ok(None);
+    };
+    let input_shape = input_shape.as_slice();
+    let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, op_name);
+    let concrete_dims = concrete_rectangular_dims(rows, cols, ctx, op_name)?;
+    if concrete_dims.is_none() && rows != cols {
+        return Err(ADRuleError::invalid_input(
+            format!("tenferro-linalg.{op_name}"),
+            ADRuleKind::Jvp,
+            "determinant differentiation requires a provably square matrix",
+        ));
+    }
+    if concrete_dims.is_some_and(|(rows_size, cols_size)| rows_size != cols_size) {
+        return Ok(None);
+    }
+
+    let rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
+    let solved = solve_in_graph(
+        builder,
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::Local(da),
+        rank,
+    );
+    let diagonal = extract_diag_linear(builder, solved);
+    let trace = builder.add_operation(
+        StdTensorOp::ReduceSum { axes: vec![0] },
+        vec![ValueRef::Local(diagonal)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    )[0];
+    Ok(Some((trace, dtype)))
+}
+
 pub(crate) fn linearize_full_piv_lu(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],

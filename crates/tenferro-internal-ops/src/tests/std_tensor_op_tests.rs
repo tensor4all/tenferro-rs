@@ -1031,7 +1031,7 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
     assert_eq!(abs_graph.operations()[0].operation, StdTensorOp::Sign);
     assert_eq!(abs_graph.operations()[1].operation, StdTensorOp::Mul);
 
-    let (sign_result, sign_graph) = run_linearize_case(StdTensorOp::Sign, 0, 0, &[true]);
+    let (sign_result, sign_graph) = run_linearize_case(StdTensorOp::Sign, 1, 0, &[true]);
     assert!(sign_result[0].is_some());
     assert_eq!(sign_graph.operations().len(), 2);
     assert_eq!(sign_graph.operations()[0].operation, StdTensorOp::Neg);

@@ -15,7 +15,7 @@ fn graph_compiler_compiles_without_backend() {
 }
 
 #[test]
-fn graph_compiler_default_inputs_use_symbolic_extent_identity() {
+fn graph_compiler_default_inputs_use_concrete_extent_identity() {
     let x2 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y2 = (&x2 + &x2).unwrap();
     let x3 = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
@@ -25,21 +25,18 @@ fn graph_compiler_default_inputs_use_symbolic_extent_identity() {
     let program2 = compiler.compile(&y2).unwrap();
     let program3 = compiler.compile(&y3).unwrap();
 
-    assert_eq!(
+    assert_ne!(
         program2.program().semantic_fingerprint(),
         program3.program().semantic_fingerprint()
     );
-    assert!(program2.program().semantic_eq(program3.program()));
+    assert!(!program2.program().semantic_eq(program3.program()));
 
     let input = program2.program().inputs()[0];
     let metadata = program2.program().value_metadata(input).unwrap();
-    assert_eq!(
-        metadata.shape(),
-        &[ShapeExtent::Exact(DimExpr::InputDim {
-            input_idx: 0,
-            axis: 0
-        })]
-    );
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(2))]);
+    let input = program3.program().inputs()[0];
+    let metadata = program3.program().value_metadata(input).unwrap();
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(3))]);
     assert_eq!(program2.bindings().iter().next().unwrap().1.shape(), &[2]);
     assert_eq!(program3.bindings().iter().next().unwrap().1.shape(), &[3]);
 }

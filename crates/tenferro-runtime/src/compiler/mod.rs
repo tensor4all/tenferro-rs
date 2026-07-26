@@ -65,6 +65,7 @@ pub(crate) fn compile_std_to_exec(
         CompilerOptions::default(),
         &[],
         input_shapes,
+        true,
     )
 }
 
@@ -99,6 +100,7 @@ pub(crate) fn compile_std_to_exec_with_options(
         options,
         &[],
         input_shapes,
+        true,
     )
 }
 
@@ -109,6 +111,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     options: CompilerOptions,
     scoped_constraints: &[SlotScopedShapeConstraint],
     analysis_input_shapes: &[Vec<DimExpr>],
+    infer_extension_constraints: bool,
 ) -> Result<ExecProgram> {
     validate_unique_output_producers(prog)?;
     if prog.input_slots.len() != input_dtypes.len() {
@@ -221,7 +224,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                             local,
                         )?;
                     }
-                    if !inferred_constraints.is_empty() {
+                    if infer_extension_constraints && !inferred_constraints.is_empty() {
                         pending_constraints.push(PendingShapeConstraints {
                             origin_output_slots: instr.outputs.clone(),
                             fallback_provenance_slots: Vec::new(),

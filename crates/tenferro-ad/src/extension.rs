@@ -161,7 +161,7 @@ fn finish_eager_extension_outputs(
         )));
     }
 
-    if !eager_grad_recording_enabled() || !inputs.iter().any(|input| input.requires_grad) {
+    if !eager_grad_recording_enabled() {
         return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
@@ -191,15 +191,27 @@ fn finish_eager_extension_outputs(
         .zip(recorded.semantic_traces)
         .zip(outputs)
         .map(|((trace, semantic_trace), output)| {
-            EagerTensor::new_result_arc_with_semantic_trace(
-                Arc::clone(&ctx),
-                trace.key,
-                output,
-                trace.requires_grad,
-                trace.trace,
-                semantic_trace,
-                metadata_scopes.clone(),
-            )
+            if trace.requires_grad {
+                EagerTensor::new_result_arc_with_semantic_trace(
+                    Arc::clone(&ctx),
+                    trace.key,
+                    output,
+                    trace.requires_grad,
+                    trace.trace,
+                    semantic_trace,
+                    metadata_scopes.clone(),
+                )
+            } else {
+                EagerTensor::new_unregistered_result_arc_with_semantic_trace(
+                    Arc::clone(&ctx),
+                    trace.key,
+                    output,
+                    trace.requires_grad,
+                    trace.trace,
+                    semantic_trace,
+                    metadata_scopes.clone(),
+                )
+            }
         })
         .collect()
 }

@@ -26,7 +26,7 @@ use crate::shape_constraint::ConstraintScopeChain;
 pub use crate::shape_constraint::ShapeConstraintScope;
 use crate::sym_dim::SymDim;
 use crate::traced::{next_input_key, next_traced_id, TracedTensor};
-use crate::{Error, Result};
+use crate::{CompiledGraph, Error, GraphCompiler, Result};
 
 /// Opaque, persistent shape-constraint history transferred across AD graphs.
 ///
@@ -299,6 +299,13 @@ pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
+}
+
+pub fn compile_ad_source(
+    compiler: &mut GraphCompiler,
+    output: &TracedTensor,
+) -> Result<CompiledGraph> {
+    compiler.compile_ad_source(output)
 }
 
 ///

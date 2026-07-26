@@ -275,6 +275,8 @@ pub(crate) enum LinalgOp {
         transpose_a: bool,
         conjugate_a: bool,
     },
+    SignDetFromLuFactor,
+    LogAbsDetFromLuFactor,
     FullPivLu,
     FullPivLuSolve {
         transpose_a: bool,
@@ -321,7 +323,9 @@ impl LinalgOp {
             | Self::EighVals { .. }
             | Self::EigVals { .. }
             | Self::FullPivLuSolve { .. }
+            | Self::LogAbsDetFromLuFactor
             | Self::LuSolvePrepared { .. }
+            | Self::SignDetFromLuFactor
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } | Self::SvdFull => 3,
@@ -335,6 +339,8 @@ impl LinalgOp {
     fn input_count(self) -> usize {
         match self {
             Self::FullPivLuSolve { .. } | Self::TriangularSolve { .. } => 2,
+            Self::LogAbsDetFromLuFactor => 2,
+            Self::SignDetFromLuFactor => 3,
             Self::LuSolvePrepared { .. } => 4,
             _ => 1,
         }
@@ -357,6 +363,8 @@ impl LinalgOp {
             Self::EighVals { .. } => 13,
             Self::EigVals { .. } => 14,
             Self::SvdFull => 15,
+            Self::LogAbsDetFromLuFactor => 16,
+            Self::SignDetFromLuFactor => 17,
         }
     }
 }
@@ -432,6 +440,8 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
+            | LinalgOp::LogAbsDetFromLuFactor
+            | LinalgOp::SignDetFromLuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::SvdFull => {}
         }
@@ -518,6 +528,21 @@ impl ExtensionOp for LinalgExtensionOp {
             }
             LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::SignDetFromLuFactor => {
+                vec![signdet_from_lu_factor_meta(
+                    input_dtypes[0],
+                    input_shapes[0],
+                    input_shapes[1],
+                    input_shapes[2],
+                )?]
+            }
+            LinalgOp::LogAbsDetFromLuFactor => {
+                vec![logabsdet_from_lu_factor_meta(
+                    input_dtypes[0],
+                    input_shapes[0],
+                    input_shapes[1],
+                )?]
+            }
             LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::SvdFull => svd_full_meta(input_dtypes[0], input_shapes[0])?,
@@ -611,6 +636,13 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::Cholesky => Ok(vec![backend.cholesky(inputs[0])?]),
         LinalgOp::Lu => backend.lu(inputs[0]),
         LinalgOp::LuFactor => backend.lu_factor(inputs[0]),
+        LinalgOp::SignDetFromLuFactor => Ok(vec![signdet_from_lu_factor(
+            inputs[0].dtype(),
+            inputs[1],
+            inputs[2],
+            backend,
+        )?]),
+        LinalgOp::LogAbsDetFromLuFactor => Ok(vec![logabsdet_from_lu_factor(inputs[1], backend)?]),
         LinalgOp::LuSolvePrepared {
             transpose_a,
             conjugate_a,
@@ -668,6 +700,41 @@ fn execute_linalg<B: LinalgBackend>(
             unit_diagonal,
         )?]),
     }
+}
+
+fn signdet_from_lu_factor<B: LinalgBackend>(
+    input_dtype: DType,
+    packed_lu: &Tensor,
+    parity: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|exec| {
+        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
+        let det_u = exec.reduce_prod_read(TensorRead::from_tensor(&diag), &[0])?;
+        let det = exec.mul_read(
+            TensorRead::from_tensor(parity),
+            TensorRead::from_tensor(&det_u),
+        )?;
+        if matches!(input_dtype, DType::C32 | DType::C64) {
+            let abs = exec.abs_read(TensorRead::from_tensor(&det))?;
+            let abs = exec.convert(&abs, input_dtype)?;
+            exec.div_read(TensorRead::from_tensor(&det), TensorRead::from_tensor(&abs))
+        } else {
+            exec.sign_read(TensorRead::from_tensor(&det))
+        }
+    })
+}
+
+fn logabsdet_from_lu_factor<B: LinalgBackend>(
+    packed_lu: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|exec| {
+        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
+        let abs = exec.abs_read(TensorRead::from_tensor(&diag))?;
+        let log = exec.log_read(TensorRead::from_tensor(&abs))?;
+        exec.reduce_sum_read(TensorRead::from_tensor(&log), &[0])
+    })
 }
 
 pub(crate) fn apply_svd_gauge(
@@ -1041,6 +1108,40 @@ fn lu_factor_meta(
         (DType::I32, vector_shape(k, batch)),
         (dtype, batch.to_vec()),
     ])
+}
+
+fn signdet_from_lu_factor_meta(
+    input_dtype: DType,
+    input_shape: &[SymDim],
+    packed_shape: &[SymDim],
+    parity_shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (_, _, batch) = matrix_meta_parts("tenferro-linalg.signdet_from_lu_factor", input_shape)?;
+    require_matrix_meta(
+        "tenferro-linalg.signdet_from_lu_factor_packed",
+        packed_shape,
+    )?;
+    if parity_shape.len() != batch.len() {
+        return Err(Error::rank_mismatch(
+            "tenferro-linalg.signdet_from_lu_factor_parity",
+            batch.len(),
+            parity_shape.len(),
+        ));
+    }
+    Ok((input_dtype, batch.to_vec()))
+}
+
+fn logabsdet_from_lu_factor_meta(
+    input_dtype: DType,
+    input_shape: &[SymDim],
+    packed_shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (_, _, batch) = matrix_meta_parts("tenferro-linalg.logabsdet_from_lu_factor", input_shape)?;
+    require_matrix_meta(
+        "tenferro-linalg.logabsdet_from_lu_factor_packed",
+        packed_shape,
+    )?;
+    Ok((singular_values_dtype(input_dtype), batch.to_vec()))
 }
 
 fn full_piv_lu_meta(

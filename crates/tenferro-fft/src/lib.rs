@@ -1356,6 +1356,13 @@ pub(crate) fn execute_fft_extension_reads<B: FftBackend + 'static>(
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let op_name = fft_op_name(op.operation);
+    {
+        let backend = ctx.backend_mut();
+        for input in inputs {
+            backend.validate_fft_read_input(op_name, input)?;
+        }
+    }
     // FFT capabilities consume compact tensors on their existing placement;
     // materialization uses the explicitly selected backend session.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {

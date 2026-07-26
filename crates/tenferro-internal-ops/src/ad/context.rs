@@ -8,6 +8,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[cfg(feature = "autodiff")]
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -29,8 +30,19 @@ type GlobalMetadataMap = HashMap<ValueKey<StdTensorOp>, GlobalMetadataEntry>;
 
 #[derive(Clone, Debug)]
 struct GlobalMetadataEntry {
+    stack: Vec<GlobalMetadataRegistration>,
+}
+
+#[derive(Clone, Debug)]
+struct GlobalMetadataRegistration {
+    token: u64,
     meta: TensorMeta,
-    scoped_refs: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ScopedGlobalMetadataRegistration {
+    key: ValueKey<StdTensorOp>,
+    token: u64,
 }
 
 /// Error returned when the process-global AD metadata registry is unavailable.
@@ -191,16 +203,18 @@ impl Eq for ShapeGuardFailure {}
 
 /// Global metadata registry.
 ///
-/// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
-/// and reads lock briefly for targeted key lookups. `ShapeGuardContext::metadata_of`
-/// reaches into the registry lazily via [`lookup_global_metadata`] and caches the
-/// result into the context's local map.
+/// Stored as a tokenized stack per value key: duplicate scoped registrations
+/// shadow older metadata while they are live, and dropping scopes in any order
+/// removes only the matching token. `ShapeGuardContext::metadata_of` reaches into
+/// the registry lazily via [`lookup_global_metadata`] and caches the result into
+/// the context's local map.
 ///
 /// Earlier designs either cloned the whole map up-front into each AD
 /// `ShapeGuardContext` or kept the map in an `Arc` and cloned on every write.
 /// Both variants were quadratic across the monotonically growing registry and
 /// dominated oracle_replay runtime.
 static GLOBAL_METADATA: OnceLock<Mutex<GlobalMetadataMap>> = OnceLock::new();
+static NEXT_GLOBAL_METADATA_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
     GLOBAL_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
@@ -213,12 +227,12 @@ fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct GlobalMetadataScope {
-    keys: Vec<ValueKey<StdTensorOp>>,
+    registrations: Vec<ScopedGlobalMetadataRegistration>,
 }
 
 impl Drop for GlobalMetadataScope {
     fn drop(&mut self) {
-        release_scoped_global_metadata(&self.keys);
+        release_scoped_global_metadata(&self.registrations);
     }
 }
 
@@ -842,7 +856,10 @@ pub fn lookup_global_metadata(
     let guard = global_metadata_registry()
         .lock()
         .map_err(|_| MetadataRegistryError::LockPoisoned)?;
-    Ok(guard.get(key).map(|entry| entry.meta.clone()))
+    Ok(guard
+        .get(key)
+        .and_then(|entry| entry.stack.last())
+        .map(|registration| registration.meta.clone()))
 }
 
 #[doc(hidden)]
@@ -860,35 +877,40 @@ where
     let mut guard = global_metadata_registry()
         .lock()
         .map_err(|_| MetadataRegistryError::LockPoisoned)?;
-    let mut keys = Vec::new();
+    let mut registrations = Vec::new();
     for (key, meta) in entries {
-        let entry = guard.entry(key.clone()).or_insert(GlobalMetadataEntry {
-            meta: meta.clone(),
-            scoped_refs: 0,
-        });
-        entry.meta = meta;
-        entry.scoped_refs += 1;
-        keys.push(key);
+        let token = NEXT_GLOBAL_METADATA_TOKEN.fetch_add(1, AtomicOrdering::Relaxed);
+        let entry = guard
+            .entry(key.clone())
+            .or_insert_with(|| GlobalMetadataEntry { stack: Vec::new() });
+        entry.stack.push(GlobalMetadataRegistration { token, meta });
+        registrations.push(ScopedGlobalMetadataRegistration { key, token });
     }
-    Ok(GlobalMetadataScope { keys })
+    Ok(GlobalMetadataScope { registrations })
 }
 
-fn release_scoped_global_metadata(keys: &[ValueKey<StdTensorOp>]) {
+fn release_scoped_global_metadata(registrations: &[ScopedGlobalMetadataRegistration]) {
     let Ok(mut guard) = global_metadata_registry().lock() else {
         // Drop cannot return an error. Failing closed here avoids reading or
         // mutating data from a poisoned registry at the cost of leaking entries
         // until process exit.
         return;
     };
-    for key in keys {
-        let should_remove = if let Some(entry) = guard.get_mut(key) {
-            entry.scoped_refs = entry.scoped_refs.saturating_sub(1);
-            entry.scoped_refs == 0
+    for registration in registrations {
+        let should_remove = if let Some(entry) = guard.get_mut(&registration.key) {
+            if let Some(position) = entry
+                .stack
+                .iter()
+                .rposition(|candidate| candidate.token == registration.token)
+            {
+                entry.stack.remove(position);
+            }
+            entry.stack.is_empty()
         } else {
             false
         };
         if should_remove {
-            guard.remove(key);
+            guard.remove(&registration.key);
         }
     }
 }

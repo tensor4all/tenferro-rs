@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -107,6 +107,25 @@ impl<'a> FftExecutionCache<'a> {
 /// }
 /// ```
 pub trait FftBackend: TensorBackend {
+    /// Validate a borrowed runtime input before the extension read path
+    /// materializes it into a compact tensor.
+    ///
+    /// Backends that can materialize their own placement may keep the default
+    /// no-op. CPU overrides this to report device inputs as unsupported FFT
+    /// placement errors instead of leaking a generic host-materialization error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when this backend cannot
+    /// consume the borrowed input placement without an explicit transfer.
+    fn validate_fft_read_input(
+        &self,
+        _op: &'static str,
+        _input: &TensorRead<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        Ok(())
+    }
+
     /// Execute one validated FFT request on `input`'s existing placement.
     ///
     /// # Errors

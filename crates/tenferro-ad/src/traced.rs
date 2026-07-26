@@ -7,10 +7,11 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{SymDim, TensorMeta};
 use tenferro_runtime::ad_support::{
-    allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, frozen_input_tensor,
-    inputs_map as tensor_inputs_map, leaf_input_key, metadata_scopes as tensor_metadata_scopes,
-    metadata_scopes_with_new, ones_tensor, register_scoped_graph_analysis,
-    shape_hint as tensor_shape_hint, tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts,
+    allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, compile_ad_source,
+    frozen_input_tensor, inputs_map as tensor_inputs_map, leaf_input_key,
+    metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new, ones_tensor,
+    register_scoped_graph_analysis, shape_hint as tensor_shape_hint, tensor_from_parts,
+    ConstraintScopeTransfer, TracedTensorParts,
 };
 use tenferro_runtime::program::{FrozenProgram, ProgramValue, ProgramValueMetadata, SemanticOpRef};
 use tenferro_runtime::{
@@ -505,7 +506,8 @@ fn jvp_optional_impl(
             "jvp tangent must have concrete tensor data",
         )
     })?;
-    let source = GraphCompiler::new().compile(output)?;
+    let mut compiler = GraphCompiler::new();
+    let source = compile_ad_source(&mut compiler, output)?;
     let Some(wrt_input_index) = source.input_key_index(&wrt_input_key) else {
         return Ok(None);
     };
@@ -564,7 +566,8 @@ fn vjp_optional_impl(
             "vjp cotangent must have concrete tensor data",
         )
     })?;
-    let source = GraphCompiler::new().compile(output)?;
+    let mut compiler = GraphCompiler::new();
+    let source = compile_ad_source(&mut compiler, output)?;
     let Some(wrt_input_index) = source.input_key_index(&wrt_input_key) else {
         return Ok(None);
     };
@@ -706,7 +709,26 @@ fn derivative_tensor_from_program(
     fallback_shape_hint: Option<Vec<SymDim>>,
     transform: &'static str,
 ) -> Result<TracedTensor> {
-    let frozen = derivative.frozen();
+    derivative_trace_from_frozen_program(
+        source,
+        derivative.frozen(),
+        derivative_output_index,
+        seed_tensors,
+        &inherited_tensors,
+        fallback_shape_hint,
+        transform,
+    )
+}
+
+pub(crate) fn derivative_trace_from_frozen_program(
+    source: &CompiledGraph,
+    frozen: &FrozenProgram,
+    derivative_output_index: usize,
+    seed_tensors: &[(usize, Arc<Tensor>)],
+    inherited_tensors: &[&TracedTensor],
+    fallback_shape_hint: Option<Vec<SymDim>>,
+    transform: &'static str,
+) -> Result<TracedTensor> {
     let input_shapes = symbolic_input_shapes(frozen)?;
     let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
     let input_metas = frozen
@@ -810,7 +832,14 @@ fn derivative_tensor_from_program(
     builder.set_outputs(graph_outputs);
     let graph = Arc::new(builder.build());
 
-    let mut inputs_map = (*tensor_inputs_map(inherited_tensors[0])).clone();
+    let Some(primary_tensor) = inherited_tensors.first() else {
+        return Err(Error::runtime_state(
+            transform,
+            ErrorPhase::GraphBuild,
+            "derivative trace construction requires inherited source tensors",
+        ));
+    };
+    let mut inputs_map = (*tensor_inputs_map(primary_tensor)).clone();
     for (input_index, key) in input_keys.iter().enumerate() {
         if let Some(tensor) = frozen_input_tensor(frozen, input_index) {
             inputs_map.insert(key.clone(), tensor);
@@ -835,14 +864,30 @@ fn derivative_tensor_from_program(
         inputs_map.insert(key.clone(), Arc::clone(tensor));
     }
 
+    let source_input_count = source.input_keys().len();
     let graph_input_metadata = graph
         .inputs()
         .iter()
         .copied()
-        .zip(input_metas)
-        .map(|(input, meta)| (graph.values()[input].key.clone(), meta));
+        .zip(input_metas.iter().cloned())
+        .enumerate()
+        .filter_map(|(input_index, (input, meta))| {
+            // Source input keys are reused so derivative traces compose with the
+            // original eager tensor. Keep those keys owned by the source tensor's
+            // metadata scopes; derivative input metadata may be shape-specialized
+            // for the current run and must not shadow the source while the VJP/JVP
+            // result stays alive.
+            if input_index < source_input_count {
+                None
+            } else {
+                Some((graph.values()[input].key.clone(), meta))
+            }
+        });
     let analysis = register_scoped_graph_analysis(graph.as_ref(), graph_input_metadata)?;
-    let inherited_constraint_scopes = inherited_tensors.map(ConstraintScopeTransfer::from_tensor);
+    let inherited_constraint_scopes = inherited_tensors
+        .iter()
+        .map(|tensor| ConstraintScopeTransfer::from_tensor(tensor))
+        .collect::<Vec<_>>();
 
     Ok(tensor_from_parts(TracedTensorParts {
         rank: output_meta.rank(),
@@ -856,7 +901,9 @@ fn derivative_tensor_from_program(
         checkpoint_chain: None,
         metadata_scopes: metadata_scopes_with_new(
             analysis.metadata,
-            inherited_tensors.map(tensor_metadata_scopes),
+            inherited_tensors
+                .iter()
+                .map(|tensor| tensor_metadata_scopes(tensor)),
         ),
         constraint_scope_transfer: ConstraintScopeTransfer::with_new(
             analysis.constraints,

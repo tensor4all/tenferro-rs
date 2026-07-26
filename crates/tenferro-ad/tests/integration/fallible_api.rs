@@ -94,12 +94,12 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
         })
         .expect("missing EagerRuntime::exec_outputs source section");
     assert!(
-        exec_outputs.contains("exec_outputs_with_optional_extension_lock("),
-        "exec_outputs should centralize backend/extension lock ordering and avoid extension locks for standard ops"
+        exec_outputs.contains("exec_outputs_with_runtime("),
+        "exec_outputs should centralize backend/runtime lock ordering and avoid runtime extension access for standard ops"
     );
 
     let lock_helper = source
-        .split_once("fn exec_outputs_with_optional_extension_lock")
+        .split_once("fn exec_outputs_with_runtime")
         .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
         .expect("missing eager runtime lock helper source section");
     assert!(

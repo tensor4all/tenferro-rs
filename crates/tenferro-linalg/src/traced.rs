@@ -1092,17 +1092,35 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     if let Some(empty) = slogdet_empty_square(a)? {
         return Ok(empty);
     }
-    let (_p, _l, u, parity) = lu(a)?;
-    let diag_u = u.extract_diag(0, 1)?;
-    let det_u = diag_u.reduce_prod(Some(&[0]))?;
-    let det = (&parity * &det_u)?;
-    let sign = if is_complex_dtype(a.dtype) {
-        let abs_det = det.abs()?;
-        (&det / &abs_det)?
-    } else {
-        det.sign()?
+    let mut factor_outputs =
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
+    let (packed_lu, parity) = match (
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+        factor_outputs.next(),
+    ) {
+        (Some(packed_lu), Some(_pivots), Some(parity), None) => (packed_lu, parity),
+        _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
-    let logabsdet = diag_u.abs()?.log()?.reduce_sum(Some(&[0]))?;
+    let mut sign_outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::SignDetFromLuFactor)),
+        &[a, &packed_lu, &parity],
+    )?
+    .into_iter();
+    let sign = match (sign_outputs.next(), sign_outputs.next()) {
+        (Some(sign), None) => sign,
+        _ => return Err(unexpected_output_count("signdet_from_lu_factor", 1)),
+    };
+    let mut logabsdet_outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::LogAbsDetFromLuFactor)),
+        &[a, &packed_lu],
+    )?
+    .into_iter();
+    let logabsdet = match (logabsdet_outputs.next(), logabsdet_outputs.next()) {
+        (Some(logabsdet), None) => logabsdet,
+        _ => return Err(unexpected_output_count("logabsdet_from_lu_factor", 1)),
+    };
     Ok((sign, logabsdet))
 }
 
@@ -1509,10 +1527,6 @@ fn real_values_dtype(dtype: DType) -> DType {
         DType::C32 => DType::F32,
         other => other,
     }
-}
-
-fn is_complex_dtype(dtype: DType) -> bool {
-    matches!(dtype, DType::C32 | DType::C64)
 }
 
 fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {

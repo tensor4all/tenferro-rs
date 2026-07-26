@@ -1,6 +1,6 @@
 use computegraph::types::OperationRole;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tenferro_tensor::{DType, ValidationError};
+use tenferro_tensor::{DType, Tensor, ValidationError};
 
 use super::*;
 
@@ -387,6 +387,41 @@ fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
             Some(vec![SymDim::from(3)])
         );
     }
+}
+
+#[test]
+fn standard_op_analysis_uses_const_exact_parent_metadata_for_shape_validation() {
+    let lhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ))
+    .unwrap();
+    let rhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+    ))
+    .unwrap();
+    let reshape = StdTensorOp::Reshape {
+        to_shape: vec![DimExpr::Const(2), DimExpr::Const(1)],
+    };
+    let lhs = apply_standard_op(reshape.clone(), &[&lhs])
+        .unwrap()
+        .remove(0);
+    let rhs = apply_standard_op(reshape, &[&rhs]).unwrap().remove(0);
+
+    let output = apply_standard_op(
+        StdTensorOp::Concatenate {
+            axis: 1,
+            input_count: 2,
+        },
+        &[&lhs, &rhs],
+    )
+    .unwrap()
+    .remove(0);
+
+    let meta = crate::metadata::registered_meta(&output.graph.values()[output.val].key).unwrap();
+    assert_eq!(
+        meta.bound_shape(),
+        Some(vec![SymDim::from(2), SymDim::from(2)])
+    );
 }
 
 #[test]

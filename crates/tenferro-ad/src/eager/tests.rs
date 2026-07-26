@@ -306,27 +306,6 @@ impl Drop for EagerOpProfileOverrideGuard {
     }
 }
 
-struct EagerSemanticVjpOverrideGuard;
-
-impl EagerSemanticVjpOverrideGuard {
-    fn set(enabled: bool) -> Self {
-        super::EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE.with(|state| {
-            *state.borrow_mut() = Some(enabled);
-        });
-        super::EAGER_SEMANTIC_VJP_EXECUTIONS.store(0, Ordering::Relaxed);
-        Self
-    }
-}
-
-impl Drop for EagerSemanticVjpOverrideGuard {
-    fn drop(&mut self) {
-        super::EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE.with(|state| {
-            *state.borrow_mut() = None;
-        });
-        super::EAGER_SEMANTIC_VJP_EXECUTIONS.store(0, Ordering::Relaxed);
-    }
-}
-
 #[derive(Clone, Debug)]
 struct ReadPathFallbackProbe;
 
@@ -774,8 +753,7 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
 }
 
 #[test]
-fn eager_runtime_jvp_uses_forward_walker() {
-    let _guard = EagerSemanticVjpOverrideGuard::set(false);
+fn eager_runtime_jvp_returns_composable_semantic_trace() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
@@ -956,7 +934,6 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
 
 #[test]
 fn eager_functional_grad_can_feed_jvp() {
-    let _guard = EagerSemanticVjpOverrideGuard::set(false);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
@@ -986,7 +963,6 @@ fn eager_functional_grad_can_feed_jvp() {
 
 #[test]
 fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
-    let _guard = EagerSemanticVjpOverrideGuard::set(false);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),

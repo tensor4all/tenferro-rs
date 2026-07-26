@@ -7,6 +7,7 @@ mod core_structural;
 
 use std::collections::{HashMap, HashSet};
 
+use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_runtime::program::{
     CoreSemanticOp, FrozenProgram, ProgramBuildError, ProgramFinishError, ProgramImport,
     ProgramInputSpec, ProgramQueryError, ProgramValue, SemanticOpRef, SemanticProgramBuilder,
@@ -92,6 +93,11 @@ pub struct SemanticAdProgram {
     frozen: FrozenProgram,
     derivative_input_indices: Box<[Option<usize>]>,
     derivative_output_indices: Box<[Option<usize>]>,
+}
+
+struct ValueShapePlan {
+    shape: Vec<DimExpr>,
+    dynamic_axes: Vec<usize>,
 }
 
 impl SemanticAdProgram {
@@ -775,22 +781,27 @@ fn vjp_core(
             primary_cotangent(builder, converted, active_inputs, primal_inputs, false)?
         }
         CoreSemanticOp::ReduceSum { axes } => {
-            let input_shape = exact_value_shape(
+            let input_shape = value_shape_plan(
                 builder,
                 primal_inputs[0],
                 SemanticTransformRole::Vjp,
                 "reduce-sum input",
             )?;
-            let dims = (0..input_shape.len())
+            let dims = (0..input_shape.shape.len())
                 .filter(|axis| !axes.contains(axis))
                 .collect();
-            let broadcast = unary_ad_value(
+            let broadcast = broadcast_ad_value_in_dim_to_shape(
                 builder,
-                CoreSemanticOp::BroadcastInDim {
-                    shape: input_shape,
-                    dims,
-                },
                 cotangent,
+                primal_inputs[0],
+                &input_shape,
+                dims,
+            )?;
+            let broadcast = truncate_ad_value_to_dynamic_axes(
+                builder,
+                broadcast,
+                primal_inputs[0],
+                &input_shape.dynamic_axes,
             )?;
             primary_cotangent(builder, broadcast, active_inputs, primal_inputs, false)?
         }
@@ -1201,17 +1212,14 @@ fn reshape_ad_value_to_input(
     value: AdValue,
     primal_input: ProgramValue,
 ) -> Result<AdValue, SemanticAdTransformError> {
-    let shape = exact_value_shape(
+    let shape = value_shape_plan(
         builder,
         primal_input,
         SemanticTransformRole::Vjp,
         "reshape input",
     )?;
-    Ok(unary_ad_value(
-        builder,
-        CoreSemanticOp::Reshape { to_shape: shape },
-        value,
-    )?)
+    let reshaped = reshape_ad_value_to_shape(builder, value, primal_input, &shape)?;
+    truncate_ad_value_to_dynamic_axes(builder, reshaped, primal_input, &shape.dynamic_axes)
 }
 
 fn transpose_broadcast(
@@ -1223,19 +1231,19 @@ fn transpose_broadcast(
     let AdValue::Value(mut value) = value else {
         return Ok(AdValue::Absent);
     };
-    let input_shape = exact_value_shape(
+    let input_shape = value_shape_plan(
         builder,
         primal_input,
         SemanticTransformRole::Vjp,
         "broadcast input",
     )?;
-    let output_shape = exact_value_shape(
+    let output_shape = value_shape_plan(
         builder,
         value,
         SemanticTransformRole::Vjp,
         "broadcast cotangent",
     )?;
-    let mut reduce_axes: Vec<_> = (0..output_shape.len())
+    let mut reduce_axes: Vec<_> = (0..output_shape.shape.len())
         .filter(|axis| !dims.contains(axis))
         .collect();
     reduce_axes.extend(
@@ -1244,9 +1252,9 @@ fn transpose_broadcast(
             .enumerate()
             .filter_map(|(input_axis, output_axis)| {
                 (matches!(
-                    input_shape[input_axis],
+                    input_shape.shape[input_axis],
                     tenferro_ops::dim_expr::DimExpr::Const(1)
-                ) && input_shape[input_axis] != output_shape[output_axis])
+                ) && input_shape.shape[input_axis] != output_shape.shape[output_axis])
                     .then_some(output_axis)
             }),
     );
@@ -1261,7 +1269,7 @@ fn transpose_broadcast(
         )?[0];
     }
 
-    let remaining_output_axes: Vec<_> = (0..output_shape.len())
+    let remaining_output_axes: Vec<_> = (0..output_shape.shape.len())
         .filter(|axis| !reduce_axes.contains(axis))
         .collect();
     let perm: Vec<_> = dims
@@ -1279,13 +1287,10 @@ fn transpose_broadcast(
         value = builder.add_op(CoreSemanticOp::Transpose { perm }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != builder.value_metadata(primal_input)?.shape() {
-        value = builder.add_op(
-            CoreSemanticOp::Reshape {
-                to_shape: input_shape,
-            },
-            &[value],
-        )?[0];
+        value = reshape_value_to_shape(builder, value, primal_input, &input_shape)?;
     }
+    value =
+        truncate_value_to_dynamic_axes(builder, value, primal_input, &input_shape.dynamic_axes)?;
     Ok(AdValue::Value(value))
 }
 
@@ -1391,71 +1396,6 @@ fn convert_ad_value(
         return Ok(value);
     }
     unary_ad_value(builder, CoreSemanticOp::Convert { from, to }, value)
-}
-
-fn linearize_sign(
-    builder: &mut SemanticProgramBuilder,
-    primal_input: ProgramValue,
-    tangent: AdValue,
-) -> Result<AdValue, SemanticAdTransformError> {
-    let AdValue::Value(tangent) = tangent else {
-        return Ok(AdValue::Absent);
-    };
-    let input_dtype = builder.value_metadata(primal_input)?.dtype();
-    if !is_complex_dtype(input_dtype) {
-        return zero_from_ad_value(builder, AdValue::Value(tangent)).map_err(Into::into);
-    }
-
-    let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_input])?[0];
-    let abs = builder.add_op(CoreSemanticOp::Abs, &[primal_input])?[0];
-    let real_dtype = abs_output_dtype(input_dtype);
-    let abs_as_input_dtype = builder.add_op(
-        CoreSemanticOp::Convert {
-            from: real_dtype,
-            to: input_dtype,
-        },
-        &[abs],
-    )?[0];
-    let conj_sign = builder.add_op(CoreSemanticOp::Conj, &[sign])?[0];
-    let abs_tangent_complex = builder.add_op(CoreSemanticOp::Mul, &[tangent, conj_sign])?[0];
-    let abs_tangent = match convert_ad_value(
-        builder,
-        AdValue::Value(abs_tangent_complex),
-        input_dtype,
-        real_dtype,
-    )? {
-        AdValue::Value(value) => value,
-        AdValue::Absent => return Ok(AdValue::Absent),
-    };
-    let abs_tangent_as_input_dtype = builder.add_op(
-        CoreSemanticOp::Convert {
-            from: real_dtype,
-            to: input_dtype,
-        },
-        &[abs_tangent],
-    )?[0];
-    let tangent_over_abs = builder.add_op(CoreSemanticOp::Div, &[tangent, abs_as_input_dtype])?[0];
-    let sign_times_abs_tangent =
-        builder.add_op(CoreSemanticOp::Mul, &[sign, abs_tangent_as_input_dtype])?[0];
-    let correction = builder.add_op(
-        CoreSemanticOp::Div,
-        &[sign_times_abs_tangent, abs_as_input_dtype],
-    )?[0];
-    let derivative = builder.add_op(CoreSemanticOp::Sub, &[tangent_over_abs, correction])?[0];
-
-    let one = one_like(builder, primal_input, SemanticTransformRole::Jvp)?;
-    let zero = builder.add_op(CoreSemanticOp::Sub, &[one, one])?[0];
-    let zero_mask = builder.add_op(
-        CoreSemanticOp::Compare(CompareDir::Eq),
-        &[primal_input, zero],
-    )?[0];
-    let zero_derivative = builder.add_op(CoreSemanticOp::Sub, &[derivative, derivative])?[0];
-    Ok(AdValue::Value(
-        builder.add_op(
-            CoreSemanticOp::Select,
-            &[zero_mask, zero_derivative, derivative],
-        )?[0],
-    ))
 }
 
 fn zero_from_ad_value(
@@ -1703,6 +1643,55 @@ fn linearize_analytic_unary(
     Ok(multiply_ad_value(builder, tangent, coefficient)?)
 }
 
+fn linearize_sign(
+    builder: &mut SemanticProgramBuilder,
+    primal_input: ProgramValue,
+    tangent: AdValue,
+) -> Result<AdValue, SemanticAdTransformError> {
+    let AdValue::Value(tangent_value) = tangent else {
+        return Ok(AdValue::Absent);
+    };
+    let input_dtype = builder.value_metadata(primal_input)?.dtype();
+    if !is_complex_dtype(input_dtype) {
+        return Ok(AdValue::Absent);
+    }
+
+    let zero = builder.add_op(CoreSemanticOp::Sub, &[primal_input, primal_input])?[0];
+    let zero_mask = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_input, zero],
+    )?[0];
+    let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_input])?[0];
+    let abs = builder.add_op(CoreSemanticOp::Abs, &[primal_input])?[0];
+    let output_dtype = abs_output_dtype(input_dtype);
+    let complex_abs = builder.add_op(
+        CoreSemanticOp::Convert {
+            from: output_dtype,
+            to: input_dtype,
+        },
+        &[abs],
+    )?[0];
+    let one = one_like(builder, complex_abs, SemanticTransformRole::Jvp)?;
+    let safe_abs = builder.add_op(CoreSemanticOp::Select, &[zero_mask, one, complex_abs])?[0];
+    let safe_sign = builder.add_op(CoreSemanticOp::Select, &[zero_mask, zero, sign])?[0];
+    let conj_sign = builder.add_op(CoreSemanticOp::Conj, &[safe_sign])?[0];
+
+    let abs_tangent_complex = multiply_ad_value(builder, AdValue::Value(tangent_value), conj_sign)?;
+    let abs_tangent = convert_ad_value(builder, abs_tangent_complex, input_dtype, output_dtype)?;
+    let abs_tangent = convert_ad_value(builder, abs_tangent, output_dtype, input_dtype)?;
+    let tangent_over_abs = divide_ad_value(builder, AdValue::Value(tangent_value), safe_abs)?;
+    let sign_times_abs_tangent = multiply_ad_value(builder, abs_tangent, safe_sign)?;
+    let correction = divide_ad_value(builder, sign_times_abs_tangent, safe_abs)?;
+    let derivative = sub_ad_values(builder, tangent_over_abs, correction)?;
+    let zero_derivative = zero_from_ad_value(builder, AdValue::Value(tangent_value))?;
+    Ok(select_ad_values(
+        builder,
+        zero_mask,
+        zero_derivative,
+        derivative,
+    )?)
+}
+
 fn analytic_unary_coefficient(
     builder: &mut SemanticProgramBuilder,
     op: &CoreSemanticOp,
@@ -1781,14 +1770,14 @@ fn one_like(
     if metadata.shape().is_empty() {
         Ok(scalar)
     } else {
-        let shape = exact_shape(metadata.shape(), role, "one-like anchor")?;
-        Ok(builder.add_op(
-            CoreSemanticOp::BroadcastInDim {
-                shape,
-                dims: Vec::new(),
-            },
-            &[scalar],
-        )?[0])
+        let shape = shape_plan(metadata.shape(), role, "one-like anchor")?;
+        let one = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+        Ok(truncate_value_to_dynamic_axes(
+            builder,
+            one,
+            anchor,
+            &shape.dynamic_axes,
+        )?)
     }
 }
 
@@ -1815,28 +1804,29 @@ fn normalize_ad_value(
     };
     let target_metadata = builder.value_metadata(primal_input)?.clone();
     let value_metadata = builder.value_metadata(value)?.clone();
-    let target_shape = exact_shape(
+    let target_shape = shape_plan(
         target_metadata.shape(),
         SemanticTransformRole::Vjp,
         "primal input",
     )?;
-    let value_shape = exact_shape(
+    let value_shape = shape_plan(
         value_metadata.shape(),
         SemanticTransformRole::Vjp,
         "cotangent",
     )?;
-    if value_shape.len() < target_shape.len() {
+    if value_shape.shape.len() < target_shape.shape.len() {
         return Err(SemanticAdTransformError::UnsupportedMetadata {
             role: SemanticTransformRole::Vjp,
             message: "cotangent rank is smaller than its primal-input rank".into(),
         });
     }
-    let leading = value_shape.len() - target_shape.len();
+    let leading = value_shape.shape.len() - target_shape.shape.len();
     let mut axes: Vec<_> = (0..leading).collect();
     axes.extend(
         target_shape
+            .shape
             .iter()
-            .zip(value_shape.iter().skip(leading))
+            .zip(value_shape.shape.iter().skip(leading))
             .enumerate()
             .filter_map(|(axis, (target, actual))| {
                 (matches!(target, tenferro_ops::dim_expr::DimExpr::Const(1)) && target != actual)
@@ -1847,13 +1837,10 @@ fn normalize_ad_value(
         value = builder.add_op(CoreSemanticOp::ReduceSum { axes }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != target_metadata.shape() {
-        value = builder.add_op(
-            CoreSemanticOp::Reshape {
-                to_shape: target_shape,
-            },
-            &[value],
-        )?[0];
+        value = reshape_value_to_shape(builder, value, primal_input, &target_shape)?;
     }
+    value =
+        truncate_value_to_dynamic_axes(builder, value, primal_input, &target_shape.dynamic_axes)?;
     let value_dtype = builder.value_metadata(value)?.dtype();
     if value_dtype != target_metadata.dtype() {
         value = builder.add_op(
@@ -1883,6 +1870,151 @@ fn exact_shape(
             })
         })
         .collect()
+}
+
+fn value_shape_plan(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    role: SemanticTransformRole,
+    field: &'static str,
+) -> Result<ValueShapePlan, SemanticAdTransformError> {
+    shape_plan(builder.value_metadata(value)?.shape(), role, field)
+}
+
+fn shape_plan(
+    shape: &[ShapeExtent<DimExpr>],
+    role: SemanticTransformRole,
+    field: &'static str,
+) -> Result<ValueShapePlan, SemanticAdTransformError> {
+    let mut planned_shape = Vec::with_capacity(shape.len());
+    let mut dynamic_axes = Vec::new();
+    for (axis, extent) in shape.iter().enumerate() {
+        match extent {
+            ShapeExtent::Exact(expression) => planned_shape.push(expression.clone()),
+            ShapeExtent::UpperBound(expression) => {
+                planned_shape.push(expression.clone());
+                dynamic_axes.push(axis);
+            }
+            ShapeExtent::Unknown => {
+                return Err(SemanticAdTransformError::UnsupportedMetadata {
+                    role,
+                    message: format!("{field} has an unknown extent without an upper bound"),
+                });
+            }
+        }
+    }
+    Ok(ValueShapePlan {
+        shape: planned_shape,
+        dynamic_axes,
+    })
+}
+
+fn reshape_ad_value_to_shape(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    shape_source: ProgramValue,
+    shape: &ValueShapePlan,
+) -> Result<AdValue, ProgramBuildError> {
+    match value {
+        AdValue::Absent => Ok(AdValue::Absent),
+        AdValue::Value(value) => Ok(AdValue::Value(reshape_value_to_shape(
+            builder,
+            value,
+            shape_source,
+            shape,
+        )?)),
+    }
+}
+
+fn reshape_value_to_shape(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+    shape_source: ProgramValue,
+    shape: &ValueShapePlan,
+) -> Result<ProgramValue, ProgramBuildError> {
+    let mut inputs = vec![value];
+    let to_shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    Ok(builder.add_op(CoreSemanticOp::Reshape { to_shape }, &inputs)?[0])
+}
+
+fn broadcast_ad_value_in_dim_to_shape(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    shape_source: ProgramValue,
+    shape: &ValueShapePlan,
+    dims: Vec<usize>,
+) -> Result<AdValue, ProgramBuildError> {
+    match value {
+        AdValue::Absent => Ok(AdValue::Absent),
+        AdValue::Value(value) => Ok(AdValue::Value(broadcast_value_in_dim_to_shape(
+            builder,
+            value,
+            shape_source,
+            shape,
+            dims,
+        )?)),
+    }
+}
+
+fn broadcast_value_in_dim_to_shape(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+    shape_source: ProgramValue,
+    shape: &ValueShapePlan,
+    dims: Vec<usize>,
+) -> Result<ProgramValue, ProgramBuildError> {
+    let mut inputs = vec![value];
+    let shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    Ok(builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0])
+}
+
+fn payload_shape_for_shape_source(
+    shape: &ValueShapePlan,
+    inputs: &mut Vec<ProgramValue>,
+    shape_source: ProgramValue,
+) -> Vec<DimExpr> {
+    if DimExpr::max_input_idx_all(&shape.shape).is_none() {
+        return shape.shape.clone();
+    }
+    let input_idx = inputs
+        .iter()
+        .position(|&input| input == shape_source)
+        .unwrap_or_else(|| {
+            let input_idx = inputs.len();
+            inputs.push(shape_source);
+            input_idx
+        });
+    DimExpr::input_shape(input_idx, shape.shape.len())
+}
+
+fn truncate_ad_value_to_dynamic_axes(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    shape_source: ProgramValue,
+    dynamic_axes: &[usize],
+) -> Result<AdValue, SemanticAdTransformError> {
+    let AdValue::Value(value) = value else {
+        return Ok(AdValue::Absent);
+    };
+    Ok(AdValue::Value(truncate_value_to_dynamic_axes(
+        builder,
+        value,
+        shape_source,
+        dynamic_axes,
+    )?))
+}
+
+fn truncate_value_to_dynamic_axes(
+    builder: &mut SemanticProgramBuilder,
+    mut value: ProgramValue,
+    shape_source: ProgramValue,
+    dynamic_axes: &[usize],
+) -> Result<ProgramValue, ProgramBuildError> {
+    for &axis in dynamic_axes {
+        let size = builder.add_op(CoreSemanticOp::ShapeOf { axis }, &[shape_source])?[0];
+        value = builder.add_op(CoreSemanticOp::DynamicTruncate { axis }, &[value, size])?[0];
+    }
+    Ok(value)
 }
 
 fn conjugate_if_complex(
@@ -1916,11 +2048,122 @@ fn finish_derivative(
             }
         })
         .collect();
+    let frozen = builder.finish(&outputs)?;
+    let frozen = prune_dead_derivative_operations(frozen)?;
+    let frozen = cancel_double_neg_derivative_operations(frozen)?;
     Ok(SemanticAdProgram {
-        frozen: builder.finish(&outputs)?,
+        frozen,
         derivative_input_indices: derivative_input_indices.into_boxed_slice(),
         derivative_output_indices,
     })
+}
+
+fn prune_dead_derivative_operations(
+    frozen: FrozenProgram,
+) -> Result<FrozenProgram, SemanticAdTransformError> {
+    let mut roots = frozen.program.inputs().to_vec();
+    let output_offset = roots.len();
+    roots.extend_from_slice(frozen.program.outputs());
+
+    let mut builder = SemanticProgramBuilder::new();
+    let imported = builder.import(ProgramImport {
+        program: frozen.program.as_ref(),
+        bindings: &frozen.bindings,
+        roots: &roots,
+    })?;
+    let outputs = imported.roots()[output_offset..].to_vec();
+    Ok(builder.finish(&outputs)?)
+}
+
+fn cancel_double_neg_derivative_operations(
+    frozen: FrozenProgram,
+) -> Result<FrozenProgram, SemanticAdTransformError> {
+    let operations = frozen.program.operations().collect::<Vec<_>>();
+    if operations.iter().any(|operation| {
+        !operation.effects().is_empty()
+            || !operation.shape_guards().is_empty()
+            || !matches!(operation.op(), SemanticOpRef::Core(_))
+    }) {
+        return Ok(frozen);
+    }
+
+    let mut builder = SemanticProgramBuilder::new();
+    let imported = builder.import(ProgramImport {
+        program: frozen.program.as_ref(),
+        bindings: &frozen.bindings,
+        roots: frozen.program.inputs(),
+    })?;
+    let mut values = frozen
+        .program
+        .inputs()
+        .iter()
+        .copied()
+        .zip(imported.roots().iter().copied())
+        .collect::<HashMap<_, _>>();
+    let mut neg_inputs = HashMap::<ProgramValue, ProgramValue>::new();
+    let mut changed = false;
+
+    for operation in operations {
+        let inputs = operation
+            .inputs()
+            .iter()
+            .copied()
+            .map(|value| {
+                values.get(&value).copied().ok_or_else(|| {
+                    SemanticAdTransformError::UnsupportedMetadata {
+                        role: SemanticTransformRole::Jvp,
+                        message: "derivative simplifier saw an unmapped value".into(),
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let SemanticOpRef::Core(op) = operation.op() else {
+            unreachable!("non-core operations returned above");
+        };
+
+        if matches!(op, CoreSemanticOp::Neg) {
+            let input = inputs[0];
+            if let Some(inner) = neg_inputs.get(&input).copied() {
+                values.insert(operation.outputs()[0], inner);
+                changed = true;
+                continue;
+            }
+            let output = builder.add_op(CoreSemanticOp::Neg, &[input])?[0];
+            neg_inputs.insert(output, input);
+            values.insert(operation.outputs()[0], output);
+            continue;
+        }
+
+        let outputs = builder.add_op(op.clone(), &inputs)?;
+        for (source, output) in operation
+            .outputs()
+            .iter()
+            .copied()
+            .zip(outputs.iter().copied())
+        {
+            values.insert(source, output);
+        }
+    }
+
+    if !changed {
+        return Ok(frozen);
+    }
+
+    let outputs = frozen
+        .program
+        .outputs()
+        .iter()
+        .copied()
+        .map(|value| {
+            values.get(&value).copied().ok_or_else(|| {
+                SemanticAdTransformError::UnsupportedMetadata {
+                    role: SemanticTransformRole::Jvp,
+                    message: "derivative simplifier saw an unmapped output".into(),
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    prune_dead_derivative_operations(builder.finish(&outputs)?)
 }
 
 fn validate_activity(

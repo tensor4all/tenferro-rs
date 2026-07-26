@@ -4,7 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use computegraph::compile::{compile, CompiledProgram, Instruction};
 use computegraph::graph::GraphBuilder;
@@ -56,9 +56,16 @@ pub trait EagerEinsumExt {
 }
 
 fn eager_cpu_extension_module() -> Result<Arc<dyn tenferro_runtime::ExtensionModule>> {
+    static MODULE: OnceLock<Arc<dyn tenferro_runtime::ExtensionModule>> = OnceLock::new();
+    if let Some(module) = MODULE.get() {
+        return Ok(Arc::clone(module));
+    }
+
     let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
-    crate::extension::extension_module::<tenferro_cpu::CpuBackend>(engine_id)
-        .map_err(eager_runtime_config_error)
+    let module = crate::extension::extension_module::<tenferro_cpu::CpuBackend>(engine_id)
+        .map_err(eager_runtime_config_error)?;
+    let _ = MODULE.set(Arc::clone(&module));
+    Ok(MODULE.get().cloned().unwrap_or(module))
 }
 
 fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {

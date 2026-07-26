@@ -32,6 +32,7 @@ use super::{
     ProviderContractError, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
     ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
     RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
@@ -508,6 +509,7 @@ fn resolve_preparation_context(
         candidates.extend(explicit.iter().filter_map(|engine| snapshot.engine(engine)));
     }
 
+    let mut missing_extension_family = None;
     for engine in candidates {
         let Some(storage_class) = resolve_storage_class(&engine, &constraint) else {
             continue;
@@ -535,9 +537,16 @@ fn resolve_preparation_context(
             planning,
             planning_key,
             prepare_options_key,
+            &mut missing_extension_family,
         )? {
             return Ok(context);
         }
+    }
+
+    if let Some(operation) = missing_extension_family {
+        return Err(Arc::new(PrepareError::Unsupported {
+            reason: UnsupportedReason::Operation { operation },
+        }));
     }
 
     Err(Arc::new(PrepareError::NoEligibleEngine { constraint }))
@@ -565,6 +574,7 @@ fn build_operation_dispatch(
     planning: ResolvedPlanningConfig,
     planning_key: ResolvedPlanningKey,
     prepare_options_key: PrepareOptionsKey,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
     let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
     let mut bindings = Vec::with_capacity(frozen.program.operations().len());
@@ -585,6 +595,7 @@ fn build_operation_dispatch(
                 let Some(slot) = snapshot
                     .extension_slot_for_preparation(extension.family_id(), engine.engine_id())
                 else {
+                    missing_extension_family.get_or_insert(extension.family_id());
                     return Ok(None);
                 };
                 let config = Arc::clone(slot.config());

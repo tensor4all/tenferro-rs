@@ -109,7 +109,7 @@ fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
     let section = source
         .split_once("pub fn einsum_subscripts")
         .and_then(|(_, rest)| {
-            rest.split_once("fn einsum_ad_context")
+            rest.split_once("fn try_direct_binary_dot_general")
                 .map(|(body, _)| body)
         })
         .expect("eager einsum execution source section");

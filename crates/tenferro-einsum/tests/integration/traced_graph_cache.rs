@@ -54,7 +54,7 @@ fn plan_policy_participates_in_semantic_fingerprint() {
 }
 
 #[test]
-fn compiler_reuses_exact_semantic_staging() {
+fn compiler_does_not_own_semantic_runtime_staging_cache() {
     let mut trace = TraceContext::new();
     let lhs = trace.input(matrix()).unwrap();
     let rhs = trace.input(matrix()).unwrap();
@@ -67,7 +67,7 @@ fn compiler_reuses_exact_semantic_staging() {
     compiler.compile_traced_graph(&graph).unwrap();
 
     assert_eq!(compiler.cache_stats().entries, after_first);
-    assert!(after_first >= 1);
+    assert_eq!(after_first, 0);
 }
 
 #[test]

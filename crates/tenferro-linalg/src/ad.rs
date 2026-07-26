@@ -59,6 +59,12 @@ impl LinalgAdRule {
         match op.op() {
             LinalgOp::Lu => rules::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
             LinalgOp::LuFactor => Ok(vec![None; op.output_count()]),
+            LinalgOp::SignDetFromLuFactor => rules::linearize_signdet_from_lu_factor(
+                builder, primal_in, primal_out, tangent_in, ctx,
+            ),
+            LinalgOp::LogAbsDetFromLuFactor => {
+                rules::linearize_logabsdet_from_lu_factor(builder, primal_in, tangent_in, ctx)
+            }
             LinalgOp::LuSolvePrepared {
                 transpose_a,
                 conjugate_a,
@@ -198,6 +204,8 @@ impl LinalgAdRule {
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
+            | LinalgOp::SignDetFromLuFactor
+            | LinalgOp::LogAbsDetFromLuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
             | LinalgOp::SvdFull
@@ -2306,10 +2314,13 @@ mod tests {
             )
             .unwrap();
         let source = builder.finish(&outputs).unwrap();
-        assert!(
-            ad.vjp_program(&source, &[false, true, false, false], &[true])
-                .is_err(),
-            "prepared LU factors must remain explicitly unsupported VJP inputs"
+        let vjp = ad
+            .vjp_program(&source, &[false, true, false, false], &[true])
+            .expect("prepared LU pivot/parity slots remain residual-only");
+        assert_eq!(
+            vjp.derivative_output_indices(),
+            &[None, None, None, None],
+            "prepared LU pivot/parity inputs must not produce cotangent outputs"
         );
     }
 

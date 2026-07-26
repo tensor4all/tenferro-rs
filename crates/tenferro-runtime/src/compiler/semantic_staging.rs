@@ -29,6 +29,7 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
     let mut input_slots = Vec::with_capacity(program.inputs().len());
     let mut input_dtypes = Vec::with_capacity(program.inputs().len());
     let mut input_shapes = Vec::with_capacity(program.inputs().len());
+    let mut analysis_input_shapes = Vec::with_capacity(program.inputs().len());
 
     for &input in program.inputs() {
         let slot = slots.len();
@@ -42,7 +43,9 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
         })?;
         input_slots.push(slot);
         input_dtypes.push(metadata.dtype());
-        input_shapes.push(exact_shape(metadata.shape())?);
+        let shape = exact_shape(metadata.shape())?;
+        analysis_input_shapes.push(input_dim_shape(slot, shape.len()));
+        input_shapes.push(shape);
     }
 
     let mut instructions = Vec::with_capacity(program.operations().len());
@@ -129,8 +132,15 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
         &input_shapes,
         options,
         &semantic_constraints,
-        &input_shapes,
+        &analysis_input_shapes,
+        false,
     )
+}
+
+fn input_dim_shape(input_idx: usize, rank: usize) -> Vec<DimExpr> {
+    (0..rank)
+        .map(|axis| DimExpr::InputDim { input_idx, axis })
+        .collect()
 }
 
 fn exact_shape(extents: &[ShapeExtent<DimExpr>]) -> Result<Vec<DimExpr>> {

@@ -205,6 +205,9 @@ fn lu_solve_prepared_transpose_active_inputs(
             ),
         )
     })?;
+    // Packed LU may be an active intermediate when `solve` lowers through
+    // factorization. Pivot and parity slots remain non-cotangent-producing
+    // residuals.
     Ok([active_inputs[0], false, false, active_inputs[3]])
 }
 
@@ -627,11 +630,13 @@ impl RecordedBuilder {
                 continue;
             }
             let input_cotangents = transpose_recorded_operation(
+                self,
                 operation,
                 &output_cotangents,
                 active_mask,
                 external_values,
                 &fixed_locals,
+                shape_sources,
                 builder,
                 role,
             )?;
@@ -968,11 +973,13 @@ fn localize_dim(
 }
 
 fn transpose_recorded_operation(
+    recorded: &RecordedBuilder,
     operation: &RecordedOperation,
     cotangent_outputs: &[Option<ProgramValue>],
     active_mask: &[bool],
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     fixed_locals: &[Option<ProgramValue>],
+    shape_sources: &[ProgramValue],
     builder: &mut SemanticProgramBuilder,
     role: SemanticAdRuleRole,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
@@ -1016,6 +1023,17 @@ fn transpose_recorded_operation(
         StdTensorOp::DotGeneral { config } => {
             transpose_matrix_dot(cotangent, config, active_mask, &fixed, builder, role)
         }
+        StdTensorOp::ReduceSum { axes } => transpose_reduce_sum(
+            recorded,
+            operation,
+            cotangent,
+            axes,
+            active_mask,
+            external_values,
+            shape_sources,
+            builder,
+            role,
+        ),
         StdTensorOp::Transpose { perm } => {
             let mut inverse = vec![0; perm.len()];
             for (output_axis, input_axis) in perm.iter().copied().enumerate() {
@@ -1077,6 +1095,273 @@ fn transpose_recorded_operation(
             format!("unsupported linear linalg fragment operation {other:?}"),
         )),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transpose_reduce_sum(
+    recorded: &RecordedBuilder,
+    operation: &RecordedOperation,
+    cotangent: ProgramValue,
+    axes: &[usize],
+    active_mask: &[bool],
+    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    shape_sources: &[ProgramValue],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
+    if operation.inputs.len() != 1 || active_mask.len() != 1 {
+        return Err(semantic_internal(
+            role,
+            "linear reduce_sum fragment has malformed arity",
+        ));
+    }
+    if !active_mask[0] {
+        return Ok(vec![None]);
+    }
+    let mut cache = HashMap::new();
+    let input_shape = recorded_value_shape(
+        recorded,
+        &operation.inputs[0],
+        external_values,
+        shape_sources,
+        builder,
+        role,
+        &mut cache,
+    )?
+    .ok_or_else(|| {
+        semantic_internal(
+            role,
+            "linear reduce_sum fragment is missing input shape metadata",
+        )
+    })?;
+    if axes.iter().any(|axis| *axis >= input_shape.len()) {
+        return Err(semantic_internal(
+            role,
+            format!(
+                "linear reduce_sum axis is out of bounds for input rank {}",
+                input_shape.len()
+            ),
+        ));
+    }
+    let dims: Vec<_> = (0..input_shape.len())
+        .filter(|axis| !axes.contains(axis))
+        .collect();
+    let mut inputs = vec![cotangent];
+    let shape = localize_dims(
+        &input_shape,
+        &[cotangent],
+        shape_sources,
+        1,
+        &mut inputs,
+        builder,
+        role,
+    )?;
+    Ok(vec![Some(
+        builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0],
+    )])
+}
+
+fn recorded_value_shape(
+    recorded: &RecordedBuilder,
+    value: &ValueRef<StdTensorOp>,
+    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    shape_sources: &[ProgramValue],
+    builder: &SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+    cache: &mut HashMap<LocalValueId, Option<Vec<DimExpr>>>,
+) -> Result<Option<Vec<DimExpr>>, SemanticAdError> {
+    match value {
+        ValueRef::External(key) => {
+            let source = external_values.get(key).copied().ok_or_else(|| {
+                semantic_internal(
+                    role,
+                    "recorded linalg shape references missing external value",
+                )
+            })?;
+            source_shape(source, shape_sources, builder, role).map(Some)
+        }
+        ValueRef::Local(local) => recorded_local_shape(
+            recorded,
+            *local,
+            external_values,
+            shape_sources,
+            builder,
+            role,
+            cache,
+        ),
+    }
+}
+
+fn recorded_local_shape(
+    recorded: &RecordedBuilder,
+    local: LocalValueId,
+    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    shape_sources: &[ProgramValue],
+    builder: &SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+    cache: &mut HashMap<LocalValueId, Option<Vec<DimExpr>>>,
+) -> Result<Option<Vec<DimExpr>>, SemanticAdError> {
+    if let Some(cached) = cache.get(&local) {
+        return Ok(cached.clone());
+    }
+    let shape = if local < recorded.seed_count {
+        let source = shape_sources.get(local).copied().ok_or_else(|| {
+            semantic_internal(
+                role,
+                format!("recorded linalg seed local {local} has no shape source"),
+            )
+        })?;
+        Some(source_shape(source, shape_sources, builder, role)?)
+    } else {
+        let (operation, output_index) = recorded
+            .operations
+            .iter()
+            .find_map(|operation| {
+                operation
+                    .outputs
+                    .iter()
+                    .position(|output| *output == local)
+                    .map(|index| (operation, index))
+            })
+            .ok_or_else(|| {
+                semantic_internal(
+                    role,
+                    format!("recorded linalg local {local} has no producing operation"),
+                )
+            })?;
+        recorded_operation_output_shape(
+            recorded,
+            operation,
+            output_index,
+            external_values,
+            shape_sources,
+            builder,
+            role,
+            cache,
+        )?
+    };
+    cache.insert(local, shape.clone());
+    Ok(shape)
+}
+
+fn source_shape(
+    source: ProgramValue,
+    shape_sources: &[ProgramValue],
+    builder: &SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> Result<Vec<DimExpr>, SemanticAdError> {
+    let index = shape_sources
+        .iter()
+        .position(|candidate| *candidate == source)
+        .ok_or_else(|| {
+            semantic_internal(role, "shape source is not part of the linalg invocation")
+        })?;
+    let rank = builder.value_metadata(source)?.shape().len();
+    Ok(DimExpr::input_shape(index, rank))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recorded_operation_output_shape(
+    recorded: &RecordedBuilder,
+    operation: &RecordedOperation,
+    output_index: usize,
+    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    shape_sources: &[ProgramValue],
+    builder: &SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+    cache: &mut HashMap<LocalValueId, Option<Vec<DimExpr>>>,
+) -> Result<Option<Vec<DimExpr>>, SemanticAdError> {
+    let input_shape = |input_index: usize,
+                       cache: &mut HashMap<LocalValueId, Option<Vec<DimExpr>>>|
+     -> Result<Option<Vec<DimExpr>>, SemanticAdError> {
+        let input = operation.inputs.get(input_index).ok_or_else(|| {
+            semantic_internal(
+                role,
+                "recorded linalg shape requested missing operation input",
+            )
+        })?;
+        recorded_value_shape(
+            recorded,
+            input,
+            external_values,
+            shape_sources,
+            builder,
+            role,
+            cache,
+        )
+    };
+    match &operation.operation {
+        StdTensorOp::Extension(extension) => {
+            let linalg = semantic_linalg_op(extension.as_ref(), role)?;
+            match linalg.op() {
+                LinalgOp::LuFactor => match output_index {
+                    0 => input_shape(0, cache),
+                    1 => Ok(input_shape(0, cache)?.map(|shape| {
+                        let (rows, cols, batch) = recorded_matrix_shape_parts(&shape);
+                        let mut pivots_shape =
+                            vec![DimExpr::Min(Box::new(rows.clone()), Box::new(cols.clone()))];
+                        pivots_shape.extend_from_slice(batch);
+                        pivots_shape
+                    })),
+                    2 => Ok(input_shape(0, cache)?.map(|shape| shape[2..].to_vec())),
+                    _ => Ok(None),
+                },
+                LinalgOp::LuSolvePrepared { .. } => input_shape(3, cache),
+                _ => Ok(None),
+            }
+        }
+        StdTensorOp::ExtractDiag { axis_a, axis_b } => Ok(input_shape(0, cache)?
+            .map(|shape| extract_diag_shape(&shape, *axis_a, *axis_b))
+            .transpose()?),
+        StdTensorOp::ReduceSum { axes } => Ok(input_shape(0, cache)?.map(|shape| {
+            shape
+                .into_iter()
+                .enumerate()
+                .filter_map(|(axis, dim)| (!axes.contains(&axis)).then_some(dim))
+                .collect()
+        })),
+        StdTensorOp::Convert { .. }
+        | StdTensorOp::Neg
+        | StdTensorOp::Conj
+        | StdTensorOp::Tril { .. }
+        | StdTensorOp::Triu { .. } => input_shape(0, cache),
+        StdTensorOp::Transpose { perm } => Ok(input_shape(0, cache)?
+            .map(|shape| perm.iter().map(|axis| shape[*axis].clone()).collect())),
+        _ => Ok(None),
+    }
+}
+
+fn recorded_matrix_shape_parts(shape: &[DimExpr]) -> (&DimExpr, &DimExpr, &[DimExpr]) {
+    (&shape[0], &shape[1], &shape[2..])
+}
+
+fn extract_diag_shape(
+    shape: &[DimExpr],
+    axis_a: usize,
+    axis_b: usize,
+) -> Result<Vec<DimExpr>, SemanticAdError> {
+    if axis_a >= shape.len() || axis_b >= shape.len() || axis_a == axis_b {
+        return Err(semantic_internal(
+            SemanticAdRuleRole::LinearTranspose,
+            "extract_diag shape derivation received invalid axes",
+        ));
+    }
+    let diagonal = DimExpr::Min(
+        Box::new(shape[axis_a].clone()),
+        Box::new(shape[axis_b].clone()),
+    );
+    let mut output = Vec::with_capacity(shape.len() - 1);
+    for (axis, dim) in shape.iter().enumerate() {
+        if axis == axis_b {
+            continue;
+        }
+        if axis == axis_a {
+            output.push(diagonal.clone());
+        } else {
+            output.push(dim.clone());
+        }
+    }
+    Ok(output)
 }
 
 fn transpose_mul(

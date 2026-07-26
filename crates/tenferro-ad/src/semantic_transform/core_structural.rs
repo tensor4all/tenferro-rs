@@ -46,7 +46,7 @@ pub(super) fn slice_vjp(
     let AdValue::Value(cotangent) = cotangent else {
         return Ok(vec![AdValue::Absent]);
     };
-    let input_shape = exact_usize_shape(builder, input, "slice input")?;
+    let input_shape = const_usize_shape_for_inverse_slice_padding(builder, input, "slice input")?;
     let rank = input_shape.len();
     if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
         return Err(metadata_error(
@@ -297,6 +297,28 @@ fn exact_usize_shape(
                 SemanticTransformRole::Vjp,
                 format!("{field} requires concrete extents"),
             )),
+        })
+        .collect()
+}
+
+fn const_usize_shape_for_inverse_slice_padding(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    field: &'static str,
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    builder
+        .value_metadata(value)?
+        .shape()
+        .iter()
+        .map(|extent| match extent {
+            ShapeExtent::Exact(DimExpr::Const(value))
+            | ShapeExtent::UpperBound(DimExpr::Const(value)) => Ok(*value),
+            ShapeExtent::Exact(_) | ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => {
+                Err(metadata_error(
+                    SemanticTransformRole::Vjp,
+                    format!("{field} requires constant exact or upper-bound extents"),
+                ))
+            }
         })
         .collect()
 }

@@ -28,7 +28,7 @@
 //! let frozen = builder.finish(&[output])?;
 //! assert_eq!(frozen.bindings.iter().count(), 1);
 //! assert!(frozen.bindings.get(key).is_some());
-//! assert_eq!(frozen.program.semantic_fingerprint().as_bytes().len(), 32);
+//! assert_eq!(frozen.program.semantic_fingerprint().as_bytes().len(), 16);
 //!
 //! let mut other = SemanticProgramBuilder::new();
 //! let foreign = other.input(ProgramInputSpec::new(
