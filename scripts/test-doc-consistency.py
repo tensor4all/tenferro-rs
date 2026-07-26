@@ -153,6 +153,7 @@ def test_ci_enforces_public_error_docs_and_extension_clippy() -> None:
     text = read(".github/workflows/ci.yml")
 
     assert "scripts/check-public-error-docs.py" in text
+    assert "python3 scripts/ci/run_profile.py fmt" in text
     assert "-D clippy::missing_errors_doc" in text
     assert "-D clippy::missing_panics_doc" in text
     assert "cargo clippy --manifest-path ext/tropical/Cargo.toml" in text

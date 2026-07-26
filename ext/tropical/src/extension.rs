@@ -349,23 +349,21 @@ fn reference_module<B: TensorBackend + 'static>(
 pub fn extension_modules<B: TensorBackend + 'static>(
     engine_id: EngineId,
 ) -> std::result::Result<Vec<Arc<dyn ExtensionModule>>, RuntimeConfigError> {
-    let mut modules = Vec::new();
-    modules.push(reference_module::<B>(
-        TROPICAL_EINSUM_FAMILY_ID,
-        engine_id.clone(),
-    )?);
     #[cfg(feature = "autodiff")]
     {
-        modules.push(reference_module::<B>(
-            TROPICAL_EINSUM_JVP_FAMILY_ID,
-            engine_id.clone(),
-        )?);
-        modules.push(reference_module::<B>(
-            TROPICAL_EINSUM_VJP_FAMILY_ID,
-            engine_id,
-        )?);
+        Ok(vec![
+            reference_module::<B>(TROPICAL_EINSUM_FAMILY_ID, engine_id.clone())?,
+            reference_module::<B>(TROPICAL_EINSUM_JVP_FAMILY_ID, engine_id.clone())?,
+            reference_module::<B>(TROPICAL_EINSUM_VJP_FAMILY_ID, engine_id)?,
+        ])
     }
-    Ok(modules)
+    #[cfg(not(feature = "autodiff"))]
+    {
+        Ok(vec![reference_module::<B>(
+            TROPICAL_EINSUM_FAMILY_ID,
+            engine_id,
+        )?])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

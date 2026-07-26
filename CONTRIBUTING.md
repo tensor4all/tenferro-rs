@@ -74,7 +74,9 @@ discussion in an issue first.
 
 ## Local PR gate and hosted CI profiles
 
-For code changes, run the non-release local gate with at least one focused test:
+For code changes, run the non-release local gate with at least one focused test.
+The gate also runs the CI-parity formatting and clippy profiles for the root
+workspace plus the standalone tropical and sparse extension manifests:
 
 ```bash
 bash scripts/check-pr-fast.sh \
@@ -94,14 +96,17 @@ focused CI helper command through `--test`.
 Hosted CI remains responsible for complete workspace tests, coverage, backend
 variants, documentation builds, GPU validation, and clean builds through the
 workspace `[profile.ci]` (`opt-level=0`, `debug=0`, `incremental=false`,
-`strip="symbols"`). Local `dev`/`test` profiles stay incremental. Run release
-locally when validating performance, a release-only failure, unsafe or
-optimization-sensitive behavior, or an explicit maintainer request.
+`strip="symbols"`). Local `dev`/`test` profiles stay incremental, while the
+local gate shares hosted CI's formatting and clippy command groups. Run release locally when
+validating performance, a release-only failure, unsafe or optimization-sensitive
+behavior, or an explicit maintainer request.
 
 The exact command groups used by hosted CI are available locally:
 
 ```bash
 python3 scripts/ci/run_profile.py --list
+python3 scripts/ci/run_profile.py fmt
+python3 scripts/ci/run_profile.py clippy
 python3 scripts/ci/run_profile.py workspace-faer
 python3 scripts/ci/run_profile.py workspace-blas
 python3 scripts/ci/run_profile.py docs

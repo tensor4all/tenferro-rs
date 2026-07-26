@@ -15,6 +15,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_fast_ci_uses_shared_policy_and_profiles(self) -> None:
         text = read(".github/workflows/ci.yml")
         self.assertIn("python3 scripts/ci/change_policy.py", text)
+        self.assertIn("python3 scripts/ci/run_profile.py fmt", text)
         self.assertIn("python3 scripts/ci/run_profile.py blas-inject", text)
         self.assertIn("python3 scripts/ci/run_profile.py coverage", text)
         self.assertIn("python3 scripts/ci/run_profile.py docs", text)

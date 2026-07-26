@@ -147,7 +147,8 @@ risk rather than propagating it.
 
 ## Code Style
 
-- `cargo fmt --all` for formatting (always run before committing)
+- `python3 scripts/ci/run_profile.py fmt` for repository formatting checks
+  across the root workspace and standalone extension manifests
 - Avoid `unwrap()`/`expect()` in library code
 - Use `thiserror` for public API error types
 
@@ -201,7 +202,9 @@ When using git worktrees for feature development, **always branch from the lates
 ## Pre-Push / PR Checklist
 
 Before pushing or creating a pull request with code changes, run focused
-non-release verification through the local gate:
+non-release verification through the local gate. The code-change path also runs
+CI-parity clippy for the root workspace and the standalone tropical and sparse
+extension manifests:
 
 ```bash
 bash scripts/check-pr-fast.sh \
@@ -230,7 +233,9 @@ Run the relevant release test or benchmark locally when a change is
 performance-sensitive, reproduces a release-only bug, touches unsafe or
 optimization-sensitive behavior, or a maintainer explicitly requests it.
 
-If the formatting step fails, run `cargo fmt --all` to fix formatting
+If the formatting step fails, run `cargo fmt --all`, then
+`cargo fmt --manifest-path ext/tropical/Cargo.toml --all` and
+`cargo fmt --manifest-path ext/sparse/Cargo.toml --all` to fix formatting
 automatically. Run the local LLM review on the committed PR head;
 `--worktree` is acceptable only as an earlier preview, and must be rerun
 without `--worktree` before PR creation.
@@ -295,7 +300,7 @@ bash scripts/check-pr-fast.sh --coverage-reviewed \
   --test 'cargo test -p tenferro-tensor checked_convert_follows_dtype_promotion_lattice'
 
 # Check formatting
-cargo fmt --check
+python3 scripts/ci/run_profile.py fmt
 
 # Coverage check (per-file thresholds)
 # Target: 90%+ line coverage per file. Files below 90% should have tests added.
