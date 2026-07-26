@@ -104,6 +104,17 @@ def load_api_consistency_checker():
     return module
 
 
+def load_repository_rules_review():
+    path = ROOT / "scripts/repository-rules-review.py"
+    spec = importlib.util.spec_from_file_location("repository_rules_review", path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_architecture_svg_lists_cpu_crate_xla_boundary_and_background() -> None:
     svg_path = ROOT / "docs/assets/tenferro-architecture.svg"
     text = svg_path.read_text(encoding="utf-8")
@@ -395,6 +406,36 @@ def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero()
     assert "floating-point and complex zero divisors" not in docs
 
 
+def test_repository_rules_sections_are_routed_or_human_only() -> None:
+    reviewer = load_repository_rules_review()
+    sections = reviewer.parse_repository_rules_sections(ROOT / "REPOSITORY_RULES.md")
+
+    routed = set(reviewer.ALWAYS_SECTIONS)
+    for _, section_names in reviewer.SECTION_TRIGGERS:
+        routed.update(section_names)
+    human_only = set(getattr(reviewer, "HUMAN_ONLY_SECTIONS", frozenset()))
+    configured = routed | human_only
+
+    missing_routing = sorted(set(sections) - configured)
+    assert not missing_routing, missing_routing
+
+    missing_sections = sorted(configured - set(sections))
+    assert not missing_sections, missing_sections
+
+    max_lines = getattr(reviewer, "MAX_ROUTED_SECTION_LINES", 100)
+    oversized = {
+        name: len(sections[name].splitlines())
+        for name in sorted(routed)
+        if name in sections and len(sections[name].splitlines()) > max_lines
+    }
+    assert not oversized, oversized
+
+    rules = read("REPOSITORY_RULES.md")
+    assert "register_runtime" not in rules
+    assert rules.count("local uniqueness proof") == 1
+    assert rules.count("need-before-implementation gate") == 1
+
+
 def test_active_ad_docs_use_current_semantic_ad_owner() -> None:
     assert not (ROOT / "docs/architecture/tidu.md").exists()
 
@@ -500,6 +541,7 @@ def main() -> int:
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
         test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
+        test_repository_rules_sections_are_routed_or_human_only,
         test_active_ad_docs_use_current_semantic_ad_owner,
         test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical,
     ]:

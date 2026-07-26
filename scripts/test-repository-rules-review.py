@@ -166,8 +166,27 @@ def test_select_rule_sections_includes_performance_for_tensor_crates() -> None:
             "crates/tenferro-tensor/src/view.rs",
         ]
     )
-    assert "Performance And Layout Rules" in sections
+    assert "Performance-Sensitive Safety Contracts" in sections
+    assert "Materialization And Copies" in sections
+    assert "Range Checks And Slicing" in sections
+    assert "Tensor Core Data Model" in sections
+    assert "Performance And Layout Rules" not in sections
     assert "Unsafe Code Boundary" in sections
+
+
+def test_select_rule_sections_includes_gpu_contract_for_gpu_paths() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-gpu/src/cuda/runtime.rs"])
+    assert "GPU Backend Contract" in sections
+    assert "Device Transfer And Backend Buffer Errors" in sections
+    assert "Cache Ownership" in sections
+
+
+def test_select_rule_sections_includes_benchmark_rules_for_bench_paths() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-cpu/benches/map.rs"])
+    assert "Performance-Sensitive Tests And Benchmarks" in sections
+    assert "Performance-Gated Experiment Protocol" not in sections
 
 
 def test_select_rule_sections_includes_public_boundary_audits() -> None:
@@ -192,11 +211,16 @@ def test_final_cross_phase_multi_agent_audit_contract_is_present() -> None:
     expected_links = [
         ("Public Boundary Safety Audits", "#public-boundary-safety-audits"),
         ("Unsafe Code Boundary", "#unsafe-code-boundary"),
-        ("Performance And Layout Rules", "#performance-and-layout-rules"),
+        (
+            "Performance-Sensitive Safety Contracts",
+            "#performance-sensitive-safety-contracts",
+        ),
+        ("Materialization And Copies", "#materialization-and-copies"),
         (
             "Performance-Gated Experiment Protocol",
             "#performance-gated-experiment-protocol",
         ),
+        ("Cache Ownership", "#cache-ownership"),
         ("CPU Threading Contract", "#cpu-threading-contract"),
         ("GPU Backend Contract", "#gpu-backend-contract"),
         ("Documentation Policy", "#documentation-policy"),
@@ -743,6 +767,8 @@ def main() -> int:
         test_select_rule_sections_includes_ad_for_ad_paths,
         test_select_rule_sections_includes_ad_for_tenferro_ad_crate,
         test_select_rule_sections_includes_performance_for_tensor_crates,
+        test_select_rule_sections_includes_gpu_contract_for_gpu_paths,
+        test_select_rule_sections_includes_benchmark_rules_for_bench_paths,
         test_select_rule_sections_includes_public_boundary_audits,
         test_final_cross_phase_multi_agent_audit_contract_is_present,
         test_extract_json_payload_strips_fence,

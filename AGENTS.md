@@ -39,6 +39,9 @@ vendor a copy into this repository. Keep tenferro-specific durable rules in
 `REPOSITORY_RULES.md`. This `AGENTS.md` file is the entry point and
 tenferro-specific orientation; avoid duplicating the detailed performance,
 layout, CPU kernel, slicing, cache, threading, and GPU backend rules here.
+`REPOSITORY_RULES.md` is also routing input for
+`scripts/repository-rules-review.py`; when adding or renaming a `##` section,
+update that script's routed or human-only section lists in the same change.
 
 ## Contribution Workflow Assets
 
