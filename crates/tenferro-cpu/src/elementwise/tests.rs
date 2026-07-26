@@ -89,7 +89,7 @@ fn add_then_multiply_identity_fusion_uses_typed_specialization() {
         ],
     );
 
-    let outputs = try_typed_mul_add_specialization(
+    let outputs = try_typed_two_input_binary_tail_specialization(
         &mut buffers,
         &input_views,
         lhs.shape(),
@@ -101,6 +101,114 @@ fn add_then_multiply_identity_fusion_uses_typed_specialization() {
 
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[11.0, 44.0, 99.0]);
+}
+
+#[test]
+fn two_input_binary_tail_classifier_accepts_commutative_reversed_first_inputs() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let plan = ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![1, 0]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 1]),
+        ],
+    );
+
+    let classified = classify_two_input_binary_tail_plan(&plan)
+        .expect("commutative first op should be recognized");
+
+    assert_eq!(classified.first_op, SpecializedBinaryOp::Add);
+    assert_eq!(classified.first_inputs, [1, 0]);
+    assert_eq!(classified.tail_op, SpecializedBinaryOp::Multiply);
+    assert_eq!(
+        classified.tail_inputs,
+        [
+            TwoInputTailOperand::Intermediate,
+            TwoInputTailOperand::Input(1)
+        ]
+    );
+}
+
+#[test]
+fn two_input_binary_tail_classifier_rejects_non_identity_and_ambiguous_plans() {
+    use tenferro_tensor::backend::{ElementwiseFusionInputView, ElementwiseFusionInst};
+
+    let repeated = ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 0]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 1]),
+        ],
+    );
+    assert!(classify_two_input_binary_tail_plan(&repeated).is_none());
+
+    let broadcast = ElementwiseFusionPlan::with_input_views(
+        DType::F64,
+        vec![
+            ElementwiseFusionInputView::broadcast_in_dim(vec![3], vec![0]),
+            ElementwiseFusionInputView::Identity,
+        ],
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 1]),
+        ],
+    );
+    assert!(classify_two_input_binary_tail_plan(&broadcast).is_none());
+
+    let multi_output = ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![2, 3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 1]),
+        ],
+    );
+    assert!(classify_two_input_binary_tail_plan(&multi_output).is_none());
+}
+
+#[test]
+fn reversed_first_input_binary_tail_specialization_computes_result() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let mut buffers = BufferPool::default();
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap();
+    let input_views = [
+        typed_view(ELEMENTWISE_FUSION_OP, &lhs).unwrap(),
+        typed_view(ELEMENTWISE_FUSION_OP, &rhs).unwrap(),
+    ];
+    let plan = ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![1, 0]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 1]),
+        ],
+    );
+
+    let outputs = try_typed_two_input_binary_tail_specialization(
+        &mut buffers,
+        &input_views,
+        lhs.shape(),
+        &plan,
+        Tensor::F64,
+    )
+    .unwrap()
+    .expect("reversed first input order should still use the binary-tail specialization");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].as_slice::<f64>().unwrap(),
+        &[110.0, 440.0, 990.0]
+    );
 }
 
 #[test]

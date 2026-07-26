@@ -29,6 +29,12 @@ splitting the follow-up work into unrelated pull requests.
   and replaying a legacy fragment. The remaining linalg recorded-fragment usage
   is limited to reverse-mode construction paths that need a local linear
   fragment to transpose.
+- #1464 CPU elementwise fusion classifier: replaced the hand-written
+  add/multiply pattern arms with an explicit two-input, two-operation,
+  one-output, identity-view binary-tail classifier. The classifier recognizes
+  the benchmark-motivated `Add`/`Multiply` family only, including reversed
+  commutative input order for the first op, and still rejects broadcast views,
+  repeated inputs, multi-output plans, unsupported ops, and longer chains.
 
 ## Current runtime boundary
 
@@ -68,6 +74,11 @@ cargo test -p tenferro-linalg --test integration --features autodiff ad_support_
 cargo test -p tenferro-linalg --test integration --features autodiff traced_ad_explicit:: -- --nocapture
 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay:: -- --nocapture
 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=64 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay::oracle_replays_supported_db_cases_when_requested -- --nocapture
+cargo test -p tenferro-cpu two_input_binary_tail_classifier --lib -- --nocapture
+cargo test -p tenferro-cpu binary_tail_specialization --lib -- --nocapture
+cargo test -p tenferro-cpu elementwise_fusion --lib -- --nocapture
+cargo test -p tenferro-runtime --test integration runtime_public_api -- --nocapture
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=64 cargo bench -p tenferro-runtime --features __bench_unification_run_compiled_api --bench elementwise_fusion -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.3
 git diff --check
 ```
 
@@ -75,6 +86,20 @@ The full local oracle replay reported:
 
 ```text
 ReplayRunSummary { total_records: 9585, supported_success_records: 2090, expected_error_records: 2, unsupported_records: 7493, skipped_by_filter_records: 0, replayed_success_records: 2090, replayed_expected_error_records: 2, parallel_jobs: 64 }
+```
+
+The #1464 Criterion run rebuilt the release bench target in `6m09s`, exposing
+the same `tenferro-cpu` release-optimization long pole tracked by #1472. Median
+times from the focused run were:
+
+```text
+runtime_elementwise_chain/f64/add_mul/segmented_graph/4096       43.776 us
+runtime_elementwise_chain/f64/add_mul/segmented_graph/65536      125.64 us
+runtime_elementwise_chain/f64/add_mul/segmented_graph/1048576    1.2320 ms
+runtime_elementwise_chain/f64/broadcast_mul/segmented_graph/256x256       112.53 us
+runtime_elementwise_chain/f64/broadcast_mul/segmented_graph/1024x1024     1.9468 ms
+runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/256x256   146.97 us
+runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/1024x1024 2.7071 ms
 ```
 
 ## Residual risks to carry forward
@@ -94,3 +119,8 @@ ReplayRunSummary { total_records: 9585, supported_success_records: 2090, expecte
   transposition still record a local linear fragment so the transpose
   interpreter can traverse it backward. This is no longer used by semantic JVP
   emission, and the numerical/oracle coverage above passed.
+- CPU elementwise fusion remains a legacy segment-executor specialization.
+  This PR records and slightly generalizes the current `Add`/`Multiply`
+  classifier, but does not introduce a broad symbolic optimizer or tune
+  `Divide`, `Pow`, ordered ops, broadcast views, or longer chains without
+  separate benchmark evidence.

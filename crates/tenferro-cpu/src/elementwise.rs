@@ -203,6 +203,117 @@ fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpecializedBinaryOp {
+    Add,
+    Multiply,
+}
+
+impl SpecializedBinaryOp {
+    fn from_fusion_op(op: ElementwiseFusionOp) -> Option<Self> {
+        match op {
+            ElementwiseFusionOp::Add => Some(Self::Add),
+            ElementwiseFusionOp::Multiply => Some(Self::Multiply),
+            _ => None,
+        }
+    }
+
+    fn apply<T: FusedScalar>(self, lhs: T, rhs: T) -> T {
+        match self {
+            Self::Add => lhs.fused_add(rhs),
+            Self::Multiply => lhs.fused_multiply(rhs),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TwoInputTailOperand {
+    Input(usize),
+    Intermediate,
+}
+
+impl TwoInputTailOperand {
+    fn from_value(value: usize) -> Option<Self> {
+        match value {
+            0 | 1 => Some(Self::Input(value)),
+            2 => Some(Self::Intermediate),
+            _ => None,
+        }
+    }
+
+    fn resolve<T: Copy>(self, inputs: [T; 2], intermediate: T) -> T {
+        match self {
+            Self::Input(index) => inputs[index],
+            Self::Intermediate => intermediate,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TwoInputBinaryTailPlan {
+    first_op: SpecializedBinaryOp,
+    first_inputs: [usize; 2],
+    tail_op: SpecializedBinaryOp,
+    tail_inputs: [TwoInputTailOperand; 2],
+}
+
+impl TwoInputBinaryTailPlan {
+    fn evaluate<T: FusedScalar>(self, input0: T, input1: T) -> T {
+        let inputs = [input0, input1];
+        let intermediate = self
+            .first_op
+            .apply(inputs[self.first_inputs[0]], inputs[self.first_inputs[1]]);
+        let lhs = self.tail_inputs[0].resolve(inputs, intermediate);
+        let rhs = self.tail_inputs[1].resolve(inputs, intermediate);
+        self.tail_op.apply(lhs, rhs)
+    }
+}
+
+fn classify_two_input_binary_tail_plan(
+    plan: &ElementwiseFusionPlan,
+) -> Option<TwoInputBinaryTailPlan> {
+    if plan.input_count() != 2
+        || plan.outputs() != [3]
+        || plan.ops().len() != 2
+        || !plan.input_views().iter().all(|view| view.is_identity())
+    {
+        return None;
+    }
+
+    let first = &plan.ops()[0];
+    let tail = &plan.ops()[1];
+    let first_op = SpecializedBinaryOp::from_fusion_op(first.op())?;
+    let tail_op = SpecializedBinaryOp::from_fusion_op(tail.op())?;
+    let first_inputs: [usize; 2] = first.inputs().try_into().ok()?;
+    if !matches!(first_inputs, [0, 1] | [1, 0]) {
+        return None;
+    }
+
+    let raw_tail_inputs: [usize; 2] = tail.inputs().try_into().ok()?;
+    let tail_inputs = [
+        TwoInputTailOperand::from_value(raw_tail_inputs[0])?,
+        TwoInputTailOperand::from_value(raw_tail_inputs[1])?,
+    ];
+    let intermediate_count = tail_inputs
+        .iter()
+        .filter(|input| matches!(input, TwoInputTailOperand::Intermediate))
+        .count();
+    let original_input_count = tail_inputs
+        .iter()
+        .filter(|input| matches!(input, TwoInputTailOperand::Input(_)))
+        .count();
+    if intermediate_count != 1 || original_input_count != 1 {
+        return None;
+    }
+
+    Some(TwoInputBinaryTailPlan {
+        first_op,
+        first_inputs,
+        tail_op,
+        tail_inputs,
+    })
+}
+
 pub(crate) trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
     fn abs_elem(self) -> Self;
     fn sign_elem(self) -> Self;
@@ -1173,7 +1284,7 @@ where
     T: Copy + Clone + FusedScalar + PoolScalar,
 {
     if let Some(outputs) =
-        try_typed_mul_add_specialization(buffers, input_views, shape, plan, wrap)?
+        try_typed_two_input_binary_tail_specialization(buffers, input_views, shape, plan, wrap)?
     {
         return Ok(Some(outputs));
     }
@@ -1202,7 +1313,7 @@ where
     ))
 }
 
-fn try_typed_mul_add_specialization<T>(
+fn try_typed_two_input_binary_tail_specialization<T>(
     buffers: &mut BufferPool,
     input_views: &[StridedView<'_, T>],
     shape: &[usize],
@@ -1212,70 +1323,23 @@ fn try_typed_mul_add_specialization<T>(
 where
     T: Copy + Clone + FusedScalar + PoolScalar,
 {
-    if plan.input_count() != 2
-        || input_views.len() != 2
-        || plan.outputs() != [3]
-        || plan.ops().len() != 2
-    {
+    let Some(classified) = classify_two_input_binary_tail_plan(plan) else {
+        return Ok(None);
+    };
+    if input_views.len() != 2 {
         return Ok(None);
     }
 
-    match (
-        plan.ops()[0].op(),
-        plan.ops()[0].inputs(),
-        plan.ops()[1].op(),
-        plan.ops()[1].inputs(),
-    ) {
-        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 0] | [0, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_multiply(b).fused_add(a),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 1] | [1, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_multiply(b).fused_add(b),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 0] | [0, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_add(b).fused_multiply(a),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 1] | [1, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_add(b).fused_multiply(b),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        _ => Ok(None),
-    }
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+    zip_map2_into(
+        &mut out.view_mut(),
+        &input_views[0],
+        &input_views[1],
+        |a, b| classified.evaluate(a, b),
+    )
+    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    Ok(Some(vec![wrap(tensor_from_array(out))]))
 }
 
 fn typed_fusion_input_view<'a, T>(
