@@ -53,13 +53,13 @@ fn semantic_rules_run_through_whole_program_jvp_and_vjp() {
 
     let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
     assert_eq!(vjp.derivative_output_indices(), &[Some(0), Some(1)]);
-    assert!(
+    assert_eq!(
         vjp.frozen()
             .program
             .operations()
             .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
-            .count()
-            >= 3
+            .count(),
+        2
     );
 }
 
