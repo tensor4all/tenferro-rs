@@ -1,11 +1,13 @@
+use std::mem::size_of_val;
 use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
 use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
-    batched_outer_product_into, broadcast_mul_into, fused_elementwise_into, map_into, mul_into,
-    reduce, zip_map2_into, zip_map3_into, FusedInst, FusedOp, FusedPlan, FusedScalar, StridedView,
+    batched_outer_product_into, broadcast_mul_into, map_into, mul_into, reduce, zip_map2_into,
+    zip_map3_into, ErasedFusedPlan, ErasedRawStridedMut, ErasedRawStridedRef, ExecContext,
+    FusedInst, FusedOp, FusedPlan, KernelDType, StridedArray, StridedView,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -188,10 +190,10 @@ fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan)
         && plan.ops()[0].op() == ElementwiseFusionOp::Multiply
 }
 
-fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
+fn single_output_strided_fused_plan(plan: &ElementwiseFusionPlan, output: usize) -> FusedPlan {
     FusedPlan {
         input_count: plan.input_count(),
-        outputs: plan.outputs().to_vec(),
+        outputs: vec![output],
         ops: plan
             .ops()
             .iter()
@@ -203,115 +205,137 @@ fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SpecializedBinaryOp {
-    Add,
-    Multiply,
+fn kernel_dtype(dtype: DType) -> KernelDType {
+    match dtype {
+        DType::F32 => KernelDType::F32,
+        DType::F64 => KernelDType::F64,
+        DType::I32 => KernelDType::I32,
+        DType::I64 => KernelDType::I64,
+        DType::Bool => KernelDType::Bool,
+        DType::C32 => KernelDType::C32,
+        DType::C64 => KernelDType::C64,
+    }
 }
 
-impl SpecializedBinaryOp {
-    fn from_fusion_op(op: ElementwiseFusionOp) -> Option<Self> {
-        match op {
-            ElementwiseFusionOp::Add => Some(Self::Add),
-            ElementwiseFusionOp::Multiply => Some(Self::Multiply),
-            _ => None,
+fn typed_bytes<T>(data: &[T]) -> &[u8] {
+    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
+    // the same lifetime and exact byte length, and is read-only.
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
+    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
+    // the same lifetime and exact byte length; erased kernels restore the
+    // dtype-specific byte validity invariant before typed reads resume.
+    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+struct ErasedFusionInput<'a> {
+    data: &'a [u8],
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+}
+
+fn tensor_host_bytes<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<&'a [u8]> {
+    macro_rules! bytes {
+        ($tensor:expr) => {
+            typed_host_data(op, $tensor).map(typed_bytes)
+        };
+    }
+
+    match input {
+        Tensor::F32(tensor) => bytes!(tensor),
+        Tensor::F64(tensor) => bytes!(tensor),
+        Tensor::I32(tensor) => bytes!(tensor),
+        Tensor::I64(tensor) => bytes!(tensor),
+        Tensor::Bool(tensor) => bytes!(tensor),
+        Tensor::C32(tensor) => bytes!(tensor),
+        Tensor::C64(tensor) => bytes!(tensor),
+    }
+}
+
+fn erased_fusion_input<'a>(
+    input: &'a Tensor,
+    view: &ElementwiseFusionInputView,
+) -> crate::Result<ErasedFusionInput<'a>> {
+    let data = tensor_host_bytes(ELEMENTWISE_FUSION_OP, input)?;
+    let base_shape = input.shape();
+    let base_strides = col_major_strides(base_shape)?;
+    let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
+        return Ok(ErasedFusionInput {
+            data,
+            dims: base_shape.to_vec(),
+            strides: base_strides,
+        });
+    };
+
+    if dims.len() != base_shape.len() {
+        return Err(crate::Error::invalid_argument(
+            ELEMENTWISE_FUSION_OP,
+            "configuration",
+            format!(
+                "broadcast dims length {} does not match input rank {}",
+                dims.len(),
+                base_shape.len()
+            ),
+        ));
+    }
+
+    let mut strides = vec![0; shape.len()];
+    let mut seen = vec![false; shape.len()];
+    for (source_axis, &target_axis) in dims.iter().enumerate() {
+        if target_axis >= shape.len() {
+            return Err(crate::Error::axis_out_of_bounds(
+                ELEMENTWISE_FUSION_OP,
+                target_axis,
+                shape.len(),
+            ));
+        }
+        if seen[target_axis] {
+            return Err(crate::Error::duplicate_axis(
+                ELEMENTWISE_FUSION_OP,
+                target_axis,
+                "broadcast dims",
+            ));
+        }
+        seen[target_axis] = true;
+        let source_dim = base_shape[source_axis];
+        let target_dim = shape[target_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return Err(crate::Error::shape_mismatch(
+                ELEMENTWISE_FUSION_OP,
+                shape.to_vec(),
+                base_shape.to_vec(),
+            ));
+        }
+        if source_dim == target_dim {
+            strides[target_axis] = base_strides[source_axis];
         }
     }
 
-    fn apply<T: FusedScalar>(self, lhs: T, rhs: T) -> T {
-        match self {
-            Self::Add => lhs.fused_add(rhs),
-            Self::Multiply => lhs.fused_multiply(rhs),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TwoInputTailOperand {
-    Input(usize),
-    Intermediate,
-}
-
-impl TwoInputTailOperand {
-    fn from_value(value: usize) -> Option<Self> {
-        match value {
-            0 | 1 => Some(Self::Input(value)),
-            2 => Some(Self::Intermediate),
-            _ => None,
-        }
-    }
-
-    fn resolve<T: Copy>(self, inputs: [T; 2], intermediate: T) -> T {
-        match self {
-            Self::Input(index) => inputs[index],
-            Self::Intermediate => intermediate,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TwoInputBinaryTailPlan {
-    first_op: SpecializedBinaryOp,
-    first_inputs: [usize; 2],
-    tail_op: SpecializedBinaryOp,
-    tail_inputs: [TwoInputTailOperand; 2],
-}
-
-impl TwoInputBinaryTailPlan {
-    fn evaluate<T: FusedScalar>(self, input0: T, input1: T) -> T {
-        let inputs = [input0, input1];
-        let intermediate = self
-            .first_op
-            .apply(inputs[self.first_inputs[0]], inputs[self.first_inputs[1]]);
-        let lhs = self.tail_inputs[0].resolve(inputs, intermediate);
-        let rhs = self.tail_inputs[1].resolve(inputs, intermediate);
-        self.tail_op.apply(lhs, rhs)
-    }
-}
-
-fn classify_two_input_binary_tail_plan(
-    plan: &ElementwiseFusionPlan,
-) -> Option<TwoInputBinaryTailPlan> {
-    if plan.input_count() != 2
-        || plan.outputs() != [3]
-        || plan.ops().len() != 2
-        || !plan.input_views().iter().all(|view| view.is_identity())
-    {
-        return None;
-    }
-
-    let first = &plan.ops()[0];
-    let tail = &plan.ops()[1];
-    let first_op = SpecializedBinaryOp::from_fusion_op(first.op())?;
-    let tail_op = SpecializedBinaryOp::from_fusion_op(tail.op())?;
-    let first_inputs: [usize; 2] = first.inputs().try_into().ok()?;
-    if !matches!(first_inputs, [0, 1] | [1, 0]) {
-        return None;
-    }
-
-    let raw_tail_inputs: [usize; 2] = tail.inputs().try_into().ok()?;
-    let tail_inputs = [
-        TwoInputTailOperand::from_value(raw_tail_inputs[0])?,
-        TwoInputTailOperand::from_value(raw_tail_inputs[1])?,
-    ];
-    let intermediate_count = tail_inputs
-        .iter()
-        .filter(|input| matches!(input, TwoInputTailOperand::Intermediate))
-        .count();
-    let original_input_count = tail_inputs
-        .iter()
-        .filter(|input| matches!(input, TwoInputTailOperand::Input(_)))
-        .count();
-    if intermediate_count != 1 || original_input_count != 1 {
-        return None;
-    }
-
-    Some(TwoInputBinaryTailPlan {
-        first_op,
-        first_inputs,
-        tail_op,
-        tail_inputs,
+    Ok(ErasedFusionInput {
+        data,
+        dims: shape.to_vec(),
+        strides,
     })
+}
+
+fn typed_array_zeroed_from_pool<T>(
+    buffers: &mut BufferPool,
+    shape: &[usize],
+) -> crate::Result<StridedArray<T>>
+where
+    T: PoolScalar,
+{
+    let total = tenferro_tensor::validate::checked_shape_product(
+        "typed_array_zeroed_from_pool",
+        "shape",
+        shape,
+    )?;
+    let strides = col_major_strides(shape)?;
+    let data = T::pool_acquire_zeroed(buffers, total);
+    StridedArray::from_parts(data, shape, &strides, 0)
+        .map_err(|err| crate::Error::backend_source("typed_array_zeroed_from_pool", err))
 }
 
 #[doc(hidden)]
@@ -1154,100 +1178,23 @@ pub fn elementwise_fusion_with_pool(
     if plan_uses_unfused_op(plan) {
         return Ok(None);
     }
-
-    match plan.dtype() {
-        DType::F32 => {
-            let typed_inputs = inputs
-                .iter()
-                .map(|input| match input {
-                    Tensor::F32(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        ELEMENTWISE_FUSION_OP,
-                        input.dtype(),
-                        plan.dtype(),
-                    )),
-                })
-                .collect::<crate::Result<Vec<_>>>()?;
-            typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::F32)
-        }
-        DType::F64 => {
-            let typed_inputs = inputs
-                .iter()
-                .map(|input| match input {
-                    Tensor::F64(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        ELEMENTWISE_FUSION_OP,
-                        input.dtype(),
-                        plan.dtype(),
-                    )),
-                })
-                .collect::<crate::Result<Vec<_>>>()?;
-            typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::F64)
-        }
-        DType::C32 => {
-            if plan_uses_ordered_op(plan) {
-                return Ok(None);
-            }
-            let typed_inputs = inputs
-                .iter()
-                .map(|input| match input {
-                    Tensor::C32(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        ELEMENTWISE_FUSION_OP,
-                        input.dtype(),
-                        plan.dtype(),
-                    )),
-                })
-                .collect::<crate::Result<Vec<_>>>()?;
-            typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::C32)
-        }
-        DType::C64 => {
-            if plan_uses_ordered_op(plan) {
-                return Ok(None);
-            }
-            let typed_inputs = inputs
-                .iter()
-                .map(|input| match input {
-                    Tensor::C64(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        ELEMENTWISE_FUSION_OP,
-                        input.dtype(),
-                        plan.dtype(),
-                    )),
-                })
-                .collect::<crate::Result<Vec<_>>>()?;
-            typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::C64)
-        }
-        DType::I32 | DType::I64 | DType::Bool => Ok(None),
-    }
-}
-
-fn typed_elementwise_fusion_with_pool<T>(
-    buffers: &mut BufferPool,
-    inputs: &[&TypedTensor<T>],
-    plan: &ElementwiseFusionPlan,
-    wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Option<Vec<Tensor>>>
-where
-    T: Copy + Clone + FusedScalar + PoolScalar,
-{
     if should_defer_to_broadcast_multiply_special_case(plan) {
         return Ok(None);
     }
-    if plan.input_views().iter().all(|view| view.is_identity()) {
-        return typed_elementwise_fusion_identity_with_pool(buffers, inputs, plan, wrap);
+    if !dtype_supports_erased_fusion(plan.dtype(), plan) {
+        return Ok(None);
     }
 
-    let input_views = inputs
+    let input_layouts = inputs
         .iter()
         .zip(plan.input_views())
-        .map(|(input, view)| typed_fusion_input_view(input, view))
+        .map(|(input, view)| erased_fusion_input(input, view))
         .collect::<crate::Result<Vec<_>>>()?;
-    let shape = input_views[0].dims().to_vec();
-    if input_views
+    let shape = input_layouts[0].dims.clone();
+    if input_layouts
         .iter()
         .skip(1)
-        .any(|input| input.dims() != shape.as_slice())
+        .any(|input| input.dims != shape)
     {
         return Ok(None);
     }
@@ -1257,162 +1204,205 @@ where
         return Ok(None);
     }
 
-    run_typed_elementwise_fusion_with_views(buffers, &input_views, &shape, plan, wrap)
-}
-
-fn typed_elementwise_fusion_identity_with_pool<T>(
-    buffers: &mut BufferPool,
-    inputs: &[&TypedTensor<T>],
-    plan: &ElementwiseFusionPlan,
-    wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Option<Vec<Tensor>>>
-where
-    T: Copy + Clone + FusedScalar + PoolScalar,
-{
-    let shape = inputs[0].shape();
-    if inputs.iter().skip(1).any(|input| input.shape() != shape) {
-        return Ok(None);
-    }
-    let element_count =
-        tenferro_tensor::validate::checked_shape_product(ELEMENTWISE_FUSION_OP, "shape", shape)?;
-    if element_count < ELEMENTWISE_FUSION_MIN_ELEMENTS {
-        return Ok(None);
-    }
-
-    let input_views = inputs
+    let dtype = kernel_dtype(plan.dtype());
+    let input_refs = input_layouts
         .iter()
-        .map(|input| typed_view(ELEMENTWISE_FUSION_OP, input))
+        .map(|input| {
+            ErasedRawStridedRef::new(dtype, input.data, &input.dims, &input.strides, 0)
+                .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
+        })
         .collect::<crate::Result<Vec<_>>>()?;
-    run_typed_elementwise_fusion_with_views(buffers, &input_views, shape, plan, wrap)
+
+    execute_erased_fused_outputs(buffers, dtype, &input_refs, &shape, plan).map(Some)
 }
 
-fn run_typed_elementwise_fusion_with_views<T>(
+fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> bool {
+    match dtype {
+        DType::F32 | DType::F64 => true,
+        DType::C32 | DType::C64 => !plan_uses_ordered_op(plan),
+        DType::I32 | DType::I64 => plan.ops().iter().all(|inst| {
+            matches!(
+                inst.op(),
+                ElementwiseFusionOp::Add
+                    | ElementwiseFusionOp::Multiply
+                    | ElementwiseFusionOp::Negate
+                    | ElementwiseFusionOp::Conj
+                    | ElementwiseFusionOp::Abs
+                    | ElementwiseFusionOp::Maximum
+                    | ElementwiseFusionOp::Minimum
+                    | ElementwiseFusionOp::Clamp
+            )
+        }),
+        DType::Bool => plan
+            .ops()
+            .iter()
+            .all(|inst| inst.op() == ElementwiseFusionOp::Conj),
+    }
+}
+
+fn execute_erased_fused_outputs(
     buffers: &mut BufferPool,
-    input_views: &[StridedView<'_, T>],
+    dtype: KernelDType,
+    input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
-    wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Option<Vec<Tensor>>>
-where
-    T: Copy + Clone + FusedScalar + PoolScalar,
-{
-    if let Some(outputs) =
-        try_typed_two_input_binary_tail_specialization(buffers, input_views, shape, plan, wrap)?
-    {
-        return Ok(Some(outputs));
-    }
-
-    let fused_plan = strided_fused_plan(plan);
-    let mut output_arrays = Vec::with_capacity(plan.outputs().len());
-    for _ in plan.outputs() {
-        // SAFETY: fused_elementwise_into writes every destination element.
-        output_arrays.push(unsafe { typed_array_uninit_from_pool(buffers, shape) }?);
-    }
-
-    {
-        let mut output_views = output_arrays
-            .iter_mut()
-            .map(|output| output.view_mut())
-            .collect::<Vec<_>>();
-        fused_elementwise_into(&mut output_views, input_views, &fused_plan)
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    }
-
-    Ok(Some(
-        output_arrays
-            .into_iter()
-            .map(|output| wrap(tensor_from_array(output)))
+) -> crate::Result<Vec<Tensor>> {
+    match dtype {
+        KernelDType::F32 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<f32>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::F32,
+                )
+            })
             .collect(),
-    ))
+        KernelDType::F64 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<f64>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::F64,
+                )
+            })
+            .collect(),
+        KernelDType::I32 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<i32>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::I32,
+                )
+            })
+            .collect(),
+        KernelDType::I64 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<i64>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::I64,
+                )
+            })
+            .collect(),
+        KernelDType::Bool => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<bool>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    true,
+                    Tensor::Bool,
+                )
+            })
+            .collect(),
+        KernelDType::C32 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<num_complex::Complex32>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::C32,
+                )
+            })
+            .collect(),
+        KernelDType::C64 => plan
+            .outputs()
+            .iter()
+            .map(|&output| {
+                execute_erased_fused_output::<num_complex::Complex64>(
+                    buffers,
+                    dtype,
+                    input_refs,
+                    shape,
+                    plan,
+                    output,
+                    false,
+                    Tensor::C64,
+                )
+            })
+            .collect(),
+        _ => Err(crate::Error::unsupported(
+            ELEMENTWISE_FUSION_OP,
+            format!("unsupported dtype {}", dtype.label()),
+        )),
+    }
 }
 
-fn try_typed_two_input_binary_tail_specialization<T>(
+#[allow(clippy::too_many_arguments)]
+fn execute_erased_fused_output<T>(
     buffers: &mut BufferPool,
-    input_views: &[StridedView<'_, T>],
+    dtype: KernelDType,
+    input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
+    output: usize,
+    zeroed_output: bool,
     wrap: fn(TypedTensor<T>) -> Tensor,
-) -> crate::Result<Option<Vec<Tensor>>>
+) -> crate::Result<Tensor>
 where
-    T: Copy + Clone + FusedScalar + PoolScalar,
+    T: Clone + PoolScalar,
 {
-    let Some(classified) = classify_two_input_binary_tail_plan(plan) else {
-        return Ok(None);
+    let fused_plan = single_output_strided_fused_plan(plan, output);
+    let erased_plan = ErasedFusedPlan::compile(dtype, fused_plan)
+        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    let mut out = if zeroed_output {
+        typed_array_zeroed_from_pool(buffers, shape)?
+    } else {
+        // SAFETY: ErasedFusedPlan overwrites every destination element before typed reads resume.
+        unsafe { typed_array_uninit_from_pool(buffers, shape) }?
     };
-    if input_views.len() != 2 {
-        return Ok(None);
-    }
-
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-    zip_map2_into(
-        &mut out.view_mut(),
-        &input_views[0],
-        &input_views[1],
-        |a, b| classified.evaluate(a, b),
+    let output_strides = col_major_strides(shape)?;
+    let mut dest = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.data_mut()),
+        shape,
+        &output_strides,
+        0,
     )
     .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    Ok(Some(vec![wrap(tensor_from_array(out))]))
-}
-
-fn typed_fusion_input_view<'a, T>(
-    input: &'a TypedTensor<T>,
-    view: &ElementwiseFusionInputView,
-) -> crate::Result<StridedView<'a, T>>
-where
-    T: Copy,
-{
-    let base = typed_view(ELEMENTWISE_FUSION_OP, input)?;
-    let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
-        return Ok(base);
-    };
-    if dims.len() != input.shape().len() {
-        return Err(crate::Error::invalid_argument(
-            ELEMENTWISE_FUSION_OP,
-            "configuration",
-            format!(
-                "broadcast dims length {} does not match input rank {}",
-                dims.len(),
-                input.shape().len()
-            ),
-        ));
-    }
-
-    let mut strides = vec![0; shape.len()];
-    let mut seen = Vec::with_capacity(shape.len());
-    seen.resize(shape.len(), false);
-    for (source_axis, &target_axis) in dims.iter().enumerate() {
-        if target_axis >= shape.len() {
-            return Err(crate::Error::axis_out_of_bounds(
-                ELEMENTWISE_FUSION_OP,
-                target_axis,
-                shape.len(),
-            ));
-        }
-        if seen[target_axis] {
-            return Err(crate::Error::duplicate_axis(
-                ELEMENTWISE_FUSION_OP,
-                target_axis,
-                "broadcast dims",
-            ));
-        }
-        seen[target_axis] = true;
-        let source_dim = input.shape()[source_axis];
-        let target_dim = shape[target_axis];
-        if source_dim != target_dim && source_dim != 1 {
-            return Err(crate::Error::shape_mismatch(
-                ELEMENTWISE_FUSION_OP,
-                shape.to_vec(),
-                input.shape().to_vec(),
-            ));
-        }
-        if source_dim == target_dim {
-            strides[target_axis] = base.strides()[source_axis];
-        }
-    }
-
-    StridedView::new(base.data(), shape, &strides, base.offset())
-        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
+    erased_plan
+        .execute(&ExecContext::serial(), &mut dest, input_refs)
+        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    Ok(wrap(tensor_from_array(out)))
 }
 
 fn typed_binary_view_with_pool<T, L, R>(

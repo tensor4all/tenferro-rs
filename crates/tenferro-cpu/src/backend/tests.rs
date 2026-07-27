@@ -173,6 +173,32 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
 }
 
 #[test]
+fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
+    let elementwise = include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
+    let indexing = include_str!("../indexing.rs");
+    let reduction = include_str!("../reduction.rs");
+
+    assert!(
+        elementwise.contains("ErasedFusedPlan::compile"),
+        "CPU elementwise fusion should delegate replay to strided-kernel's erased fused plan"
+    );
+    assert!(
+        !elementwise.contains("fused_elementwise_into"),
+        "tenferro-cpu should not instantiate strided generic fused replay directly"
+    );
+    assert!(
+        indexing.contains("ErasedDynamicSlicePlan::compile")
+            && indexing.contains("ErasedDynamicUpdateSlicePlan::compile")
+            && indexing.contains("ErasedScatterPlan::compile"),
+        "CPU indexed slice/update/scatter execution should delegate to erased strided plans"
+    );
+    assert!(
+        reduction.contains("ErasedReducePlan::compile_axes"),
+        "CPU sum/product axis reductions should delegate to erased strided reduce plans"
+    );
+}
+
+#[test]
 fn direct_native_scope_uses_the_selected_rayon_budget() {
     let backend = CpuBackend::with_threads(2).unwrap();
     let participants = backend

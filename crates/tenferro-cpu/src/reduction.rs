@@ -1,12 +1,17 @@
-use std::ops::{Add, Mul};
+use std::mem::size_of_val;
 
-use num_traits::{Float, One, Zero};
-use strided_kernel::reduce_axis;
+use num_traits::Float;
+use strided_kernel::{
+    col_major_strides, reduce_axis, ErasedRawStridedMut, ErasedRawStridedRef, ErasedReducePlan,
+    ExecContext, KernelDType, ReduceOp,
+};
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
-use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
+use tenferro_tensor::{
+    DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView,
+};
 
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
     let mut seen = vec![false; rank];
@@ -100,9 +105,40 @@ fn nan_propagating_min<T: Float>(a: T, b: T) -> T {
     }
 }
 
-trait WrappingReductionElem: Copy + Clone + Send + Sync + Zero + One + 'static {
-    fn wrapping_add_elem(self, other: Self) -> Self;
-    fn wrapping_mul_elem(self, other: Self) -> Self;
+fn kernel_dtype(dtype: DType) -> KernelDType {
+    match dtype {
+        DType::F32 => KernelDType::F32,
+        DType::F64 => KernelDType::F64,
+        DType::I32 => KernelDType::I32,
+        DType::I64 => KernelDType::I64,
+        DType::Bool => KernelDType::Bool,
+        DType::C32 => KernelDType::C32,
+        DType::C64 => KernelDType::C64,
+    }
+}
+
+fn typed_bytes<T>(data: &[T]) -> &[u8] {
+    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
+    // the same lifetime and exact byte length, and is read-only.
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
+    // SAFETY: `data` is an aligned typed slice. The erased reduction writes
+    // valid scalar values before the buffer is read through its typed view.
+    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
+    input_shape
+        .iter()
+        .enumerate()
+        .filter(|&(axis, _)| !axes.contains(&axis))
+        .map(|(_, &dim)| dim)
+        .collect()
+}
+
+trait WrappingReductionElem: Copy + Clone + Send + Sync + 'static {
     fn min_value_elem() -> Self;
     fn max_value_elem() -> Self;
     fn max_elem(self, other: Self) -> Self;
@@ -112,14 +148,6 @@ trait WrappingReductionElem: Copy + Clone + Send + Sync + Zero + One + 'static {
 macro_rules! impl_wrapping_reduction_elem {
     ($ty:ty) => {
         impl WrappingReductionElem for $ty {
-            fn wrapping_add_elem(self, other: Self) -> Self {
-                self.wrapping_add(other)
-            }
-
-            fn wrapping_mul_elem(self, other: Self) -> Self {
-                self.wrapping_mul(other)
-            }
-
             fn min_value_elem() -> Self {
                 <$ty>::MIN
             }
@@ -181,56 +209,50 @@ pub(crate) fn reduce_sum_read(
             ensure_host_tensor("reduce_sum", input)?;
             reduce_sum(input, axes)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
+        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a + b,
-            f32::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view(
+        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a + b,
-            f64::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
-        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view(
+        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a.wrapping_add(b),
-            i32::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
-        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view(
+        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a.wrapping_add(b),
-            i64::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
         TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_sum",
             "unsupported dtype Bool",
         )),
-        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view(
+        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a + b,
-            num_complex::Complex32::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
-        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view(
+        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a + b,
-            num_complex::Complex64::zero(),
+            ReduceOp::Sum,
             "reduce_sum",
         )?)),
     }
@@ -275,56 +297,50 @@ pub(crate) fn reduce_prod_read(
             ensure_host_tensor("reduce_prod", input)?;
             reduce_prod(input, axes)
         }
-        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
+        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a * b,
-            f32::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
-        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view(
+        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a * b,
-            f64::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
-        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view(
+        TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a.wrapping_mul(b),
-            i32::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
-        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view(
+        TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a.wrapping_mul(b),
-            i64::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
         TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_prod",
             "unsupported dtype Bool",
         )),
-        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view(
+        TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a * b,
-            num_complex::Complex32::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
-        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view(
+        TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
+            buffers,
             &t,
             axes,
-            |x| x,
-            |a, b| a * b,
-            num_complex::Complex64::one(),
+            ReduceOp::Product,
             "reduce_prod",
         )?)),
     }
@@ -554,6 +570,70 @@ where
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
 }
 
+fn typed_reduce_erased<T>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+    op: ReduceOp,
+    label: &'static str,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + TensorScalar,
+{
+    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
+    if axes.is_empty() {
+        // INVARIANT: empty-axis typed reductions preserve values exactly while
+        // satisfying the owned-output contract.
+        return Ok(input.clone());
+    }
+
+    let output_shape = reduction_output_shape(input.shape(), axes);
+    let output_len =
+        tenferro_tensor::validate::checked_shape_product(label, "output shape", &output_shape)?;
+    let output_strides = col_major_strides(&output_shape);
+    let dtype = kernel_dtype(T::dtype());
+    let input_view = typed_view(label, input)?;
+    let plan = ErasedReducePlan::compile_axes(
+        dtype,
+        op,
+        input_view.dims(),
+        input_view.strides(),
+        &output_shape,
+        &output_strides,
+        axes,
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    let source = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(input_view.data()),
+        input_view.dims(),
+        input_view.strides(),
+        input_view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    // SAFETY: ErasedReducePlan writes every destination element.
+    let mut output = unsafe { uninit_full_overwrite_vec(output_len) };
+    let mut dest = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(&mut output),
+        &output_shape,
+        &output_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    plan.execute(&ExecContext::serial(), &mut dest, &source)
+        .map_err(|err| crate::Error::backend_source(label, err))?;
+
+    TypedTensor::from_vec_col_major(output_shape, output)
+}
+
+#[allow(clippy::uninit_vec)]
+unsafe fn uninit_full_overwrite_vec<T>(len: usize) -> Vec<T> {
+    let mut output = Vec::with_capacity(len);
+    // SAFETY: the caller promises every element is overwritten before any read.
+    unsafe { output.set_len(len) };
+    output
+}
+
 pub(crate) fn typed_reduce_view<T, M, R, TR>(
     input: &TypedTensorView<'_, T, TR>,
     axes: &[usize],
@@ -605,6 +685,63 @@ where
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
 }
 
+fn typed_reduce_view_erased<T, TR>(
+    buffers: &mut BufferPool,
+    input: &TypedTensorView<'_, T, TR>,
+    axes: &[usize],
+    op: ReduceOp,
+    label: &'static str,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + TensorScalar + crate::buffer_pool::PoolScalar + 'static,
+    TR: TensorRank,
+{
+    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
+    if axes.is_empty() {
+        return Err(crate::Error::unsupported(
+            label,
+            "empty-axis view reductions require backend-owned materialization",
+        ));
+    }
+
+    let output_shape = reduction_output_shape(input.shape(), axes);
+    let output_strides = col_major_strides(&output_shape);
+    let dtype = kernel_dtype(T::dtype());
+    let input_view = typed_view_from_view(label, input)?;
+    let plan = ErasedReducePlan::compile_axes(
+        dtype,
+        op,
+        input_view.dims(),
+        input_view.strides(),
+        &output_shape,
+        &output_strides,
+        axes,
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    let source = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(input_view.data()),
+        input_view.dims(),
+        input_view.strides(),
+        input_view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    // SAFETY: ErasedReducePlan writes every destination element.
+    let mut output = unsafe { crate::typed_array_uninit_from_pool(buffers, &output_shape) }?;
+    let mut dest = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(output.data_mut()),
+        &output_shape,
+        &output_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
+    plan.execute(&ExecContext::serial(), &mut dest, &source)
+        .map_err(|err| crate::Error::backend_source(label, err))?;
+
+    Ok(crate::tensor_from_array(output))
+}
+
 /// # Errors
 ///
 /// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
@@ -612,9 +749,9 @@ where
 /// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync + Zero + Add<Output = T>,
+    T: Copy + Clone + Send + Sync + TensorScalar,
 {
-    typed_reduce(input, axes, |x| x, |a, b| a + b, T::zero(), "reduce_sum")
+    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum")
 }
 
 fn typed_reduce_sum_wrapping<T>(
@@ -622,16 +759,9 @@ fn typed_reduce_sum_wrapping<T>(
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingReductionElem,
+    T: WrappingReductionElem + TensorScalar,
 {
-    typed_reduce(
-        input,
-        axes,
-        |x| x,
-        |a, b| a.wrapping_add_elem(b),
-        T::zero(),
-        "reduce_sum",
-    )
+    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum")
 }
 
 /// # Errors
@@ -641,9 +771,9 @@ where
 /// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_prod<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync + One + Mul<Output = T>,
+    T: Copy + Clone + Send + Sync + TensorScalar,
 {
-    typed_reduce(input, axes, |x| x, |a, b| a * b, T::one(), "reduce_prod")
+    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod")
 }
 
 fn typed_reduce_prod_wrapping<T>(
@@ -651,16 +781,9 @@ fn typed_reduce_prod_wrapping<T>(
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingReductionElem,
+    T: WrappingReductionElem + TensorScalar,
 {
-    typed_reduce(
-        input,
-        axes,
-        |x| x,
-        |a, b| a.wrapping_mul_elem(b),
-        T::one(),
-        "reduce_prod",
-    )
+    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod")
 }
 
 /// # Errors
