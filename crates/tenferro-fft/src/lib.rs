@@ -147,6 +147,11 @@ pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 
 /// Reusable concrete FFT executor with an explicitly owned backend-neutral cache.
+///
+/// Use this executor for repeated concrete FFT calls that should reuse backend
+/// plans. The immediate [`TensorFftExt`] and [`TensorReadFftExt`] methods stay
+/// one-shot and do not retain hidden process-global, thread-local, or
+/// backend-owned plan state between calls.
 #[derive(Default)]
 pub struct FftExecutor {
     plans: FftPlanCache,
@@ -399,6 +404,10 @@ impl TracedTensorFftExt for TracedTensor {
 /// [`TensorReadFftExt`] when the input is a borrowed view or other
 /// [`TensorRead`] value.
 ///
+/// Direct calls intentionally use a call-local one-shot FFT plan cache. Use
+/// [`FftExecutor`] for repeated concrete calls with stable transform lengths,
+/// or traced/runtime execution when the runtime should own the extension cache.
+///
 /// # Examples
 ///
 /// ```
@@ -560,6 +569,10 @@ impl TensorFftExt for Tensor {
 ///
 /// The `_read` suffix follows the repository convention for APIs that
 /// explicitly accept [`TensorRead`] values such as borrowed views.
+///
+/// Direct read calls intentionally materialize through a call-local one-shot
+/// FFT plan cache. Use [`FftExecutor`] on compact owned tensors when repeated
+/// concrete calls should retain backend plans across calls.
 ///
 /// # Examples
 ///

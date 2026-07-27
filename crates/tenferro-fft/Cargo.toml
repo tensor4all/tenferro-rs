@@ -50,6 +50,14 @@ num-traits.workspace = true
 rustfft = "6"
 thiserror.workspace = true
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "fft_plan_cache"
+path = "benches/fft_plan_cache.rs"
+harness = false
+
 [[test]]
 name = "apple_cpu"
 path = "tests/apple_cpu.rs"
