@@ -230,6 +230,27 @@ fn execution_context_is_the_single_source_of_faer_parallelism() {
 }
 
 #[test]
+fn execution_context_is_the_single_source_of_erased_strided_replay_policy() {
+    let single = execution_context_fixture(1);
+    single.with_context(ParallelMode::Sequential, |context| {
+        let strided = context.strided_exec_context();
+        assert!(strided.is_serial());
+        assert_eq!(strided.max_threads_limit(), None);
+    });
+
+    let multi = execution_context_fixture(2);
+    multi.with_context(ParallelMode::Inner, |context| {
+        let strided = context.strided_exec_context();
+        assert_eq!(strided.max_threads_limit(), NonZeroUsize::new(2));
+    });
+    multi.with_context(ParallelMode::Sequential, |context| {
+        let strided = context.strided_exec_context();
+        assert!(strided.is_serial());
+        assert_eq!(strided.max_threads_limit(), None);
+    });
+}
+
+#[test]
 fn outer_mode_is_rejected_before_install_or_operation_mutation() {
     let multi = execution_context_fixture(2);
     let ran = AtomicUsize::new(0);

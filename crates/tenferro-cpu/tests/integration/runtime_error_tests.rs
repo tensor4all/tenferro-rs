@@ -270,19 +270,19 @@ fn cpu_reductions_use_common_empty_axes_validation_helpers() {
 
     for (start, end, helper, op) in [
         (
-            "pub fn reduce_sum",
+            "pub(crate) fn reduce_sum",
             "pub(crate) fn reduce_sum_read",
             "reduction_empty_axes_noop",
             "reduce_sum",
         ),
         (
             "pub(crate) fn reduce_sum_read",
-            "pub fn reduce_prod",
+            "pub(crate) fn reduce_prod",
             "reduction_read_empty_axes_noop",
             "reduce_sum",
         ),
         (
-            "pub fn reduce_prod",
+            "pub(crate) fn reduce_prod",
             "pub(crate) fn reduce_prod_read",
             "reduction_empty_axes_noop",
             "reduce_prod",

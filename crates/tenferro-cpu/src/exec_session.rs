@@ -100,6 +100,30 @@ impl CpuExecSession<'_> {
             })
             .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
+
+    fn run_native_fresh_with_context<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| {
+                let mut output = op(&context, buffers)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
+            });
+        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    let mut output = op(context, buffers)?;
+                    output.tag_fresh(context.domain_id());
+                    Ok(output)
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+    }
 }
 
 impl TensorDeviceTransfer for CpuExecSession<'_> {
@@ -255,16 +279,32 @@ impl TensorStructural for CpuExecSession<'_> {
 
 impl TensorReduction for CpuExecSession<'_> {
     // Reduction
-    delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
-
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| reduction::reduce_sum_read(buffers, input, axes))
+    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, _| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_sum(input, axes, &exec_context)
+        })
     }
 
-    delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_sum_read(buffers, input, axes, &exec_context)
+        })
+    }
+
+    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, _| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_prod(input, axes, &exec_context)
+        })
+    }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| reduction::reduce_prod_read(buffers, input, axes))
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_prod_read(buffers, input, axes, &exec_context)
+        })
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
@@ -494,14 +534,52 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| {
-            indexing::gather_with_pool(buffers, operand, start_indices, config)
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::gather_with_pool(buffers, &exec_context, operand, start_indices, config)
         })
     }
-    delegate_with_pool!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter_with_pool);
+    fn scatter(
+        &mut self,
+        operand: &Tensor,
+        indices: &Tensor,
+        updates: &Tensor,
+        config: &ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::scatter_with_pool(buffers, &exec_context, operand, indices, updates, config)
+        })
+    }
     delegate_with_pool!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice_with_pool);
-    delegate_with_pool!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice_with_pool);
-    delegate_with_pool!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice_with_pool);
+    fn dynamic_slice(
+        &mut self,
+        input: &Tensor,
+        starts: &Tensor,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_slice_with_pool(buffers, &exec_context, input, starts, slice_sizes)
+        })
+    }
+    fn dynamic_update_slice(
+        &mut self,
+        operand: &Tensor,
+        update: &Tensor,
+        starts: &Tensor,
+    ) -> crate::Result<Tensor> {
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_update_slice_with_pool(
+                buffers,
+                &exec_context,
+                operand,
+                update,
+                starts,
+            )
+        })
+    }
     delegate_with_pool!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad_with_pool);
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
         self.run_native_fresh(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
@@ -531,8 +609,9 @@ impl TensorFusion for CpuExecSession<'_> {
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.run_native_fresh(|buffers| {
-            elementwise::elementwise_fusion_with_pool(buffers, inputs, plan)
+        self.run_native_fresh_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            elementwise::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
         })
     }
 

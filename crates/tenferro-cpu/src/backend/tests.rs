@@ -196,6 +196,17 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
         reduction.contains("ErasedReducePlan::compile_axes"),
         "CPU sum/product axis reductions should delegate to erased strided reduce plans"
     );
+    for (name, source) in [
+        ("elementwise", elementwise),
+        ("indexing", indexing),
+        ("reduction", reduction),
+    ] {
+        let compact_source = source.split_whitespace().collect::<String>();
+        assert!(
+            !compact_source.contains(".execute(&ExecContext::serial()"),
+            "{name} erased strided replay should inherit CpuExecutionContext, not force serial"
+        );
+    }
 }
 
 #[test]

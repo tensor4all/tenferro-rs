@@ -2188,12 +2188,37 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
+    fn try_install_with_context<R: Send>(
+        &self,
+        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| op(context))
+            })
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
     fn try_install_fresh<R: FreshCpuOutput + Send>(
         &self,
         op: impl FnOnce() -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
         let domain = self.engine.domain().id();
         let mut output = self.try_install(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    fn try_install_fresh_with_context<R: FreshCpuOutput + Send>(
+        &self,
+        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.try_install_with_context(op)?;
         output.tag_fresh(domain);
         Ok(output)
     }
@@ -2218,12 +2243,42 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
+    fn install_with_pool_context_unmarked<R: Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                        op(context, buffers.get_mut())
+                    })
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
     fn install_with_pool<R: FreshCpuOutput + Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
         let domain = self.engine.domain().id();
         let mut output = self.install_with_pool_unmarked(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    fn install_with_pool_context<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.install_with_pool_context_unmarked(op)?;
         output.tag_fresh(domain);
         Ok(output)
     }
@@ -2652,19 +2707,31 @@ impl TensorStructural for CpuBackend {
 
 impl TensorReduction for CpuBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh(|| reduction::reduce_sum(input, axes))
+        self.try_install_fresh_with_context(|context| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_sum(input, axes, &exec_context)
+        })
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| reduction::reduce_sum_read(buffers, input, axes))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_sum_read(buffers, input, axes, &exec_context)
+        })
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh(|| reduction::reduce_prod(input, axes))
+        self.try_install_fresh_with_context(|context| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_prod(input, axes, &exec_context)
+        })
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| reduction::reduce_prod_read(buffers, input, axes))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            reduction::reduce_prod_read(buffers, input, axes, &exec_context)
+        })
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2817,8 +2884,9 @@ impl TensorIndexing for CpuBackend {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            indexing::gather_with_pool(buffers, operand, start_indices, config)
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::gather_with_pool(buffers, &exec_context, operand, start_indices, config)
         })
     }
 
@@ -2829,8 +2897,16 @@ impl TensorIndexing for CpuBackend {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            indexing::scatter_with_pool(buffers, operand, scatter_indices, updates, config)
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::scatter_with_pool(
+                buffers,
+                &exec_context,
+                operand,
+                scatter_indices,
+                updates,
+                config,
+            )
         })
     }
 
@@ -2844,8 +2920,9 @@ impl TensorIndexing for CpuBackend {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            indexing::dynamic_slice_with_pool(buffers, input, starts, slice_sizes)
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_slice_with_pool(buffers, &exec_context, input, starts, slice_sizes)
         })
     }
 
@@ -2855,8 +2932,15 @@ impl TensorIndexing for CpuBackend {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            indexing::dynamic_update_slice_with_pool(buffers, operand, update, starts)
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_update_slice_with_pool(
+                buffers,
+                &exec_context,
+                operand,
+                update,
+                starts,
+            )
         })
     }
 
@@ -3055,8 +3139,9 @@ impl TensorFusion for CpuBackend {
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.install_with_pool(|buffers| {
-            elementwise::elementwise_fusion_with_pool(buffers, inputs, plan)
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            elementwise::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
         })
     }
 

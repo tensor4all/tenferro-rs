@@ -94,9 +94,10 @@ fn elementwise_fusion_executes_i32_add_multiply_plan() {
         ],
     );
 
-    let outputs = elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &plan)
-        .unwrap()
-        .expect("I32 add/multiply fusion should be delegated to strided-kernel");
+    let outputs =
+        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&lhs, &rhs], &plan)
+            .unwrap()
+            .expect("I32 add/multiply fusion should be delegated to strided-kernel");
 
     assert_eq!(outputs.len(), 1);
     let actual = outputs[0].as_slice::<i32>().unwrap();
@@ -130,9 +131,10 @@ fn elementwise_fusion_executes_reversed_first_input_plan() {
         ],
     );
 
-    let outputs = elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &plan)
-        .unwrap()
-        .expect("reversed first input order should be handled by strided fused replay");
+    let outputs =
+        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&lhs, &rhs], &plan)
+            .unwrap()
+            .expect("reversed first input order should be handled by strided fused replay");
 
     assert_eq!(outputs.len(), 1);
     let actual = outputs[0].as_slice::<f64>().unwrap();
@@ -163,9 +165,14 @@ fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
         )],
     );
 
-    let f32_outputs = elementwise_fusion_with_pool(&mut buffers, &[&f32_lhs, &f32_rhs], &add_plan)
-        .unwrap()
-        .expect("F32 add fusion should be delegated to strided-kernel");
+    let f32_outputs = elementwise_fusion_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &[&f32_lhs, &f32_rhs],
+        &add_plan,
+    )
+    .unwrap()
+    .expect("F32 add fusion should be delegated to strided-kernel");
     let f32_actual = f32_outputs[0].as_slice::<f32>().unwrap();
     assert_eq!(f32_actual[3], f32_lhs_data[3] + f32_rhs_data[3]);
 
@@ -187,9 +194,14 @@ fn elementwise_fusion_executes_f32_and_i64_erased_dtype_arms() {
         )],
     );
 
-    let i64_outputs = elementwise_fusion_with_pool(&mut buffers, &[&i64_lhs, &i64_rhs], &i64_plan)
-        .unwrap()
-        .expect("I64 add fusion should be delegated to strided-kernel");
+    let i64_outputs = elementwise_fusion_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &[&i64_lhs, &i64_rhs],
+        &i64_plan,
+    )
+    .unwrap()
+    .expect("I64 add fusion should be delegated to strided-kernel");
     let i64_actual = i64_outputs[0].as_slice::<i64>().unwrap();
     assert_eq!(i64_actual[n - 1], i64_lhs_data[n - 1] + i64_rhs_data[n - 1]);
 }
@@ -213,9 +225,14 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         )],
     );
 
-    let bool_outputs = elementwise_fusion_with_pool(&mut buffers, &[&bool_input], &bool_plan)
-        .unwrap()
-        .expect("Bool conj fusion should use the zeroed erased destination path");
+    let bool_outputs = elementwise_fusion_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &[&bool_input],
+        &bool_plan,
+    )
+    .unwrap()
+    .expect("Bool conj fusion should use the zeroed erased destination path");
     assert_eq!(
         bool_outputs[0].as_slice::<bool>().unwrap(),
         bool_data.as_slice()
@@ -245,9 +262,14 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         ],
     );
 
-    let c32_outputs = elementwise_fusion_with_pool(&mut buffers, &[&c32_lhs, &c32_rhs], &c32_plan)
-        .unwrap()
-        .expect("C32 multi-output fusion should be delegated output-by-output");
+    let c32_outputs = elementwise_fusion_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &[&c32_lhs, &c32_rhs],
+        &c32_plan,
+    )
+    .unwrap()
+    .expect("C32 multi-output fusion should be delegated output-by-output");
     assert_eq!(c32_outputs.len(), 2);
     assert_eq!(
         c32_outputs[0].as_slice::<num_complex::Complex32>().unwrap()[5],
@@ -282,9 +304,14 @@ fn elementwise_fusion_executes_bool_and_complex_erased_dtype_arms() {
         )],
     );
 
-    let c64_outputs = elementwise_fusion_with_pool(&mut buffers, &[&c64_lhs, &c64_rhs], &c64_plan)
-        .unwrap()
-        .expect("C64 add fusion should be delegated to strided-kernel");
+    let c64_outputs = elementwise_fusion_with_pool(
+        &mut buffers,
+        &ExecContext::serial(),
+        &[&c64_lhs, &c64_rhs],
+        &c64_plan,
+    )
+    .unwrap()
+    .expect("C64 add fusion should be delegated to strided-kernel");
     assert_eq!(
         c64_outputs[0].as_slice::<num_complex::Complex64>().unwrap()[7],
         c64_lhs_data[7] + c64_rhs_data[7]
@@ -309,9 +336,14 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
         )],
     );
     assert!(
-        elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &divide_plan)
-            .unwrap()
-            .is_none(),
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&lhs, &rhs],
+            &divide_plan
+        )
+        .unwrap()
+        .is_none(),
         "integer divide is not owned by erased strided fusion"
     );
 
@@ -332,9 +364,14 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
         )],
     );
     assert!(
-        elementwise_fusion_with_pool(&mut buffers, &[&complex, &complex], &ordered_plan)
-            .unwrap()
-            .is_none(),
+        elementwise_fusion_with_pool(
+            &mut buffers,
+            &ExecContext::serial(),
+            &[&complex, &complex],
+            &ordered_plan
+        )
+        .unwrap()
+        .is_none(),
         "complex ordered ops stay outside erased strided fusion"
     );
 }

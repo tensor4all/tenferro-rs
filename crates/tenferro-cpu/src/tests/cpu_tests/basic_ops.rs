@@ -671,13 +671,13 @@ fn test_reduce_sum() {
     let t = Tensor::F64(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
-    let r = reduce_sum(&t, &[0]).unwrap();
+    let r = reduce_sum(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(r.shape(), &[3]);
     assert_eq!(get_f64(&r, &[0]), 3.0);
     assert_eq!(get_f64(&r, &[1]), 7.0);
     assert_eq!(get_f64(&r, &[2]), 11.0);
 
-    let all = reduce_sum(&t, &[0, 1]).unwrap();
+    let all = reduce_sum(&t, &[0, 1], &strided_kernel::ExecContext::serial()).unwrap();
     assert!(all.shape().is_empty());
     assert_eq!(get_f64(&all, &[]), 21.0);
 }
@@ -688,13 +688,13 @@ fn test_reduce_prod() {
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
-    let r = reduce_prod(&t, &[0]).unwrap();
+    let r = reduce_prod(&t, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(r.shape(), &[3]);
     assert_eq!(get_f64(&r, &[0]), 2.0);
     assert_eq!(get_f64(&r, &[1]), 12.0);
     assert_eq!(get_f64(&r, &[2]), 30.0);
 
-    let all = reduce_prod(&t, &[0, 1]).unwrap();
+    let all = reduce_prod(&t, &[0, 1], &strided_kernel::ExecContext::serial()).unwrap();
     assert!(all.shape().is_empty());
     assert_eq!(get_f64(&all, &[]), 720.0);
 }
@@ -702,19 +702,19 @@ fn test_reduce_prod() {
 #[test]
 fn test_integer_reduce_sum_prod_wrap_on_overflow() {
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]).unwrap();
-    let sum = reduce_sum(&input, &[0]).unwrap();
+    let sum = reduce_sum(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(
         sum.as_slice::<i32>().unwrap(),
         &[i32::MIN, i32::MAX.wrapping_add(2)]
     );
 
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2]).unwrap();
-    let prod = reduce_prod(&input, &[0]).unwrap();
+    let prod = reduce_prod(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(prod.as_slice::<i32>().unwrap(), &[i32::MIN, -2]);
 
     let input = Tensor::from_vec_col_major(vec![2], vec![i64::MAX, 2]).unwrap();
-    let sum = reduce_sum(&input, &[0]).unwrap();
-    let prod = reduce_prod(&input, &[0]).unwrap();
+    let sum = reduce_sum(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    let prod = reduce_prod(&input, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(sum.as_slice::<i64>().unwrap(), &[i64::MIN.wrapping_add(1)]);
     assert_eq!(prod.as_slice::<i64>().unwrap(), &[-2]);
 }

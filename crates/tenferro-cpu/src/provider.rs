@@ -19,9 +19,9 @@ use crate::buffer_pool::BufferPool;
 use crate::domain_executor::{indexed_jobs, install_scoped};
 #[cfg(feature = "cpu-blas")]
 use crate::provider_capability::builtin_blas_execution_capabilities;
-use crate::provider_capability::{
-    engine_worker_capabilities, serial_capabilities, CpuProviderExecutionCapabilities,
-};
+#[cfg(not(feature = "cpu-blas"))]
+use crate::provider_capability::serial_capabilities;
+use crate::provider_capability::{engine_worker_capabilities, CpuProviderExecutionCapabilities};
 use crate::resource_domain::CpuResourceDomain;
 use crate::{
     CpuDomainExecutorError, CpuDomainId, CpuInnerParallelism, CpuPlacementGuarantee, CpuSet,
@@ -363,6 +363,26 @@ impl<'a> CpuExecutionContext<'a> {
                 faer::Par::rayon(self.thread_budget().get())
             }
             _ => faer::Par::Seq,
+        }
+    }
+
+    pub(crate) fn strided_exec_context(&self) -> strided_kernel::ExecContext {
+        match (
+            self.parallel_mode,
+            self.domain.executor_capabilities().inner_parallelism,
+        ) {
+            (ParallelMode::Inner, CpuInnerParallelism::Rayon) if self.thread_budget().get() > 1 => {
+                // This is only an operation-local thread limit for strided's
+                // replay policy. The Rayon pool itself is the already-entered
+                // CpuContext pool installed by `with_native_parallelism`.
+                match strided_kernel::ExecContext::max_threads(self.thread_budget().get()) {
+                    Ok(context) => context,
+                    // INVARIANT: CpuExecutionContext stores a NonZeroUsize
+                    // thread budget, and this branch passes that positive value.
+                    Err(_) => unreachable!("CpuExecutionContext has a non-zero thread budget"),
+                }
+            }
+            _ => strided_kernel::ExecContext::serial(),
         }
     }
 

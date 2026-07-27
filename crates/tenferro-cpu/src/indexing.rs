@@ -202,11 +202,20 @@ pub(crate) fn gather(
     start_indices: &Tensor,
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| gather_with_pool(buffers, operand, start_indices, config))
+    with_test_pool(|buffers| {
+        gather_with_pool(
+            buffers,
+            &ExecContext::serial(),
+            operand,
+            start_indices,
+            config,
+        )
+    })
 }
 
 pub(crate) fn gather_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &Tensor,
     start_indices: &Tensor,
     config: &GatherConfig,
@@ -214,6 +223,7 @@ pub(crate) fn gather_with_pool(
     let start_indices = try_index_tensor(start_indices)?;
     dispatch_tensor_unary_result!(operand, |t| typed_gather(
         buffers,
+        exec_context,
         t,
         &start_indices,
         config
@@ -227,11 +237,21 @@ pub(crate) fn scatter(
     updates: &Tensor,
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| scatter_with_pool(buffers, operand, scatter_indices, updates, config))
+    with_test_pool(|buffers| {
+        scatter_with_pool(
+            buffers,
+            &ExecContext::serial(),
+            operand,
+            scatter_indices,
+            updates,
+            config,
+        )
+    })
 }
 
 pub(crate) fn scatter_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &Tensor,
     scatter_indices: &Tensor,
     updates: &Tensor,
@@ -243,7 +263,7 @@ pub(crate) fn scatter_with_pool(
         operand,
         updates,
         "Bool data tensors are not supported by additive scatter",
-        |op, upd| typed_scatter(buffers, op, &scatter_indices, upd, config)
+        |op, upd| typed_scatter(buffers, exec_context, op, &scatter_indices, upd, config)
     )
 }
 
@@ -261,11 +281,14 @@ pub(crate) fn dynamic_slice(
     starts: &Tensor,
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| dynamic_slice_with_pool(buffers, input, starts, slice_sizes))
+    with_test_pool(|buffers| {
+        dynamic_slice_with_pool(buffers, &ExecContext::serial(), input, starts, slice_sizes)
+    })
 }
 
 pub(crate) fn dynamic_slice_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &Tensor,
     starts: &Tensor,
     slice_sizes: &[usize],
@@ -273,6 +296,7 @@ pub(crate) fn dynamic_slice_with_pool(
     let starts = try_index_tensor(starts)?;
     dispatch_tensor_unary_result!(input, |t| typed_dynamic_slice(
         buffers,
+        exec_context,
         t,
         &starts,
         slice_sizes
@@ -304,18 +328,21 @@ pub(crate) fn dynamic_update_slice(
     update: &Tensor,
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| dynamic_update_slice_with_pool(buffers, operand, update, starts))
+    with_test_pool(|buffers| {
+        dynamic_update_slice_with_pool(buffers, &ExecContext::serial(), operand, update, starts)
+    })
 }
 
 pub(crate) fn dynamic_update_slice_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &Tensor,
     update: &Tensor,
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
     dispatch_same_dtype_result!("dynamic_update_slice", operand, update, |op, upd| {
-        typed_dynamic_update_slice(buffers, op, upd, &starts)
+        typed_dynamic_update_slice(buffers, exec_context, op, upd, &starts)
     })
 }
 
@@ -767,6 +794,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
 
 fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
     config: &GatherConfig,
@@ -951,19 +979,15 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    plan.execute(
-        &ExecContext::serial(),
-        &mut out_ref,
-        &operand_ref,
-        &index_ref,
-    )
-    .map_err(|err| crate::Error::backend_source("gather", err))?;
+    plan.execute(exec_context, &mut out_ref, &operand_ref, &index_ref)
+        .map_err(|err| crate::Error::backend_source("gather", err))?;
 
     Ok(out)
 }
 
 fn typed_scatter<T>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     scatter_indices: &IndexTensor,
     updates: &TypedTensor<T>,
@@ -1188,7 +1212,7 @@ where
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
     plan.execute(
-        &ExecContext::serial(),
+        exec_context,
         &mut out_ref,
         &operand_ref,
         &index_ref,
@@ -1201,6 +1225,7 @@ where
 
 fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
     slice_sizes: &[usize],
@@ -1287,7 +1312,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    plan.execute(&ExecContext::serial(), &mut out_ref, &input_ref, &start_ref)
+    plan.execute(exec_context, &mut out_ref, &input_ref, &start_ref)
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
 
     Ok(out)
@@ -1295,6 +1320,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
 
 fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     update: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1393,7 +1419,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     plan.execute(
-        &ExecContext::serial(),
+        exec_context,
         &mut out_ref,
         &operand_ref,
         &update_ref,
