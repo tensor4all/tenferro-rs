@@ -1,9 +1,6 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use super::{
-    dynamic_slice, f32_index_to_i64, f64_index_to_i64, index_component, typed_concatenate,
-    BufferPool, IndexTensor,
-};
+use super::{dynamic_slice, f32_index_to_i64, f64_index_to_i64, typed_concatenate, BufferPool};
 use tenferro_tensor::{Error, Tensor, TypedTensor, ValidationError};
 
 #[test]
@@ -21,28 +18,6 @@ fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {
             op: "concatenate",
             ..
         }
-    ));
-}
-
-#[test]
-fn index_component_rejects_mismatched_scratch_len_without_panicking() {
-    let mut scratch = vec![0usize; 1];
-    let indices = IndexTensor {
-        shape: vec![1, 1],
-        values: vec![7],
-    };
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        index_component("gather", &indices, &[0], 1, 0, &mut scratch)
-    }));
-
-    assert!(
-        result.is_ok(),
-        "index_component should return Err for a malformed scratch buffer"
-    );
-    assert!(matches!(
-        result.unwrap().unwrap_err(),
-        Error::Validation { op: "gather", .. }
     ));
 }
 

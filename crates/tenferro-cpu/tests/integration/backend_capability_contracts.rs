@@ -406,16 +406,22 @@ fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
 }
 
 #[test]
-fn gather_scatter_index_component_reuses_index_scratch() {
+fn indirect_indexed_writes_delegate_to_strided_plans() {
     let indexing_source = include_str!("../../src/indexing.rs");
 
     assert!(
         !indexing_source.contains("let mut full_idx = vec![0usize; indices.shape.len()];"),
-        "gather/scatter should not allocate index vectors for every index component"
+        "indexed kernels should not allocate index vectors for every index component"
     );
     assert!(
-        indexing_source.contains("index_scratch"),
-        "gather/scatter should carry reusable index scratch through index_component"
+        !indexing_source.contains("fn index_component("),
+        "index component decoding should not remain in tenferro after strided plan delegation"
+    );
+    assert!(
+        indexing_source.contains("ErasedScatterPlan::compile")
+            && indexing_source.contains("ErasedDynamicSlicePlan::compile")
+            && indexing_source.contains("ErasedDynamicUpdateSlicePlan::compile"),
+        "scatter and dynamic slice/update replay should be delegated to strided erased plans"
     );
 }
 
@@ -484,12 +490,16 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
     assert_eq!(
         contract_set(&contract, "affine-kernels"),
         BTreeSet::from([
-            "axis-reduction",
+            "additive-scatter",
             "broadcast",
             "copy",
+            "dynamic-slice",
+            "dynamic-update-slice",
+            "fused-elementwise",
             "gather",
             "map",
             "permutation",
+            "sum-product-reduction",
             "zip-map",
         ])
     );

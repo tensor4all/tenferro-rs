@@ -1,10 +1,10 @@
 use std::mem::size_of_val;
-use std::ops::Add;
 
 use num_traits::Zero;
 use strided_kernel::{
-    col_major_strides, ErasedGatherPlan, ErasedRawStridedMut, ErasedRawStridedRef, ExecContext,
-    GatherSpec, KernelDType,
+    col_major_strides, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan, ErasedGatherPlan,
+    ErasedRawStridedMut, ErasedRawStridedRef, ErasedScatterPlan, ExecContext, GatherSpec,
+    KernelDType, ScatterSpec,
 };
 
 use super::indexing_alloc::pooled_uninit_tensor;
@@ -14,12 +14,11 @@ use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
-// Most indexing-family kernels stay as dedicated sequential loops for now.
-// Scatter/slice/pad/concatenate/reverse still have per-output index transforms
-// without a matching strided-kernel or backend-native parallel primitive.
-// Gather delegates its bulk traversal to strided-kernel's erased gather plan.
-// Backend entrypoints run these kernels inside CpuContext::install, so future
-// parallel implementations can use the same CPU threading policy.
+// Indexed gather, additive scatter, and fixed-window dynamic slice/update
+// delegate bulk traversal to strided-kernel erased plans. Pad/concatenate/
+// reverse still own their operation-specific loops here. Backend entrypoints
+// run these kernels inside CpuContext::install, so future parallel
+// implementations can use the same CPU threading policy.
 
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
@@ -82,6 +81,15 @@ fn gather_spec(config: &GatherConfig) -> GatherSpec {
         start_index_map: config.start_index_map.clone(),
         index_vector_dim: config.index_vector_dim,
         slice_sizes: config.slice_sizes.clone(),
+    }
+}
+
+fn scatter_spec(config: &ScatterConfig) -> ScatterSpec {
+    ScatterSpec {
+        update_window_dims: config.update_window_dims.clone(),
+        inserted_window_dims: config.inserted_window_dims.clone(),
+        scatter_dims_to_operand_dims: config.scatter_dims_to_operand_dims.clone(),
+        index_vector_dim: config.index_vector_dim,
     }
 }
 
@@ -185,21 +193,6 @@ where
     // SAFETY: the following fill writes every pooled output element.
     let mut out = pooled_uninit_tensor(buffers, shape)?;
     out.host_data_mut()?.fill(fill);
-    Ok(out)
-}
-
-fn clone_host_tensor_from_pool<T>(
-    buffers: &mut BufferPool,
-    op: &'static str,
-    tensor: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + PoolScalar,
-{
-    // SAFETY: copy_from_slice writes every pooled output element.
-    let mut out = pooled_uninit_tensor(buffers, tensor.shape().to_vec())?;
-    out.host_data_mut()?
-        .copy_from_slice(typed_host_data(op, tensor)?);
     Ok(out)
 }
 
@@ -708,41 +701,6 @@ fn checked_product(op: &'static str, role: &'static str, shape: &[usize]) -> cra
     })
 }
 
-fn linear_offset(op: &'static str, shape: &[usize], indices: &[usize]) -> crate::Result<usize> {
-    if indices.len() != shape.len() {
-        return Err(crate::Error::rank_mismatch(op, shape.len(), indices.len()));
-    }
-    let mut offset = 0usize;
-    let mut stride = 1usize;
-    for (axis, &index) in indices.iter().enumerate() {
-        if index >= shape[axis] {
-            return Err(crate::Error::axis_out_of_bounds(op, axis, shape.len()));
-        }
-        let scaled = index.checked_mul(stride).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "configuration",
-                format!("linear index component overflows usize on axis {axis}"),
-            )
-        })?;
-        offset = offset.checked_add(scaled).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "configuration",
-                format!("linear offset overflows usize on axis {axis}"),
-            )
-        })?;
-        stride = stride.checked_mul(shape[axis]).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "configuration",
-                format!("linear stride overflows usize after axis {axis}"),
-            )
-        })?;
-    }
-    Ok(offset)
-}
-
 fn try_index_vector_size(
     op: &'static str,
     shape: &[usize],
@@ -782,59 +740,6 @@ fn try_index_batch_shape(
         .enumerate()
         .filter_map(|(axis, &dim)| (axis != index_vector_dim).then_some(dim))
         .collect())
-}
-
-fn index_component(
-    op: &'static str,
-    indices: &IndexTensor,
-    batch_idx: &[usize],
-    index_vector_dim: usize,
-    component: usize,
-    index_scratch: &mut [usize],
-) -> crate::Result<i64> {
-    if index_vector_dim == indices.shape.len() {
-        if component != 0 {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "configuration",
-                "implicit index_vector_dim only supports scalar index vectors",
-            ));
-        }
-        return Ok(indices.values[linear_offset(op, &indices.shape, batch_idx)?]);
-    }
-
-    if index_scratch.len() != indices.shape.len() {
-        return Err(crate::Error::invalid_argument(
-            op,
-            "configuration",
-            format!(
-                "index scratch length {} must match index tensor rank {}",
-                index_scratch.len(),
-                indices.shape.len()
-            ),
-        ));
-    }
-    if batch_idx.len() + 1 != indices.shape.len() {
-        return Err(crate::Error::invalid_argument(
-            op,
-            "configuration",
-            format!(
-                "batch index rank {} must be one less than index tensor rank {}",
-                batch_idx.len(),
-                indices.shape.len()
-            ),
-        ));
-    }
-    let mut batch_axis = 0usize;
-    for (axis, slot) in index_scratch.iter_mut().enumerate() {
-        if axis == index_vector_dim {
-            *slot = component;
-        } else {
-            *slot = batch_idx[batch_axis];
-            batch_axis += 1;
-        }
-    }
-    Ok(indices.values[linear_offset(op, &indices.shape, index_scratch)?])
 }
 
 fn clamp_window_start(
@@ -1065,7 +970,7 @@ fn typed_scatter<T>(
     config: &ScatterConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
+    T: Copy + Clone + PoolScalar + TensorScalar,
 {
     let operand_shape = operand.shape();
     let updates_shape = updates.shape();
@@ -1223,67 +1128,78 @@ where
         let _ = clamp_window_start("scatter", 0, operand_shape[axis], window_shape[axis])?;
     }
 
-    let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?;
-    let window_elems = checked_product("scatter", "window update shape", &window_shape_updates)?;
-    let mut out = clone_host_tensor_from_pool(buffers, "scatter", operand)?;
+    checked_product("scatter", "batch shape", &batch_shape)?;
+    checked_product("scatter", "window update shape", &window_shape_updates)?;
 
-    let mut batch_idx = vec![0usize; batch_shape.len()];
-    let mut window_idx = vec![0usize; window_shape_updates.len()];
-    let mut update_idx = vec![0usize; update_rank];
-    let mut operand_base = vec![0usize; op_rank];
-    let mut operand_idx = vec![0usize; op_rank];
-    let mut index_scratch = vec![0usize; scatter_indices.shape.len()];
+    let dtype = kernel_dtype(T::dtype());
+    let index_dtype = KernelDType::I64;
+    let operand_strides = col_major_strides(operand_shape);
+    let index_strides = col_major_strides(&scatter_indices.shape);
+    let update_strides = col_major_strides(updates_shape);
+    let out_strides = col_major_strides(operand_shape);
+    let plan = ErasedScatterPlan::compile(
+        dtype,
+        index_dtype,
+        operand_shape,
+        &operand_strides,
+        &scatter_indices.shape,
+        &index_strides,
+        updates_shape,
+        &update_strides,
+        operand_shape,
+        &out_strides,
+        scatter_spec(config),
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
 
-    for _ in 0..batch_elems {
-        operand_base.fill(0);
-        for (component, &operand_dim) in config.scatter_dims_to_operand_dims.iter().enumerate() {
-            let start = index_component(
-                "scatter",
-                scatter_indices,
-                &batch_idx,
-                config.index_vector_dim,
-                component,
-                &mut index_scratch,
-            )?;
-            operand_base[operand_dim] = clamp_window_start(
-                "scatter",
-                start,
-                operand_shape[operand_dim],
-                window_shape[operand_dim],
-            )?;
-        }
-
-        window_idx.fill(0);
-        for _ in 0..window_elems {
-            let mut batch_axis = 0usize;
-            let mut window_axis = 0usize;
-            for axis in 0..update_rank {
-                if is_update_window_dim[axis] {
-                    update_idx[axis] = window_idx[window_axis];
-                    window_axis += 1;
-                } else {
-                    update_idx[axis] = batch_idx[batch_axis];
-                    batch_axis += 1;
-                }
-            }
-
-            operand_idx.copy_from_slice(&operand_base);
-            for (window_axis, &operand_axis) in window_dims.iter().enumerate() {
-                operand_idx[operand_axis] += window_idx[window_axis];
-            }
-
-            let value = *updates.get(&update_idx)?;
-            let slot = out.get_mut(&operand_idx)?;
-            *slot = *slot + value;
-            advance_col_major_index(&mut window_idx, &window_shape_updates);
-        }
-        advance_col_major_index(&mut batch_idx, &batch_shape);
-    }
+    // INVARIANT: ErasedScatterPlan first copies the full operand into `out`,
+    // then applies every additive update.
+    let mut out = pooled_uninit_tensor(buffers, operand_shape.to_vec())?;
+    let operand_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("scatter", operand)?),
+        operand_shape,
+        &operand_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
+    let index_ref = ErasedRawStridedRef::new(
+        index_dtype,
+        typed_bytes(&scatter_indices.values),
+        &scatter_indices.shape,
+        &index_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
+    let update_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("scatter", updates)?),
+        updates_shape,
+        &update_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        operand_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
+    plan.execute(
+        &ExecContext::serial(),
+        &mut out_ref,
+        &operand_ref,
+        &index_ref,
+        &update_ref,
+    )
+    .map_err(|err| crate::Error::backend_source("scatter", err))?;
 
     Ok(out)
 }
 
-fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
+fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1316,9 +1232,8 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
         ));
     }
 
-    let mut clamped_starts = vec![0usize; input_shape.len()];
     for axis in 0..input_shape.len() {
-        clamped_starts[axis] = clamp_window_start(
+        let _ = clamp_window_start(
             "dynamic_slice",
             starts.values[axis],
             input_shape[axis],
@@ -1327,23 +1242,58 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     }
 
     let out_shape = slice_sizes.to_vec();
-    // SAFETY: the dynamic-slice loop below assigns every output coordinate exactly once.
+    let dtype = kernel_dtype(T::dtype());
+    let input_strides = col_major_strides(input_shape);
+    let start_strides = col_major_strides(&starts.shape);
+    let out_strides = col_major_strides(&out_shape);
+    let plan = ErasedDynamicSlicePlan::compile(
+        dtype,
+        KernelDType::I64,
+        input_shape,
+        &input_strides,
+        &starts.shape,
+        &start_strides,
+        &out_shape,
+        &out_strides,
+        slice_sizes,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
+    // INVARIANT: ErasedDynamicSlicePlan writes every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    let mut out_idx = vec![0usize; out_shape.len()];
-    let mut input_idx = vec![0usize; out_shape.len()];
-
-    for out_value in out.host_data_mut()?.iter_mut() {
-        for axis in 0..out_shape.len() {
-            input_idx[axis] = clamped_starts[axis] + out_idx[axis];
-        }
-        *out_value = *input.get(&input_idx)?;
-        advance_col_major_index(&mut out_idx, &out_shape);
+    if T::dtype() == DType::Bool {
+        out.host_data_mut()?.fill(T::pool_zero());
     }
+    let input_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("dynamic_slice", input)?),
+        input_shape,
+        &input_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
+    let start_ref = ErasedRawStridedRef::new(
+        KernelDType::I64,
+        typed_bytes(&starts.values),
+        &starts.shape,
+        &start_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        &out_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
+    plan.execute(&ExecContext::serial(), &mut out_ref, &input_ref, &start_ref)
+        .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
 
     Ok(out)
 }
 
-fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
+fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     update: &TypedTensor<T>,
@@ -1377,9 +1327,8 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
         ));
     }
 
-    let mut clamped_starts = vec![0usize; operand_shape.len()];
     for axis in 0..operand_shape.len() {
-        clamped_starts[axis] = clamp_window_start(
+        let _ = clamp_window_start(
             "dynamic_update_slice",
             starts.values[axis],
             operand_shape[axis],
@@ -1387,17 +1336,70 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
         )?;
     }
 
-    let mut out = clone_host_tensor_from_pool(buffers, "dynamic_update_slice", operand)?;
-    let mut update_idx = vec![0usize; update_shape.len()];
-    let mut operand_idx = vec![0usize; operand_shape.len()];
-
-    for update_value in update.as_slice()? {
-        for axis in 0..update_shape.len() {
-            operand_idx[axis] = clamped_starts[axis] + update_idx[axis];
-        }
-        *out.get_mut(&operand_idx)? = *update_value;
-        advance_col_major_index(&mut update_idx, update_shape);
+    let dtype = kernel_dtype(T::dtype());
+    let operand_strides = col_major_strides(operand_shape);
+    let start_strides = col_major_strides(&starts.shape);
+    let update_strides = col_major_strides(update_shape);
+    let out_strides = col_major_strides(operand_shape);
+    let plan = ErasedDynamicUpdateSlicePlan::compile(
+        dtype,
+        KernelDType::I64,
+        operand_shape,
+        &operand_strides,
+        &starts.shape,
+        &start_strides,
+        update_shape,
+        &update_strides,
+        operand_shape,
+        &out_strides,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+    // INVARIANT: ErasedDynamicUpdateSlicePlan copies the full operand into
+    // `out` before overwriting the update window.
+    let mut out = pooled_uninit_tensor(buffers, operand_shape.to_vec())?;
+    if T::dtype() == DType::Bool {
+        out.host_data_mut()?.fill(T::pool_zero());
     }
+    let operand_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
+        operand_shape,
+        &operand_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+    let update_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("dynamic_update_slice", update)?),
+        update_shape,
+        &update_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+    let start_ref = ErasedRawStridedRef::new(
+        KernelDType::I64,
+        typed_bytes(&starts.values),
+        &starts.shape,
+        &start_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        operand_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+    plan.execute(
+        &ExecContext::serial(),
+        &mut out_ref,
+        &operand_ref,
+        &update_ref,
+        &start_ref,
+    )
+    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
 
     Ok(out)
 }

@@ -72,7 +72,7 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        revision = "cfe90bd2fba38452f32fcdc9df120bb4dd28d151"
+        revision = "20b2def9bf9554605d12fe13762f8770ba732efb"
         for name in (
             "strided-view",
             "strided-traits",
