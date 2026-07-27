@@ -3,6 +3,11 @@
 These are tenferro-specific rules. Apply them on top of the shared tensor4all
 rules from `tensor4all-agent-rules`.
 
+`scripts/repository-rules-review.py` treats each `##` heading below as a
+routing unit. Sections that should reach the diff-scoped review bot must be
+listed in that script's `ALWAYS_SECTIONS` or `SECTION_TRIGGERS`; human/process
+protocols must be listed in `HUMAN_ONLY_SECTIONS` instead.
+
 ## Public Surface Drift
 
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
@@ -236,6 +241,9 @@ rules from `tensor4all-agent-rules`.
 
 ## Final Cross-Phase Multi-Agent Audit
 
+Human/process protocol. This section is intentionally not routed to the
+diff-scoped review bot.
+
 Repository-scale, multi-phase implementation programs require one final audit
 after every phase and its task-local reviews are complete, but before the
 umbrella issue or implementation branch is declared ready for integration.
@@ -276,8 +284,10 @@ umbrella issue or implementation branch is declared ready for integration.
   support, but do not replace, call-path review and runtime tests.
 - Apply the existing [Public Boundary Safety Audits](#public-boundary-safety-audits),
   [Unsafe Code Boundary](#unsafe-code-boundary),
-  [Performance And Layout Rules](#performance-and-layout-rules),
+  [Performance-Sensitive Safety Contracts](#performance-sensitive-safety-contracts),
+  [Materialization And Copies](#materialization-and-copies),
   [Performance-Gated Experiment Protocol](#performance-gated-experiment-protocol),
+  [Cache Ownership](#cache-ownership),
   [CPU Threading Contract](#cpu-threading-contract),
   [GPU Backend Contract](#gpu-backend-contract),
   [Documentation Policy](#documentation-policy), and
@@ -305,6 +315,9 @@ umbrella issue or implementation branch is declared ready for integration.
 
 ## External Contribution Intake
 
+Human/process protocol. This section is intentionally not routed to the
+diff-scoped review bot.
+
 - Pull request creation is currently restricted to collaborators. External
   requests, reproducers, proposed regression tests, benchmark reports, and
   prototype branches should be collected in issues first.
@@ -328,6 +341,9 @@ umbrella issue or implementation branch is declared ready for integration.
 
 ## CI Cost Discipline
 
+Human/process protocol. This section is intentionally not routed to the
+diff-scoped review bot.
+
 - Expensive CI lanes, especially GPU or larger-runner jobs, must be gated behind
   cheaper repository-policy and non-GPU checks. Do not trigger hardware-backed
   runners directly on PR updates when an earlier review, lint, docs, or CPU test
@@ -347,7 +363,8 @@ umbrella issue or implementation branch is declared ready for integration.
   extension family; for example the direct
   `tenferro_einsum::TraceContextEinsumExt` /
   `tenferro_einsum::TracedTensorEinsumExt` operation surfaces plus
-  `executor.register_extension(tenferro_einsum::register_runtime)`.
+  `Runtime::builder().install_extension_module(...)` after registering the
+  target engine.
 - Extension runtime dispatch must fail explicitly when a runtime owner is
   available but the extension family is not registered. Do not silently fall
   back from a registered-runtime execution path to an `ExtensionOp::eager_execute`
@@ -525,9 +542,7 @@ Tests follow implementation ownership.
   tests.
 - This rule is enforced by repository contract tests and must stay green in CI.
 
-## Performance And Layout Rules
-
-### Performance-Sensitive Safety Contracts
+## Performance-Sensitive Safety Contracts
 
 - Potentially dangerous operations that are intentionally kept for performance,
   such as raw scratch-buffer acquisition, unchecked indexing after validation,
@@ -543,8 +558,16 @@ Tests follow implementation ownership.
   an explicit zeroed/initialized acquisition path, keep raw acquisition unsafe
   and documented for full-overwrite kernels only, and add regression coverage
   for both contracts.
+- An in-place write into a buffer reachable through `Arc` ownership requires a
+  local uniqueness proof at the write site, such as `Arc::get_mut`,
+  `Arc::try_unwrap`, `Arc::make_mut`, or an `Arc::ptr_eq` alias rejection for
+  backend buffers. The alternative is exclusive runtime ownership of the buffer
+  for its whole lifetime, such as dispatch-loop slots. Do not infer uniqueness
+  from `&mut Tensor` when backend buffers can wrap shared device allocations.
+  Add mutation-after-handoff tests when an optimization preserves aliases or
+  views that a previous implementation copied.
 
-### Complexity Budget
+## Complexity Budget
 
 - Do not introduce accidental `O(n^2)` behavior in graph construction,
   metadata propagation, key hashing/equality, compilation, or execution
@@ -558,7 +581,7 @@ Tests follow implementation ownership.
 - When optimizing compiler or graph-build overhead, measure scaling across
   increasing graph sizes, not only one fixed benchmark case.
 
-### Materialization And Copies
+## Materialization And Copies
 
 - Production tensor paths must not silently materialize dense temporary buffers
   whose memory or time scales with an unconstrained product of tensor
@@ -575,7 +598,7 @@ Tests follow implementation ownership.
   backend limitation, or external ABI boundary, make that boundary explicit in
   the implementation and cover it with tests.
 
-### Device Transfer And Backend Buffer Errors
+## Device Transfer And Backend Buffer Errors
 
 - tenferro follows the PyTorch convention: no implicit CPU-GPU transfer.
   Tensors must already live on the device required by the backend operation.
@@ -605,7 +628,7 @@ Tests follow implementation ownership.
 - Unsupported CUDA op or dtype combinations must return an explicit error, not
   silently fall back to CPU execution.
 
-### Dense Layout And Linear Algebra
+## Dense Layout And Linear Algebra
 
 - tenferro uses column-major (Fortran order) dense storage: the leftmost
   dimension has the smallest stride and varies fastest in memory.
@@ -625,7 +648,7 @@ Tests follow implementation ownership.
   algebra. Do not reimplement linalg kernels locally in downstream layers when
   the CPU/GPU backend already owns the operation.
 
-### Range Checks And Slicing
+## Range Checks And Slicing
 
 - Public indexing and slicing APIs must validate rank, bounds, steps, output
   shape, and empty/singleton boundary behavior at the API boundary or planning
@@ -652,7 +675,7 @@ Tests follow implementation ownership.
   range, empty or singleton slices, lower and upper boundaries, out-of-range
   errors, rank mismatch, and non-contiguous slices.
 
-### CPU Kernel Implementation
+## CPU Kernel Implementation
 
 - No naive CPU loop fallbacks. CPU tensor kernels must use optimized
   implementations unless the operation is explicitly listed as an exception
@@ -736,7 +759,7 @@ Tests follow implementation ownership.
   yet, keep a nearby source comment naming that rationale. Do not let
   undocumented serial loops become the default fallback pattern.
 
-### Tensor Core Data Model
+## Tensor Core Data Model
 
 - `tenferro-tensor-core` owns backend-independent host tensor metadata and
   contiguous host storage: `DType`, `TensorScalar`, `HostTensor<T>`,
@@ -752,7 +775,7 @@ Tests follow implementation ownership.
   implement `PartialEq` for views.
 - `ShapeVec` and `StrideVec` use `SmallVec` with inline rank capacity 8.
 
-### Faer Integration
+## Faer Integration
 
 - Prefer zero-copy `faer::MatRef` / `faer::MatMut` views over packing data into
   temporary dense matrices. Validate shape, bounds, alignment, and aliasing
@@ -767,7 +790,7 @@ Tests follow implementation ownership.
   allocate reusable scratch once for the operation. Avoid repeated `Vec`
   allocation in decomposition, solve, or batched inner loops.
 
-### Performance Anti-Patterns
+## Performance Anti-Patterns
 
 - Do not hand-copy near-identical dtype-specific operation bodies. Prefer
   generic helpers, sealed traits, or macros, and keep any unavoidable dtype
@@ -782,7 +805,7 @@ Tests follow implementation ownership.
 - Do not call `Backend::plan()` or equivalent planning APIs inside execution
   loops. Pre-compute plans before the loop and pass them in.
 
-### Performance-Sensitive Tests And Benchmarks
+## Performance-Sensitive Tests And Benchmarks
 
 - Small reference tests may materialize dense tensors, but should materialize
   each full result once and compare the whole result. Avoid per-element
@@ -802,8 +825,20 @@ Tests follow implementation ownership.
   thread counts. A single fixed-size speedup is not enough evidence for a
   performance-sensitive change.
 
-### Performance-Gated Experiment Protocol
+## Performance-Gated Experiment Protocol
 
+Human/process protocol. This section is intentionally not routed to the
+diff-scoped review bot.
+
+- Performance candidates found by static/source audit alone must pass a
+  need-before-implementation gate before code changes start. First measure the
+  candidate path's share of an end-to-end workload, or another
+  issue-predeclared representative workload. If the path does not occupy a
+  meaningful share under the predeclared threshold, record the measurement or
+  argument in the issue and close or defer it without implementation. A
+  microbenchmark of the targeted helper is useful after the need is established,
+  but by itself it proves only effect, not that the optimization is worth its
+  semantic, aliasing, cache, or maintenance risk.
 - Before running a candidate, record the baseline commit, candidate commit,
   benchmark source, build profile, hardware and affinity configuration,
   provider/thread settings, complete case list, comparison statistic,
@@ -823,7 +858,7 @@ Tests follow implementation ownership.
   redefine the primary metric, or add post-hoc exclusions after seeing the
   candidate.
 
-### Cache Ownership
+## Cache Ownership
 
 - Long-lived runtime/compiler caches must be owned by `Engine` or another
   explicit top-level runtime object, not hidden in thread-local/global state or
@@ -848,7 +883,7 @@ Tests follow implementation ownership.
   capacity, memory behavior, entry/byte accounting, and
   clear/configuration/stats path.
 
-### CPU Threading Contract
+## CPU Threading Contract
 
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helper functions.
@@ -862,7 +897,7 @@ Tests follow implementation ownership.
   controlled by provider variables such as `OPENBLAS_NUM_THREADS`,
   `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
 
-### GPU Backend Contract
+## GPU Backend Contract
 
 - Before touching CubeCL/GPU backend code, read
   [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
@@ -874,7 +909,7 @@ Tests follow implementation ownership.
   provided by cuSOLVER. `CudaBackend::eig` returns `Unsupported`; users
   must explicitly download to CPU and compute via `CpuBackend::eig`.
 
-### Structured Error Classification
+## Structured Error Classification
 
 - Validation facts use the shared typed vocabulary for shape, rank, axis, dtype,
   configuration, and invalid arguments. Eager and traced paths must report the

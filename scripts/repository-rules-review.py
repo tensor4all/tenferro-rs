@@ -32,6 +32,7 @@ DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
 MAX_DIFF_CHARS = 120_000
 MAX_FILE_DIFF_CHARS = 40_000
 MAX_FINDINGS_PER_CHUNK = 8
+MAX_ROUTED_SECTION_LINES = 100
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
 )
@@ -77,8 +78,18 @@ ALWAYS_SECTIONS = frozenset(
     {
         "Public Surface Discipline",
         "Public Boundary Safety Audits",
+        "Invariant Markers",
         "Work Logs And Design Records",
         "No Ad Hoc Fixes",
+    }
+)
+
+HUMAN_ONLY_SECTIONS = frozenset(
+    {
+        "Final Cross-Phase Multi-Agent Audit",
+        "External Contribution Intake",
+        "CI Cost Discipline",
+        "Performance-Gated Experiment Protocol",
     }
 )
 
@@ -94,12 +105,91 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         ),
     ),
     (
-        re.compile(r"tenferro-cpu/|tenferro-tensor(?:-core)?/|/kernel/|strided"),
-        frozenset({"Performance And Layout Rules", "Unsafe Code Boundary"}),
+        re.compile(r"tenferro-tensor(?:-core)?/|/layout|/view|strided"),
+        frozenset(
+            {
+                "Performance-Sensitive Safety Contracts",
+                "Complexity Budget",
+                "Materialization And Copies",
+                "Device Transfer And Backend Buffer Errors",
+                "Dense Layout And Linear Algebra",
+                "Range Checks And Slicing",
+                "Tensor Core Data Model",
+                "Performance Anti-Patterns",
+                "Structured Error Classification",
+                "Unsafe Code Boundary",
+            }
+        ),
+    ),
+    (
+        re.compile(r"tenferro-cpu/|/kernel/|strided-kernel|strided-rs|strided-einsum"),
+        frozenset(
+            {
+                "Performance-Sensitive Safety Contracts",
+                "Materialization And Copies",
+                "Dense Layout And Linear Algebra",
+                "Range Checks And Slicing",
+                "CPU Kernel Implementation",
+                "Faer Integration",
+                "Performance Anti-Patterns",
+                "Cache Ownership",
+                "CPU Threading Contract",
+                "Structured Error Classification",
+                "Unsafe Code Boundary",
+            }
+        ),
     ),
     (
         re.compile(r"tenferro-gpu/|cubecl|cuda|cutensor|cublas"),
-        frozenset({"Performance And Layout Rules", "Unsafe Code Boundary"}),
+        frozenset(
+            {
+                "Performance-Sensitive Safety Contracts",
+                "Materialization And Copies",
+                "Device Transfer And Backend Buffer Errors",
+                "Dense Layout And Linear Algebra",
+                "Range Checks And Slicing",
+                "Performance Anti-Patterns",
+                "Cache Ownership",
+                "GPU Backend Contract",
+                "Structured Error Classification",
+                "Unsafe Code Boundary",
+            }
+        ),
+    ),
+    (
+        re.compile(r"tenferro-runtime/|runtime/|cache|executor"),
+        frozenset(
+            {
+                "Performance-Sensitive Safety Contracts",
+                "Complexity Budget",
+                "Device Transfer And Backend Buffer Errors",
+                "Cache Ownership",
+                "Structured Error Classification",
+            }
+        ),
+    ),
+    (
+        re.compile(r"tenferro-linalg/|linalg|faer|lapack|blas|dot_general|gemm"),
+        frozenset(
+            {
+                "Performance-Sensitive Safety Contracts",
+                "Materialization And Copies",
+                "Dense Layout And Linear Algebra",
+                "Faer Integration",
+                "Performance Anti-Patterns",
+                "Cache Ownership",
+                "Structured Error Classification",
+                "Unsafe Code Boundary",
+            }
+        ),
+    ),
+    (
+        re.compile(r"(^|/)benches/|^benchmarks/|criterion|benchmark"),
+        frozenset(
+            {
+                "Performance-Sensitive Tests And Benchmarks",
+            }
+        ),
     ),
     (
         re.compile(r"tenferro-einsum/|tenferro-linalg/|tenferro-fft/|ext/"),
