@@ -319,6 +319,26 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
 }
 
 #[test]
+fn direct_concrete_api_uses_call_local_one_shot_plan_cache() {
+    let input = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let mut backend = MockNonCpuBackend::default();
+
+    input
+        .fft(None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    input
+        .fft(None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+
+    assert_eq!(backend.plan_builds, 2);
+    assert_eq!(backend.plan_reuses, 0);
+}
+
+#[test]
 fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
     let mut backend = CpuBackend::new();
 
