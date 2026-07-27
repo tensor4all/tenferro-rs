@@ -9,7 +9,6 @@ use super::{
     CpuBatchedMatrixLayout, CpuExecutionContext, CpuGemmProvider, CpuGemmRequest,
     CpuGeneralContractionProvider, CpuLayoutTransformProvider, CpuOperationEntry,
     CpuProviderOutcome, CpuProviderUnsupported, ParallelMode, StridedLayoutTransformProvider,
-    TblisGeneralContractionProvider,
 };
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
@@ -169,8 +168,6 @@ fn parallel_mode_exposes_the_complete_execution_contract() {
     assert_ne!(ParallelMode::Sequential, ParallelMode::Outer);
     assert_ne!(ParallelMode::Outer, ParallelMode::Inner);
 }
-#[cfg(feature = "cpu-tblis-provider")]
-use super::{CpuContractionAxes, CpuDotGeneralRequest};
 #[cfg(feature = "cpu-faer")]
 use super::{CpuGroupedGemmRequest, FaerGemmProvider};
 #[cfg(feature = "cpu-faer")]
@@ -1168,47 +1165,6 @@ fn blas_provider_executes_and_rejects_layout_before_mutation() {
         drop(output_write);
         assert_eq!(output.as_slice::<f64>().unwrap(), before.as_slice());
     });
-}
-
-#[test]
-fn tblis_provider_is_object_safe_even_when_runtime_is_optional() {
-    let provider: &dyn CpuGeneralContractionProvider = &TblisGeneralContractionProvider;
-    let _ = provider;
-}
-
-#[test]
-#[cfg(feature = "cpu-tblis-provider")]
-fn tblis_provider_executes_or_preserves_output_when_runtime_is_unavailable() {
-    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
-    let before = output.as_slice::<f64>().unwrap().to_vec();
-    let lhs_read = TensorRead::from_tensor(&lhs);
-    let rhs_read = TensorRead::from_tensor(&rhs);
-    let mut output_write = TensorWrite::from_tensor(&mut output);
-    let request = CpuDotGeneralRequest::new(
-        &lhs_read,
-        &rhs_read,
-        &mut output_write,
-        CpuContractionAxes::new(2, 2, &[1], &[0], &[], &[], Some(2), Some(1)),
-        DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
-    );
-    let fixture = execution_context_fixture(1);
-    let outcome = fixture.with_context(ParallelMode::Sequential, |provider_context| {
-        TblisGeneralContractionProvider
-            .dot_general(provider_context, request)
-            .unwrap()
-    });
-    drop(output_write);
-    match outcome {
-        CpuProviderOutcome::Executed => {
-            assert_eq!(output.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
-        }
-        CpuProviderOutcome::Unsupported(CpuProviderUnsupported::RuntimeUnavailable) => {
-            assert_eq!(output.as_slice::<f64>().unwrap(), before.as_slice());
-        }
-        other => panic!("unexpected TBLIS provider outcome: {other:?}"),
-    }
 }
 
 #[test]

@@ -51,6 +51,14 @@ splitting the follow-up work into unrelated pull requests.
   heavy elementwise/buffer-pool implementation files do not move back into the
   public CPU crate. The remaining fine-grained CPU release-codegen split is
   tracked separately in #1486.
+- #1487 crates.io package-resolution checkpoint: removed the built-in TBLIS
+  provider features and `tblis-ffi`/`t4a-tblis-src` dependencies from
+  `tenferro-cpu` and its public user-crate feature pass-throughs. The TBLIS
+  provider now lives only in unpublished `ext/tenferro-cpu-tblis` as an
+  external-provider example; it replaces supported `dot_general` contractions
+  and delegates everything else to the configured default CPU provider. Its
+  optional source-build route keeps `t4a-tblis-src` as a local path dependency
+  until a maintainer explicitly approves publishing that separate package.
 
 ## Current runtime boundary
 
@@ -109,6 +117,19 @@ cargo metadata --no-deps --format-version 1
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py --root-dir . --site-index /tmp/tenferro-missing-api-index.html --docs-site-root /tmp/tenferro-missing-docs-site
 cargo package -p tenferro-internal-cpu-kernels --allow-dirty --no-verify
+python3 -m unittest discover -s scripts/ci/tests -v
+python3 scripts/test-doc-consistency.py
+python3 scripts/test-repository-rules-review.py
+python3 scripts/check-publish-layout.py
+python3 scripts/check-guide-dependency-snippets.py
+python3 scripts/check-doc-snippets.py --root-dir . --check
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-cpu --test integration provider_feature_contract -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml -- --nocapture
+CARGO_BUILD_JOBS=64 cargo check -p tenferro-cpu --no-default-features --features cpu-faer --lib
+CARGO_BUILD_JOBS=64 cargo check --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all-targets
+CARGO_BUILD_JOBS=64 cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+CARGO_BUILD_JOBS=64 cargo check --workspace --all-targets
+CARGO_BUILD_JOBS=64 bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-cpu --test integration provider_feature_contract -- --nocapture' --test 'cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml -- --nocapture' --test 'python3 scripts/check-publish-layout.py'
 CARGO_BUILD_JOBS=64 bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-cpu --test provider_boundary_allocation_tests warmed_public_session_request_provider_dispatch_does_not_allocate -- --nocapture'
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=64 cargo bench -p tenferro-runtime --features __bench_unification_run_compiled_api --bench elementwise_fusion -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.3
 CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 CARGO_INCREMENTAL=0 RUSTC_WRAPPER= /usr/bin/time -v cargo build --workspace --release --timings
@@ -144,9 +165,18 @@ directory at `/tmp/tenferro-1472-candidate-target.Y3WFns`, `CARGO_BUILD_JOBS=64`
 
 The new internal crate also packaged successfully with
 `cargo package -p tenferro-internal-cpu-kernels --allow-dirty --no-verify`.
-The corresponding `tenferro-cpu` package check still stops on the pre-existing
-`t4a-tblis-src` crates.io resolution gap, not on the new internal kernel
-dependency. That publish-resolution follow-up is #1487.
+After #1487, the corresponding `tenferro-cpu` package check no longer resolves
+or requires `t4a-tblis-src`. It now stops only because
+`tenferro-internal-cpu-kernels` has not been published to crates.io yet:
+
+```text
+cargo package -p tenferro-cpu --allow-dirty --no-verify
+error: no matching package named `tenferro-internal-cpu-kernels` found
+```
+
+The release workflow now lists `tenferro-internal-cpu-kernels` before
+`tenferro-cpu`; `t4a-tblis-src` remains outside the release order until an
+explicit maintainer approval publishes that separate package.
 
 Coverage thresholds were updated for the post-U8 execution-path shift and CPU
 kernel split: the moved elementwise implementation now lives under
@@ -244,3 +274,6 @@ criterion                                3.1s total
   elementwise, reductions/indexing, dot/GEMM helpers, and provider contracts if
   those edit patterns become the dominant bottleneck. That narrower follow-up
   is #1486.
+- The TBLIS source-build helper is intentionally not published in #1487.
+  `ext/tenferro-cpu-tblis` is a `publish = false` standalone example, and its
+  `source-build` feature requires the local `third_party/t4a-tblis-src` path.

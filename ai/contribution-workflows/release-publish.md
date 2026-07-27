@@ -81,6 +81,7 @@ Violating any of these aborts the release.
    tenferro-internal-extension-macros
    tenferro-tensor-core
    tenferro-tensor
+   tenferro-internal-cpu-kernels
    tenferro-cpu
    tenferro-gpu
    tenferro-internal-ops
@@ -92,8 +93,10 @@ Violating any of these aborts the release.
    tenferro-linalg
    ```
 
-   Crates with `publish = false` (currently `tenferro-tutorial-code`) are
-   skipped. When workspace membership or dependencies change, recompute the
+   Crates with `publish = false` (currently `tenferro-tutorial-code` and
+   standalone examples under `ext/`) are skipped. `t4a-tblis-src` is not part
+   of this order until a maintainer explicitly approves publishing that new
+   package. When workspace membership or dependencies change, recompute the
    order from `cargo metadata` (topological sort of workspace members over
    their `tenferro-*` dependencies) instead of trusting this list.
 3. For each crate run `cargo publish -p <crate>`. A dependent crate fails

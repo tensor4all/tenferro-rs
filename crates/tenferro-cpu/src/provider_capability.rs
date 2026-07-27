@@ -268,7 +268,7 @@ fn controlled_external_capabilities(
     }
 }
 
-#[cfg(any(test, feature = "cpu-blas", feature = "cpu-tblis-provider"))]
+#[cfg(any(test, feature = "cpu-blas"))]
 fn uncontrolled_external_capabilities() -> CpuProviderExecutionCapabilities {
     CpuProviderExecutionCapabilities {
         thread_count: CpuThreadCountControl::GlobalOrUncontrolled,
@@ -295,13 +295,8 @@ pub(crate) fn serial_capabilities() -> CpuProviderExecutionCapabilities {
 ///
 /// The adapter does not yet install and restore any provider-specific local
 /// thread-count setter, so all BLAS builds are classified conservatively.
-#[cfg(any(test, feature = "cpu-blas", feature = "cpu-tblis-provider"))]
+#[cfg(any(test, feature = "cpu-blas"))]
 pub(crate) fn builtin_blas_execution_capabilities() -> CpuProviderExecutionCapabilities {
-    uncontrolled_external_capabilities()
-}
-
-#[cfg(feature = "cpu-tblis-provider")]
-pub(crate) fn builtin_tblis_execution_capabilities() -> CpuProviderExecutionCapabilities {
     uncontrolled_external_capabilities()
 }
 

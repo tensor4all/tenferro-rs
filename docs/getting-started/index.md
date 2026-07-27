@@ -85,12 +85,13 @@ CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
 must be enabled, and builds may enable both. `CpuBackend::new()` selects the
 compiled default provider: BLAS when `cpu-blas` is compiled, otherwise faer.
 Use `CpuBackend::with_kind` when a program needs explicit provider selection
-within a build that has multiple providers. `cpu-tblis` may be enabled as an
-optional `dot_general` contraction provider, but it does not replace `cpu-faer`
-or `cpu-blas`; one of those providers is still required for fallback and linalg
-coverage. The `cpu-blas` backend needs a BLAS/LAPACK provider. Link one from
-the system toolchain with `cpu-blas`, or enable exactly one explicit provider
-feature to select a source provider for BLAS, LAPACK, and strided einsum:
+within a build that has multiple providers. External CPU providers may replace
+only a provider bundle slot, such as `dot_general`; they do not replace
+`cpu-faer` or `cpu-blas`, so one complete CPU provider is still required for
+fallback and linalg coverage. The `cpu-blas` backend needs a BLAS/LAPACK
+provider. Link one from the system toolchain with `cpu-blas`, or enable exactly
+one explicit provider feature to select a source provider for BLAS, LAPACK, and
+strided einsum:
 
 ```toml
 [dependencies]

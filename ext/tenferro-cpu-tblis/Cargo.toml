@@ -1,0 +1,42 @@
+[package]
+name = "tenferro-cpu-tblis"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
+publish = false
+description = "Standalone TBLIS dot_general provider example for tenferro-cpu."
+
+[workspace]
+resolver = "2"
+
+[lib]
+name = "tenferro_cpu_tblis"
+path = "src/lib.rs"
+
+[features]
+default = ["runtime", "cpu-faer"]
+cpu-faer = ["tenferro-cpu/cpu-faer"]
+cpu-blas = ["tenferro-cpu/cpu-blas"]
+runtime = ["tblis-ffi/dynamic_loading"]
+source-build = ["dep:tblis-src", "tblis-src/build_from_source", "tblis-src/static"]
+
+[dependencies]
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
+num-complex = "0.4"
+num-traits = "0.2"
+smallvec = "1"
+tblis-ffi = { version = "0.2.6", default-features = false }
+tblis-src = { package = "t4a-tblis-src", path = "../../third_party/t4a-tblis-src", version = "=0.1.0", default-features = false, optional = true }
+
+[dev-dependencies]
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"

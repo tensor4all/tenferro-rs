@@ -38,6 +38,7 @@ class RunProfileTests(unittest.TestCase):
         for relative in (
             "ext/tropical/Cargo.toml",
             "ext/sparse/Cargo.toml",
+            "ext/tenferro-cpu-tblis/Cargo.toml",
             "samples/kdv-pinn/Cargo.toml",
         ):
             manifest = tomllib.loads((ROOT / relative).read_text())
@@ -71,6 +72,7 @@ class RunProfileTests(unittest.TestCase):
                 "cargo fmt --all --check",
                 "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
                 "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+                "cargo fmt --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all --check",
             ),
         )
 
@@ -85,6 +87,9 @@ class RunProfileTests(unittest.TestCase):
                 "-D clippy::missing_panics_doc",
                 "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets "
                 "-- -D warnings -D clippy::missing_errors_doc "
+                "-D clippy::missing_panics_doc",
+                "cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml "
+                "--all-targets -- -D warnings -D clippy::missing_errors_doc "
                 "-D clippy::missing_panics_doc",
             ),
         )

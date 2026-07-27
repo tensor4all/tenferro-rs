@@ -171,6 +171,7 @@ def test_ci_enforces_public_error_docs_and_extension_clippy() -> None:
     assert "-D clippy::missing_panics_doc" in text
     assert "cargo clippy --manifest-path ext/tropical/Cargo.toml" in text
     assert "cargo clippy --manifest-path ext/sparse/Cargo.toml" in text
+    assert "cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml" in text
 
 
 def test_review_bot_workflow_exists() -> None:

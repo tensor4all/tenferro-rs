@@ -52,13 +52,14 @@ The CPU backend is the main complete backend. At least one fallback/linalg CPU
 feature must be enabled:
 
 - `cpu-faer` for faer-backed GEMM,
-- `cpu-blas` for BLAS-backed GEMM,
-- optional `cpu-tblis` for supported TBLIS-backed `dot_general` contractions.
+- `cpu-blas` for BLAS-backed GEMM.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
 the standard linalg extension are implemented on CPU for the supported dtype
-subset of each op. `cpu-tblis` does not replace `cpu-faer` or `cpu-blas`; a
-compiled faer/BLAS provider remains required for fallback and linalg coverage.
+subset of each op. External general-contraction providers, such as the
+unpublished TBLIS example under `ext/tenferro-cpu-tblis`, can override supported
+`dot_general` contractions without replacing the compiled faer/BLAS fallback
+and linalg provider.
 
 ### CUDA/CubeCL Status
 

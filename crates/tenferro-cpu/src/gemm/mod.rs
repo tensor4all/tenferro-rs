@@ -1,5 +1,3 @@
-#[cfg(feature = "cpu-tblis-provider")]
-use num_traits::One;
 use num_traits::Zero;
 use smallvec::{Array, SmallVec};
 use std::fmt;
@@ -7,10 +5,8 @@ use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
 use crate::dot_runtime::CpuProviderBundleInner;
-#[cfg(any(feature = "cpu-blas", feature = "cpu-tblis-provider"))]
+#[cfg(feature = "cpu-blas")]
 use crate::provider::CpuOperand;
-#[cfg(feature = "cpu-tblis-provider")]
-use crate::provider::{CpuContractionAxes, CpuDotGeneralRequest};
 use crate::provider::{
     CpuExecutionContext, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
     CpuProviderUnsupported,
@@ -28,8 +24,6 @@ use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DotGeneralConfi
 mod blas_gemm;
 #[cfg(feature = "cpu-faer")]
 mod faer_gemm;
-#[cfg(feature = "cpu-tblis-provider")]
-mod tblis_gemm;
 
 #[cfg(feature = "cpu-blas")]
 use blas_gemm::BlasGemm;
@@ -37,8 +31,6 @@ use blas_gemm::BlasGemm;
 use blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
-#[cfg(feature = "cpu-tblis-provider")]
-use tblis_gemm::TblisGemm;
 
 const OP: &str = "dot_general";
 
@@ -1509,129 +1501,6 @@ where
         T::grouped_gemm(alpha, beta, &batches)?;
     }
     Ok(true)
-}
-
-#[cfg(feature = "cpu-tblis-provider")]
-fn execute_tblis_request_typed<L, R, T>(
-    lhs: &L,
-    rhs: &R,
-    axes: CpuContractionAxes<'_>,
-    output: &mut TypedTensorViewMut<'_, T>,
-    execution: tblis_gemm::TblisExecution<T>,
-) -> Result<CpuProviderOutcome>
-where
-    L: TypedTensorRead<T>,
-    R: TypedTensorRead<T>,
-    T: TblisGemm + Copy + Clone + Zero + One + PartialEq + std::ops::Mul<Output = T> + 'static,
-{
-    if !tblis_gemm::runtime_available()? {
-        return Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ));
-    }
-    let Some(plan) = tblis_gemm::plan_from_axes(lhs, rhs, &axes, output.shape(), output.strides())?
-    else {
-        return Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::Layout(CpuOperand::Output),
-        ));
-    };
-    let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
-        return Err(crate::cpu_backend_buffer_error(OP));
-    };
-    let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
-        return Err(crate::cpu_backend_buffer_error(OP));
-    };
-    // SAFETY: the common validator proved non-negative, reachable offsets.
-    let lhs_ptr = unsafe { lhs_data.offset(lhs.offset()) };
-    // SAFETY: the common validator proved non-negative, reachable offsets.
-    let rhs_ptr = unsafe { rhs_data.offset(rhs.offset()) };
-    tblis_gemm::execute(plan, lhs_ptr, rhs_ptr, output, execution)?;
-    Ok(CpuProviderOutcome::Executed)
-}
-
-#[cfg(feature = "cpu-tblis-provider")]
-pub(crate) fn execute_tblis_general_request(
-    _context: &CpuExecutionContext<'_>,
-    request: CpuDotGeneralRequest<'_, '_, '_>,
-) -> Result<CpuProviderOutcome> {
-    let (lhs, rhs, output, axes, accumulation) = request.into_parts();
-    let dtype = lhs.dtype();
-    macro_rules! dispatch {
-        ($owned:ident, $view:ident) => {
-            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
-                (accumulation.alpha, accumulation.beta)
-            {
-                let execution = tblis_gemm::TblisExecution::new(
-                    alpha,
-                    beta,
-                    accumulation.lhs_conj,
-                    accumulation.rhs_conj,
-                );
-                match (lhs, rhs, &mut *output) {
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
-                        let mut output = output.as_view_mut();
-                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
-                    }
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
-                        let mut output = output.as_view_mut();
-                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
-                    }
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
-                        let mut output = output.as_view_mut();
-                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
-                    }
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
-                    ) => {
-                        let mut output = output.as_view_mut();
-                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
-                    }
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
-                    (
-                        TensorRead::View(TensorView::$view(lhs)),
-                        TensorRead::View(TensorView::$view(rhs)),
-                        TensorWrite::View(TensorViewMut::$view(output)),
-                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
-                    _ => {}
-                }
-            }
-        };
-    }
-    dispatch!(F32, F32);
-    dispatch!(F64, F64);
-    dispatch!(C32, C32);
-    dispatch!(C64, C64);
-    Ok(CpuProviderOutcome::Unsupported(
-        CpuProviderUnsupported::DType(dtype),
-    ))
 }
 
 #[cfg(feature = "cpu-blas")]

@@ -98,16 +98,18 @@ CPU execution is handled by `CpuBackend`:
 - elementwise/reduction/structural work uses strided-kernel and dedicated CPU
   implementations,
 - `dot_general` uses the selected CPU provider (`cpu-faer`, `cpu-blas`, or
-  optional `cpu-tblis` for supported contractions),
+  an optional external general-contraction provider for supported contractions),
 - faer-backed work runs inside the `CpuContext` Rayon pool through
   `CpuExecSession`, with `Par::Seq` for one-thread contexts and explicit
   `Par::rayon(n)` from the configured degree for multi-thread contexts,
-- BLAS/LAPACK and TBLIS provider threading remain provider-owned.
+- BLAS/LAPACK provider threading remains provider-owned; the external TBLIS
+  example clamps TBLIS to one thread for each provider call.
 
-`cpu-tblis` is additive to the faer/BLAS providers. `CpuBackendKind` still
-selects the complete base provider, while `DotGeneralProvider` controls whether
-`dot_general` attempts TBLIS first. Unsupported TBLIS shapes and unavailable
-runtime TBLIS fall back to the selected base provider unless TBLIS is required.
+External general-contraction providers are additive to the faer/BLAS providers.
+`CpuBackendKind` still selects the complete base provider, while
+`CpuProviderBundleBuilder` controls whether `dot_general` attempts an external
+provider first. Unsupported shapes and unavailable optional runtimes fall back
+to the selected base provider unless the provider is required.
 
 ## CubeCL/CUDA Execution
 

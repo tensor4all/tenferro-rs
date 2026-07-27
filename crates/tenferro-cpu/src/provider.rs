@@ -19,8 +19,6 @@ use crate::buffer_pool::BufferPool;
 use crate::domain_executor::{indexed_jobs, install_scoped};
 #[cfg(feature = "cpu-blas")]
 use crate::provider_capability::builtin_blas_execution_capabilities;
-#[cfg(feature = "cpu-tblis-provider")]
-use crate::provider_capability::builtin_tblis_execution_capabilities;
 use crate::provider_capability::{
     engine_worker_capabilities, serial_capabilities, CpuProviderExecutionCapabilities,
 };
@@ -1122,8 +1120,22 @@ impl<'request, 'input, 'output> CpuDotGeneralRequest<'request, 'input, 'output> 
         self.accumulation
     }
 
-    #[cfg(feature = "cpu-tblis-provider")]
-    pub(crate) fn into_parts(
+    /// Consume the request and return the validated operand borrows.
+    ///
+    /// External general-contraction providers use this when they need
+    /// simultaneous immutable access to both inputs and mutable access to the
+    /// output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuDotGeneralRequest;
+    ///
+    /// fn consume_request(request: CpuDotGeneralRequest<'_, '_, '_>) {
+    ///     let (_lhs, _rhs, _output, _axes, _accumulation) = request.into_parts();
+    /// }
+    /// ```
+    pub fn into_parts(
         self,
     ) -> (
         &'request TensorRead<'input>,
@@ -1269,57 +1281,6 @@ pub trait CpuGeneralContractionProvider: fmt::Debug + Send + Sync + 'static {
         context: &CpuExecutionContext<'_>,
         request: CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
-}
-
-/// Built-in TBLIS general-contraction provider.
-///
-/// Without a TBLIS feature this provider reports
-/// [`CpuProviderUnsupported::RuntimeUnavailable`] without modifying output.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::provider::{
-///     CpuGeneralContractionProvider, TblisGeneralContractionProvider,
-/// };
-/// let provider: &dyn CpuGeneralContractionProvider = &TblisGeneralContractionProvider;
-/// let _ = provider;
-/// ```
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TblisGeneralContractionProvider;
-
-impl CpuGeneralContractionProvider for TblisGeneralContractionProvider {
-    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
-        #[cfg(feature = "cpu-tblis-provider")]
-        {
-            // The current TBLIS adapter does not install a scoped thread-count
-            // control, so it cannot claim a domain-local upper bound.
-            builtin_tblis_execution_capabilities()
-        }
-        #[cfg(not(feature = "cpu-tblis-provider"))]
-        {
-            // This build returns RuntimeUnavailable without invoking a kernel.
-            serial_capabilities()
-        }
-    }
-
-    fn dot_general(
-        &self,
-        context: &CpuExecutionContext<'_>,
-        request: CpuDotGeneralRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        #[cfg(feature = "cpu-tblis-provider")]
-        {
-            crate::gemm::execute_tblis_general_request(context, request)
-        }
-        #[cfg(not(feature = "cpu-tblis-provider"))]
-        {
-            let _ = (context, request);
-            Ok(CpuProviderOutcome::Unsupported(
-                CpuProviderUnsupported::RuntimeUnavailable,
-            ))
-        }
-    }
 }
 
 /// Built-in faer GEMM provider.

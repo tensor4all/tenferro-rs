@@ -30,6 +30,7 @@ EXTENSION_CRATE_ORDER = [
 IMPLEMENTATION_CRATE_ORDER = [
     "tenferro-tensor-core",
     "tenferro-core-ops",
+    "tenferro-internal-cpu-kernels",
     "tenferro-internal-ops",
     "tenferro-internal-extension-macros",
 ]
@@ -42,6 +43,7 @@ PUBLISHED_CRATES = set(
     + [
         "tenferro-tensor-core",
         "tenferro-core-ops",
+        "tenferro-internal-cpu-kernels",
         "tenferro-internal-ops",
         "tenferro-internal-extension-macros",
     ]
@@ -142,7 +144,17 @@ def check_workspace_dependencies(root_text: str, errors: list[str]) -> None:
             )
 
 
-def check_package_metadata(errors: list[str]) -> None:
+def workspace_version(root_text: str) -> str:
+    package_section = section(root_text, "workspace.package")
+    for line in package_section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("version = "):
+            return stripped.split("=", 1)[1].strip().strip('"')
+    raise ValueError("workspace.package missing version")
+
+
+def check_package_metadata(root_text: str, errors: list[str]) -> None:
+    expected_version = workspace_version(root_text)
     for crate in TENFERRO_CRATES:
         manifest_path = ROOT / "crates" / crate / "Cargo.toml"
         if not manifest_path.exists():
@@ -165,10 +177,11 @@ def check_package_metadata(errors: list[str]) -> None:
                     f"{rel(manifest_path)} package.{key} must inherit workspace metadata"
                 )
         for line_no, line in enumerate(manifest_text.splitlines(), start=1):
-            if 'path = "../tenferro-' in line and 'version = "0.1.0"' not in line:
+            version_fragment = f'version = "{expected_version}"'
+            if 'path = "../tenferro-' in line and version_fragment not in line:
                 errors.append(
                     f"{rel(manifest_path)}:{line_no}: tenferro path dependency "
-                    'must include version = "0.1.0" for crates.io packaging'
+                    f'must include {version_fragment} for crates.io packaging'
                 )
 
     tutorial_manifest = ROOT / "docs" / "tutorial-code" / "Cargo.toml"
@@ -177,11 +190,12 @@ def check_package_metadata(errors: list[str]) -> None:
     ):
         errors.append("docs/tutorial-code must remain publish = false")
 
-    tropical_manifest = ROOT / "ext" / "tropical" / "Cargo.toml"
-    if "publish = false" not in section(
-        tropical_manifest.read_text(encoding="utf-8"), "package"
-    ):
-        errors.append("ext/tropical must remain publish = false")
+    for extension in ("tropical", "sparse", "tenferro-cpu-tblis"):
+        extension_manifest = ROOT / "ext" / extension / "Cargo.toml"
+        if "publish = false" not in section(
+            extension_manifest.read_text(encoding="utf-8"), "package"
+        ):
+            errors.append(f"ext/{extension} must remain publish = false")
 
 
 def check_readme(errors: list[str]) -> None:
@@ -225,7 +239,7 @@ def main() -> int:
     check_workspace_members(metadata, root_text, errors)
     check_workspace_metadata(root_text, errors)
     check_workspace_dependencies(root_text, errors)
-    check_package_metadata(errors)
+    check_package_metadata(root_text, errors)
     check_readme(errors)
 
     if errors:

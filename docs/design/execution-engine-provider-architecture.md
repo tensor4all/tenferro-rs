@@ -1633,11 +1633,13 @@ local setter is already wired. The current conservative Task 7a implementation
 does not yet apply and restore MKL or Accelerate local controls around a call.
 It also does not identify the linked OpenBLAS build mode in production, so it
 cannot claim the sequential-build exception. Consequently every current
-built-in BLAS descriptor, plus TBLIS, remains `GlobalOrUncontrolled` external
-workers in Task 7a. A future adapter may classify a positively identified
-sequential OpenBLAS build as `Sequential` on `CallingThread`; parallel OpenBLAS
-cannot be upgraded by wiring its `_local` symbol because the underlying count
-is process-global. `ProviderDefaultExclusive` preserves legacy `Auto`
+built-in BLAS descriptor remains `GlobalOrUncontrolled` external workers in
+Task 7a. A future adapter may classify a positively identified sequential
+OpenBLAS build as `Sequential` on `CallingThread`; parallel OpenBLAS cannot be
+upgraded by wiring its `_local` symbol because the underlying count is
+process-global. TBLIS is implemented outside `tenferro-cpu`; an adapter that
+declares `BinaryClampToOne` must actually clamp and restore the TBLIS thread
+count around each call. `ProviderDefaultExclusive` preserves legacy `Auto`
 execution under the process-wide permit, while explicit strict provider
 bundles are rejected rather than receiving a false thread-count or
 NUMA-placement guarantee. Task 7b owns scoped guards for providers with true

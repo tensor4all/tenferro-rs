@@ -242,6 +242,12 @@ solves your problem.
 | `tenferro-einsum` | Einsum and contraction planning |
 | `tenferro-fft` | FFT operations |
 
+### Standalone Examples
+
+| Path | Use when you need |
+| --- | --- |
+| `ext/tenferro-cpu-tblis` | An unpublished external CPU provider example that replaces only supported `dot_general` contractions with TBLIS |
+
 ### Implementation Crates
 
 The crates `tenferro-tensor-core`, `tenferro-core-ops`,
