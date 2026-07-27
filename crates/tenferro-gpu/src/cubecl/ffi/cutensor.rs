@@ -41,7 +41,7 @@ enum CutensorLoadError {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CudaDataType {
     R32F = 0,
     R64F = 1,
@@ -50,7 +50,7 @@ pub(crate) enum CudaDataType {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CutensorOperator {
     Identity = 1,
     Conj = 9,
@@ -69,7 +69,7 @@ pub(crate) enum CutensorJitMode {
 }
 
 #[repr(i32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CutensorWorksizePreference {
     Default = 2,
 }

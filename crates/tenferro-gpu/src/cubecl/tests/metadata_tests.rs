@@ -9,7 +9,7 @@ use crate::cubecl::{CudaBackend, CudaExtensionCache};
 use crate::{
     Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
 };
-use tenferro_tensor::{Error, ErrorKind, ValidationError, ValidationKind};
+use tenferro_tensor::{CacheStats, Error, ErrorKind, ValidationError, ValidationKind};
 
 #[test]
 fn scalar_reduction_shape_stays_separate_from_cubecl_launch_metadata() {
@@ -163,11 +163,36 @@ fn cuda_extension_cache_has_configurable_retained_byte_bound() {
 }
 
 #[test]
+fn cuda_extension_cache_allows_dynamic_retained_byte_updates() {
+    let cache = CudaExtensionCache::with_max_entries(NonZeroUsize::new(8).unwrap());
+    let value = cache.get_or_try_init::<usize>(|| Ok(17)).unwrap();
+    assert_eq!(*value, 17);
+    drop(value);
+
+    cache.update_retained_bytes::<usize>(4096).unwrap();
+    let stats = cache.stats().unwrap();
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.retained_bytes, 4096);
+
+    cache
+        .set_max_retained_bytes(NonZeroUsize::new(1024).unwrap())
+        .unwrap();
+    assert!(cache.is_empty().unwrap());
+    assert_eq!(cache.stats().unwrap().evictions, 1);
+}
+
+#[test]
 fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
     let _getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
         CudaBackend::cuda_extension_cache_max_retained_bytes;
     let _setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
         CudaBackend::set_cuda_extension_cache_max_retained_bytes;
+    let _cutensor_stats: fn(&CudaBackend) -> crate::Result<CacheStats> =
+        CudaBackend::cutensor_plan_cache_stats;
+    let _cutensor_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
+        CudaBackend::cutensor_plan_cache_max_entries;
+    let _cutensor_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
+        CudaBackend::set_cutensor_plan_cache_max_entries;
 }
 
 #[test]

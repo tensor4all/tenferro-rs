@@ -151,9 +151,10 @@ fn cuda_dot_general_stays_cutensor_backed_and_not_cubek_rewired() {
         "CUDA dot_general must remain cuTENSOR-backed in this work"
     );
     assert!(
-        cuda_gemm.contains("alloc_workspace(backend.runtime(), workspace_size)")
+        cuda_gemm.contains("cached_cutensor_contraction::<")
+            && cuda_gemm.contains("alloc_workspace(rt, workspace_size)")
             && cuda_gemm.contains("Plan::new(cutensor, &op_desc"),
-        "CUDA workspace and plan flow must remain visible"
+        "CUDA workspace and plan flow must remain visible through the cuTENSOR cache helper"
     );
     assert!(
         !cuda_gemm.contains("cubek_matmul") && !cuda_gemm.contains("DotGeneralPlan"),

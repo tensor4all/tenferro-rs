@@ -1516,6 +1516,50 @@ fn cubecl_extension_cache_guard_validates_downcast_before_deref() {
 }
 
 #[test]
+fn cutensor_contractions_use_structural_plan_cache_without_pointer_alignment_keys() {
+    let source = cubecl_source("gemm.rs");
+    let key_source = source_section(
+        &source,
+        "struct CutensorContractionKey",
+        "struct CachedCutensorContraction",
+    );
+
+    assert!(
+        key_source.contains("workspace_preference: CutensorWorksizePreference"),
+        "cuTENSOR plan cache keys should include the workspace preference used to build the plan"
+    );
+    assert!(
+        key_source.contains("alignment_requirement"),
+        "cuTENSOR plan cache keys should store descriptor alignment requirements"
+    );
+    assert!(
+        !key_source.contains("ptr") && !key_source.contains("address_alignment"),
+        "cuTENSOR plan cache keys must not include allocation-specific pointers or actual pointer alignment"
+    );
+    assert!(
+        source.contains("struct CachedCutensorContraction"),
+        "cuTENSOR contractions should cache descriptor/plan/workspace state"
+    );
+    assert!(
+        source.contains("fn cached_cutensor_contraction"),
+        "both CUDA dot_general paths should share the cached cuTENSOR plan construction path"
+    );
+    assert!(
+        source.contains("update_retained_bytes::<"),
+        "cached cuTENSOR workspace bytes should be reported through the runtime-owned cache"
+    );
+    assert!(
+        source.contains("pub(super) fn cutensor_plan_cache_stats")
+            && source.contains("pub(super) fn set_cutensor_plan_cache_max_entries"),
+        "cuTENSOR plan cache should expose owner-routed stats and bound configuration"
+    );
+    assert!(
+        source.contains("workspace.size"),
+        "cuTENSOR retained-byte accounting should include cached device workspace bytes"
+    );
+}
+
+#[test]
 fn cutensor_drop_paths_report_destroy_status() {
     let source = cubecl_source("ffi/cutensor.rs");
     for banned in [

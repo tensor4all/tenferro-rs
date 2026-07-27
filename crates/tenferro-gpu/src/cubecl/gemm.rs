@@ -1,4 +1,7 @@
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
@@ -23,15 +26,18 @@ use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
-    ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorView, TensorViewMut,
-    TensorWrite, TypedTensorView, TypedTensorViewMut,
+    CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorView,
+    TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 
 const OP: &str = "dot_general";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
+const DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES: usize = 64;
+type CutensorPlanCacheState = Arc<Mutex<CutensorContractionPlanCache>>;
 
 trait CutensorScalar: CubeElement + CubePrimitive + Clone + One + Zero {
     const DATA_TYPE: CudaDataType;
+    const DTYPE: DType;
     const IS_COMPLEX: bool;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor;
@@ -90,6 +96,7 @@ impl CutensorScalar for f32 {
     cutensor_variant_accessors!(F32);
 
     const DATA_TYPE: CudaDataType = CudaDataType::R32F;
+    const DTYPE: DType = DType::F32;
     const IS_COMPLEX: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
@@ -126,6 +133,7 @@ impl CutensorScalar for f64 {
     cutensor_variant_accessors!(F64);
 
     const DATA_TYPE: CudaDataType = CudaDataType::R64F;
+    const DTYPE: DType = DType::F64;
     const IS_COMPLEX: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
@@ -162,6 +170,7 @@ impl CutensorScalar for Complex32 {
     cutensor_variant_accessors!(C32);
 
     const DATA_TYPE: CudaDataType = CudaDataType::C32F;
+    const DTYPE: DType = DType::C32;
     const IS_COMPLEX: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
@@ -199,6 +208,7 @@ impl CutensorScalar for Complex64 {
     cutensor_variant_accessors!(C64);
 
     const DATA_TYPE: CudaDataType = CudaDataType::C64F;
+    const DTYPE: DType = DType::C64;
     const IS_COMPLEX: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
@@ -259,6 +269,280 @@ impl Workspace {
             ptr: std::ptr::null_mut(),
             size: 0,
         }
+    }
+}
+
+// SAFETY: `Workspace` owns a CubeCL server handle that keeps the device
+// allocation alive. The raw pointer is only submitted back to cuTENSOR while
+// the cached contraction mutex is held.
+unsafe impl Send for Workspace {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CutensorOperandLayoutKey {
+    extents: Vec<i64>,
+    strides: Vec<i64>,
+    modes: Vec<i32>,
+}
+
+impl CutensorOperandLayoutKey {
+    fn new(extents: &[i64], strides: &[i64], modes: &[i32]) -> Self {
+        Self {
+            extents: extents.to_vec(),
+            strides: strides.to_vec(),
+            modes: modes.to_vec(),
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.extents.capacity() * std::mem::size_of::<i64>())
+            .saturating_add(self.strides.capacity() * std::mem::size_of::<i64>())
+            .saturating_add(self.modes.capacity() * std::mem::size_of::<i32>())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CutensorContractionKey {
+    dtype: DType,
+    lhs: CutensorOperandLayoutKey,
+    rhs: CutensorOperandLayoutKey,
+    output: CutensorOperandLayoutKey,
+    lhs_alignment_requirement: u32,
+    rhs_alignment_requirement: u32,
+    output_alignment_requirement: u32,
+    lhs_op: CutensorOperator,
+    rhs_op: CutensorOperator,
+    workspace_preference: CutensorWorksizePreference,
+}
+
+impl CutensorContractionKey {
+    fn from_spec<T: CutensorScalar>(spec: &CutensorContractionSpec<'_>) -> Self {
+        Self {
+            dtype: T::DTYPE,
+            lhs: CutensorOperandLayoutKey::new(
+                &spec.layout.lhs_extents,
+                spec.lhs_strides,
+                &spec.layout.lhs_modes,
+            ),
+            rhs: CutensorOperandLayoutKey::new(
+                &spec.layout.rhs_extents,
+                spec.rhs_strides,
+                &spec.layout.rhs_modes,
+            ),
+            output: CutensorOperandLayoutKey::new(
+                &spec.layout.output_extents,
+                spec.output_strides,
+                &spec.layout.output_modes,
+            ),
+            lhs_alignment_requirement: spec.lhs_alignment_requirement,
+            rhs_alignment_requirement: spec.rhs_alignment_requirement,
+            output_alignment_requirement: spec.output_alignment_requirement,
+            lhs_op: cutensor_conj_op::<T>(spec.lhs_conj),
+            rhs_op: cutensor_conj_op::<T>(spec.rhs_conj),
+            workspace_preference: spec.workspace_preference,
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.lhs.retained_bytes())
+            .saturating_add(self.rhs.retained_bytes())
+            .saturating_add(self.output.retained_bytes())
+    }
+}
+
+struct CutensorContractionSpec<'a> {
+    layout: &'a DotGeneralLayout,
+    lhs_strides: &'a [i64],
+    rhs_strides: &'a [i64],
+    output_strides: &'a [i64],
+    lhs_alignment_requirement: u32,
+    rhs_alignment_requirement: u32,
+    output_alignment_requirement: u32,
+    lhs_conj: bool,
+    rhs_conj: bool,
+    workspace_preference: CutensorWorksizePreference,
+}
+
+struct CachedCutensorContraction {
+    // Drop the cuTENSOR plan before the descriptor objects it was built from.
+    plan: Plan,
+    _plan_preference: PlanPreference,
+    _operation_descriptor: OperationDescriptor,
+    _output_descriptor: TensorDescriptor,
+    _rhs_descriptor: TensorDescriptor,
+    _lhs_descriptor: TensorDescriptor,
+    workspace: Workspace,
+}
+
+// SAFETY: cached cuTENSOR state is tied to one `CudaBackend` and is only used
+// while holding the enclosing plan-cache mutex. The opaque cuTENSOR handles are
+// created and destroyed through the same loaded cuTENSOR library.
+unsafe impl Send for CachedCutensorContraction {}
+
+impl CachedCutensorContraction {
+    fn new<T>(
+        rt: &CudaRuntime,
+        cutensor: &CutensorHandle,
+        spec: &CutensorContractionSpec<'_>,
+    ) -> crate::Result<Self>
+    where
+        T: CutensorScalar,
+    {
+        let desc_a = TensorDescriptor::new(
+            cutensor,
+            &spec.layout.lhs_extents,
+            spec.lhs_strides,
+            T::DATA_TYPE,
+            spec.lhs_alignment_requirement,
+            OP,
+        )?;
+        let desc_b = TensorDescriptor::new(
+            cutensor,
+            &spec.layout.rhs_extents,
+            spec.rhs_strides,
+            T::DATA_TYPE,
+            spec.rhs_alignment_requirement,
+            OP,
+        )?;
+        let desc_out = TensorDescriptor::new(
+            cutensor,
+            &spec.layout.output_extents,
+            spec.output_strides,
+            T::DATA_TYPE,
+            spec.output_alignment_requirement,
+            OP,
+        )?;
+        let op_desc = OperationDescriptor::new_contraction_with_ops(
+            cutensor,
+            &desc_a,
+            &spec.layout.lhs_modes,
+            cutensor_conj_op::<T>(spec.lhs_conj),
+            &desc_b,
+            &spec.layout.rhs_modes,
+            cutensor_conj_op::<T>(spec.rhs_conj),
+            &desc_out,
+            &spec.layout.output_modes,
+            &desc_out,
+            &spec.layout.output_modes,
+            T::compute_descriptor(cutensor),
+            OP,
+        )?;
+        let pref = PlanPreference::new_default(cutensor, OP)?;
+        let workspace_size =
+            cutensor.estimate_workspace_size(&op_desc, &pref, spec.workspace_preference, OP)?;
+        let plan = Plan::new(cutensor, &op_desc, &pref, workspace_size, OP)?;
+        let workspace = alloc_workspace(rt, workspace_size)?;
+        Ok(Self {
+            plan,
+            _plan_preference: pref,
+            _operation_descriptor: op_desc,
+            _output_descriptor: desc_out,
+            _rhs_descriptor: desc_b,
+            _lhs_descriptor: desc_a,
+            workspace,
+        })
+    }
+
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(usize::try_from(self.workspace.size).unwrap_or(usize::MAX))
+    }
+}
+
+struct CutensorContractionPlanCache {
+    max_entries: NonZeroUsize,
+    entries: HashMap<CutensorContractionKey, CachedCutensorContraction>,
+    order: VecDeque<CutensorContractionKey>,
+    stats: CacheStats,
+}
+
+impl CutensorContractionPlanCache {
+    fn new(max_entries: NonZeroUsize) -> Self {
+        Self {
+            max_entries,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            stats: CacheStats::empty(),
+        }
+    }
+
+    fn ensure<T>(
+        &mut self,
+        rt: &CudaRuntime,
+        cutensor: &CutensorHandle,
+        key: &CutensorContractionKey,
+        spec: &CutensorContractionSpec<'_>,
+    ) -> crate::Result<()>
+    where
+        T: CutensorScalar,
+    {
+        if self.entries.contains_key(key) {
+            self.stats.hits = self.stats.hits.saturating_add(1);
+            self.touch(key);
+            return Ok(());
+        }
+        self.stats.misses = self.stats.misses.saturating_add(1);
+        let cached = CachedCutensorContraction::new::<T>(rt, cutensor, spec)?;
+        self.entries.insert(key.clone(), cached);
+        self.touch(key);
+        self.evict_to_limit();
+        Ok(())
+    }
+
+    fn get(&self, key: &CutensorContractionKey) -> crate::Result<&CachedCutensorContraction> {
+        self.entries.get(key).ok_or_else(|| {
+            Error::runtime_state(
+                "cutensor_plan_cache",
+                "cached cuTENSOR contraction was evicted before use",
+            )
+        })
+    }
+
+    fn touch(&mut self, key: &CutensorContractionKey) {
+        self.order.retain(|existing| existing != key);
+        self.order.push_back(key.clone());
+    }
+
+    fn evict_to_limit(&mut self) {
+        while self.entries.len() > self.max_entries.get() {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if self.entries.remove(&oldest).is_some() {
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
+            }
+        }
+    }
+
+    fn max_entries(&self) -> NonZeroUsize {
+        self.max_entries
+    }
+
+    fn set_max_entries(&mut self, max_entries: NonZeroUsize) {
+        self.max_entries = max_entries;
+        self.evict_to_limit();
+    }
+
+    fn stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.entries.len(),
+            retained_bytes: self.retained_bytes(),
+            ..self.stats
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        let entries_bytes =
+            self.entries
+                .iter()
+                .fold(std::mem::size_of::<Self>(), |total, (key, cached)| {
+                    total
+                        .saturating_add(key.retained_bytes())
+                        .saturating_add(cached.retained_bytes())
+                });
+        entries_bytes
+            .saturating_add(self.order.capacity() * std::mem::size_of::<CutensorContractionKey>())
     }
 }
 
@@ -358,6 +642,13 @@ impl<T: 'static> ReadOperand<'_, '_, T> {
     }
 }
 
+fn read_operand_alignment_requirement<T: CutensorScalar>(operand: &ReadOperand<'_, '_, T>) -> u32 {
+    match operand {
+        ReadOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
+        ReadOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
+    }
+}
+
 /// Write-slot operand for the accumulate path.
 enum WriteOperand<'a, 'b, T> {
     Owned(&'a mut TypedTensor<T>),
@@ -378,6 +669,19 @@ impl<T: 'static> WriteOperand<'_, '_, T> {
             Self::View(view) => view.n_elements(),
         }
     }
+}
+
+fn write_operand_alignment_requirement<T: CutensorScalar>(
+    operand: &WriteOperand<'_, '_, T>,
+) -> u32 {
+    match operand {
+        WriteOperand::Owned(_) => CUDA_ALLOCATION_ALIGNMENT,
+        WriteOperand::View(_) => view_descriptor_alignment_requirement::<T>(),
+    }
+}
+
+fn view_descriptor_alignment_requirement<T: CutensorScalar>() -> u32 {
+    u32::try_from(std::mem::size_of::<T>()).unwrap_or(CUDA_ALLOCATION_ALIGNMENT)
 }
 
 /// Device pointer plus cuTENSOR descriptor metadata for one operand.
@@ -520,64 +824,29 @@ where
         };
     }
 
-    let cutensor = backend.cutensor_handle()?;
-    let desc_a = TensorDescriptor::new(
-        cutensor,
-        &layout.lhs_extents,
-        &lhs_res.strides,
-        T::DATA_TYPE,
-        lhs_res.alignment,
-        OP,
-    )?;
-    let desc_b = TensorDescriptor::new(
-        cutensor,
-        &layout.rhs_extents,
-        &rhs_res.strides,
-        T::DATA_TYPE,
-        rhs_res.alignment,
-        OP,
-    )?;
-    let desc_out = TensorDescriptor::new(
-        cutensor,
-        &layout.output_extents,
-        &out_res.strides,
-        T::DATA_TYPE,
-        out_res.alignment,
-        OP,
-    )?;
-    let op_desc = OperationDescriptor::new_contraction_with_ops(
-        cutensor,
-        &desc_a,
-        &layout.lhs_modes,
-        cutensor_conj_op::<T>(lhs_conj),
-        &desc_b,
-        &layout.rhs_modes,
-        cutensor_conj_op::<T>(rhs_conj),
-        &desc_out,
-        &layout.output_modes,
-        &desc_out,
-        &layout.output_modes,
-        T::compute_descriptor(cutensor),
-        OP,
-    )?;
-    let pref = PlanPreference::new_default(cutensor, OP)?;
-    let workspace_size = cutensor.estimate_workspace_size(
-        &op_desc,
-        &pref,
-        CutensorWorksizePreference::Default,
-        OP,
-    )?;
-    let plan = Plan::new(cutensor, &op_desc, &pref, workspace_size, OP)?;
-    let workspace = alloc_workspace(backend.runtime(), workspace_size)?;
-
     let stream = raw_stream(backend.runtime())?;
+    let spec = CutensorContractionSpec {
+        layout: &layout,
+        lhs_strides: &lhs_res.strides,
+        rhs_strides: &rhs_res.strides,
+        output_strides: &out_res.strides,
+        lhs_alignment_requirement: read_operand_alignment_requirement(&lhs),
+        rhs_alignment_requirement: read_operand_alignment_requirement(&rhs),
+        output_alignment_requirement: write_operand_alignment_requirement(&out),
+        lhs_conj,
+        rhs_conj,
+        workspace_preference: CutensorWorksizePreference::Default,
+    };
+    validate_descriptor_alignment(lhs_res.alignment, spec.lhs_alignment_requirement, "lhs")?;
+    validate_descriptor_alignment(rhs_res.alignment, spec.rhs_alignment_requirement, "rhs")?;
+    validate_descriptor_alignment(out_res.alignment, spec.output_alignment_requirement, "out")?;
     // C = D = out: cuTENSOR reads the destination as the accumulator (skipped
     // by cuTENSOR itself when beta == 0) and writes the result in place.
     // Overlap between the out region and the lhs/rhs regions is the caller's
     // responsibility, as with BLAS-style in-place update APIs.
-    unsafe {
+    cached_cutensor_contraction::<T, _>(backend, &spec, |cutensor, plan, workspace| unsafe {
         cutensor.contract(
-            &plan,
+            plan,
             &alpha as *const T as *const c_void,
             lhs_res.ptr as *const c_void,
             rhs_res.ptr as *const c_void,
@@ -588,9 +857,8 @@ where
             workspace.size,
             stream,
             OP,
-        )?;
-    }
-    Ok(())
+        )
+    })
 }
 
 fn resolve_read_operand<T>(
@@ -800,56 +1068,6 @@ where
         return zero_alloc::<T>(backend.runtime(), &layout.output_shape);
     }
 
-    let cutensor = backend.cutensor_handle()?;
-    let desc_a = TensorDescriptor::new(
-        cutensor,
-        &layout.lhs_extents,
-        &layout.lhs_strides,
-        T::DATA_TYPE,
-        CUDA_ALLOCATION_ALIGNMENT,
-        OP,
-    )?;
-    let desc_b = TensorDescriptor::new(
-        cutensor,
-        &layout.rhs_extents,
-        &layout.rhs_strides,
-        T::DATA_TYPE,
-        CUDA_ALLOCATION_ALIGNMENT,
-        OP,
-    )?;
-    let desc_out = TensorDescriptor::new(
-        cutensor,
-        &layout.output_extents,
-        &layout.output_strides,
-        T::DATA_TYPE,
-        CUDA_ALLOCATION_ALIGNMENT,
-        OP,
-    )?;
-    let op_desc = OperationDescriptor::new_contraction_with_ops(
-        cutensor,
-        &desc_a,
-        &layout.lhs_modes,
-        cutensor_conj_op::<T>(lhs_conj),
-        &desc_b,
-        &layout.rhs_modes,
-        cutensor_conj_op::<T>(rhs_conj),
-        &desc_out,
-        &layout.output_modes,
-        &desc_out,
-        &layout.output_modes,
-        T::compute_descriptor(cutensor),
-        OP,
-    )?;
-    let pref = PlanPreference::new_default(cutensor, OP)?;
-    let workspace_size = cutensor.estimate_workspace_size(
-        &op_desc,
-        &pref,
-        CutensorWorksizePreference::Default,
-        OP,
-    )?;
-    let plan = Plan::new(cutensor, &op_desc, &pref, workspace_size, OP)?;
-    let workspace = alloc_workspace(backend.runtime(), workspace_size)?;
-
     let lhs_ptr = typed_device_ptr(backend.runtime(), lhs)?;
     let rhs_ptr = typed_device_ptr(backend.runtime(), rhs)?;
     let output_ptr = typed_device_ptr(backend.runtime(), &output)?;
@@ -860,9 +1078,21 @@ where
     let alpha = T::one();
     let beta = T::zero();
     let stream = raw_stream(backend.runtime())?;
-    unsafe {
+    let spec = CutensorContractionSpec {
+        layout: &layout,
+        lhs_strides: &layout.lhs_strides,
+        rhs_strides: &layout.rhs_strides,
+        output_strides: &layout.output_strides,
+        lhs_alignment_requirement: CUDA_ALLOCATION_ALIGNMENT,
+        rhs_alignment_requirement: CUDA_ALLOCATION_ALIGNMENT,
+        output_alignment_requirement: CUDA_ALLOCATION_ALIGNMENT,
+        lhs_conj,
+        rhs_conj,
+        workspace_preference: CutensorWorksizePreference::Default,
+    };
+    cached_cutensor_contraction::<T, _>(backend, &spec, |cutensor, plan, workspace| unsafe {
         cutensor.contract(
-            &plan,
+            plan,
             &alpha as *const T as *const c_void,
             lhs_ptr as *const c_void,
             rhs_ptr as *const c_void,
@@ -873,8 +1103,8 @@ where
             workspace.size,
             stream,
             OP,
-        )?;
-    }
+        )
+    })?;
 
     Ok(output)
 }
@@ -885,6 +1115,109 @@ fn cutensor_conj_op<T: CutensorScalar>(conj: bool) -> CutensorOperator {
     } else {
         CutensorOperator::Identity
     }
+}
+
+fn default_cutensor_plan_cache_max_entries() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES).unwrap_or(NonZeroUsize::MIN)
+}
+
+fn new_cutensor_plan_cache_state(max_entries: NonZeroUsize) -> CutensorPlanCacheState {
+    Arc::new(Mutex::new(CutensorContractionPlanCache::new(max_entries)))
+}
+
+fn get_or_init_cutensor_plan_cache(backend: &CudaBackend) -> crate::Result<CutensorPlanCacheState> {
+    let guard = backend
+        .cuda_extension_cache()
+        .get_or_try_init::<CutensorPlanCacheState>(|| {
+            Ok(new_cutensor_plan_cache_state(
+                default_cutensor_plan_cache_max_entries(),
+            ))
+        })?;
+    Ok(Arc::clone(&guard))
+}
+
+fn lock_cutensor_plan_cache(
+    cache: &CutensorPlanCacheState,
+) -> crate::Result<std::sync::MutexGuard<'_, CutensorContractionPlanCache>> {
+    cache
+        .lock()
+        .map_err(|_| Error::runtime_state("cutensor_plan_cache", "plan cache lock poisoned"))
+}
+
+pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<CacheStats> {
+    let Some(plan_cache) = backend
+        .cuda_extension_cache()
+        .get_cloned::<CutensorPlanCacheState>()?
+    else {
+        return Ok(CacheStats::empty());
+    };
+    let plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
+    Ok(plan_cache.stats())
+}
+
+pub(super) fn cutensor_plan_cache_max_entries(
+    backend: &CudaBackend,
+) -> crate::Result<NonZeroUsize> {
+    let Some(plan_cache) = backend
+        .cuda_extension_cache()
+        .get_cloned::<CutensorPlanCacheState>()?
+    else {
+        return Ok(default_cutensor_plan_cache_max_entries());
+    };
+    let plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
+    Ok(plan_cache.max_entries())
+}
+
+pub(super) fn set_cutensor_plan_cache_max_entries(
+    backend: &CudaBackend,
+    max_entries: NonZeroUsize,
+) -> crate::Result<()> {
+    let plan_cache = get_or_init_cutensor_plan_cache(backend)?;
+    let mut plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
+    plan_cache.set_max_entries(max_entries);
+    let retained_bytes = plan_cache.retained_bytes();
+    backend
+        .cuda_extension_cache()
+        .update_retained_bytes::<CutensorPlanCacheState>(retained_bytes)
+}
+
+fn cached_cutensor_contraction<T, R>(
+    backend: &CudaBackend,
+    spec: &CutensorContractionSpec<'_>,
+    execute: impl FnOnce(&CutensorHandle, &Plan, &Workspace) -> crate::Result<R>,
+) -> crate::Result<R>
+where
+    T: CutensorScalar,
+{
+    let cutensor = backend.cutensor_handle()?;
+    let key = CutensorContractionKey::from_spec::<T>(spec);
+    let plan_cache = get_or_init_cutensor_plan_cache(backend)?;
+    let mut plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
+    plan_cache.ensure::<T>(backend.runtime(), cutensor, &key, spec)?;
+    let retained_bytes = plan_cache.retained_bytes();
+    backend
+        .cuda_extension_cache()
+        .update_retained_bytes::<CutensorPlanCacheState>(retained_bytes)?;
+    let cached = plan_cache.get(&key)?;
+    execute(cutensor, &cached.plan, &cached.workspace)
+}
+
+fn validate_descriptor_alignment(
+    actual_alignment: u32,
+    alignment_requirement: u32,
+    slot: &'static str,
+) -> crate::Result<()> {
+    if actual_alignment >= alignment_requirement {
+        return Ok(());
+    }
+    Err(Error::invalid_argument(
+        OP,
+        "alignment",
+        format!(
+            "{slot} device pointer alignment {actual_alignment} is smaller than the cuTENSOR \
+             descriptor requirement {alignment_requirement}"
+        ),
+    ))
 }
 
 fn raw_stream(rt: &CudaRuntime) -> crate::Result<CutensorCudaStream> {
