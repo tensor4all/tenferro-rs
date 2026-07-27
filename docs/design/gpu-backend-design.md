@@ -215,6 +215,23 @@ logical retained bytes, and event counters with
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
 
+CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and device
+workspace inside this backend-owned extension cache. The cuTENSOR plan key is
+structural: dtype, extents, strides, modes, conjugation flags, descriptor
+alignment requirements, and workspace preference. It must not include
+allocation addresses or actual pointer-specific alignment. Whole-allocation
+operands keep the CUDA allocation alignment requirement; borrowed views use a
+conservative dtype-size descriptor alignment requirement so the cached plan
+remains valid across different view offsets without using pointer-specific
+alignment. Cached device workspace bytes are included in the logical
+retained-byte estimate and are released by normal extension-cache eviction or
+`CudaBackend::clear_cuda_extension_cache`. The overall extension cache stats
+report the retained typed cache entry. Use
+`CudaBackend::cutensor_plan_cache_stats`,
+`CudaBackend::cutensor_plan_cache_max_entries`, and
+`CudaBackend::set_cutensor_plan_cache_max_entries` for cuTENSOR plan-entry
+introspection and bound configuration.
+
 WebGPU provider caches must be owned by `WebGpuBackend` or a WebGPU runtime
 cache object with the same bounded-default, clear, configure, and stats
 requirements before they become long-lived.
@@ -234,10 +251,11 @@ shape across CUDA, WebGPU, and future ROCm:
 | `high_water_retained_bytes` | Peak logical retained bytes |
 
 This common stats design is future direction only. It must not be introduced by
-rewriting existing CUDA contraction allocation behavior. CUDA `dot_general`
-continues to allocate cuTENSOR workspace through the existing runtime client
-path, and this WebGPU work does not alter CUDA buffer pools, CUDA scratch
-reuse, or CUDA library-call algorithms.
+rewriting existing CUDA contraction allocation behavior into an unowned global
+pool. CUDA `dot_general` may retain cuTENSOR-owned contraction workspace only
+through the explicit `CudaBackend` extension cache described above; WebGPU work
+must not alter CUDA buffer pools, CUDA scratch reuse, or CUDA library-call
+algorithms.
 
 ## Operation-Crate Interop Boundary
 

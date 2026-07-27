@@ -346,6 +346,14 @@ impl CudaExtensionCacheInner {
             ..self.stats
         }
     }
+
+    fn refresh_retained_bytes(&mut self) {
+        self.retained_bytes = self
+            .entries
+            .values()
+            .map(|entry| entry.retained_bytes)
+            .sum();
+    }
 }
 
 impl CudaExtensionCache {
@@ -526,6 +534,50 @@ impl CudaExtensionCache {
             _marker: std::marker::PhantomData,
         })
     }
+
+    pub(crate) fn get_cloned<T>(&self) -> crate::Result<Option<T>>
+    where
+        T: Clone + 'static,
+    {
+        let inner = self.lock_inner()?;
+        inner
+            .entries
+            .get(&TypeId::of::<T>())
+            .map(|entry| {
+                entry.value.downcast_ref::<T>().cloned().ok_or_else(|| {
+                    crate::Error::runtime_state(
+                        "cuda_extension_cache",
+                        format!(
+                            "stored entry for {} is missing or has the wrong type",
+                            std::any::type_name::<T>()
+                        ),
+                    )
+                })
+            })
+            .transpose()
+    }
+
+    /// Update the logical retained-byte estimate for an existing typed entry.
+    ///
+    /// This supports extension states whose own internal cache grows after the
+    /// top-level entry is initialized. If another thread clears or evicts the
+    /// typed entry before the update, the update is treated as a no-op.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub(crate) fn update_retained_bytes<T: 'static>(
+        &self,
+        retained_bytes: usize,
+    ) -> crate::Result<()> {
+        let type_id = TypeId::of::<T>();
+        let mut inner = self.lock_inner()?;
+        if let Some(entry) = inner.entries.get_mut(&type_id) {
+            entry.retained_bytes = retained_bytes;
+            inner.refresh_retained_bytes();
+            inner.evict_to_limit();
+        }
+        Ok(())
+    }
 }
 
 impl Default for CudaExtensionCache {
@@ -691,6 +743,40 @@ impl CudaBackend {
         self.inner
             .extension_cache
             .set_max_retained_bytes(max_retained_bytes)
+    }
+
+    /// Return cuTENSOR contraction plan cache stats.
+    ///
+    /// The returned entry count is the number of retained cuTENSOR contraction
+    /// plans inside the CUDA backend's extension cache entry. Logical retained
+    /// bytes include cached cuTENSOR device workspace estimates.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_plan_cache_stats(&self) -> crate::Result<CacheStats> {
+        gemm::cutensor_plan_cache_stats(self)
+    }
+
+    /// Return the cuTENSOR contraction plan entry bound.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_plan_cache_max_entries(&self) -> crate::Result<NonZeroUsize> {
+        gemm::cutensor_plan_cache_max_entries(self)
+    }
+
+    /// Configure the cuTENSOR contraction plan entry bound.
+    ///
+    /// The cache is initialized if it does not already exist so a setting made
+    /// before the first CUDA `dot_general` call is preserved.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn set_cutensor_plan_cache_max_entries(
+        &self,
+        max_entries: NonZeroUsize,
+    ) -> crate::Result<()> {
+        gemm::set_cutensor_plan_cache_max_entries(self, max_entries)
     }
 
     fn transpose_typed<T>(

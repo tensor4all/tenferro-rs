@@ -75,3 +75,9 @@ required-features = ["cuda"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[bench]]
+name = "cutensor_plan_cache"
+path = "benches/cutensor_plan_cache.rs"
+harness = false
+required-features = ["cuda"]
