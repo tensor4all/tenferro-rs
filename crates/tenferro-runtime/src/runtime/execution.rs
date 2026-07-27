@@ -22,7 +22,7 @@ use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{ScheduledGraph, ScheduledNode};
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationHandle, Runtime, RuntimeCacheOwner, StorageClass, TransferProvider,
+    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferProvider,
     TransferRequest,
 };
 use crate::{Error, Result};
@@ -124,32 +124,32 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
     fn execute(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>>;
     fn execute_tensor_refs(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>>;
     fn execute_values(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<TensorValue>>;
     fn execute_value_refs(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>>;
     fn execute_slot_instruction<'input>(
         &self,
         instruction_index: usize,
         instruction: &ExecInstruction,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         slots: &mut [Option<ExecSlot<'input>>],
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
@@ -371,7 +371,7 @@ where
     fn execute(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>> {
         validate_exec_input_count(program, inputs.len())?;
@@ -400,7 +400,7 @@ where
     fn execute_tensor_refs(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
         validate_exec_input_count(program, inputs.len())?;
@@ -436,7 +436,7 @@ where
     fn execute_values(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: Vec<Tensor>,
     ) -> Result<Vec<TensorValue>> {
         validate_exec_input_count(program, inputs.len())?;
@@ -466,7 +466,7 @@ where
     fn execute_value_refs(
         &self,
         program: &ExecProgram,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>> {
         validate_exec_input_count(program, inputs.len())?;
@@ -503,7 +503,7 @@ where
         &self,
         instruction_index: usize,
         instruction: &ExecInstruction,
-        operations: &[PreparedOperationHandle],
+        operations: &[PreparedOperationPlan],
         slots: &mut [Option<ExecSlot<'input>>],
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
@@ -821,7 +821,7 @@ fn execute_scheduled_tensor_refs(
     execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
-    operations: &[PreparedOperationHandle],
+    operations: &[PreparedOperationPlan],
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len())?;
@@ -846,7 +846,7 @@ fn execute_scheduled_value_refs(
     execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
-    operations: &[PreparedOperationHandle],
+    operations: &[PreparedOperationPlan],
     inputs: &[&Tensor],
 ) -> Result<Vec<TensorValue>> {
     validate_exec_input_count(program, inputs.len())?;
@@ -875,7 +875,7 @@ fn execute_scheduled_slots<'input>(
     execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
-    operations: &[PreparedOperationHandle],
+    operations: &[PreparedOperationPlan],
     inputs: Vec<ExecSlot<'input>>,
     output_mode: RuntimeOutputMode,
 ) -> Result<Vec<Option<ExecSlot<'input>>>> {
@@ -1240,9 +1240,9 @@ mod tests {
     use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
     use crate::runtime::{
         EngineId, ErasedExecutionContext, ExecutionContextIdentity, HardwareClassId,
-        InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationHandle,
-        RegistrationIdentity, RuntimeEpoch, RuntimeId, SpecializationProjection,
-        SpecializationRequirements,
+        InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
+        PreparedOperationPlan, RegistrationIdentity, RuntimeEpoch, RuntimeId,
+        SpecializationProjection, SpecializationRequirements,
     };
     use crate::{Error, ErrorPhase, ExtensionCacheStore, Result};
 
@@ -1347,7 +1347,9 @@ mod tests {
         fn retained_bytes(&self) -> usize {
             0
         }
+    }
 
+    impl PreparedOperationExecutor for LockProbePreparedOperation {
         fn execute(
             &self,
             context: &mut ErasedExecutionContext<'_>,
@@ -1412,7 +1414,9 @@ mod tests {
         fn retained_bytes(&self) -> usize {
             0
         }
+    }
 
+    impl PreparedOperationExecutor for ReentrantProbePreparedOperation {
         fn execute(
             &self,
             context: &mut ErasedExecutionContext<'_>,
@@ -1516,12 +1520,16 @@ mod tests {
     fn tensor_backend_executor_releases_state_lock_during_extension_execution() {
         let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
         let observed_unlocked_state = Arc::new(AtomicBool::new(false));
-        let operations: Vec<PreparedOperationHandle> = vec![Arc::new(LockProbePreparedOperation {
+        let prepared = Arc::new(LockProbePreparedOperation {
             binding: probe_binding(),
             specialization: probe_specialization(),
             executor: Arc::downgrade(&executor),
             observed_unlocked_state: Arc::clone(&observed_unlocked_state),
-        })];
+        });
+        let operations = vec![PreparedOperationPlan::executable(
+            prepared.clone(),
+            prepared,
+        )];
 
         let output = ErasedTensorBackendExecutor::execute(
             executor.as_ref(),
@@ -1542,13 +1550,16 @@ mod tests {
     fn tensor_backend_executor_reentrant_call_returns_error_instead_of_deadlocking() {
         let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
         let observed_reentrant_error = Arc::new(AtomicBool::new(false));
-        let operations: Vec<PreparedOperationHandle> =
-            vec![Arc::new(ReentrantProbePreparedOperation {
-                binding: probe_binding(),
-                specialization: probe_specialization(),
-                executor: Arc::downgrade(&executor),
-                observed_reentrant_error: Arc::clone(&observed_reentrant_error),
-            })];
+        let prepared = Arc::new(ReentrantProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            executor: Arc::downgrade(&executor),
+            observed_reentrant_error: Arc::clone(&observed_reentrant_error),
+        });
+        let operations = vec![PreparedOperationPlan::executable(
+            prepared.clone(),
+            prepared,
+        )];
 
         let output = ErasedTensorBackendExecutor::execute(
             executor.as_ref(),

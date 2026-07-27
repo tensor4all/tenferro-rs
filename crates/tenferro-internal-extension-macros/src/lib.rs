@@ -266,14 +266,15 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                             operation: #family_id,
                         },
                     })?;
-                Ok(tenferro_runtime::PrepareCapability::Prepared(std::sync::Arc::new(
-                    #prepared_operation::<B> {
-                        binding: request.binding().clone(),
-                        specialization: request.specialization().clone(),
-                        op,
-                        _backend: std::marker::PhantomData,
-                    },
-                )))
+                let prepared = std::sync::Arc::new(#prepared_operation::<B> {
+                    binding: request.binding().clone(),
+                    specialization: request.specialization().clone(),
+                    op,
+                    _backend: std::marker::PhantomData,
+                });
+                Ok(tenferro_runtime::PrepareCapability::Prepared(
+                    tenferro_runtime::PreparedOperationPlan::executable(prepared.clone(), prepared)
+                ))
             }
         }
 
@@ -315,6 +316,12 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                 0
             }
 
+        }
+
+        impl<B: #backend_bound + 'static> tenferro_runtime::PreparedOperationExecutor for #prepared_operation<B>
+        where
+            #op_type: Clone + Send + Sync + 'static,
+        {
             fn execute(
                 &self,
                 context: &mut tenferro_runtime::ErasedExecutionContext<'_>,

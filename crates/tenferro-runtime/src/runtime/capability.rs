@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::program::SemanticOperationView;
-use crate::{Error, ErrorPhase, ExtensionCacheStore};
+use crate::ExtensionCacheStore;
 use tenferro_tensor::{Tensor, TensorRead};
 
 use super::{
@@ -256,8 +256,16 @@ impl PreparedOperationBinding {
     }
 }
 
-/// Immutable metadata and optional execution entrypoint for a prepared provider
-/// operation.
+/// Immutable metadata for a prepared provider operation.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::PreparedOperation;
+///
+/// fn accepts_prepared_operation(_: Option<&dyn PreparedOperation>) {}
+/// let _ = accepts_prepared_operation;
+/// ```
 pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
     /// Return the runtime-created binding carried by this operation.
     fn binding(&self) -> &PreparedOperationBinding;
@@ -265,14 +273,18 @@ pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
     fn specialization(&self) -> &SpecializationProjection;
     /// Return logical heap bytes owned exclusively by this operation.
     fn retained_bytes(&self) -> usize;
+}
 
+#[doc(hidden)]
+/// Internal execution bridge for a prepared provider operation.
+///
+/// This remains a public trait only so out-of-crate extension providers can
+/// hand an executable plan back to the runtime. Public prepared-operation
+/// metadata stays on [`PreparedOperation`]; scheduled runtime execution owns
+/// when and how this bridge is invoked.
+pub trait PreparedOperationExecutor: fmt::Debug + Send + Sync + 'static {
     /// Execute this prepared operation using a runtime-owned erased backend
     /// context and extension cache store.
-    ///
-    /// Core providers may keep the default unsupported implementation because
-    /// core execution is still lowered through `ExecOp` dispatch. Extension
-    /// providers override this method so `ExecOp::Extension` no longer needs a
-    /// separate registry/executor lookup at execution time.
     ///
     /// # Errors
     ///
@@ -280,16 +292,10 @@ pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
     /// supplied context, input reads are invalid, or backend execution fails.
     fn execute(
         &self,
-        _context: &mut ErasedExecutionContext<'_>,
-        _extension_caches: &mut ExtensionCacheStore,
-        _inputs: &[TensorRead<'_>],
-    ) -> crate::Result<Vec<Tensor>> {
-        Err(Error::unsupported(
-            "prepared_operation",
-            ErrorPhase::Execution,
-            "prepared operation does not implement execution",
-        ))
-    }
+        context: &mut ErasedExecutionContext<'_>,
+        extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> crate::Result<Vec<Tensor>>;
 }
 
 /// Shared prepared-operation handle.
@@ -304,6 +310,195 @@ pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
 /// requires_debug::<PreparedOperationHandle>();
 /// ```
 pub type PreparedOperationHandle = Arc<dyn PreparedOperation>;
+
+#[doc(hidden)]
+/// Shared prepared-operation executor handle.
+///
+/// This alias is part of the runtime/provider bridge, not the user-facing
+/// prepared-operation metadata surface.
+pub type PreparedOperationExecutorHandle = Arc<dyn PreparedOperationExecutor>;
+
+/// Runtime-owned prepared operation plan with separated metadata and optional
+/// execution bridge.
+///
+/// Core operations are metadata-only because scheduled execution dispatches
+/// them through the selected engine's core executor. Extension operations carry
+/// an executor bridge that is invoked only by the scheduled runtime loop.
+///
+/// # Examples
+///
+/// ```
+/// use std::fmt::Debug;
+/// use tenferro_runtime::PreparedOperationPlan;
+///
+/// fn requires_debug<T: Debug>() {}
+/// requires_debug::<PreparedOperationPlan>();
+/// ```
+#[derive(Clone)]
+pub struct PreparedOperationPlan {
+    operation: PreparedOperationHandle,
+    executor: Option<PreparedOperationExecutorHandle>,
+}
+
+impl fmt::Debug for PreparedOperationPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedOperationPlan")
+            .field("operation", &self.operation)
+            .field("has_executor", &self.executor.is_some())
+            .finish()
+    }
+}
+
+impl PreparedOperationPlan {
+    /// Construct a metadata-only prepared operation plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{PreparedOperationHandle, PreparedOperationPlan};
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::metadata(provider_handle());
+    ///     assert!(plan.executor().is_none());
+    /// }
+    /// ```
+    #[must_use]
+    pub fn metadata(operation: PreparedOperationHandle) -> Self {
+        Self {
+            operation,
+            executor: None,
+        }
+    }
+
+    /// Construct an executable prepared operation plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{
+    ///     PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan,
+    /// };
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// fn executor_handle() -> PreparedOperationExecutorHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::executable(provider_handle(), executor_handle());
+    ///     assert!(plan.executor().is_some());
+    /// }
+    /// ```
+    #[must_use]
+    pub fn executable(
+        operation: PreparedOperationHandle,
+        executor: PreparedOperationExecutorHandle,
+    ) -> Self {
+        Self {
+            operation,
+            executor: Some(executor),
+        }
+    }
+
+    /// Return the prepared-operation metadata handle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{PreparedOperationHandle, PreparedOperationPlan};
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::metadata(provider_handle());
+    ///     let _operation = plan.operation();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn operation(&self) -> &PreparedOperationHandle {
+        &self.operation
+    }
+
+    /// Return the optional prepared-operation executor bridge.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn executor(&self) -> Option<&PreparedOperationExecutorHandle> {
+        self.executor.as_ref()
+    }
+
+    /// Return the runtime-created binding carried by the metadata operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{PreparedOperationHandle, PreparedOperationPlan};
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::metadata(provider_handle());
+    ///     let _binding = plan.binding();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn binding(&self) -> &PreparedOperationBinding {
+        self.operation.binding()
+    }
+
+    /// Return the specialization projection carried by the metadata operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{PreparedOperationHandle, PreparedOperationPlan};
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::metadata(provider_handle());
+    ///     let _specialization = plan.specialization();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn specialization(&self) -> &SpecializationProjection {
+        self.operation.specialization()
+    }
+
+    /// Return logical heap bytes owned by metadata and executor handles.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{PreparedOperationHandle, PreparedOperationPlan};
+    ///
+    /// fn provider_handle() -> PreparedOperationHandle {
+    ///     unreachable!("example is type-checked but not executed")
+    /// }
+    ///
+    /// if false {
+    ///     let plan = PreparedOperationPlan::metadata(provider_handle());
+    ///     let _bytes = plan.retained_bytes();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        self.operation.retained_bytes()
+    }
+}
 
 /// Result of asking a provider to prepare an operation.
 ///
@@ -320,7 +515,7 @@ pub type PreparedOperationHandle = Arc<dyn PreparedOperation>;
 #[derive(Clone, Debug)]
 pub enum PrepareCapability {
     /// Provider returned an immutable prepared operation.
-    Prepared(PreparedOperationHandle),
+    Prepared(PreparedOperationPlan),
     /// Provider requires a wider specialization before it can prepare.
     NeedsSpecialization(SpecializationRequirements),
     /// Provider does not support this request.

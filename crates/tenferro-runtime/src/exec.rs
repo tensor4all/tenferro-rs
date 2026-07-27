@@ -13,7 +13,7 @@ use tenferro_tensor::{
 };
 
 use crate::extension_cache::ExtensionCacheStore;
-use crate::runtime::{ErasedExecutionContext, PreparedOperationHandle};
+use crate::runtime::{ErasedExecutionContext, PreparedOperationPlan};
 
 mod dispatch;
 
@@ -56,7 +56,7 @@ pub struct ExecProgram {
 }
 
 pub(crate) struct ExtensionExecutionDispatch<'a> {
-    pub(crate) operations: &'a [PreparedOperationHandle],
+    pub(crate) operations: &'a [PreparedOperationPlan],
     pub(crate) caches: &'a mut ExtensionCacheStore,
 }
 
@@ -890,7 +890,7 @@ fn execute_prepared_extension_instruction<'input, B: TensorBackend + 'static>(
     slots: &[Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     ext: &dyn ExtensionOp,
-    operations: &[PreparedOperationHandle],
+    operations: &[PreparedOperationPlan],
     caches: &mut ExtensionCacheStore,
 ) -> Result<Vec<Tensor>> {
     let operation_index = inst.semantic_operation_index.ok_or_else(|| {
@@ -926,8 +926,18 @@ fn execute_prepared_extension_instruction<'input, B: TensorBackend + 'static>(
             ),
         ));
     }
+    let executor = operation.executor().ok_or_else(|| {
+        Error::runtime_state(
+            "extension",
+            ErrorPhase::Execution,
+            format!(
+                "prepared extension operation for family_id {:?} has no executor bridge",
+                ext.family_id()
+            ),
+        )
+    })?;
     let inputs = collect_tensor_reads(slots, &inst.input_slots)?;
-    operation.execute(&mut context, caches, &inputs)
+    executor.execute(&mut context, caches, &inputs)
 }
 
 fn collect_tensor_reads<'slot, 'input>(

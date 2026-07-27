@@ -21,8 +21,9 @@ use tenferro_runtime::{
     CoreCapabilityKind, EngineId, ErasedExecutionContext, ErrorPhase, ExecutionContextIdentity,
     ExtensionCacheStore, ExtensionEngine, ExtensionModule, ExtensionModuleId,
     ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, PrepareCapability,
-    PrepareError, PreparedOperation, PreparedOperationBinding, ProviderContractError,
-    RuntimeConfigError, SpecializationProjection, UnsupportedReason,
+    PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
+    PreparedOperationPlan, ProviderContractError, RuntimeConfigError, SpecializationProjection,
+    UnsupportedReason,
 };
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
 use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend, TensorRead};
@@ -286,15 +287,16 @@ impl<B: TensorBackend + 'static> ExtensionEngine for SparseReferenceEngine<B> {
                 },
             ));
         }
-        Ok(PrepareCapability::Prepared(Arc::new(
-            SparseReferencePreparedOperation::<B> {
-                family_id: self.family_id,
-                binding: request.binding().clone(),
-                specialization: request.specialization().clone(),
-                op: request.operation().clone_arc(),
-                _backend: PhantomData,
-            },
-        )))
+        let prepared = Arc::new(SparseReferencePreparedOperation::<B> {
+            family_id: self.family_id,
+            binding: request.binding().clone(),
+            specialization: request.specialization().clone(),
+            op: request.operation().clone_arc(),
+            _backend: PhantomData,
+        });
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::executable(prepared.clone(), prepared),
+        ))
     }
 }
 
@@ -335,7 +337,9 @@ impl<B: TensorBackend + 'static> PreparedOperation for SparseReferencePreparedOp
     fn retained_bytes(&self) -> usize {
         0
     }
+}
 
+impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePreparedOperation<B> {
     fn execute(
         &self,
         context: &mut ErasedExecutionContext<'_>,

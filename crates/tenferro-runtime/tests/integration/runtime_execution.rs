@@ -15,9 +15,9 @@ use tenferro_runtime::{
     ExtensionCacheStore, ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
     ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler,
     HardwareClassId, IndexingRuntime, LayoutRuntime, PrepareCapability, PrepareError,
-    PreparedOperation, PreparedOperationBinding, ReductionRuntime, Runtime, RuntimeCacheOwner,
-    RuntimeConfigError, SpecializationProjection, StorageClass, TracedTensor, TransferProvider,
-    TransferRequest,
+    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
+    ReductionRuntime, Runtime, RuntimeCacheOwner, RuntimeConfigError, SpecializationProjection,
+    StorageClass, TracedTensor, TransferProvider, TransferRequest,
 };
 use tenferro_tensor::{AllocationDomainId, SharedTensorAllocationDomain};
 use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
@@ -226,13 +226,14 @@ impl ExtensionEngine for CountingExtensionEngine {
         assert_eq!(request.operation().family_id(), COUNTING_EXTENSION_FAMILY);
         assert_eq!(request.binding().engine_id(), &self.engine_id);
         self.counters.prepare.fetch_add(1, Ordering::SeqCst);
-        Ok(PrepareCapability::Prepared(Arc::new(
-            CountingPreparedOperation {
-                binding: request.binding().clone(),
-                specialization: request.specialization().clone(),
-                counters: Arc::clone(&self.counters),
-            },
-        )))
+        let prepared = Arc::new(CountingPreparedOperation {
+            binding: request.binding().clone(),
+            specialization: request.specialization().clone(),
+            counters: Arc::clone(&self.counters),
+        });
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::executable(prepared.clone(), prepared),
+        ))
     }
 }
 
@@ -255,7 +256,9 @@ impl PreparedOperation for CountingPreparedOperation {
     fn retained_bytes(&self) -> usize {
         0
     }
+}
 
+impl PreparedOperationExecutor for CountingPreparedOperation {
     fn execute(
         &self,
         context: &mut ErasedExecutionContext<'_>,

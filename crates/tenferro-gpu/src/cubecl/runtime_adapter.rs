@@ -10,9 +10,10 @@ use tenferro_runtime::{
     IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, ProviderContractError, ReductionPrepareRequest, ReductionRuntime,
-    RuntimeCacheOwner, RuntimeConfigError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, UnsupportedReason,
+    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
+    ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 
 use super::CudaBackend;
@@ -235,13 +236,13 @@ fn prepare_cuda(
         return Ok(PrepareCapability::NeedsSpecialization(merged));
     }
 
-    Ok(PrepareCapability::Prepared(Arc::new(
-        CudaPreparedOperation {
+    Ok(PrepareCapability::Prepared(
+        PreparedOperationPlan::metadata(Arc::new(CudaPreparedOperation {
             binding: context.binding().clone(),
             specialization: context.specialization().clone(),
             kind: actual_kind,
-        },
-    )))
+        })),
+    ))
 }
 
 fn validate_cuda_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {

@@ -15,9 +15,9 @@ use crate::runtime::{
     ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
     ExtensionPrepareRequest, HardwareClassId, InputSignature, InputSignatureEntry,
     InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
-    PreparedOperation, PreparedOperationBinding, ProgramPlacementConstraint, ProviderContractError,
-    ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder, SpecializationProjection,
-    SpecializationRequirements, StorageClass,
+    PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
+    ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
+    SpecializationProjection, SpecializationRequirements, StorageClass,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
@@ -70,11 +70,11 @@ impl ElementwiseRuntime for RecordingElementwise {
             .unwrap_or(ProviderAction::Prepared { retained_bytes: 17 });
         match action {
             ProviderAction::Prepared { retained_bytes } => Ok(PrepareCapability::Prepared(
-                Arc::new(RecordingPreparedOperation {
+                PreparedOperationPlan::metadata(Arc::new(RecordingPreparedOperation {
                     binding: request.context().binding().clone(),
                     specialization: request.context().specialization().clone(),
                     retained_bytes,
-                }),
+                })),
             )),
             ProviderAction::NeedsDType => {
                 let inputs: Vec<_> = request
@@ -227,13 +227,13 @@ impl ExtensionEngine for RecordingExtensionEngine {
     ) -> Result<PrepareCapability, PrepareError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         assert_eq!(request.operation().family_id(), TEST_EXTENSION_FAMILY);
-        Ok(PrepareCapability::Prepared(Arc::new(
-            RecordingPreparedOperation {
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::metadata(Arc::new(RecordingPreparedOperation {
                 binding: request.binding().clone(),
                 specialization: request.specialization().clone(),
                 retained_bytes: 23,
-            },
-        )))
+            })),
+        ))
     }
 }
 

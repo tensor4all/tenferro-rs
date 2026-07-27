@@ -22,8 +22,8 @@ use tenferro_runtime::{
     ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
     ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
     PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
-    ProviderContractError, Result as RuntimeResult, RuntimeConfigError, SpecializationProjection,
-    UnsupportedReason,
+    PreparedOperationExecutor, PreparedOperationPlan, ProviderContractError,
+    Result as RuntimeResult, RuntimeConfigError, SpecializationProjection, UnsupportedReason,
 };
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::TensorScalar;
@@ -224,15 +224,16 @@ impl<B: TensorBackend + 'static> ExtensionEngine for TropicalReferenceEngine<B> 
                 },
             ));
         }
-        Ok(PrepareCapability::Prepared(Arc::new(
-            TropicalReferencePreparedOperation::<B> {
-                family_id: self.family_id,
-                binding: request.binding().clone(),
-                specialization: request.specialization().clone(),
-                op: request.operation().clone_arc(),
-                _backend: PhantomData,
-            },
-        )))
+        let prepared = Arc::new(TropicalReferencePreparedOperation::<B> {
+            family_id: self.family_id,
+            binding: request.binding().clone(),
+            specialization: request.specialization().clone(),
+            op: request.operation().clone_arc(),
+            _backend: PhantomData,
+        });
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::executable(prepared.clone(), prepared),
+        ))
     }
 }
 
@@ -273,7 +274,11 @@ impl<B: TensorBackend + 'static> PreparedOperation for TropicalReferencePrepared
     fn retained_bytes(&self) -> usize {
         0
     }
+}
 
+impl<B: TensorBackend + 'static> PreparedOperationExecutor
+    for TropicalReferencePreparedOperation<B>
+{
     fn execute(
         &self,
         context: &mut ErasedExecutionContext<'_>,
