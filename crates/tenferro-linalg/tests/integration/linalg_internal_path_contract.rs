@@ -301,6 +301,28 @@ fn semantic_linalg_linearize_does_not_replay_recorded_legacy_fragments() {
 }
 
 #[test]
+fn semantic_linalg_transpose_does_not_use_recorded_builder_family() {
+    let source = crate_source("src/ad/semantic.rs");
+
+    assert!(
+        !source.contains("RecordedBuilder"),
+        "semantic linalg transpose must not use the legacy RecordedBuilder family"
+    );
+    assert!(
+        !source.contains("RecordedOperation"),
+        "semantic linalg transpose must not store legacy RecordedOperation fragments"
+    );
+    assert!(
+        !source.contains("RecordedTransposeContext"),
+        "semantic linalg transpose must not depend on recorded-fragment transpose context"
+    );
+    assert!(
+        source.contains("General linalg decomposition VJPs remain"),
+        "remaining op-local linear fragment must document why linearize-then-transpose is retained"
+    );
+}
+
+#[test]
 fn prepared_solve_transpose_rule_keeps_matrix_cotangent_path() {
     let source = crate_source("src/ad/rules/solve.rs");
     let transpose_rule = source_section(
