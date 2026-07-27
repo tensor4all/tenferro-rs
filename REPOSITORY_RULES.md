@@ -680,8 +680,8 @@ Tests follow implementation ownership.
 - No naive CPU loop fallbacks. CPU tensor kernels must use optimized
   implementations unless the operation is explicitly listed as an exception
   below.
-- CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis reduction
-  delegate to `strided-rs`. Tenferro owns tensor semantics, validation, dtype
+- CPU affine-strided copy, permutation, broadcast, map, zip-map, axis reduction,
+  and gather delegate to `strided-rs`. Tenferro owns tensor semantics, validation, dtype
   dispatch, placement checks, error translation, execution contexts, and
   reusable output storage; it does not duplicate the tensor-sized affine
   traversal.
@@ -692,6 +692,7 @@ Tests follow implementation ownership.
   | Elementwise (`add`, `mul`, `neg`, `exp`, ...) | `strided-kernel` (`map_into`, `zip_map2_into`, etc.) |
   | Reduction (`reduce_sum`, `reduce_prod`, ...) | `strided-kernel` (`reduce`, `reduce_axis`) |
   | Structural (`transpose`, `broadcast`, `extract_diag`) | `strided-kernel` (`permute` + `copy_into`, `broadcast`, `diagonal_view`) |
+  | Gather | `strided-kernel` (`ErasedGatherPlan`) |
   | GEMM (`dot_general`) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
   | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
 
@@ -703,7 +704,8 @@ Tests follow implementation ownership.
   | Broadcast | Zero-stride broadcast views and bulk copy/map traversal | Broadcast dimension semantics, output shape, placement, and allocation |
   | Unary map and binary zip-map | Affine iteration, tiling, and parallel execution | Operation semantics, dtype dispatch/promotion, capability checks, and errors |
   | Axis reduction | Per-axis strided reduction kernels | Multi-axis orchestration, axis validation, identities, dtype policy, and output wrapping |
-  | Gather/scatter and indirect indexing | No ownership until a suitable general primitive exists | Indirect-index semantics and current dedicated kernels |
+  | Gather | Indexed-read traversal and erased replay dispatch | Gather semantics, index validation/normalization, dtype dispatch, output allocation, and error translation |
+  | Scatter and other indirect indexing | No ownership until a suitable general primitive exists | Indirect-index semantics and current dedicated kernels |
   | Einsum/dot-general | Reusable strided primitives may be consumed where they fit | Planning, optimized preparation, provider integration, and benchmark accountability |
 
 <!-- TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT_BEGIN -->
@@ -711,7 +713,7 @@ Tests follow implementation ownership.
   ```text
   schema = tenferro.cpu-strided-ownership.v1
   affine-kernel-owner = strided-rs
-  affine-kernels = copy,permutation,broadcast,map,zip-map,axis-reduction
+  affine-kernels = copy,permutation,broadcast,map,zip-map,axis-reduction,gather
   einsum-owner = tenferro:benchmark-backed-exception
   execution-entry = CpuBackend
   execution-resources = persistent-BufferPool,uninitialized-full-overwrite,CpuContext-Rayon,nested-execution,serial-parallel-threshold
@@ -742,7 +744,7 @@ Tests follow implementation ownership.
   transforms and do not own data-moving convenience methods.
 - Exceptions with dedicated implementations are `reshape` (metadata-only),
   `embed_diagonal`, index-dependent triangular masks (`tril`/`triu`), and
-  indexing ops such as gather, scatter, slice, pad, concatenate, and reverse.
+  indexing ops such as scatter, slice, pad, concatenate, and reverse.
 - CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
   must be enabled; enabling both is valid and must compile. `CpuBackend` owns
   the runtime provider selection. `CpuBackend::new()` selects the default

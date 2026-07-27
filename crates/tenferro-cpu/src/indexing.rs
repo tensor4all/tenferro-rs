@@ -1,18 +1,25 @@
+use std::mem::size_of_val;
 use std::ops::Add;
 
 use num_traits::Zero;
+use strided_kernel::{
+    col_major_strides, ErasedGatherPlan, ErasedRawStridedMut, ErasedRawStridedRef, ExecContext,
+    GatherSpec, KernelDType,
+};
 
 use super::indexing_alloc::pooled_uninit_tensor;
 use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use tenferro_tensor::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use tenferro_tensor::TensorScalar;
+use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
-// Indexing-family kernels stay as dedicated sequential loops for now. Their
-// per-output gather/scatter/slice/pad/concatenate/reverse index transforms do
-// not currently map to a strided-kernel or backend-native parallel primitive.
-// Backend entrypoints still run these loops inside CpuContext::install, so a
-// future parallel implementation can use the same CPU threading policy.
+// Most indexing-family kernels stay as dedicated sequential loops for now.
+// Scatter/slice/pad/concatenate/reverse still have per-output index transforms
+// without a matching strided-kernel or backend-native parallel primitive.
+// Gather delegates its bulk traversal to strided-kernel's erased gather plan.
+// Backend entrypoints run these kernels inside CpuContext::install, so future
+// parallel implementations can use the same CPU threading policy.
 
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
@@ -42,6 +49,41 @@ impl_tensor_as_typed!(
     (num_complex::Complex<f32>, C32),
     (num_complex::Complex<f64>, C64),
 );
+
+fn kernel_dtype(dtype: DType) -> KernelDType {
+    match dtype {
+        DType::F32 => KernelDType::F32,
+        DType::F64 => KernelDType::F64,
+        DType::I32 => KernelDType::I32,
+        DType::I64 => KernelDType::I64,
+        DType::Bool => KernelDType::Bool,
+        DType::C32 => KernelDType::C32,
+        DType::C64 => KernelDType::C64,
+    }
+}
+
+fn typed_bytes<T>(data: &[T]) -> &[u8] {
+    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
+    // the same lifetime and exact byte length, and is read-only.
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
+    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
+    // the same lifetime and exact byte length; callers must preserve the
+    // dtype's byte validity invariants before typed reads resume.
+    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
+}
+
+fn gather_spec(config: &GatherConfig) -> GatherSpec {
+    GatherSpec {
+        offset_dims: config.offset_dims.clone(),
+        collapsed_slice_dims: config.collapsed_slice_dims.clone(),
+        start_index_map: config.start_index_map.clone(),
+        index_vector_dim: config.index_vector_dim,
+        slice_sizes: config.slice_sizes.clone(),
+    }
+}
 
 macro_rules! dispatch_tensor_unary_result {
     ($input:expr, |$tensor:ident| $body:expr) => {
@@ -818,7 +860,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
         .collect()
 }
 
-fn typed_gather<T: Copy + Clone + PoolScalar>(
+fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
@@ -954,60 +996,63 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
         }
     }
 
-    for &operand_dim in &config.start_index_map {
-        let _ = clamp_window_start(
-            "gather",
-            0,
-            operand_shape[operand_dim],
-            config.slice_sizes[operand_dim],
-        )?;
+    for (operand_dim, &dim_size) in operand_shape.iter().enumerate() {
+        let _ = clamp_window_start("gather", 0, dim_size, config.slice_sizes[operand_dim])?;
     }
 
-    // SAFETY: the gather loop below assigns every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    let mut out_idx = vec![0usize; out_rank];
-    let mut batch_idx = vec![0usize; batch_shape.len()];
-    let mut operand_idx = vec![0usize; rank];
-    let mut window_offsets = vec![0usize; rank];
-    let mut index_scratch = vec![0usize; start_indices.shape.len()];
-
-    for out_value in out.host_data_mut()?.iter_mut() {
-        batch_axis = 0;
-        window_offsets.fill(0);
-        for out_axis in 0..out_rank {
-            if let Some(operand_dim) = out_axis_to_operand_dim[out_axis] {
-                window_offsets[operand_dim] = out_idx[out_axis];
-            } else {
-                batch_idx[batch_axis] = out_idx[out_axis];
-                batch_axis += 1;
-            }
-        }
-
-        operand_idx.fill(0);
-        for (component, &operand_dim) in config.start_index_map.iter().enumerate() {
-            let start = index_component(
-                "gather",
-                start_indices,
-                &batch_idx,
-                config.index_vector_dim,
-                component,
-                &mut index_scratch,
-            )?;
-            operand_idx[operand_dim] = clamp_window_start(
-                "gather",
-                start,
-                operand_shape[operand_dim],
-                config.slice_sizes[operand_dim],
-            )?;
-        }
-
-        for axis in 0..operand_idx.len() {
-            operand_idx[axis] += window_offsets[axis];
-        }
-
-        *out_value = *operand.get(&operand_idx)?;
-        advance_col_major_index(&mut out_idx, &out_shape);
+    if T::dtype() == DType::Bool {
+        out.host_data_mut()?.fill(T::pool_zero());
     }
+
+    let dtype = kernel_dtype(T::dtype());
+    let operand_strides = col_major_strides(operand_shape);
+    let index_strides = col_major_strides(&start_indices.shape);
+    let out_strides = col_major_strides(&out_shape);
+    let plan = ErasedGatherPlan::compile(
+        dtype,
+        KernelDType::I64,
+        operand_shape,
+        &operand_strides,
+        &start_indices.shape,
+        &index_strides,
+        &out_shape,
+        &out_strides,
+        gather_spec(config),
+    )
+    .map_err(|err| crate::Error::backend_source("gather", err))?;
+
+    let operand_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("gather", operand)?),
+        operand_shape,
+        &operand_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("gather", err))?;
+    let index_ref = ErasedRawStridedRef::new(
+        KernelDType::I64,
+        typed_bytes(&start_indices.values),
+        &start_indices.shape,
+        &index_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("gather", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        &out_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("gather", err))?;
+    plan.execute(
+        &ExecContext::serial(),
+        &mut out_ref,
+        &operand_ref,
+        &index_ref,
+    )
+    .map_err(|err| crate::Error::backend_source("gather", err))?;
 
     Ok(out)
 }

@@ -420,6 +420,22 @@ fn gather_scatter_index_component_reuses_index_scratch() {
 }
 
 #[test]
+fn gather_delegates_bulk_traversal_to_strided_kernel_plan() {
+    let indexing_source = include_str!("../../src/indexing.rs");
+    let typed_gather = rust_function_body(indexing_source, "typed_gather")
+        .expect("typed_gather implementation should exist");
+
+    assert!(
+        typed_gather.contains("ErasedGatherPlan"),
+        "CPU gather bulk traversal should delegate to strided-kernel ErasedGatherPlan"
+    );
+    assert!(
+        typed_gather.contains(".execute("),
+        "CPU gather should execute the prepared strided gather plan"
+    );
+}
+
+#[test]
 fn cpu_public_ops_require_backend_owner() {
     let lib_source = include_str!("../../src/lib.rs");
     for reexport in [
@@ -471,6 +487,7 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
             "axis-reduction",
             "broadcast",
             "copy",
+            "gather",
             "map",
             "permutation",
             "zip-map",
