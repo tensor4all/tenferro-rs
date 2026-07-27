@@ -157,9 +157,12 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
             .count(),
         1
     );
+    assert!(!provider.contains("ExecContext::ambient("));
     for (name, source) in native_modules {
         assert!(
-            !source.contains("ExecutionPolicy::") && !source.contains("with_execution_policy("),
+            !source.contains("ExecutionPolicy::")
+                && !source.contains("with_execution_policy(")
+                && !source.contains("ExecContext::ambient("),
             "{name} must inherit native policy from CpuExecutionContext"
         );
         assert!(
