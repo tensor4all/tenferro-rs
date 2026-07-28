@@ -107,13 +107,14 @@ workers remain provider-owned and may fan out independently.
 
 | Operation family | Threading behavior |
 | --- | --- |
-| Elementwise and analytic ops | `strided-kernel` map/zip kernels use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
-| Reductions | `strided-kernel::reduce_axis` uses the same selected native policy and never ambient Rayon. |
+| Elementwise and analytic ops | `strided-kernel` map/zip kernels and erased fused replay use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
+| Reductions | sum/product erased replay and typed max/min reductions use the same selected native policy and never ambient Rayon. Upstream strided plan coverage determines whether a specific multi-axis reduction shape can actually partition work. |
 | View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
 | `dot_general` through `cpu-faer` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through an external TBLIS provider | The example provider clamps TBLIS to one thread per call; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider in preferred mode. |
-| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
+| Indexed gather/scatter and dynamic slice/update | These delegate to strided erased plans with an explicit `ExecContext` derived from `CpuExecutionContext`; upstream strided plan coverage determines whether a specific indexed plan can actually partition work. |
+| Slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
 
 CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
 reduction delegate to `strided-rs`, while tenferro supplies operation semantics,

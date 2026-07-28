@@ -647,14 +647,14 @@ fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
     let empty = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap());
 
     assert!(matches!(
-        reduce_sum(&empty, &[0]),
+        reduce_sum(&empty, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
-        reduce_prod(&empty, &[0]),
+        reduce_prod(&empty, &[0], &strided_kernel::ExecContext::serial()),
         Err(crate::Error::Validation {
             op: "reduce_prod",
             ..
@@ -682,8 +682,8 @@ fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
     let bools = Tensor::Bool(bool_tensor.clone());
     let mut backend = CpuBackend::new();
 
-    let sum_owned = reduce_sum(&bools, &[]).unwrap();
-    let prod_owned = reduce_prod(&bools, &[]).unwrap();
+    let sum_owned = reduce_sum(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
+    let prod_owned = reduce_prod(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
     let sum_read = backend
         .reduce_sum_read(TensorRead::from_tensor(&bools), &[])
         .unwrap();
@@ -1001,17 +1001,18 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         )
         .unwrap(),
     );
-    let sum = reduce_sum(&complex, &[0]).unwrap();
+    let sum = reduce_sum(&complex, &[0], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(get_c32(&sum, &[0]), Complex32::new(3.0, 1.0));
     assert_eq!(get_c32(&sum, &[1]), Complex32::new(7.0, 1.0));
 
-    let prod = reduce_prod(&complex, &[]).unwrap();
+    let prod = reduce_prod(&complex, &[], &strided_kernel::ExecContext::serial()).unwrap();
     assert_eq!(prod.shape(), &[2, 2]);
 
     assert!(matches!(
         reduce_sum(
             &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()),
-            &[2]
+            &[2],
+            &strided_kernel::ExecContext::serial()
         ),
         Err(crate::Error::Validation {
             op: "reduce_sum",
@@ -1021,7 +1022,8 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
     assert!(matches!(
         reduce_prod(
             &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()),
-            &[0, 0]
+            &[0, 0],
+            &strided_kernel::ExecContext::serial()
         ),
         Err(crate::Error::Validation {
             op: "reduce_prod",

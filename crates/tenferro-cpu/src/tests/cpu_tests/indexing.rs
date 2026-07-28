@@ -544,6 +544,7 @@ fn test_cpu_supports_i32_and_bool_structural_paths() {
     let i32_sum = reduce_sum(
         &Tensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap(),
         &[0],
+        &strided_kernel::ExecContext::serial(),
     )
     .unwrap();
     assert_eq!(i32_sum.as_slice::<i32>().unwrap(), &[3, 7]);

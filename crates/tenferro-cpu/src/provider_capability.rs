@@ -280,6 +280,7 @@ fn uncontrolled_external_capabilities() -> CpuProviderExecutionCapabilities {
     }
 }
 
+#[cfg(any(test, not(feature = "cpu-blas")))]
 pub(crate) fn serial_capabilities() -> CpuProviderExecutionCapabilities {
     CpuProviderExecutionCapabilities {
         thread_count: CpuThreadCountControl::Sequential,

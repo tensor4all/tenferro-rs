@@ -1166,6 +1166,7 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
 #[doc(hidden)]
 pub fn elementwise_fusion_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<Option<Vec<Tensor>>> {
@@ -1213,7 +1214,7 @@ pub fn elementwise_fusion_with_pool(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
-    execute_erased_fused_outputs(buffers, dtype, &input_refs, &shape, plan).map(Some)
+    execute_erased_fused_outputs(buffers, exec_context, dtype, &input_refs, &shape, plan).map(Some)
 }
 
 fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> bool {
@@ -1242,6 +1243,7 @@ fn dtype_supports_erased_fusion(dtype: DType, plan: &ElementwiseFusionPlan) -> b
 
 fn execute_erased_fused_outputs(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     dtype: KernelDType,
     input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
@@ -1254,6 +1256,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<f32>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1270,6 +1273,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<f64>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1286,6 +1290,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<i32>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1302,6 +1307,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<i64>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1318,6 +1324,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<bool>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1334,6 +1341,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<num_complex::Complex32>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1350,6 +1358,7 @@ fn execute_erased_fused_outputs(
             .map(|&output| {
                 execute_erased_fused_output::<num_complex::Complex64>(
                     buffers,
+                    exec_context,
                     dtype,
                     input_refs,
                     shape,
@@ -1370,6 +1379,7 @@ fn execute_erased_fused_outputs(
 #[allow(clippy::too_many_arguments)]
 fn execute_erased_fused_output<T>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     dtype: KernelDType,
     input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
@@ -1400,7 +1410,7 @@ where
     )
     .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     erased_plan
-        .execute(&ExecContext::serial(), &mut dest, input_refs)
+        .execute(exec_context, &mut dest, input_refs)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     Ok(wrap(tensor_from_array(out)))
 }

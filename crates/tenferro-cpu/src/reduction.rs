@@ -176,22 +176,34 @@ impl_wrapping_reduction_elem!(i64);
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
 /// error when the input storage cannot be read.
-pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+pub(crate) fn reduce_sum(
+    input: &Tensor,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_sum", input, axes)? {
         return Ok(output);
     }
 
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum_wrapping(t, axes)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum_wrapping(t, axes)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes, exec_context)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes, exec_context)?)),
+        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum_wrapping(
+            t,
+            axes,
+            exec_context,
+        )?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum_wrapping(
+            t,
+            axes,
+            exec_context,
+        )?)),
         Tensor::Bool(_) => Err(crate::Error::unsupported(
             "reduce_sum",
             "unsupported dtype Bool",
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes, exec_context)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes, exec_context)?)),
     }
 }
 
@@ -199,6 +211,7 @@ pub(crate) fn reduce_sum_read(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     axes: &[usize],
+    exec_context: &ExecContext,
 ) -> crate::Result<Tensor> {
     if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_sum", &input, axes)? {
         return Ok(output);
@@ -207,7 +220,7 @@ pub(crate) fn reduce_sum_read(
     match input {
         TensorRead::Tensor(input) => {
             ensure_host_tensor("reduce_sum", input)?;
-            reduce_sum(input, axes)
+            reduce_sum(input, axes, exec_context)
         }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
             buffers,
@@ -215,6 +228,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
             buffers,
@@ -222,6 +236,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
             buffers,
@@ -229,6 +244,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
             buffers,
@@ -236,6 +252,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_sum",
@@ -247,6 +264,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
             buffers,
@@ -254,6 +272,7 @@ pub(crate) fn reduce_sum_read(
             axes,
             ReduceOp::Sum,
             "reduce_sum",
+            exec_context,
         )?)),
     }
 }
@@ -264,22 +283,34 @@ pub(crate) fn reduce_sum_read(
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
 /// error when the input storage cannot be read.
-pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+pub(crate) fn reduce_prod(
+    input: &Tensor,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_prod", input, axes)? {
         return Ok(output);
     }
 
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_prod(t, axes)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes)?)),
-        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod_wrapping(t, axes)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod_wrapping(t, axes)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_prod(t, axes, exec_context)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes, exec_context)?)),
+        Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod_wrapping(
+            t,
+            axes,
+            exec_context,
+        )?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod_wrapping(
+            t,
+            axes,
+            exec_context,
+        )?)),
         Tensor::Bool(_) => Err(crate::Error::unsupported(
             "reduce_prod",
             "unsupported dtype Bool",
         )),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes, exec_context)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes, exec_context)?)),
     }
 }
 
@@ -287,6 +318,7 @@ pub(crate) fn reduce_prod_read(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     axes: &[usize],
+    exec_context: &ExecContext,
 ) -> crate::Result<Tensor> {
     if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_prod", &input, axes)? {
         return Ok(output);
@@ -295,7 +327,7 @@ pub(crate) fn reduce_prod_read(
     match input {
         TensorRead::Tensor(input) => {
             ensure_host_tensor("reduce_prod", input)?;
-            reduce_prod(input, axes)
+            reduce_prod(input, axes, exec_context)
         }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
             buffers,
@@ -303,6 +335,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
             buffers,
@@ -310,6 +343,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::I32(t)) => Ok(Tensor::I32(typed_reduce_view_erased(
             buffers,
@@ -317,6 +351,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::I64(t)) => Ok(Tensor::I64(typed_reduce_view_erased(
             buffers,
@@ -324,6 +359,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_prod",
@@ -335,6 +371,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
         TensorRead::View(TensorView::C64(t)) => Ok(Tensor::C64(typed_reduce_view_erased(
             buffers,
@@ -342,6 +379,7 @@ pub(crate) fn reduce_prod_read(
             axes,
             ReduceOp::Product,
             "reduce_prod",
+            exec_context,
         )?)),
     }
 }
@@ -575,6 +613,7 @@ fn typed_reduce_erased<T>(
     axes: &[usize],
     op: ReduceOp,
     label: &'static str,
+    exec_context: &ExecContext,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + TensorScalar,
@@ -620,7 +659,7 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    plan.execute(&ExecContext::serial(), &mut dest, &source)
+    plan.execute(exec_context, &mut dest, &source)
         .map_err(|err| crate::Error::backend_source(label, err))?;
 
     TypedTensor::from_vec_col_major(output_shape, output)
@@ -691,6 +730,7 @@ fn typed_reduce_view_erased<T, TR>(
     axes: &[usize],
     op: ReduceOp,
     label: &'static str,
+    exec_context: &ExecContext,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + TensorScalar + crate::buffer_pool::PoolScalar + 'static,
@@ -736,7 +776,7 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    plan.execute(&ExecContext::serial(), &mut dest, &source)
+    plan.execute(exec_context, &mut dest, &source)
         .map_err(|err| crate::Error::backend_source(label, err))?;
 
     Ok(crate::tensor_from_array(output))
@@ -747,21 +787,26 @@ where
 /// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, or a typed backend error while materializing the result.
-pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
+pub(crate) fn typed_reduce_sum<T>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + TensorScalar,
 {
-    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum")
+    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum", exec_context)
 }
 
 fn typed_reduce_sum_wrapping<T>(
     input: &TypedTensor<T>,
     axes: &[usize],
+    exec_context: &ExecContext,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: WrappingReductionElem + TensorScalar,
 {
-    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum")
+    typed_reduce_erased(input, axes, ReduceOp::Sum, "reduce_sum", exec_context)
 }
 
 /// # Errors
@@ -769,21 +814,26 @@ where
 /// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, or a typed backend error while materializing the result.
-pub fn typed_reduce_prod<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
+pub(crate) fn typed_reduce_prod<T>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + TensorScalar,
 {
-    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod")
+    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod", exec_context)
 }
 
 fn typed_reduce_prod_wrapping<T>(
     input: &TypedTensor<T>,
     axes: &[usize],
+    exec_context: &ExecContext,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: WrappingReductionElem + TensorScalar,
 {
-    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod")
+    typed_reduce_erased(input, axes, ReduceOp::Product, "reduce_prod", exec_context)
 }
 
 /// # Errors
