@@ -67,6 +67,7 @@ crates/tenferro-gpu/src/cubecl/
     interop.rs             owner-scoped launch/allocation bridge for operation crates
     fusion/                fused elementwise classification and code generation
     gemm.rs                cuTENSOR/cuBLAS-backed contraction support
+    permutation.rs         cuTENSOR-backed structural permutation support
     linalg.rs              cuSOLVER/cuBLAS-backed linalg support
     ffi/                   runtime-loaded CUDA library bindings
     tests/                 ignored GPU tests
@@ -198,6 +199,15 @@ Local GPU test runs should also set:
 | `LD_LIBRARY_PATH` | CUDA, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
 | `CUBECL_DEBUG_LOG=0` | Suppress generated-kernel log spam |
 
+CUDA paths whose accepted implementation is an NVIDIA vendor library report a
+typed load or provider error when that library is unavailable or lacks support;
+they do not silently fall back to native CubeCL kernels. Native CubeCL kernels
+remain provider implementations for WebGPU/Metal and for CUDA operations or
+dtypes outside a vendor library's supported set. For structural permutation,
+cuTENSOR covers `F32`, `F64`, `C32`, and `C64`; CUDA `I32`, `I64`, and `Bool`
+structural data movement stays on existing CubeCL kernels because cuTENSOR 2.x
+does not provide an integer or bool permutation compute descriptor.
+
 ## Runtime Cache Ownership
 
 `CudaBackend` owns CUDA extension backend-state caches. Extension crates may
@@ -231,6 +241,23 @@ report the retained typed cache entry. Use
 `CudaBackend::cutensor_plan_cache_max_entries`, and
 `CudaBackend::set_cutensor_plan_cache_max_entries` for cuTENSOR plan-entry
 introspection and bound configuration.
+
+CUDA structural permutation for `F32`, `F64`, `C32`, and `C64` stores cuTENSOR
+permutation descriptors and plans in the same backend-owned extension cache
+when the layout is representable by cuTENSOR descriptors. The permutation plan
+key is structural: dtype, input/output extents, strides, modes, unary input
+operator, and descriptor alignment requirements. It must not include allocation
+addresses or actual pointer-specific alignment. Whole allocations keep the CUDA
+allocation alignment requirement; borrowed nonnegative-stride views use a
+conservative dtype-size descriptor alignment requirement so cached plans remain
+valid across offsets. Negative-stride CUDA views are not a missing-library
+fallback: cuTENSOR 2.x rejects those descriptors, so same-device
+canonicalization of such views remains on the native CubeCL structural copy
+kernel. Use
+`CudaBackend::cutensor_permutation_plan_cache_stats`,
+`CudaBackend::cutensor_permutation_plan_cache_max_entries`, and
+`CudaBackend::set_cutensor_permutation_plan_cache_max_entries` for permutation
+plan-entry introspection and bound configuration.
 
 WebGPU provider caches must be owned by `WebGpuBackend` or a WebGPU runtime
 cache object with the same bounded-default, clear, configure, and stats
@@ -421,7 +448,7 @@ CUDA library calls:
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
 | Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/sub/mul/div/rem, neg/abs/sign/pow, compare/select, and minimum/maximum; `C32`/`C64` add/mul/div/neg/conj and real-output `abs` |
 | Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`, `F64`, `I32`, and `I64` |
-| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; Bool data movement uses its one-byte device representation |
+| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; `F32`/`F64`/`C32`/`C64` transpose and view canonicalization use cuTENSOR permutation on CUDA; integer and Bool data movement use CubeCL kernels because cuTENSOR lacks those permutation compute descriptors |
 | DType conversion | checked `convert` and explicit `cast` cover every CPU-supported pair among the seven public dtypes; explicit real/complex-to-integer validation uses a small device flag and never downloads the input tensor |
 | Indexing | gather and dynamic_slice support `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
