@@ -11,7 +11,8 @@ use crate::{
     GatherConfig, GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind,
     PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorWrite, TypedTensor,
+    TensorRead, TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -24,6 +25,7 @@ mod kernels;
 mod memory;
 mod runtime;
 mod runtime_adapter;
+mod structural;
 
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
@@ -761,16 +763,16 @@ impl TensorAnalytic for WebGpuBackend {
 }
 
 impl TensorStructural for WebGpuBackend {
-    fn to_contiguous_read(&mut self, _input: TensorRead<'_>) -> crate::Result<Tensor> {
-        unsupported!("WebGpuBackend::to_contiguous_read")
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        structural::to_contiguous_read(self, input)
     }
 
     fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
         unsupported!("WebGpuBackend::copy_read_into")
     }
 
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_transpose")
+    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
+        structural::transpose(self, input, perm)
     }
 
     fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
@@ -814,6 +816,23 @@ impl TensorStructural for WebGpuBackend {
 
     fn triu(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
         unsupported!("webgpu_triu")
+    }
+}
+
+impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend {
+    fn to_contiguous(
+        &mut self,
+        view: &TypedTensorView<'_, f32>,
+    ) -> crate::Result<TypedTensor<f32>> {
+        structural::to_contiguous_f32(self, view)
+    }
+
+    fn copy_into(
+        &mut self,
+        _src: &TypedTensorView<'_, f32>,
+        _dst: &mut TypedTensorViewMut<'_, f32>,
+    ) -> crate::Result<()> {
+        unsupported!("WebGpuBackend::copy_into")
     }
 }
 

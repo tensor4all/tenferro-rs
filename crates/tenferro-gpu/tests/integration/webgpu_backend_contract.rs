@@ -4,14 +4,17 @@ use tenferro_gpu::{
     download_webgpu_tensor, upload_webgpu_tensor, webgpu_interop, WebGpuBackend, WebGpuRuntime,
 };
 use tenferro_tensor::{
-    DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorDeviceTransfer, TensorDot,
+    DotGeneralConfig, DynRank, Error, Result, Tensor, TensorBackend, TensorDeviceTransfer,
+    TensorDot, TensorViewCanonicalization,
 };
 
 fn assert_tensor_backend<B: TensorBackend>() {}
+fn assert_f32_view_canonicalization<B: TensorViewCanonicalization<f32, DynRank>>() {}
 
 #[test]
 fn webgpu_backend_implements_tensor_backend_contract() {
     assert_tensor_backend::<WebGpuBackend>();
+    assert_f32_view_canonicalization::<WebGpuBackend>();
 
     let _upload: fn(&mut WebGpuBackend, &Tensor) -> Result<Tensor> =
         <WebGpuBackend as TensorDeviceTransfer>::upload_host_tensor;
