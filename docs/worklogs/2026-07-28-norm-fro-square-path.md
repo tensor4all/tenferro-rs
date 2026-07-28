@@ -87,7 +87,14 @@ cargo test -p tenferro-linalg --features cpu-faer,autodiff --test integration tr
 cargo test -p tenferro-linalg --features cpu-faer,autodiff --test integration norm -- --nocapture
 cargo check -p tenferro-linalg --features cpu-faer,autodiff --tests
 cargo fmt --all --check
+cargo llvm-cov -p tenferro-linalg --features cpu-faer,autodiff --test integration --profile ci --json --output-path /tmp/tenferro-linalg-coverage-after.json
 ```
+
+After the first PR run, hosted `coverage` reported
+`crates/tenferro-linalg/src/eager_composites.rs: 79.5% < 80%`. I added eager
+execution coverage for no-op `dim=[]`, vector infinity norms, vector p-norm,
+and complex p=2 norm. The local linalg coverage rerun reported
+`eager_composites.rs` at 81.46%.
 
 ## Remaining Risk
 
