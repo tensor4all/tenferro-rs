@@ -1392,17 +1392,21 @@ pub fn norm(
         }
     }
 
-    let out = match axes.len() {
-        1 => vector_norm(a, axes[0], ord)?,
-        2 => matrix_norm(a, &axes, ord)?,
-        _ => {
-            let abs = a.abs()?;
-            match ord {
-                None => frobenius_norm(&abs, &axes)?,
-                Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&axes))?,
-                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&axes))?,
-                Some(0.0) => count_nonzero(&abs, &axes)?,
-                Some(p) => p_norm(&abs, &axes, p)?,
+    let out = if can_square_without_abs(a.dtype, axes.len(), ord) {
+        frobenius_norm(a, &axes)?
+    } else {
+        match axes.len() {
+            1 => vector_norm(a, axes[0], ord)?,
+            2 => matrix_norm(a, &axes, ord)?,
+            _ => {
+                let abs = a.abs()?;
+                match ord {
+                    None => frobenius_norm(&abs, &axes)?,
+                    Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&axes))?,
+                    Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&axes))?,
+                    Some(0.0) => count_nonzero(&abs, &axes)?,
+                    Some(p) => p_norm(&abs, &axes, p)?,
+                }
             }
         }
     };
@@ -1538,6 +1542,11 @@ fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
     }
 }
 
+fn can_square_without_abs(dtype: DType, axes_len: usize, ord: Option<f64>) -> bool {
+    matches!(dtype, DType::F32 | DType::F64)
+        && (ord.is_none() || (ord == Some(2.0) && axes_len != 2))
+}
+
 fn ensure_min_rank(op: &'static str, actual: usize, expected: usize) -> Result<()> {
     if actual < expected {
         return Err(Error::TensorRuntime(tenferro_tensor::Error::rank_mismatch(
@@ -1630,7 +1639,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 }
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    let squared = abs.pow(&scalar_real(abs.dtype, 2.0)?)?;
+    let squared = abs.mul(abs)?;
     squared.reduce_sum(Some(axes))?.sqrt()
 }
 
@@ -1642,6 +1651,9 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
             "p",
             format!("p-norm order must be finite and nonzero, got {p}"),
         ));
+    }
+    if p == 2.0 {
+        return frobenius_norm(abs, axes);
     }
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;

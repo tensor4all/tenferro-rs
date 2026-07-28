@@ -1224,11 +1224,15 @@ fn norm_from_read<B: LinalgBackend>(
         return backend.with_backend_session(|exec| exec.to_contiguous_read(input));
     }
     validate_axes("norm", original_shape.len(), &axes)?;
-    let abs = backend.with_backend_session(|exec| exec.abs_read(input))?;
-    let reduced = match axes.len() {
-        1 => norm_over_axes(&abs, &axes, ord, backend)?,
-        2 => matrix_norm(&abs, &axes, ord, backend)?,
-        _ => norm_over_axes(&abs, &axes, ord, backend)?,
+    let reduced = if can_square_without_abs(input.dtype(), axes.len(), ord) {
+        frobenius_norm_read(input.clone(), &axes, backend)?
+    } else {
+        let abs = backend.with_backend_session(|exec| exec.abs_read(input))?;
+        match axes.len() {
+            1 => norm_over_axes(&abs, &axes, ord, backend)?,
+            2 => matrix_norm(&abs, &axes, ord, backend)?,
+            _ => norm_over_axes(&abs, &axes, ord, backend)?,
+        }
     };
     if !keepdim {
         return Ok(reduced);
@@ -1284,6 +1288,11 @@ fn ensure_float_or_complex(op: &'static str, dtype: DType) -> tenferro_tensor::R
         DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
         _ => Err(crate::error::unsupported_dtype(op, dtype)),
     }
+}
+
+fn can_square_without_abs(dtype: DType, axes_len: usize, ord: Option<f64>) -> bool {
+    matches!(dtype, DType::F32 | DType::F64)
+        && (ord.is_none() || (ord == Some(2.0) && axes_len != 2))
 }
 
 fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> tenferro_tensor::Result<()> {
@@ -1493,10 +1502,20 @@ fn frobenius_norm<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let two = scalar_real(abs.dtype(), 2.0)?;
     let squared = backend.with_backend_session(|exec| {
-        exec.pow_read(TensorRead::from_tensor(abs), TensorRead::from_tensor(&two))
+        exec.mul_read(TensorRead::from_tensor(abs), TensorRead::from_tensor(abs))
     })?;
+    let sum = reduce_sum(&squared, axes, backend)?;
+    backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
+}
+
+fn frobenius_norm_read<B: LinalgBackend>(
+    input: TensorRead<'_>,
+    axes: &[usize],
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    let rhs = input.clone();
+    let squared = backend.with_backend_session(|exec| exec.mul_read(input, rhs))?;
     let sum = reduce_sum(&squared, axes, backend)?;
     backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
 }
@@ -1513,6 +1532,9 @@ fn p_norm<B: LinalgBackend>(
             "p",
             format!("p-norm order must be finite and nonzero, got {p}"),
         ));
+    }
+    if p == 2.0 {
+        return frobenius_norm(abs, axes, backend);
     }
     let power = scalar_real(abs.dtype(), p)?;
     let powered = backend.with_backend_session(|exec| {
