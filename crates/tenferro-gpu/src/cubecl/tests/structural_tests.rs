@@ -595,6 +595,74 @@ fn cuda_to_contiguous_keeps_tensor_on_cuda() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU and cuTENSOR"]
+fn cuda_cutensor_permutation_transpose_and_to_contiguous_match_cpu() {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    assert_eq!(
+        gpu.cutensor_permutation_plan_cache_stats().unwrap().entries,
+        0
+    );
+
+    let input = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let gpu_input = upload(&gpu, &input);
+    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
+    let actual = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
+
+    let cache_after_first = gpu.cutensor_permutation_plan_cache_stats().unwrap();
+    assert_eq!(cache_after_first.entries, 1);
+    assert_eq!(cache_after_first.misses, 1);
+
+    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
+    let actual = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
+    let cache_after_second = gpu.cutensor_permutation_plan_cache_stats().unwrap();
+    assert_eq!(cache_after_second.entries, 1);
+    assert_eq!(cache_after_second.hits, 1);
+
+    let Tensor::F64(gpu_tensor) = &gpu_input else {
+        panic!("expected f64 tensor");
+    };
+    let materialize_view = gpu_tensor.as_view().transpose_view([1, 0]).unwrap();
+    let materialized = gpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::F64(materialize_view)))
+        .unwrap();
+    let actual = download(&gpu, &materialized);
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+
+    let complex = tensor_c32(
+        vec![2, 2],
+        vec![
+            Complex32::new(1.0, 2.0),
+            Complex32::new(3.0, 4.0),
+            Complex32::new(5.0, 6.0),
+            Complex32::new(7.0, 8.0),
+        ],
+    );
+    let gpu_complex = upload(&gpu, &complex);
+    let expected = cpu.transpose(&complex, &[1, 0]).unwrap();
+    let actual = gpu.transpose(&gpu_complex, &[1, 0]).unwrap();
+    assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+
+    let view = gpu_tensor
+        .as_view()
+        .try_slice_axis(0, StridedSliceSpec::reverse())
+        .unwrap()
+        .transpose_view([1, 0])
+        .unwrap();
+    let compact = gpu.to_contiguous(&view).unwrap();
+    let actual = download(&gpu, &Tensor::F64(compact));
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        &[2.0, 4.0, 6.0, 1.0, 3.0, 5.0]
+    );
+}
+
+#[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_runtime_materialization_is_object_safe_and_stays_on_device() {
     let mut gpu = gpu_backend();

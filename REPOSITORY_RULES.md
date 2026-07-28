@@ -914,6 +914,12 @@ diff-scoped review bot.
   runtime shape/stride metadata conventions, launch configuration rules, and
   device transfer behavior. Any change to those conventions must update that
   document in the same PR.
+- CUDA operation paths whose accepted implementation is an NVIDIA vendor
+  library must fail with typed load or provider errors when the required
+  NVIDIA library is unavailable or lacks support. They must not silently fall
+  back to native CubeCL kernels. Native CubeCL kernels are separate provider
+  implementations for operations or dtypes not covered by the accepted
+  vendor-library path, not fallback tiers for missing CUDA libraries.
 - CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
   provided by cuSOLVER. `CudaBackend::eig` returns `Unsupported`; users
   must explicitly download to CPU and compute via `CpuBackend::eig`.

@@ -135,6 +135,10 @@ export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
 export CUBECL_DEBUG_LOG=0
 ```
 
+CUDA operations implemented through NVIDIA libraries return typed load or
+provider errors when the required library is missing. They do not silently use
+a slower native CubeCL kernel as a CUDA fallback.
+
 For XLA/PJRT GPU verification, add the PJRT plugin path separately:
 
 ```bash
@@ -315,12 +319,12 @@ descriptor.
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
-| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Structural tensor operations |
+| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Structural tensor operations; CUDA `F32`/`F64`/`C32`/`C64` transpose uses cuTENSOR permutation |
 | checked `convert`, explicit `cast` | All CPU-supported pairs among `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | `convert` remains restricted by the public promotion lattice; explicit `cast` supports lossy narrowing, real-component projection, zero-imaginary injection, integer conversion, and nonzero Bool truthiness. Fallible real/complex-to-integer casts validate on device and return the same typed errors as CPU |
 | `gather` | operand `F32`, `F64`, `I32`, `Bool`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` operands are not implemented |
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
 | `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Dense structural/indexing operations |
-| `to_contiguous_read` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same-device canonicalization of owned tensors and arbitrary valid CUDA views; `Bool` is an explicit current limitation |
+| `to_contiguous_read` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same-device canonicalization of owned tensors and arbitrary valid CUDA views; CUDA `F32`/`F64`/`C32`/`C64` nonnegative-stride canonicalization uses cuTENSOR permutation, while negative-stride views use the native CUDA structural copy because cuTENSOR does not represent that layout; `Bool` is an explicit current limitation |
 | `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Source must be compact column-major with offset zero and cover its full allocation; destination may be strided; allocations must not alias; `Bool` is an explicit current limitation |
 | `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
 | `dynamic_update_slice` | No CUDA implementation | Returns an error |

@@ -122,6 +122,7 @@ mod gemm;
 pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
+mod permutation;
 mod runtime;
 mod runtime_adapter;
 
@@ -666,7 +667,7 @@ impl CudaBackend {
         let _ = self.inner.cutensor.set(handle);
         self.inner.cutensor.get().ok_or_else(|| {
             crate::Error::runtime_state(
-                "dot_general",
+                "cuda_cutensor",
                 "cuTENSOR handle initialization completed without a stored handle",
             )
         })
@@ -777,6 +778,40 @@ impl CudaBackend {
         max_entries: NonZeroUsize,
     ) -> crate::Result<()> {
         gemm::set_cutensor_plan_cache_max_entries(self, max_entries)
+    }
+
+    /// Return cuTENSOR structural permutation plan cache stats.
+    ///
+    /// The returned entry count is the number of retained cuTENSOR permutation
+    /// plans inside the CUDA backend's extension cache entry. Logical retained
+    /// bytes include cached descriptor and plan state.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_permutation_plan_cache_stats(&self) -> crate::Result<CacheStats> {
+        permutation::cutensor_permutation_plan_cache_stats(self)
+    }
+
+    /// Return the cuTENSOR structural permutation plan entry bound.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn cutensor_permutation_plan_cache_max_entries(&self) -> crate::Result<NonZeroUsize> {
+        permutation::cutensor_permutation_plan_cache_max_entries(self)
+    }
+
+    /// Configure the cuTENSOR structural permutation plan entry bound.
+    ///
+    /// The cache is initialized if it does not already exist so a setting made
+    /// before the first CUDA structural permutation call is preserved.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn set_cutensor_permutation_plan_cache_max_entries(
+        &self,
+        max_entries: NonZeroUsize,
+    ) -> crate::Result<()> {
+        permutation::set_cutensor_permutation_plan_cache_max_entries(self, max_entries)
     }
 
     fn transpose_typed<T>(
@@ -1011,6 +1046,25 @@ impl CudaBackend {
             );
         }
         Ok(output)
+    }
+
+    fn to_contiguous_view_cutensor_or_cubecl<T, R>(
+        &self,
+        view: &TypedTensorView<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: permutation::CutensorPermutationScalar,
+        R: TensorRank,
+    {
+        if view.strides().iter().any(|&stride| stride < 0) {
+            // cuTENSOR 2.x rejects negative-stride tensor descriptors. This
+            // keeps existing CUDA view coverage for a layout the vendor
+            // permutation path cannot represent; it is not a missing-library
+            // fallback for cuTENSOR-supported descriptors.
+            return self.to_contiguous_view_typed(view, op);
+        }
+        permutation::to_contiguous_view(self, view, op)
     }
 
     fn copy_view_to_view_typed<T, R>(
@@ -4273,7 +4327,14 @@ impl TensorAnalytic for CudaBackend {
 
 impl TensorStructural for CudaBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        macro_rules! materialize {
+        macro_rules! materialize_cutensor {
+            ($variant:ident, $view:expr) => {{
+                let view = $view;
+                self.to_contiguous_view_cutensor_or_cubecl(&view, "CudaBackend::to_contiguous_read")
+                    .map(Tensor::$variant)
+            }};
+        }
+        macro_rules! materialize_cubecl {
             ($variant:ident, $view:expr) => {{
                 let view = $view;
                 self.to_contiguous_view_typed(&view, "CudaBackend::to_contiguous_read")
@@ -4282,26 +4343,26 @@ impl TensorStructural for CudaBackend {
         }
 
         match input {
-            TensorRead::Tensor(Tensor::F32(input)) => materialize!(F32, input.as_view()),
-            TensorRead::Tensor(Tensor::F64(input)) => materialize!(F64, input.as_view()),
-            TensorRead::Tensor(Tensor::I32(input)) => materialize!(I32, input.as_view()),
-            TensorRead::Tensor(Tensor::I64(input)) => materialize!(I64, input.as_view()),
+            TensorRead::Tensor(Tensor::F32(input)) => materialize_cutensor!(F32, input.as_view()),
+            TensorRead::Tensor(Tensor::F64(input)) => materialize_cutensor!(F64, input.as_view()),
+            TensorRead::Tensor(Tensor::I32(input)) => materialize_cubecl!(I32, input.as_view()),
+            TensorRead::Tensor(Tensor::I64(input)) => materialize_cubecl!(I64, input.as_view()),
             TensorRead::Tensor(Tensor::Bool(_)) => Err(unsupported_dtype(
                 "CudaBackend::to_contiguous_read",
                 crate::DType::Bool,
             )),
-            TensorRead::Tensor(Tensor::C32(input)) => materialize!(C32, input.as_view()),
-            TensorRead::Tensor(Tensor::C64(input)) => materialize!(C64, input.as_view()),
-            TensorRead::View(TensorView::F32(input)) => materialize!(F32, input),
-            TensorRead::View(TensorView::F64(input)) => materialize!(F64, input),
-            TensorRead::View(TensorView::I32(input)) => materialize!(I32, input),
-            TensorRead::View(TensorView::I64(input)) => materialize!(I64, input),
+            TensorRead::Tensor(Tensor::C32(input)) => materialize_cutensor!(C32, input.as_view()),
+            TensorRead::Tensor(Tensor::C64(input)) => materialize_cutensor!(C64, input.as_view()),
+            TensorRead::View(TensorView::F32(input)) => materialize_cutensor!(F32, input),
+            TensorRead::View(TensorView::F64(input)) => materialize_cutensor!(F64, input),
+            TensorRead::View(TensorView::I32(input)) => materialize_cubecl!(I32, input),
+            TensorRead::View(TensorView::I64(input)) => materialize_cubecl!(I64, input),
             TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype(
                 "CudaBackend::to_contiguous_read",
                 crate::DType::Bool,
             )),
-            TensorRead::View(TensorView::C32(input)) => materialize!(C32, input),
-            TensorRead::View(TensorView::C64(input)) => materialize!(C64, input),
+            TensorRead::View(TensorView::C32(input)) => materialize_cutensor!(C32, input),
+            TensorRead::View(TensorView::C64(input)) => materialize_cutensor!(C64, input),
         }
     }
 
@@ -4364,13 +4425,13 @@ impl TensorStructural for CudaBackend {
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         match input {
-            Tensor::F32(t) => self.transpose_typed(t, perm).map(Tensor::F32),
-            Tensor::F64(t) => self.transpose_typed(t, perm).map(Tensor::F64),
+            Tensor::F32(t) => permutation::transpose(self, t, perm).map(Tensor::F32),
+            Tensor::F64(t) => permutation::transpose(self, t, perm).map(Tensor::F64),
             Tensor::I32(t) => self.transpose_typed(t, perm).map(Tensor::I32),
             Tensor::I64(t) => self.transpose_typed(t, perm).map(Tensor::I64),
             Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool),
-            Tensor::C32(t) => self.transpose_typed(t, perm).map(Tensor::C32),
-            Tensor::C64(t) => self.transpose_typed(t, perm).map(Tensor::C64),
+            Tensor::C32(t) => permutation::transpose(self, t, perm).map(Tensor::C32),
+            Tensor::C64(t) => permutation::transpose(self, t, perm).map(Tensor::C64),
         }
     }
 
@@ -5194,7 +5255,34 @@ macro_rules! impl_cubecl_view_canonicalization {
     };
 }
 
-impl_cubecl_view_canonicalization!(f32, f64, i32, i64, Complex32, Complex64);
+macro_rules! impl_cutensor_view_canonicalization {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl<R> TensorViewCanonicalization<$ty, R> for CudaBackend
+            where
+                R: TensorRank,
+            {
+                fn to_contiguous(
+                    &mut self,
+                    view: &TypedTensorView<'_, $ty, R>,
+                ) -> crate::Result<TypedTensor<$ty, R>> {
+                    self.to_contiguous_view_cutensor_or_cubecl(view, "CudaBackend::to_contiguous")
+                }
+
+                fn copy_into(
+                    &mut self,
+                    src: &TypedTensorView<'_, $ty, R>,
+                    dst: &mut TypedTensorViewMut<'_, $ty, R>,
+                ) -> crate::Result<()> {
+                    self.copy_view_to_view_typed(src, dst, "CudaBackend::copy_into")
+                }
+            }
+        )*
+    };
+}
+
+impl_cutensor_view_canonicalization!(f32, f64, Complex32, Complex64);
+impl_cubecl_view_canonicalization!(i32, i64);
 
 impl<R> TensorViewCanonicalization<bool, R> for CudaBackend
 where

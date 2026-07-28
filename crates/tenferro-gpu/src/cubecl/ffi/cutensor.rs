@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use libloading::Library;
 
-const OP: &str = "dot_general";
+const OP: &str = "cuda_cutensor";
 /// Default cuTENSOR search paths. Override with `TENFERRO_CUTENSOR_PATH` env var.
 const CUTENSOR_DEFAULT_PATHS: &[&str] = &[
     "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2",
@@ -103,6 +103,16 @@ type CutensorCreateContractionFn = unsafe extern "C" fn(
     *const i32,
     CutensorComputeDescriptor,
 ) -> CutensorStatus;
+type CutensorCreatePermutationFn = unsafe extern "C" fn(
+    CutensorHandleRaw,
+    *mut CutensorOperationDescriptorRaw,
+    CutensorTensorDescriptorRaw,
+    *const i32,
+    CutensorOperator,
+    CutensorTensorDescriptorRaw,
+    *const i32,
+    CutensorComputeDescriptor,
+) -> CutensorStatus;
 type CutensorDestroyOperationDescriptorFn =
     unsafe extern "C" fn(CutensorOperationDescriptorRaw) -> CutensorStatus;
 type CutensorCreatePlanPreferenceFn = unsafe extern "C" fn(
@@ -141,6 +151,14 @@ type CutensorContractFn = unsafe extern "C" fn(
     u64,
     CutensorCudaStream,
 ) -> CutensorStatus;
+type CutensorPermuteFn = unsafe extern "C" fn(
+    CutensorHandleRaw,
+    CutensorPlanRaw,
+    *const c_void,
+    *const c_void,
+    *mut c_void,
+    CutensorCudaStream,
+) -> CutensorStatus;
 type CutensorGetErrorStringFn = unsafe extern "C" fn(CutensorStatus) -> *const c_char;
 
 struct CutensorVtable {
@@ -149,6 +167,7 @@ struct CutensorVtable {
     create_tensor_descriptor: CutensorCreateTensorDescriptorFn,
     destroy_tensor_descriptor: CutensorDestroyTensorDescriptorFn,
     create_contraction: CutensorCreateContractionFn,
+    create_permutation: CutensorCreatePermutationFn,
     destroy_operation_descriptor: CutensorDestroyOperationDescriptorFn,
     create_plan_preference: CutensorCreatePlanPreferenceFn,
     destroy_plan_preference: CutensorDestroyPlanPreferenceFn,
@@ -156,6 +175,7 @@ struct CutensorVtable {
     create_plan: CutensorCreatePlanFn,
     destroy_plan: CutensorDestroyPlanFn,
     contract: CutensorContractFn,
+    permute: CutensorPermuteFn,
     get_error_string: CutensorGetErrorStringFn,
     compute_desc_32f: CutensorComputeDescriptor,
     compute_desc_64f: CutensorComputeDescriptor,
@@ -169,6 +189,7 @@ impl CutensorVtable {
             create_tensor_descriptor: load_symbol(lib, b"cutensorCreateTensorDescriptor\0")?,
             destroy_tensor_descriptor: load_symbol(lib, b"cutensorDestroyTensorDescriptor\0")?,
             create_contraction: load_symbol(lib, b"cutensorCreateContraction\0")?,
+            create_permutation: load_symbol(lib, b"cutensorCreatePermutation\0")?,
             destroy_operation_descriptor: load_symbol(
                 lib,
                 b"cutensorDestroyOperationDescriptor\0",
@@ -179,6 +200,7 @@ impl CutensorVtable {
             create_plan: load_symbol(lib, b"cutensorCreatePlan\0")?,
             destroy_plan: load_symbol(lib, b"cutensorDestroyPlan\0")?,
             contract: load_symbol(lib, b"cutensorContract\0")?,
+            permute: load_symbol(lib, b"cutensorPermute\0")?,
             get_error_string: load_symbol(lib, b"cutensorGetErrorString\0")?,
             compute_desc_32f: load_data_symbol(lib, b"CUTENSOR_COMPUTE_DESC_32F\0")?,
             compute_desc_64f: load_data_symbol(lib, b"CUTENSOR_COMPUTE_DESC_64F\0")?,
@@ -251,6 +273,10 @@ unsafe impl Sync for CutensorLibrary {}
 impl CutensorLibrary {
     fn load() -> crate::Result<Arc<Self>> {
         let paths = super::library_search_paths("TENFERRO_CUTENSOR_PATH", CUTENSOR_DEFAULT_PATHS);
+        Self::load_from_paths(paths)
+    }
+
+    fn load_from_paths(paths: Vec<String>) -> crate::Result<Arc<Self>> {
         let mut errors = Vec::new();
         let mut last_source = None;
         for path in &paths {
@@ -311,6 +337,29 @@ impl CutensorLibrary {
         Err(super::super::error::provider_status(
             op, "cuTENSOR", call, status,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cutensor_loader_missing_library_is_typed_io_error() {
+        let err = match super::CutensorLibrary::load_from_paths(vec![
+            "/definitely/not/libcutensor.so".to_string(),
+        ]) {
+            Ok(_) => panic!("unexpectedly loaded cuTENSOR from a nonexistent path"),
+            Err(err) => err,
+        };
+
+        match err {
+            crate::Error::IoSource { op, source } => {
+                assert_eq!(op, "cuda_cutensor");
+                assert!(source
+                    .to_string()
+                    .contains("failed to load cuTENSOR library"));
+            }
+            other => panic!("expected typed cuTENSOR IoSource, got {other:?}"),
+        }
     }
 }
 
@@ -412,6 +461,19 @@ impl CutensorHandle {
             stream,
         );
         self.lib.check_status(status, op, "cutensorContract")
+    }
+
+    pub(crate) unsafe fn permute(
+        &self,
+        plan: &Plan,
+        alpha: *const c_void,
+        a: *const c_void,
+        b: *mut c_void,
+        stream: CutensorCudaStream,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let status = (self.lib.vtable.permute)(self.as_raw(), plan.as_raw(), alpha, a, b, stream);
+        self.lib.check_status(status, op, "cutensorPermute")
     }
 }
 
@@ -515,6 +577,38 @@ impl OperationDescriptor {
         handle
             .lib
             .check_status(status, op, "cutensorCreateContraction")?;
+        Ok(Self {
+            lib: Arc::clone(&handle.lib),
+            raw,
+        })
+    }
+
+    pub(crate) fn new_permutation(
+        handle: &CutensorHandle,
+        desc_a: &TensorDescriptor,
+        mode_a: &[i32],
+        op_a: CutensorOperator,
+        desc_b: &TensorDescriptor,
+        mode_b: &[i32],
+        compute_desc: CutensorComputeDescriptor,
+        op: &'static str,
+    ) -> crate::Result<Self> {
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe {
+            (handle.lib.vtable.create_permutation)(
+                handle.as_raw(),
+                &mut raw,
+                desc_a.as_raw(),
+                mode_a.as_ptr(),
+                op_a,
+                desc_b.as_raw(),
+                mode_b.as_ptr(),
+                compute_desc,
+            )
+        };
+        handle
+            .lib
+            .check_status(status, op, "cutensorCreatePermutation")?;
         Ok(Self {
             lib: Arc::clone(&handle.lib),
             raw,

@@ -1560,6 +1560,102 @@ fn cutensor_contractions_use_structural_plan_cache_without_pointer_alignment_key
 }
 
 #[test]
+fn cutensor_permutations_use_backend_owned_plan_cache_without_pointer_alignment_keys() {
+    let source = cubecl_source("permutation.rs");
+    let key_source = source_section(
+        &source,
+        "struct CutensorPermutationKey",
+        "struct CachedCutensorPermutation",
+    );
+
+    assert!(
+        key_source.contains("alignment_requirement"),
+        "cuTENSOR permutation plan cache keys should store descriptor alignment requirements"
+    );
+    assert!(
+        !key_source.contains("ptr") && !key_source.contains("address_alignment"),
+        "cuTENSOR permutation plan cache keys must not include allocation-specific pointers or actual pointer alignment"
+    );
+    assert!(
+        source.contains("struct CachedCutensorPermutation"),
+        "CUDA structural permutation should cache descriptor and plan state"
+    );
+    assert!(
+        source.contains("fn cached_cutensor_permutation"),
+        "CUDA transpose and to_contiguous should share the cached cuTENSOR permutation path"
+    );
+    assert!(
+        source.contains("update_retained_bytes::<"),
+        "cached cuTENSOR permutation retained bytes should be reported through the runtime-owned cache"
+    );
+    assert!(
+        source.contains("pub(super) fn cutensor_permutation_plan_cache_stats")
+            && source.contains("pub(super) fn set_cutensor_permutation_plan_cache_max_entries"),
+        "cuTENSOR permutation plan cache should expose owner-routed stats and bound configuration"
+    );
+}
+
+#[test]
+fn cutensor_ffi_binds_permutation_symbols() {
+    let source = cubecl_source("ffi/cutensor.rs");
+
+    for needle in [
+        "type CutensorCreatePermutationFn",
+        "type CutensorPermuteFn",
+        "create_permutation: CutensorCreatePermutationFn",
+        "permute: CutensorPermuteFn",
+        "cutensorCreatePermutation\\0",
+        "cutensorPermute\\0",
+        "pub(crate) fn new_permutation",
+        "pub(crate) unsafe fn permute",
+    ] {
+        assert!(
+            source.contains(needle),
+            "cuTENSOR permutation FFI binding is missing: {needle}"
+        );
+    }
+}
+
+#[test]
+fn cuda_float_permutation_routes_through_cutensor_and_policy_is_recorded() {
+    let cuda = cubecl_source("mod.rs");
+    let permutation = cubecl_source("permutation.rs");
+    let rules = std::fs::read_to_string("../../REPOSITORY_RULES.md").unwrap();
+
+    assert!(
+        cuda.contains("mod permutation;"),
+        "CUDA backend should have a dedicated cuTENSOR permutation module"
+    );
+    assert!(
+        cuda.contains("permutation::transpose(self, t, perm)")
+            && cuda.contains("permutation::to_contiguous_view("),
+        "CUDA f32/f64/c32/c64 structural permutation paths should route through cuTENSOR"
+    );
+    for dtype in ["Tensor::F32", "Tensor::F64", "Tensor::C32", "Tensor::C64"] {
+        assert!(
+            cuda.contains(dtype),
+            "CUDA structural dispatch should retain explicit {dtype} routing"
+        );
+    }
+    for dtype in ["Tensor::I32", "Tensor::I64", "Tensor::Bool"] {
+        assert!(
+            cuda.contains(dtype),
+            "CUDA structural dispatch should keep non-cuTENSOR dtype coverage where supported"
+        );
+    }
+    assert!(
+        permutation.contains("cutensor.permute(")
+            && permutation.contains("CutensorOperator::Identity"),
+        "cuTENSOR permutation should execute through cutensorPermute without adding conjugation semantics"
+    );
+    assert!(
+        rules.contains("must fail with typed load or provider errors")
+            && rules.contains("NVIDIA library is unavailable"),
+        "GPU Backend Contract should record the no-silent-fallback NVIDIA library policy"
+    );
+}
+
+#[test]
 fn cutensor_drop_paths_report_destroy_status() {
     let source = cubecl_source("ffi/cutensor.rs");
     for banned in [

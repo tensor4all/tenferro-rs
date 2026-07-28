@@ -193,6 +193,12 @@ fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
         CudaBackend::cutensor_plan_cache_max_entries;
     let _cutensor_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
         CudaBackend::set_cutensor_plan_cache_max_entries;
+    let _cutensor_permutation_stats: fn(&CudaBackend) -> crate::Result<CacheStats> =
+        CudaBackend::cutensor_permutation_plan_cache_stats;
+    let _cutensor_permutation_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
+        CudaBackend::cutensor_permutation_plan_cache_max_entries;
+    let _cutensor_permutation_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
+        CudaBackend::set_cutensor_permutation_plan_cache_max_entries;
 }
 
 #[test]
