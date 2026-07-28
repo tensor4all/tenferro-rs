@@ -13,6 +13,14 @@ fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
     .unwrap()
 }
 
+fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
+    EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(shape, data).unwrap(),
+        EagerRuntime::with_cpu_backend(CpuBackend::new()),
+    )
+    .unwrap()
+}
+
 fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
     tensor
         .materialized()
@@ -60,18 +68,47 @@ fn eager_vector_norm_and_keepdim_follow_traced_contract() {
     let x = eager(vec![3.0, 4.0], vec![2]);
 
     let norm = x.norm(Some(2.0), Some(&[0]), true).unwrap();
+    let no_op = x.norm(None, Some(&[]), false).unwrap();
 
     assert_eq!(norm.shape(), &[1]);
     assert!((f64_values(&norm)[0] - 5.0).abs() < 1.0e-12);
+    assert_eq!(no_op.shape(), x.shape());
+    assert_eq!(f64_values(&no_op), f64_values(&x));
 }
 
 #[test]
 fn eager_norm_supports_zero_and_matrix_induced_orders() {
     let vector = eager(vec![1.0, 0.0, 2.0, -3.0], vec![4]);
+    let complex_vector = eager_complex(
+        vec![
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, -12.0),
+            Complex64::new(5.0, 0.0),
+        ],
+        vec![3],
+    );
     let matrix = eager(vec![1.0, 3.0, 2.0, 4.0], vec![2, 2]);
 
     let cases = [
         (vector.norm(Some(0.0), Some(&[0]), false).unwrap(), 3.0),
+        (
+            vector.norm(Some(f64::INFINITY), Some(&[0]), false).unwrap(),
+            3.0,
+        ),
+        (
+            vector
+                .norm(Some(f64::NEG_INFINITY), Some(&[0]), false)
+                .unwrap(),
+            0.0,
+        ),
+        (
+            vector.norm(Some(3.0), Some(&[0]), false).unwrap(),
+            36.0_f64.cbrt(),
+        ),
+        (
+            complex_vector.norm(Some(2.0), Some(&[0]), false).unwrap(),
+            194.0_f64.sqrt(),
+        ),
         (matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap(), 6.0),
         (matrix.norm(Some(-1.0), Some(&[0, 1]), false).unwrap(), 4.0),
         (
