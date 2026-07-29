@@ -174,6 +174,9 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
 - Added `InputIngressContractError::ResidencyMismatch` as the typed source for
   `run_prepared` inputs whose logical metadata still matches but whose backend
   family or allocation domain is incompatible with the prepared ingress.
+- Kept `TensorView` physical residency accessors public and documented in
+  parity with `TensorRead`; the final repository-rules review identified the
+  initial private visibility as unintended public-surface asymmetry.
 - TDD regressions first reproduced both synchronous-submit failures, a split
   input whose second consumer was unreachable, a synthesized root instruction
   omitted by semantic-only selection, and message-only prepared-input

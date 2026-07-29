@@ -3629,7 +3629,18 @@ impl<'a> TensorView<'a> {
         }
     }
 
-    fn placement(&self) -> &Placement {
+    /// Return the placement metadata carried by this borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryKind, TensorView};
+    ///
+    /// let view = TensorView::f64(&[1], &[1.0])?;
+    /// assert_eq!(view.placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn placement(&self) -> &Placement {
         match self {
             Self::F32(t) => t.placement(),
             Self::F64(t) => t.placement(),
@@ -3641,7 +3652,18 @@ impl<'a> TensorView<'a> {
         }
     }
 
-    fn backend_family(&self) -> Option<&'static str> {
+    /// Return the physical backend family, when this view is backend-owned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let view = TensorView::f64(&[1], &[1.0])?;
+    /// assert_eq!(view.backend_family(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn backend_family(&self) -> Option<&'static str> {
         match self {
             Self::F32(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
             Self::F64(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
@@ -3653,7 +3675,18 @@ impl<'a> TensorView<'a> {
         }
     }
 
-    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+    /// Return the shared allocation domain, when this view has one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let view = TensorView::f64(&[1], &[1.0])?;
+    /// assert_eq!(view.allocation_domain(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn allocation_domain(&self) -> Option<AllocationDomainId> {
         match self {
             Self::F32(t) => t
                 .backend_buffer()
