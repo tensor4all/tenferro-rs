@@ -3,7 +3,7 @@
 //! This representation remains crate-private. Later phases attach native
 //! GPU/XLA dispatch and asynchronous completion to the same node families.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 #[cfg(test)]
 use std::error::Error as StdError;
 #[cfg(test)]
@@ -133,6 +133,7 @@ pub(crate) struct ScheduledOperation {
     location: ExecutionLocation,
     input_values: Box<[usize]>,
     output_values: Box<[usize]>,
+    dependencies: Box<[EventDependency]>,
     completion: EventCompletion,
 }
 
@@ -142,6 +143,7 @@ impl ScheduledOperation {
         location: ExecutionLocation,
         input_values: impl Into<Box<[usize]>>,
         output_values: impl Into<Box<[usize]>>,
+        dependencies: impl Into<Box<[EventDependency]>>,
         completion: EventCompletion,
     ) -> Self {
         Self {
@@ -149,6 +151,7 @@ impl ScheduledOperation {
             location,
             input_values: input_values.into(),
             output_values: output_values.into(),
+            dependencies: dependencies.into(),
             completion,
         }
     }
@@ -158,6 +161,7 @@ impl ScheduledOperation {
         Self::new(
             0,
             ExecutionLocation::for_test(domain),
+            [],
             [],
             [],
             EventCompletion::new(domain, EventSlotId::new(0), 0),
@@ -172,6 +176,10 @@ impl ScheduledOperation {
         &self.location
     }
 
+    pub(crate) fn dependencies(&self) -> &[EventDependency] {
+        &self.dependencies
+    }
+
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
     }
@@ -184,6 +192,9 @@ impl ScheduledOperation {
             self.output_values
                 .len()
                 .checked_mul(std::mem::size_of::<usize>())?,
+            self.dependencies
+                .len()
+                .checked_mul(std::mem::size_of::<EventDependency>())?,
         ])
     }
 }
@@ -294,6 +305,10 @@ impl ScheduledCollective {
         self.completion
     }
 
+    fn dependencies(&self) -> &[EventDependency] {
+        &self.dependencies
+    }
+
     fn retained_bytes(&self) -> Option<usize> {
         self.dependencies
             .len()
@@ -308,6 +323,10 @@ pub(crate) struct ScheduledBarrier {
 }
 
 impl ScheduledBarrier {
+    fn dependencies(&self) -> &[EventDependency] {
+        &self.dependencies
+    }
+
     pub(crate) fn completion(&self) -> EventCompletion {
         self.completion
     }
@@ -340,13 +359,21 @@ pub(crate) enum ScheduledNode {
 }
 
 impl ScheduledNode {
-    #[cfg(test)]
     pub(crate) fn completion(&self) -> EventCompletion {
         match self {
             Self::Operation(node) => node.completion(),
             Self::Transfer(node) => node.completion(),
             Self::Collective(node) => node.completion(),
             Self::Barrier(node) => node.completion(),
+        }
+    }
+
+    pub(crate) fn dependencies(&self) -> &[EventDependency] {
+        match self {
+            Self::Operation(node) => node.dependencies(),
+            Self::Transfer(node) => node.dependencies(),
+            Self::Collective(node) => node.dependencies(),
+            Self::Barrier(node) => node.dependencies(),
         }
     }
 
@@ -466,12 +493,19 @@ impl ScheduledGraph {
                 });
             }
 
+            let dependencies = operation_dependencies(
+                &available,
+                instruction_index,
+                &instruction.input_slots,
+                &location,
+            )?;
             let completion = event_completion(&nodes, location.event_domain_id())?;
             nodes.push(ScheduledNode::Operation(ScheduledOperation::new(
                 instruction_index,
                 location.clone(),
                 instruction.input_slots.clone(),
                 instruction.output_slots.clone(),
+                dependencies,
                 completion,
             )));
 
@@ -521,6 +555,7 @@ impl ScheduledGraph {
     }
 
     pub(crate) fn validate(&self) -> Result<(), ScheduleValidationError> {
+        let mut known_completions = HashSet::with_capacity(self.nodes.len());
         for (index, node) in self.nodes.iter().enumerate() {
             match node {
                 ScheduledNode::Operation(operation) => {
@@ -556,6 +591,14 @@ impl ScheduledGraph {
                     let _ = barrier.completion().domain();
                 }
             }
+            if node
+                .dependencies()
+                .iter()
+                .any(|dependency| !known_completions.contains(dependency))
+            {
+                return Err(ScheduleValidationError::DependencyNotPriorCompletion { index });
+            }
+            known_completions.insert(EventDependency::from_completion(node.completion()));
         }
         Ok(())
     }
@@ -628,6 +671,8 @@ pub(crate) enum ScheduleValidationError {
     CompletionEventDomainMismatch { index: usize },
     #[error("schedule node {index} dependency uses the wrong event domain")]
     DependencyEventDomainMismatch { index: usize },
+    #[error("schedule node {index} dependency does not refer to a prior completion")]
+    DependencyNotPriorCompletion { index: usize },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -691,6 +736,38 @@ fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
 struct AvailableValue {
     location: ExecutionLocation,
     completion: Option<EventCompletion>,
+}
+
+fn operation_dependencies(
+    available: &[Vec<AvailableValue>],
+    instruction_index: usize,
+    input_slots: &[usize],
+    location: &ExecutionLocation,
+) -> Result<Vec<EventDependency>, ScheduleBuildError> {
+    let mut dependencies = Vec::with_capacity(input_slots.len());
+    let mut seen = HashSet::with_capacity(input_slots.len());
+    for &slot in input_slots {
+        let values = available
+            .get(slot)
+            .ok_or(ScheduleBuildError::ValueSlotOutOfBounds {
+                slot,
+                value_count: available.len(),
+            })?;
+        let value = values
+            .iter()
+            .find(|value| &value.location == location)
+            .ok_or(ScheduleBuildError::ValueUnavailable {
+                instruction_index,
+                slot,
+            })?;
+        if let Some(completion) = value.completion {
+            let dependency = EventDependency::from_completion(completion);
+            if seen.insert(dependency) {
+                dependencies.push(dependency);
+            }
+        }
+    }
+    Ok(dependencies)
 }
 
 fn event_completion(

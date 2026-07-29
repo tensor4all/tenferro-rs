@@ -1,6 +1,6 @@
 use super::super::schedule::{
-    EventDomainId, ExecutionLocation, ScheduledCollective, ScheduledGraph, ScheduledNode,
-    ScheduledOperation, ScheduledTransfer, TransferReachability,
+    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
+    ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer, TransferReachability,
 };
 use super::super::{EngineId, StorageClass};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
@@ -84,7 +84,14 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
     assert!(matches!(
         &graph.nodes_for_test()[2],
         ScheduledNode::Operation(operation)
-            if operation.instruction_index() == 1 && operation.location() == &destination
+            if operation.instruction_index() == 1
+                && operation.location() == &destination
+                && operation.dependencies()
+                    == [EventDependency::new(
+                        destination.event_domain_id(),
+                        EventSlotId::new(1),
+                        0,
+                    )]
     ));
     assert!(matches!(
         &graph.nodes_for_test()[3],
@@ -144,6 +151,121 @@ fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
     assert_eq!(transfers.len(), 2);
     assert_eq!(transfers[1].source_location(), &reachable);
     assert_eq!(transfers[1].destination_location(), &destination);
+}
+
+#[test]
+fn operation_dependencies_follow_input_order_and_are_deduplicated() {
+    let execution = location(
+        "tenferro-test.engine.execution",
+        1,
+        "tenferro-test.storage.execution",
+    );
+    let program = ExecProgram {
+        instructions: vec![
+            instruction(0, 0, 1, false),
+            instruction(1, 0, 2, true),
+            ExecInstruction {
+                op: ExecOp::Negate,
+                semantic_operation_index: Some(2),
+                input_slots: vec![2, 1, 2],
+                output_slots: vec![3],
+                dtype: DType::F64,
+                output_shapes: Default::default(),
+                output_extents: Default::default(),
+                last_use: vec![true, true, true],
+            },
+        ],
+        input_slots: vec![0],
+        output_slots: vec![3],
+        n_slots: 4,
+        shape_guards: Vec::new(),
+    };
+
+    let graph = ScheduledGraph::from_exec_program(
+        &program,
+        execution.clone(),
+        std::slice::from_ref(&execution),
+        &[execution.clone(), execution.clone(), execution.clone()],
+        &TransferReachability::new(),
+    )
+    .expect("schedule");
+    let ScheduledNode::Operation(operation) = &graph.nodes_for_test()[2] else {
+        panic!("third node should be an operation");
+    };
+
+    assert_eq!(
+        operation.dependencies(),
+        &[
+            EventDependency::new(
+                EventDomainId::runtime_created_for_test(1),
+                EventSlotId::new(1),
+                0,
+            ),
+            EventDependency::new(
+                EventDomainId::runtime_created_for_test(1),
+                EventSlotId::new(0),
+                0,
+            ),
+        ]
+    );
+}
+
+#[test]
+fn schedule_validation_rejects_dependency_without_prior_completion() {
+    let source = EventDomainId::runtime_created_for_test(1);
+    let destination = EventDomainId::runtime_created_for_test(2);
+    let source_location = location(
+        "tenferro-test.engine.source",
+        1,
+        "tenferro-test.storage.source",
+    );
+    let destination_location = location(
+        "tenferro-test.engine.destination",
+        2,
+        "tenferro-test.storage.destination",
+    );
+    let graph = ScheduledGraph::for_test(vec![ScheduledNode::Transfer(ScheduledTransfer::new(
+        0,
+        source_location,
+        destination_location,
+        [EventDependency::new(source, EventSlotId::new(99), 0)],
+        super::super::schedule::EventCompletion::new(destination, EventSlotId::new(0), 0),
+    ))]);
+
+    assert!(graph.validate().is_err());
+}
+
+#[test]
+fn retained_bytes_include_operation_dependencies() {
+    let execution = location(
+        "tenferro-test.engine.execution",
+        1,
+        "tenferro-test.storage.execution",
+    );
+    let program = ExecProgram {
+        instructions: vec![instruction(0, 0, 1, true), instruction(1, 1, 2, true)],
+        input_slots: vec![0],
+        output_slots: vec![2],
+        n_slots: 3,
+        shape_guards: Vec::new(),
+    };
+    let graph = ScheduledGraph::from_exec_program(
+        &program,
+        execution.clone(),
+        std::slice::from_ref(&execution),
+        &[execution.clone(), execution.clone()],
+        &TransferReachability::new(),
+    )
+    .expect("schedule");
+    let expected = std::mem::size_of::<ScheduledGraph>()
+        + 2 * std::mem::size_of::<ScheduledNode>()
+        + 4 * std::mem::size_of::<usize>()
+        + std::mem::size_of::<EventDependency>()
+        + std::mem::size_of::<usize>()
+        + std::mem::size_of::<usize>()
+        + 3 * std::mem::size_of::<usize>();
+
+    assert_eq!(graph.retained_bytes(), Some(expected));
 }
 
 #[test]
