@@ -29,6 +29,7 @@ const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.counting-extension.v1";
+const DOWNSTREAM_COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.downstream-counting-extension.v1";
 
 fn cpu_registration(
     backend: &CpuBackend,
@@ -207,17 +208,24 @@ impl BackendBuffer<f64> for DropTrackedBuffer {
 }
 
 #[derive(Clone, Debug)]
-struct CountingExtensionOp;
+struct CountingExtensionOp {
+    family_id: &'static str,
+}
 
 impl ExtensionOp for CountingExtensionOp {
     fn family_id(&self) -> &'static str {
-        COUNTING_EXTENSION_FAMILY
+        self.family_id
     }
 
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write(self.family_id.as_bytes());
+    }
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.family_id == other.family_id)
     }
 
     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
@@ -253,11 +261,13 @@ impl ExtensionOp for CountingExtensionOp {
 }
 
 #[derive(Debug)]
-struct CountingExtensionConfig;
+struct CountingExtensionConfig {
+    family_id: &'static str,
+}
 
 impl ExtensionPlanningConfig for CountingExtensionConfig {
     fn family_id(&self) -> &'static str {
-        COUNTING_EXTENSION_FAMILY
+        self.family_id
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -265,11 +275,14 @@ impl ExtensionPlanningConfig for CountingExtensionConfig {
     }
 
     fn payload_hash(&self, state: &mut dyn Hasher) {
-        state.write_u8(0);
+        state.write(self.family_id.as_bytes());
     }
 
     fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
-        other.as_any().downcast_ref::<Self>().is_some()
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.family_id == other.family_id)
     }
 
     fn retained_bytes(&self) -> usize {
@@ -279,13 +292,14 @@ impl ExtensionPlanningConfig for CountingExtensionConfig {
 
 #[derive(Debug)]
 struct CountingExtensionEngine {
+    family_id: &'static str,
     engine_id: EngineId,
     counters: Arc<ExtensionCounters>,
 }
 
 impl ExtensionEngine for CountingExtensionEngine {
     fn family_id(&self) -> &'static str {
-        COUNTING_EXTENSION_FAMILY
+        self.family_id
     }
 
     fn engine_id(&self) -> &EngineId {
@@ -300,7 +314,7 @@ impl ExtensionEngine for CountingExtensionEngine {
         &self,
         request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
-        assert_eq!(request.operation().family_id(), COUNTING_EXTENSION_FAMILY);
+        assert_eq!(request.operation().family_id(), self.family_id);
         assert_eq!(request.binding().engine_id(), &self.engine_id);
         self.counters.prepare.fetch_add(1, Ordering::SeqCst);
         let prepared = Arc::new(CountingPreparedOperation {
@@ -379,6 +393,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
 #[derive(Debug)]
 struct CountingExtensionModule {
     module_id: ExtensionModuleId,
+    family_id: &'static str,
     engine_id: EngineId,
     counters: Arc<ExtensionCounters>,
 }
@@ -393,11 +408,16 @@ impl ExtensionModule for CountingExtensionModule {
         registrar: &mut ExtensionModuleRegistrar<'_>,
     ) -> Result<(), ExtensionModuleError> {
         registrar.register_engine(Arc::new(CountingExtensionEngine {
+            family_id: self.family_id,
             engine_id: self.engine_id.clone(),
             counters: Arc::clone(&self.counters),
         }))?;
-        registrar
-            .register_planning_config(self.engine_id.clone(), Arc::new(CountingExtensionConfig))
+        registrar.register_planning_config(
+            self.engine_id.clone(),
+            Arc::new(CountingExtensionConfig {
+                family_id: self.family_id,
+            }),
+        )
     }
 }
 
@@ -410,6 +430,7 @@ fn runtime_with_counting_extension(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.module")
             .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
         counters,
     }))?;
@@ -544,9 +565,14 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
     let counters = Arc::new(ExtensionCounters::default());
     let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&x])?
-        .pop()
-        .expect("extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
@@ -603,6 +629,7 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.per-op-module")
             .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
@@ -619,9 +646,14 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
-    let y = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
-        .pop()
-        .expect("extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
@@ -694,6 +726,7 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.transfer-module")
             .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
@@ -711,9 +744,14 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
-    let y = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
-        .pop()
-        .expect("extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
@@ -789,6 +827,7 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.split-module")
             .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
@@ -796,9 +835,14 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
-    let extension = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
-        .pop()
-        .expect("extension has one output");
+    let extension = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
     let y = (&extension + &sum)?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
@@ -823,8 +867,9 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
     let core_backend = CpuBackend::new();
     let extension_backend = CpuBackend::new();
     let drops = Arc::new(AtomicUsize::new(0));
-    let counters = Arc::new(ExtensionCounters::default());
-    *counters
+    let upstream_counters = Arc::new(ExtensionCounters::default());
+    let downstream_counters = Arc::new(ExtensionCounters::default());
+    *upstream_counters
         .tracked_output_drops
         .lock()
         .expect("tracked output lock") = Some(Arc::clone(&drops));
@@ -866,17 +911,39 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
             "tenferro-test.counting-extension.transfer-failure-module",
         )
         .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
-        counters: Arc::clone(&counters),
+        counters: Arc::clone(&upstream_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new(
+            "tenferro-test.downstream-counting-extension.transfer-failure-module",
+        )
+        .map_err(RuntimeConfigError::from)?,
+        family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(core_engine_id).map_err(RuntimeConfigError::from)?,
+        counters: Arc::clone(&downstream_counters),
     }))?;
     let runtime = builder.build()?;
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
-    let extension = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
-        .pop()
-        .expect("extension has one output");
-    let y = (&extension + &sum)?;
+    let extension = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&extension],
+    )?
+    .pop()
+    .expect("downstream extension has one output");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
@@ -886,7 +953,12 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
     assert!(error.to_string().contains("intentional transfer failure"));
     assert_eq!(forward.calls(), 1);
     assert_eq!(failing.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(upstream_counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        downstream_counters.execute.load(Ordering::SeqCst),
+        0,
+        "the downstream operation must not execute after its input transfer fails"
+    );
     assert_eq!(
         drops.load(Ordering::SeqCst),
         1,
@@ -924,6 +996,7 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.no-transfer-module")
             .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
         engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
@@ -940,9 +1013,14 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
-    let y = tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp), &[&sum])?
-        .pop()
-        .expect("extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;

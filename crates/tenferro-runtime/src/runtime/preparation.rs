@@ -615,18 +615,20 @@ fn candidate_storage_classes(
     }
 }
 
-fn execution_location(
+pub(crate) fn execution_location(
     snapshot: &super::RuntimeConfigSnapshot,
     placement: &ResolvedProgramPlacement,
-) -> ExecutionLocation {
-    let engine = snapshot
-        .engine(placement.engine_id())
-        .expect("resolved placement must reference its source snapshot");
-    ExecutionLocation::new(
+) -> PreparedProgramResult<ExecutionLocation> {
+    let engine = snapshot.engine(placement.engine_id()).ok_or_else(|| {
+        Arc::new(PrepareError::ResolvedEngineUnavailable {
+            engine_id: placement.engine_id().clone(),
+        })
+    })?;
+    Ok(ExecutionLocation::new(
         placement.engine_id().clone(),
         engine.event_domain_id(),
         placement.storage_class().clone(),
-    )
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -713,11 +715,12 @@ fn build_operation_dispatch(
         };
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
 
-    let root_location = execution_location(snapshot, &primary_resolved_placement);
-    let operation_locations = placements
+    let root_location = execution_location(snapshot, &primary_resolved_placement)?;
+    let operation_locations: Arc<[_]> = placements
         .iter()
         .map(|placement| execution_location(snapshot, placement))
-        .collect::<Arc<[_]>>();
+        .collect::<PreparedProgramResult<Vec<_>>>()?
+        .into();
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
@@ -788,11 +791,12 @@ fn build_cross_storage_operation_dispatch(
     };
     let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
     let primary_binding = primary.binding.clone();
-    let root_location = execution_location(snapshot, &primary.resolved_placement);
-    let operation_locations = placements
+    let root_location = execution_location(snapshot, &primary.resolved_placement)?;
+    let operation_locations: Arc<[_]> = placements
         .iter()
         .map(|placement| execution_location(snapshot, placement))
-        .collect::<Arc<[_]>>();
+        .collect::<PreparedProgramResult<Vec<_>>>()?
+        .into();
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),

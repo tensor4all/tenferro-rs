@@ -729,6 +729,12 @@ pub enum PrepareError {
         /// Placement constraint that could not be satisfied.
         constraint: ProgramPlacementConstraint,
     },
+    /// A resolved placement references an engine absent from its preparation snapshot.
+    #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]
+    ResolvedEngineUnavailable {
+        /// Engine referenced by the resolved placement.
+        engine_id: EngineId,
+    },
     /// No provider supports this operation under the requested constraints.
     #[error("operation is unsupported: {reason}")]
     Unsupported {

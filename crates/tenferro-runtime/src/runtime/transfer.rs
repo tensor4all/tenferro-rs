@@ -43,31 +43,95 @@ impl<'a> TransferRequest<'a> {
     }
 
     /// Return the source engine for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{EngineId, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let source: &EngineId = request.source_engine_id();
+    /// assert!(!source.as_str().is_empty());
+    /// # }
+    /// ```
     pub fn source_engine_id(&self) -> &'a EngineId {
         self.source_location.engine_id()
     }
 
     /// Return the source event domain for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{EventDomainId, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let _: EventDomainId = request.source_event_domain_id();
+    /// # }
+    /// ```
     pub fn source_event_domain_id(&self) -> EventDomainId {
         self.source_location.event_domain_id()
     }
 
     /// Return the source storage class for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{StorageClass, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let source: &StorageClass = request.source_storage_class();
+    /// assert!(!source.as_str().is_empty());
+    /// # }
+    /// ```
     pub fn source_storage_class(&self) -> &'a StorageClass {
         self.source_location.storage_class()
     }
 
     /// Return the destination engine for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{EngineId, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let destination: &EngineId = request.destination_engine_id();
+    /// assert!(!destination.as_str().is_empty());
+    /// # }
+    /// ```
     pub fn destination_engine_id(&self) -> &'a EngineId {
         self.destination_location.engine_id()
     }
 
     /// Return the destination event domain for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{EventDomainId, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let _: EventDomainId = request.destination_event_domain_id();
+    /// # }
+    /// ```
     pub fn destination_event_domain_id(&self) -> EventDomainId {
         self.destination_location.event_domain_id()
     }
 
     /// Return the destination storage class for this transfer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{StorageClass, TransferRequest};
+    ///
+    /// # fn inspect(request: TransferRequest<'_>) {
+    /// let destination: &StorageClass = request.destination_storage_class();
+    /// assert!(!destination.as_str().is_empty());
+    /// # }
+    /// ```
     pub fn destination_storage_class(&self) -> &'a StorageClass {
         self.destination_location.storage_class()
     }
@@ -79,6 +143,16 @@ impl<'a> TransferRequest<'a> {
 }
 
 /// Typed runtime transfer setup failure.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::TransferError;
+///
+/// fn is_missing_provider(error: &TransferError) -> bool {
+///     matches!(error, TransferError::MissingProvider { .. })
+/// }
+/// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TransferError {

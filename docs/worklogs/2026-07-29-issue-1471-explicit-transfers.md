@@ -59,9 +59,23 @@ keyed by source and destination storage class.
 - GREEN: a split-use graph performs one forward and one reverse transfer,
   proving that the first transfer does not destroy the source copy.
 - GREEN: an intentional transfer failure skips the downstream operation and
-  drops a tracked source-location backend value.
+  drops a tracked source-location backend value. A separate downstream
+  extension family records an explicit zero execution count after the failed
+  transfer.
 - GREEN: identical transfer-provider registration is idempotent, while a
   different provider at the same class-pair key returns the typed conflict.
+
+## Specification Review Follow-up
+
+The initial specification review returned `NOT_APPROVED`. The follow-up:
+
+- places an independently counted extension operation downstream of the
+  intentional transfer failure and asserts its execution count remains zero;
+- replaces the preparation-path `expect()` used to resolve execution locations
+  with `PrepareError::ResolvedEngineUnavailable`, propagated through both
+  same-storage and cross-storage dispatch construction; and
+- adds runnable `# Examples` to all public transfer endpoint accessors and
+  `TransferError`.
 
 ## Deferred Scope
 
@@ -82,7 +96,15 @@ limited to the additive `TransferRequest` endpoint accessors and
 - `cargo test -p tenferro-runtime --test integration runtime_execution::`
 - `cargo test -p tenferro-runtime`: passed across library, integration, and
   doctest targets.
+- `cargo test -p tenferro-runtime
+  runtime::preparation::execution_location_tests::missing_resolved_engine_returns_typed_prepare_error
+  --lib`
 - `cargo fmt --all --check`: passed.
 - `bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p
   tenferro-runtime --test integration runtime_execution::'`: passed, including
   workspace and extension clippy with warnings denied.
+- The fast check was rerun after rebasing onto `origin/main` at `96c9e1c4`
+  with both the runtime execution module and typed preparation error test; it
+  passed.
+- `python3 scripts/repository-rules-review.py --base origin/main --worktree`:
+  passed. Follow-up unit tests are organized under `src/runtime/tests/`.
