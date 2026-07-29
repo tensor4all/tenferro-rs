@@ -74,6 +74,7 @@ struct PreparedRootIdentity {
     prepare_options: PrepareOptionsKey,
     operation_bindings: Box<[PreparedOperationBinding]>,
     operation_placements: Box<[ResolvedProgramPlacement]>,
+    input_locations: Box<[ExecutionLocation]>,
     extension_planning: Box<[ExtensionPlanningIdentity]>,
 }
 
@@ -94,6 +95,7 @@ impl fmt::Debug for PreparedRootIdentity {
             .field("prepare_options", &self.prepare_options)
             .field("operation_bindings", &self.operation_bindings.len())
             .field("operation_placements", &self.operation_placements.len())
+            .field("input_locations", &self.input_locations.len())
             .field("extension_planning", &self.extension_planning.len())
             .finish()
     }
@@ -205,6 +207,7 @@ impl PreparedProgramRoot {
         let schedule = Arc::new(ScheduledGraph::from_exec_program(
             &staging,
             root_location,
+            &identity.input_locations,
             operation_locations,
         )?);
         let logical_retained_bytes = prepared_program_root_retained_bytes(
@@ -249,6 +252,10 @@ impl PreparedProgramRoot {
 
     pub(crate) fn operation_placements(&self) -> &[ResolvedProgramPlacement] {
         &self.identity.operation_placements
+    }
+
+    pub(crate) fn input_locations(&self) -> &[ExecutionLocation] {
+        &self.identity.input_locations
     }
 
     pub(crate) fn epoch(&self) -> super::RuntimeEpoch {
@@ -481,6 +488,7 @@ fn prepare_for_with_compiler_options(
         &snapshot,
         frozen,
         compiler_options,
+        signature,
         options,
     )?);
     let mut requirements = SpecializationRequirements::polymorphic(signature.entries().len());
@@ -534,6 +542,7 @@ fn resolve_preparation_context(
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
     compiler_options: CompilerOptions,
+    signature: &InputSignature,
     options: &PrepareOptions,
 ) -> PreparedProgramResult<PreparationContext> {
     let constraint = options
@@ -558,6 +567,7 @@ fn resolve_preparation_context(
             compiler_options,
             &candidates,
             storage_class,
+            signature,
             options,
             &mut missing_extension_family,
         )? {
@@ -571,6 +581,7 @@ fn resolve_preparation_context(
             frozen,
             compiler_options,
             &candidates,
+            signature,
             options,
             &mut missing_extension_family,
         )? {
@@ -585,6 +596,41 @@ fn resolve_preparation_context(
     }
 
     Err(Arc::new(PrepareError::NoEligibleEngine { constraint }))
+}
+
+fn resolve_input_locations(
+    candidates: &[super::EngineSnapshotView<'_>],
+    signature: &InputSignature,
+) -> PreparedProgramResult<Arc<[ExecutionLocation]>> {
+    signature
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(input_index, entry)| {
+            candidates
+                .iter()
+                .find_map(|engine| {
+                    engine
+                        .storage_classes()
+                        .iter()
+                        .find(|storage| engine.accepts_input_placement(entry.placement(), storage))
+                        .map(|storage| {
+                            ExecutionLocation::new(
+                                engine.engine_id().clone(),
+                                engine.event_domain_id(),
+                                storage.clone(),
+                            )
+                        })
+                })
+                .ok_or_else(|| {
+                    Arc::new(PrepareError::NoInputIngress {
+                        input_index,
+                        placement: entry.placement().clone(),
+                    })
+                })
+        })
+        .collect::<PreparedProgramResult<Vec<_>>>()
+        .map(Arc::from)
 }
 
 fn candidate_storage_classes(
@@ -639,6 +685,7 @@ fn build_operation_dispatch(
     compiler_options: CompilerOptions,
     candidates: &[super::EngineSnapshotView<'_>],
     storage_class: StorageClass,
+    signature: &InputSignature,
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
@@ -714,6 +761,7 @@ fn build_operation_dispatch(
             )
         };
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
+    let input_locations = resolve_input_locations(candidates, signature)?;
 
     let root_location = execution_location(snapshot, &primary_resolved_placement)?;
     let operation_locations: Arc<[_]> = placements
@@ -736,6 +784,7 @@ fn build_operation_dispatch(
         prepare_options: primary_options_key,
         operation_bindings: bindings.into_boxed_slice(),
         operation_placements: placements.into_boxed_slice(),
+        input_locations: input_locations.to_vec().into_boxed_slice(),
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
@@ -748,12 +797,14 @@ fn build_operation_dispatch(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_cross_storage_operation_dispatch(
     runtime: &Runtime,
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
     compiler_options: CompilerOptions,
     candidates: &[super::EngineSnapshotView<'_>],
+    signature: &InputSignature,
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
@@ -791,6 +842,7 @@ fn build_cross_storage_operation_dispatch(
     };
     let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
     let primary_binding = primary.binding.clone();
+    let input_locations = resolve_input_locations(candidates, signature)?;
     let root_location = execution_location(snapshot, &primary.resolved_placement)?;
     let operation_locations: Arc<[_]> = placements
         .iter()
@@ -812,6 +864,7 @@ fn build_cross_storage_operation_dispatch(
         prepare_options: primary.prepare_options_key.clone(),
         operation_bindings: bindings.into_boxed_slice(),
         operation_placements: placements.into_boxed_slice(),
+        input_locations: input_locations.to_vec().into_boxed_slice(),
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
@@ -1408,6 +1461,7 @@ fn hash_root_identity_for_digest(identity: &PreparedRootIdentity, state: &mut im
     identity.prepare_options.hash(state);
     identity.operation_bindings.hash(state);
     identity.operation_placements.hash(state);
+    identity.input_locations.hash(state);
     for extension in &identity.extension_planning {
         extension.module_id.hash(state);
         extension.family_id.hash(state);
@@ -1430,6 +1484,7 @@ fn root_identity_exact_eq(left: &PreparedRootIdentity, right: &PreparedRootIdent
         && left.prepare_options == right.prepare_options
         && left.operation_bindings == right.operation_bindings
         && left.operation_placements == right.operation_placements
+        && left.input_locations == right.input_locations
         && left.semantic.semantic_eq(&right.semantic)
         && extension_planning_exact_eq(&left.extension_planning, &right.extension_planning)
 }
@@ -1485,6 +1540,10 @@ fn prepared_root_identity_key_retained_bytes(identity: &PreparedRootIdentity) ->
             .operation_placements
             .len()
             .checked_mul(size_of::<ResolvedProgramPlacement>())?,
+        identity
+            .input_locations
+            .len()
+            .checked_mul(size_of::<ExecutionLocation>())?,
         identity
             .extension_planning
             .len()

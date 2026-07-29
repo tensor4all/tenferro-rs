@@ -5,7 +5,7 @@ use super::{
     execution, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
     RuntimeCacheOwner, RuntimeConfigError, StorageClass,
 };
-use tenferro_tensor::TensorBackend;
+use tenferro_tensor::{Placement, TensorBackend};
 
 #[derive(Debug)]
 struct CandidateRegistrationToken;
@@ -51,8 +51,11 @@ pub struct EngineRegistration {
     capabilities: CoreCapabilityBundle,
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
+    input_placement_validator: Option<Arc<InputPlacementValidator>>,
     candidate_token: Arc<CandidateRegistrationToken>,
 }
+
+type InputPlacementValidator = dyn Fn(&Placement, &StorageClass) -> bool + Send + Sync + 'static;
 
 impl EngineRegistration {
     /// Build an immutable engine registration candidate.
@@ -81,6 +84,7 @@ impl EngineRegistration {
             capabilities,
             cache_owner: None,
             execution_engine: None,
+            input_placement_validator: None,
             candidate_token: Arc::new(CandidateRegistrationToken),
         })
     }
@@ -157,6 +161,87 @@ impl EngineRegistration {
         self
     }
 
+    /// Declare which tensor placements may enter this engine at each storage class.
+    ///
+    /// The runtime uses this predicate both to place compiled-program inputs and
+    /// to validate tensors returned by transfer providers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    /// use tenferro_tensor::MemoryKind;
+    ///
+    /// let storage = StorageClass::new("example.host")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("example.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.cpu")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage.clone(),
+    ///     CoreCapabilityBundle::builder().build(),
+    /// )?
+    /// .with_input_placement_validator(move |placement, candidate| {
+    ///     placement.memory_kind == MemoryKind::UnpinnedHost && candidate == &storage
+    /// });
+    /// assert!(registration.has_input_placement_validator());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_input_placement_validator<F>(mut self, validator: F) -> Self
+    where
+        F: Fn(&Placement, &StorageClass) -> bool + Send + Sync + 'static,
+    {
+        self.input_placement_validator = Some(Arc::new(validator));
+        self
+    }
+
+    /// Return whether this registration declares an input-placement validator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("example.host")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("example.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.cpu")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::builder().build(),
+    /// )?;
+    /// assert!(!registration.has_input_placement_validator());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn has_input_placement_validator(&self) -> bool {
+        self.input_placement_validator.is_some()
+    }
+
+    pub(super) fn accepts_input_placement(
+        &self,
+        placement: &Placement,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.storage_classes.contains(storage_class)
+            && self
+                .input_placement_validator
+                .as_ref()
+                .is_some_and(|validator| validator(placement, storage_class))
+    }
+
     /// Return whether this registration carries a runtime-owned execution
     /// bridge.
     ///
@@ -205,6 +290,10 @@ impl fmt::Debug for EngineRegistration {
             .field("capabilities", &self.capabilities)
             .field("cache_owner", &self.cache_owner.is_some())
             .field("execution_engine", &self.has_execution_engine())
+            .field(
+                "input_placement_validator",
+                &self.has_input_placement_validator(),
+            )
             .finish_non_exhaustive()
     }
 }

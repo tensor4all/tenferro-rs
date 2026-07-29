@@ -25,7 +25,7 @@ use crate::runtime::schedule::{
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
     PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferError,
-    TransferProvider, TransferRequest,
+    TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -595,8 +595,10 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
 
 #[derive(Debug)]
 struct PreparedExecutionEngines {
+    snapshot: Arc<super::RuntimeConfigSnapshot>,
     root: Arc<dyn ErasedTensorBackendExecutor>,
     root_location: ExecutionLocation,
+    input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
     transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
 }
@@ -769,6 +771,30 @@ fn execution_engines(
         storage_class.clone(),
     );
     let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let input_locations = root.input_locations();
+    for location in input_locations {
+        let engine = snapshot.engine(location.engine_id()).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared input ingress engine {:?} is no longer registered",
+                    location.engine_id()
+                ),
+            )
+        })?;
+        if !engine.storage_classes().contains(location.storage_class()) {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared input ingress engine {:?} does not support storage {:?}",
+                    location.engine_id(),
+                    location.storage_class()
+                ),
+            ));
+        }
+    }
     let operation_placements = root.operation_placements();
     if operation_placements.len() != prepared.operations().len() {
         return Err(Error::runtime_state(
@@ -810,11 +836,14 @@ fn execution_engines(
             ),
         });
     }
+    let transfers = snapshot.transfers_for_execution();
     Ok(PreparedExecutionEngines {
+        snapshot,
         root: root_executor,
         root_location,
+        input_locations: input_locations.to_vec().into_boxed_slice(),
         operations: operation_executors.into_boxed_slice(),
-        transfers: snapshot.transfers_for_execution(),
+        transfers,
     })
 }
 
@@ -911,13 +940,29 @@ fn execute_scheduled_slots<'input>(
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
-        for &slot in &program.input_slots {
+        if execution.input_locations.len() != program.input_slots.len() {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared execution has {} input locations for {} inputs",
+                    execution.input_locations.len(),
+                    program.input_slots.len()
+                ),
+            ));
+        }
+        for (&slot, location) in program
+            .input_slots
+            .iter()
+            .zip(execution.input_locations.iter())
+        {
             let value = staged
                 .get_mut(slot)
                 .and_then(Option::take)
                 .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            validate_runtime_input_ingress(execution, location, &value.as_read(), slot)?;
             located[slot].push(LocatedExecSlot {
-                location: execution.root_location.clone(),
+                location: location.clone(),
                 value,
             });
         }
@@ -1124,6 +1169,33 @@ pub(crate) fn retain_instruction_results<'input>(
     Ok(())
 }
 
+fn validate_runtime_input_ingress(
+    execution: &PreparedExecutionEngines,
+    location: &ExecutionLocation,
+    input: &TensorRead<'_>,
+    slot: usize,
+) -> Result<()> {
+    let placement = super::signature::read_placement(input);
+    let accepted = execution
+        .snapshot
+        .engine(location.engine_id())
+        .is_some_and(|engine| engine.accepts_input_placement(&placement, location.storage_class()));
+    if accepted {
+        return Ok(());
+    }
+    Err(Error::runtime_state(
+        "Runtime::run_compiled",
+        ErrorPhase::Execution,
+        format!(
+            "input slot {slot} placement {:?} is incompatible with prepared ingress \
+             {:?}/{:?}",
+            placement,
+            location.engine_id(),
+            location.storage_class()
+        ),
+    ))
+}
+
 fn execute_scheduled_transfer<'input>(
     execution: &PreparedExecutionEngines,
     transfer: &ScheduledTransfer,
@@ -1174,17 +1246,84 @@ fn execute_scheduled_transfer<'input>(
             .ok_or(tenferro_tensor::Error::MissingValue {
                 slot: transfer.value_slot(),
             })?;
-        provider.transfer(TransferRequest::new(
-            source,
+        let source_read = source_value.value.as_read();
+        let expected_dtype = source_read.dtype();
+        let expected_shape = source_read.shape().to_vec();
+        let transferred =
+            provider.transfer(TransferRequest::new(source, destination, source_read))?;
+        validate_transfer_output(
+            execution,
             destination,
-            source_value.value.as_read(),
-        ))?
+            expected_dtype,
+            &expected_shape,
+            &transferred,
+        )?;
+        transferred
     };
     values.push(LocatedExecSlot {
         location: destination.clone(),
         value: ExecSlot::Owned(transferred),
     });
     Ok(())
+}
+
+fn validate_transfer_output(
+    execution: &PreparedExecutionEngines,
+    destination: &ExecutionLocation,
+    expected_dtype: tenferro_tensor::DType,
+    expected_shape: &[usize],
+    output: &Tensor,
+) -> Result<()> {
+    let contract_error = if output.dtype() != expected_dtype {
+        Some(TransferProviderContractError::DTypeMismatch {
+            expected: expected_dtype,
+            actual: output.dtype(),
+        })
+    } else if output.shape() != expected_shape {
+        Some(TransferProviderContractError::ShapeMismatch {
+            expected: expected_shape.to_vec(),
+            actual: output.shape().to_vec(),
+        })
+    } else if !execution
+        .snapshot
+        .engine(destination.engine_id())
+        .is_some_and(|engine| {
+            engine.accepts_input_placement(output.placement(), destination.storage_class())
+        })
+    {
+        Some(
+            TransferProviderContractError::DestinationPlacementMismatch {
+                destination_engine_id: destination.engine_id().clone(),
+                destination_storage_class: destination.storage_class().clone(),
+                actual: output.placement().clone(),
+            },
+        )
+    } else {
+        let expected = expected_shape.iter().copied().product::<usize>();
+        let actual = tensor_buffer_len(output);
+        (actual != expected)
+            .then_some(TransferProviderContractError::InvalidBufferLength { expected, actual })
+    };
+    match contract_error {
+        None => Ok(()),
+        Some(source) => Err(Error::runtime_state_source(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            TransferError::ProviderContract { source },
+        )),
+    }
+}
+
+fn tensor_buffer_len(tensor: &Tensor) -> usize {
+    match tensor {
+        Tensor::F32(tensor) => tensor.buffer().len(),
+        Tensor::F64(tensor) => tensor.buffer().len(),
+        Tensor::I32(tensor) => tensor.buffer().len(),
+        Tensor::I64(tensor) => tensor.buffer().len(),
+        Tensor::Bool(tensor) => tensor.buffer().len(),
+        Tensor::C32(tensor) => tensor.buffer().len(),
+        Tensor::C64(tensor) => tensor.buffer().len(),
+    }
 }
 
 fn collect_located_outputs<'input>(

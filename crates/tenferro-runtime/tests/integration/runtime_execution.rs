@@ -18,10 +18,10 @@ use tenferro_runtime::{
     PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
     PreparedOperationExecutor, PreparedOperationPlan, ReductionRuntime, RegistrationKey, Runtime,
     RuntimeCacheOwner, RuntimeConfigError, SpecializationProjection, StorageClass, TracedTensor,
-    TransferError, TransferProvider, TransferRequest,
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, Placement,
+    AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, MemoryKind, Placement,
     SharedTensorAllocationDomain, Tensor, TensorRead, TypedTensor,
 };
 
@@ -52,6 +52,7 @@ fn cpu_registration(
         .layout(layout);
 
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
+    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
@@ -61,7 +62,14 @@ fn cpu_registration(
         capabilities.build(),
     )
     .map(|registration| {
-        let registration = registration.with_cache_owner(cache_owner);
+        let registration = registration
+            .with_cache_owner(cache_owner)
+            .with_input_placement_validator(move |placement, candidate| {
+                matches!(
+                    placement.memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) && candidate == &ingress_storage
+            });
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -177,9 +185,79 @@ impl TransferProvider for FailingTransferProvider {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum FaultyTransferOutput {
+    DType,
+    Shape,
+    Placement,
+    BufferLength,
+}
+
+#[derive(Debug)]
+struct FaultyTransferProvider {
+    fault: FaultyTransferOutput,
+}
+
+impl TransferProvider for FaultyTransferProvider {
+    fn transfer(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
+        match self.fault {
+            FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
+            FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
+            FaultyTransferOutput::Placement => {
+                let mut tensor = request.input().as_tensor().cloned().ok_or_else(|| {
+                    Error::Internal("test transfer expected an owned tensor".into())
+                })?;
+                let Tensor::F64(tensor) = &mut tensor else {
+                    return Err(Error::Internal(
+                        "test transfer expected an f64 tensor".into(),
+                    ));
+                };
+                tensor.set_placement(Placement {
+                    memory_kind: MemoryKind::Device,
+                    device: None,
+                    cpu_affinity: None,
+                });
+                Ok(tensor.clone().into())
+            }
+            FaultyTransferOutput::BufferLength => {
+                let len = Arc::new(AtomicUsize::new(2));
+                let buffer = Buffer::Backend(Arc::new(MutableLengthBuffer {
+                    len: Arc::clone(&len),
+                }));
+                let tensor = TypedTensor::<f64>::from_buffer_col_major(
+                    vec![2],
+                    buffer,
+                    Placement::default(),
+                )?;
+                len.store(1, Ordering::SeqCst);
+                Ok(tensor.into())
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("intentional transfer failure")]
 struct TestTransferFailure;
+
+#[derive(Debug)]
+struct MutableLengthBuffer {
+    len: Arc<AtomicUsize>,
+}
+
+impl BackendBuffer<f64> for MutableLengthBuffer {
+    fn backend_family(&self) -> &'static str {
+        "tenferro-test.mutable-length"
+    }
+
+    fn len(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 #[derive(Debug)]
 struct DropTrackedBuffer {
@@ -460,6 +538,7 @@ fn cpu_registration_with_id(
     }
 
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
+    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
@@ -469,6 +548,13 @@ fn cpu_registration_with_id(
         capabilities.build(),
     )
     .map(|registration| {
+        let registration =
+            registration.with_input_placement_validator(move |placement, candidate| {
+                matches!(
+                    placement.memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) && candidate == &ingress_storage
+            });
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -501,6 +587,7 @@ fn cpu_registration_with_storage_id(
     }
 
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
+    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
@@ -510,6 +597,13 @@ fn cpu_registration_with_storage_id(
         capabilities.build(),
     )
     .map(|registration| {
+        let registration =
+            registration.with_input_placement_validator(move |placement, candidate| {
+                matches!(
+                    placement.memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) && candidate == &ingress_storage
+            });
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -777,6 +871,192 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         Some(extension_domain)
     );
 
+    Ok(())
+}
+
+#[test]
+fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer(
+) -> Result<(), Box<dyn StdError>> {
+    let ingress_backend = CpuBackend::new();
+    let consumer_backend = CpuBackend::new();
+    let counters = Arc::new(ExtensionCounters::default());
+    let ingress_engine_id = "tenferro-test.a-input-ingress.v1";
+    let consumer_engine_id = "tenferro-test.z-input-consumer.v1";
+    let ingress_storage = StorageClass::new("tenferro-test.storage.input-ingress.v1")?;
+    let consumer_storage = StorageClass::new("tenferro-test.storage.input-consumer.v1")?;
+    let transfer = Arc::new(RecordingTransferProvider::new(
+        ingress_storage.clone(),
+        consumer_storage.clone(),
+    ));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &ingress_backend,
+        ingress_engine_id,
+        ingress_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &consumer_backend,
+        consumer_engine_id,
+        consumer_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_transfer_provider(
+        ingress_storage.clone(),
+        consumer_storage.clone(),
+        transfer.clone(),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.input-consumer")
+            .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(consumer_engine_id).map_err(RuntimeConfigError::from)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+    let snapshot = runtime.snapshot()?;
+    let ingress_event_domain = snapshot
+        .engine(&EngineId::new(ingress_engine_id)?)
+        .expect("ingress engine")
+        .event_domain_id();
+    let consumer_event_domain = snapshot
+        .engine(&EngineId::new(consumer_engine_id)?)
+        .expect("consumer engine")
+        .event_domain_id();
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(output[0].as_slice::<f64>()?, &[3.0, 5.0]);
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(transfer.calls(), 1);
+    assert_eq!(
+        transfer.requests(),
+        vec![RecordedTransferRequest {
+            source_engine_id: EngineId::new(ingress_engine_id)?,
+            source_event_domain_id: ingress_event_domain,
+            source_storage_class: ingress_storage,
+            destination_engine_id: EngineId::new(consumer_engine_id)?,
+            destination_event_domain_id: consumer_event_domain,
+            destination_storage_class: consumer_storage,
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
+) -> Result<(), Box<dyn StdError>> {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    for fault in [
+        FaultyTransferOutput::DType,
+        FaultyTransferOutput::Shape,
+        FaultyTransferOutput::Placement,
+        FaultyTransferOutput::BufferLength,
+    ] {
+        let ingress_backend = CpuBackend::new();
+        let consumer_backend = CpuBackend::new();
+        let counters = Arc::new(ExtensionCounters::default());
+        let ingress_storage = StorageClass::new("tenferro-test.storage.faulty-ingress.v1")?;
+        let consumer_storage = StorageClass::new("tenferro-test.storage.faulty-consumer.v1")?;
+        let mut builder = Runtime::builder();
+        builder.register_engine(cpu_registration_with_storage_id(
+            &ingress_backend,
+            "tenferro-test.a-faulty-ingress.v1",
+            ingress_storage.as_str(),
+            false,
+            true,
+        )?)?;
+        builder.register_engine(cpu_registration_with_storage_id(
+            &consumer_backend,
+            "tenferro-test.z-faulty-consumer.v1",
+            consumer_storage.as_str(),
+            false,
+            true,
+        )?)?;
+        builder.register_transfer_provider(
+            ingress_storage,
+            consumer_storage,
+            Arc::new(FaultyTransferProvider { fault }),
+        )?;
+        builder.install_extension_module(Arc::new(CountingExtensionModule {
+            module_id: ExtensionModuleId::new("tenferro-test.counting-extension.faulty-output")
+                .map_err(RuntimeConfigError::from)?,
+            family_id: COUNTING_EXTENSION_FAMILY,
+            engine_id: EngineId::new("tenferro-test.z-faulty-consumer.v1")
+                .map_err(RuntimeConfigError::from)?,
+            counters: Arc::clone(&counters),
+        }))?;
+        let runtime = builder.build()?;
+
+        let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+        let transfer_error = error
+            .source()
+            .and_then(|source| source.downcast_ref::<TransferError>())
+            .expect("typed transfer error source");
+        let TransferError::ProviderContract { source } = transfer_error else {
+            panic!("expected provider contract error for {fault:?}: {transfer_error}");
+        };
+        let chained_contract = transfer_error
+            .source()
+            .and_then(|source| source.downcast_ref::<TransferProviderContractError>())
+            .expect("provider contract remains available through Error::source");
+        assert_eq!(
+            std::mem::discriminant(chained_contract),
+            std::mem::discriminant(source)
+        );
+        assert!(
+            matches!(
+                (fault, source),
+                (
+                    FaultyTransferOutput::DType,
+                    TransferProviderContractError::DTypeMismatch { .. }
+                ) | (
+                    FaultyTransferOutput::Shape,
+                    TransferProviderContractError::ShapeMismatch { .. }
+                ) | (
+                    FaultyTransferOutput::Placement,
+                    TransferProviderContractError::DestinationPlacementMismatch { .. }
+                ) | (
+                    FaultyTransferOutput::BufferLength,
+                    TransferProviderContractError::InvalidBufferLength { .. }
+                )
+            ),
+            "unexpected contract error for {fault:?}: {source}"
+        );
+        assert_eq!(
+            counters.execute.load(Ordering::SeqCst),
+            0,
+            "faulty transfer output must not reach the consumer"
+        );
+    }
     Ok(())
 }
 

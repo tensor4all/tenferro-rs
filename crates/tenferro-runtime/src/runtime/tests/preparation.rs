@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
-use tenferro_tensor::{DType, Placement, ShapeVec, StrideVec, Tensor};
+use tenferro_tensor::{DType, MemoryKind, Placement, ShapeVec, StrideVec, Tensor};
 
 use crate::program::{CoreSemanticOp, FrozenProgram, ProgramInputSpec, SemanticProgramBuilder};
 use crate::runtime::{
@@ -378,6 +378,7 @@ fn engine_registration(
 ) -> EngineRegistration {
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities.elementwise(provider);
+    let ingress_storage = storage.clone();
     EngineRegistration::new(
         engine_id(id),
         ExecutionContextIdentity::of::<RecordingElementwise>(),
@@ -387,6 +388,12 @@ fn engine_registration(
         capabilities.build(),
     )
     .expect("engine registration")
+    .with_input_placement_validator(move |placement, candidate| {
+        matches!(
+            placement.memory_kind,
+            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+        ) && candidate == &ingress_storage
+    })
 }
 
 fn runtime_with_engines(registrations: Vec<EngineRegistration>) -> Runtime {

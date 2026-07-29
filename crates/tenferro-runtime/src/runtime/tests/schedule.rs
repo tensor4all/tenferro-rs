@@ -59,6 +59,7 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
     let graph = ScheduledGraph::from_exec_program(
         &program,
         source.clone(),
+        std::slice::from_ref(&source),
         &[source.clone(), destination.clone(), source.clone()],
     )
     .expect("schedule");

@@ -369,11 +369,18 @@ impl ScheduledGraph {
     pub(crate) fn from_exec_program(
         program: &ExecProgram,
         root_location: ExecutionLocation,
+        input_locations: &[ExecutionLocation],
         operation_locations: &[ExecutionLocation],
     ) -> Result<Self, ScheduleBuildError> {
         let mut nodes = Vec::with_capacity(program.instructions.len());
         let mut available = vec![Vec::<AvailableValue>::new(); program.n_slots];
-        for &slot in &program.input_slots {
+        if input_locations.len() != program.input_slots.len() {
+            return Err(ScheduleBuildError::InputLocationCountMismatch {
+                expected: program.input_slots.len(),
+                actual: input_locations.len(),
+            });
+        }
+        for (&slot, location) in program.input_slots.iter().zip(input_locations) {
             let values =
                 available
                     .get_mut(slot)
@@ -382,7 +389,7 @@ impl ScheduledGraph {
                         value_count: program.n_slots,
                     })?;
             values.push(AvailableValue {
-                location: root_location.clone(),
+                location: location.clone(),
                 completion: None,
             });
         }
@@ -602,6 +609,8 @@ pub(crate) enum ScheduleValidationError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScheduleBuildError {
+    #[error("schedule has {actual} input locations for {expected} program inputs")]
+    InputLocationCountMismatch { expected: usize, actual: usize },
     #[error(
         "instruction {instruction_index} references semantic operation {operation_index}, \
          but that operation has no execution location"

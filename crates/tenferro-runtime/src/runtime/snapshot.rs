@@ -1127,6 +1127,16 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot.registration.default_storage_class()
     }
 
+    pub(super) fn accepts_input_placement(
+        &self,
+        placement: &tenferro_tensor::Placement,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_input_placement(placement, storage_class)
+    }
+
     pub(super) fn execution_engine(
         &self,
     ) -> Option<&'a Arc<dyn super::execution::ErasedTensorBackendExecutor>> {

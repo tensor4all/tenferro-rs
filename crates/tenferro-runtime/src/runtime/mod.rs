@@ -60,7 +60,9 @@ pub use specialization::{
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
 };
-pub use transfer::{TransferError, TransferProvider, TransferRequest};
+pub use transfer::{
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+};
 
 #[cfg(test)]
 mod tests;

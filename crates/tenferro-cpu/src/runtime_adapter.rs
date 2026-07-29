@@ -9,7 +9,7 @@ use tenferro_runtime::{
     EngineId, EngineRegistration, ExecutionContextIdentity, HardwareClassId,
     IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
-    LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
+    LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
     ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
@@ -73,6 +73,7 @@ pub fn runtime_engine_registration(
         .layout(layout);
 
     let storage = runtime_storage_class()?;
+    let ingress_storage = storage.clone();
     EngineRegistration::new(
         runtime_engine_id()?,
         ExecutionContextIdentity::of::<CpuBackend>(),
@@ -85,6 +86,12 @@ pub fn runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
+            .with_input_placement_validator(move |placement, candidate| {
+                matches!(
+                    placement.memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) && candidate == &ingress_storage
+            })
     })
 }
 

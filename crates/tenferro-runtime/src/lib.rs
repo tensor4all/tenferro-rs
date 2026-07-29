@@ -92,8 +92,8 @@ pub use runtime::{
     RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats, RuntimeConfigBuilder,
     RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeReconfiguration,
     RuntimeReconfigureError, RuntimeStateError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, TransferError, TransferProvider, TransferRequest,
-    UnsupportedReason,
+    SpecializationRequirements, StorageClass, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
@@ -101,9 +101,9 @@ pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
-    CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
-    TypedTensor, TypedTensorView,
+    CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue,
+    TensorView, TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
 

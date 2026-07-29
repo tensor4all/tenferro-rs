@@ -1,6 +1,6 @@
 use std::fmt;
 
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_tensor::{DType, Placement, Tensor, TensorRead};
 
 use super::schedule::{EventDomainId, ExecutionLocation};
 use super::{EngineId, StorageClass};
@@ -23,6 +23,7 @@ pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
 }
 
 /// Borrowed request passed to a [`TransferProvider`].
+#[derive(Debug)]
 pub struct TransferRequest<'a> {
     source_location: &'a ExecutionLocation,
     destination_location: &'a ExecutionLocation,
@@ -177,5 +178,70 @@ pub enum TransferError {
         destination_event_domain_id: EventDomainId,
         /// Destination storage class.
         destination_storage_class: StorageClass,
+    },
+    /// A provider returned a tensor that violates the transfer request contract.
+    #[error("transfer provider returned an invalid tensor")]
+    ProviderContract {
+        /// Typed provider-contract violation.
+        #[source]
+        source: TransferProviderContractError,
+    },
+}
+
+/// Typed contract violation in a tensor returned by a transfer provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{DType, TransferProviderContractError};
+///
+/// let error = TransferProviderContractError::DTypeMismatch {
+///     expected: DType::F64,
+///     actual: DType::F32,
+/// };
+/// assert!(error.to_string().contains("dtype"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum TransferProviderContractError {
+    /// The returned tensor changed the source dtype.
+    #[error("transfer output dtype mismatch: expected {expected:?}, actual {actual:?}")]
+    DTypeMismatch {
+        /// Source dtype required by the request.
+        expected: DType,
+        /// Dtype returned by the provider.
+        actual: DType,
+    },
+    /// The returned tensor changed the source shape.
+    #[error("transfer output shape mismatch: expected {expected:?}, actual {actual:?}")]
+    ShapeMismatch {
+        /// Source shape required by the request.
+        expected: Vec<usize>,
+        /// Shape returned by the provider.
+        actual: Vec<usize>,
+    },
+    /// The returned tensor placement is not accepted at the destination endpoint.
+    #[error(
+        "transfer output placement {actual:?} is incompatible with destination storage \
+         {destination_storage_class:?} on engine {destination_engine_id:?}"
+    )]
+    DestinationPlacementMismatch {
+        /// Destination engine from the transfer request.
+        destination_engine_id: EngineId,
+        /// Destination storage class from the transfer request.
+        destination_storage_class: StorageClass,
+        /// Placement returned by the provider.
+        actual: Placement,
+    },
+    /// The returned tensor's buffer length does not match its shape.
+    #[error(
+        "transfer output buffer length mismatch: shape requires {expected} elements, \
+         buffer reports {actual}"
+    )]
+    InvalidBufferLength {
+        /// Element count required by the returned shape.
+        expected: usize,
+        /// Element count reported by the returned buffer.
+        actual: usize,
     },
 }

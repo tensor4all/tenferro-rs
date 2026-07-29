@@ -77,6 +77,28 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
 - adds runnable `# Examples` to all public transfer endpoint accessors and
   `TransferError`.
 
+## W7 Code-Quality Review Follow-up
+
+- Added an engine-owned input-placement validator that explicitly declares
+  which `(tensor placement, storage class)` pairs may enter an execution
+  engine. Preparation resolves and caches one validated execution location per
+  program input instead of assigning every input to the first operation.
+- Schedule generation initializes each input slot at its resolved ingress
+  location. Production execution applies the same per-input locations and
+  revalidates the actual runtime tensor placement before tagging a value.
+- Added an end-to-end two-location test whose first operation runs on a
+  different engine from input ingress. The test records the emitted transfer's
+  concrete endpoints and proves the provider executes before the consumer.
+- Added `TransferProviderContractError` and validates provider output dtype,
+  shape, destination placement/storage compatibility, and backing-buffer
+  length before retaining a destination copy. Contract failures remain
+  available through the full `Error::source` chain.
+- Added faulty-provider coverage for each contract dimension and confirmed the
+  downstream operation does not execute for rejected output.
+- Confirmed commit `06147e4e` is in branch history and its adjacent
+  `// INVARIANT` markers remain at both deferred `schedule.rs` dead-code
+  allowances.
+
 ## Deferred Scope
 
 - Submit/event schedulers and asynchronous completion.

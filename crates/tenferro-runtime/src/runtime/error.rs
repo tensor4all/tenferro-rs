@@ -729,6 +729,14 @@ pub enum PrepareError {
         /// Placement constraint that could not be satisfied.
         constraint: ProgramPlacementConstraint,
     },
+    /// No eligible engine declared an ingress compatible with an input placement.
+    #[error("no eligible input ingress for input {input_index} at placement {placement:?}")]
+    NoInputIngress {
+        /// Input position in the compiled-program signature.
+        input_index: usize,
+        /// Placement rejected by every eligible engine ingress.
+        placement: tenferro_tensor::Placement,
+    },
     /// A resolved placement references an engine absent from its preparation snapshot.
     #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]
     ResolvedEngineUnavailable {

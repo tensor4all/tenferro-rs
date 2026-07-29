@@ -407,7 +407,7 @@ fn validate_entry(
     Ok(())
 }
 
-fn read_placement(read: &TensorRead<'_>) -> Placement {
+pub(super) fn read_placement(read: &TensorRead<'_>) -> Placement {
     match read {
         TensorRead::Tensor(tensor) => tensor.placement().clone(),
         TensorRead::View(view) => view_placement(view),
