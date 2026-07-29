@@ -734,6 +734,30 @@ fn eager_x_squared_gradient_matches_finite_difference() {
 }
 
 #[test]
+fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
+    let x_data = vec![1.25, -2.0, 3.5];
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![3], x_data.clone()).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let loss = x.reduce_sum_squares(&[0]).unwrap();
+    let _cotangents = loss.backward().unwrap();
+    let grad = x.grad().unwrap().unwrap();
+
+    let expected: Vec<f64> = (0..x_data.len())
+        .map(|index| {
+            finite_diff_scalar(
+                |values| values.iter().map(|value| value * value).sum::<f64>(),
+                &x_data,
+                index,
+            )
+        })
+        .collect();
+    assert_close_slice(f64_data(grad.as_ref()), &expected, FD_TOL);
+}
+
+#[test]
 fn eager_repeated_backward_accumulates_across_calls() {
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),

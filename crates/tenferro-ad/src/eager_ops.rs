@@ -277,6 +277,29 @@ impl EagerTensor {
         self.unary_op(StdTensorOp::ReduceSum { axes })
     }
 
+    /// Sum elementwise squares over the requested axes.
+    ///
+    /// Each value is squared in its input dtype before reduction. The initial
+    /// supported dtypes are `f32` and `f64`; other dtypes return a typed
+    /// unsupported error. Passing an empty axis slice returns the elementwise
+    /// square without reducing rank.
+    ///
+    /// This operation is useful when the squared sum is needed directly. Use
+    /// the linalg norm APIs when a square root or complex magnitude semantics
+    /// are required.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for invalid axes, a typed unsupported
+    /// error for other dtypes, or a typed backend or runtime-state error during
+    /// execution.
+    pub fn reduce_sum_squares(&self, axes: &[usize]) -> Result<Self> {
+        validate_eager_axes("EagerTensor::reduce_sum_squares", self.shape().len(), axes)?;
+        self.unary_op(StdTensorOp::ReduceSumSquares {
+            axes: axes.to_vec(),
+        })
+    }
+
     /// Execute a dot-general contraction eagerly.
     ///
     /// # Examples

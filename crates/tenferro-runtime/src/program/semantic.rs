@@ -164,6 +164,7 @@ fn core_semantic_op_retained_bytes(op: &CoreSemanticOp) -> Option<usize> {
         }
         CoreSemanticOp::Constant { bytes, .. } => vec_bytes::<u8>(bytes.len()),
         CoreSemanticOp::ReduceSum { axes }
+        | CoreSemanticOp::ReduceSumSquares { axes }
         | CoreSemanticOp::ReduceProd { axes }
         | CoreSemanticOp::ReduceMax { axes }
         | CoreSemanticOp::ReduceMin { axes }

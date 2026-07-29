@@ -241,6 +241,50 @@ pub(crate) fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
     Ok(())
 }
 
+/// Launch a floating-point sum-of-squares reduction.
+pub(crate) fn launch_sum_squares_float<R: Runtime, F: Float + CubeElement>(
+    client: &ComputeClient<R>,
+    input: TensorBinding<R>,
+    output: TensorBinding<R>,
+    axis: usize,
+    strategy: ReduceStrategy,
+) -> Result<()> {
+    let problem = validate_launch(&input, &output, axis)?;
+    let launch = resolve_launch_settings(client, problem, strategy)?;
+
+    unsafe {
+        // SAFETY: `validate_launch` proves the input and keepdims output
+        // layouts agree and the reduced axis is non-empty. The resolved launch
+        // covers exactly `problem.reduce_count` guarded output elements.
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => {
+                kernels::reduce_sum_squares_float::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_sum_squares_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Launch an integer sum reduction.
 pub(crate) fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
     client: &ComputeClient<R>,

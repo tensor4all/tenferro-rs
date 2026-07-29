@@ -1,5 +1,50 @@
 use super::*;
 
+pub(super) fn linearize_sum_squares(
+    builder: &mut SemanticProgramBuilder,
+    input: ProgramValue,
+    tangent: AdValue,
+    axes: &[usize],
+) -> Result<AdValue, SemanticAdTransformError> {
+    let AdValue::Value(tangent) = tangent else {
+        return Ok(AdValue::Absent);
+    };
+    let product = builder.add_op(CoreSemanticOp::Mul, &[input, tangent])?[0];
+    let doubled = builder.add_op(CoreSemanticOp::Add, &[product, product])?[0];
+    Ok(AdValue::Value(
+        builder.add_op(
+            CoreSemanticOp::ReduceSum {
+                axes: axes.to_vec(),
+            },
+            &[doubled],
+        )?[0],
+    ))
+}
+
+pub(super) fn sum_squares_vjp(
+    builder: &mut SemanticProgramBuilder,
+    input: ProgramValue,
+    cotangent: AdValue,
+    active: bool,
+    axes: &[usize],
+) -> Result<Vec<AdValue>, SemanticAdTransformError> {
+    if !active {
+        return Ok(vec![AdValue::Absent]);
+    }
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(vec![AdValue::Absent]);
+    };
+    let cotangent = broadcast_reduction_output(builder, cotangent, input, axes)?;
+    let product = builder.add_op(CoreSemanticOp::Mul, &[input, cotangent])?[0];
+    let doubled = builder.add_op(CoreSemanticOp::Add, &[product, product])?[0];
+    Ok(vec![normalize_ad_value(
+        builder,
+        AdValue::Value(doubled),
+        true,
+        input,
+    )?])
+}
+
 pub(super) fn linearize_nonlinear_reduction(
     builder: &mut SemanticProgramBuilder,
     op: &CoreSemanticOp,

@@ -300,6 +300,7 @@ fn cuda_operation_kind(op: &CoreSemanticOp) -> Option<CudaPreparedKind> {
         | CoreSemanticOp::Expm1
         | CoreSemanticOp::Log1p => CudaPreparedKind::Elementwise,
         CoreSemanticOp::ReduceSum { .. }
+        | CoreSemanticOp::ReduceSumSquares { .. }
         | CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }
         | CoreSemanticOp::ReduceMin { .. } => CudaPreparedKind::Reduction,
@@ -452,6 +453,7 @@ fn core_operation_name(op: &CoreSemanticOp) -> &'static str {
         CoreSemanticOp::Convert { .. } => "convert",
         CoreSemanticOp::Constant { .. } => "constant",
         CoreSemanticOp::ReduceSum { .. } => "reduce_sum",
+        CoreSemanticOp::ReduceSumSquares { .. } => "reduce_sum_squares",
         CoreSemanticOp::Div => "div",
         CoreSemanticOp::Rem => "rem",
         CoreSemanticOp::Abs => "abs",
@@ -556,5 +558,22 @@ impl fmt::Display for CudaPreparedKind {
             Self::DotGeneral => "dot_general",
             Self::Layout => "layout",
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sum_squares_routes_through_runtime_reduction_preparation() {
+        assert_eq!(
+            cuda_operation_kind(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
+            Some(CudaPreparedKind::Reduction)
+        );
+        assert_eq!(
+            core_operation_name(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
+            "reduce_sum_squares"
+        );
     }
 }

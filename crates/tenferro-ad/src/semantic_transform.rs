@@ -562,6 +562,12 @@ fn linearize_core(
         | CoreSemanticOp::Reverse { .. } => {
             linearize_unary_core(builder, op.clone(), primal_inputs, tangent_inputs[0])?
         }
+        CoreSemanticOp::ReduceSumSquares { axes } => core_reductions::linearize_sum_squares(
+            builder,
+            primal_inputs[0],
+            tangent_inputs[0],
+            axes,
+        )?,
         CoreSemanticOp::Concatenate { axis, input_count } => {
             linearize_concatenate(builder, primal_inputs, tangent_inputs, *axis, *input_count)?
         }
@@ -805,6 +811,13 @@ fn vjp_core(
             )?;
             primary_cotangent(builder, broadcast, active_inputs, primal_inputs, false)?
         }
+        CoreSemanticOp::ReduceSumSquares { axes } => core_reductions::sum_squares_vjp(
+            builder,
+            primal_inputs[0],
+            cotangent,
+            active_inputs[0],
+            axes,
+        )?,
         CoreSemanticOp::ExtractDiag { axis_a, axis_b } => {
             let embedded = unary_ad_value(
                 builder,

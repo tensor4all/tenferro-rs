@@ -3,7 +3,7 @@ use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_cpu::cpu_capabilities;
 use tenferro_tensor::{
     capability_output_dtype, BackendId, DType, OperationCapability, SupportLevel, Tensor,
-    TensorAnalytic, TensorDot, TensorElementwise, TensorReduction,
+    TensorAnalytic, TensorDot, TensorElementwise, TensorRead, TensorReduction,
 };
 
 use crate::config::CompareDir;
@@ -264,6 +264,11 @@ fn run_supported_case(
         PrimitiveOpKind::ReduceSum => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_sum(x, axes))
         }
+        PrimitiveOpKind::ReduceSumSquares => {
+            assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
+                b.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
+            })
+        }
         PrimitiveOpKind::ReduceProd => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| b.reduce_prod(x, axes))
         }
@@ -447,6 +452,9 @@ fn run_cpu_reduction(
 ) -> Tensor {
     match op {
         PrimitiveOpKind::ReduceSum => cpu.reduce_sum(input, axes),
+        PrimitiveOpKind::ReduceSumSquares => {
+            cpu.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+        }
         PrimitiveOpKind::ReduceProd => cpu.reduce_prod(input, axes),
         PrimitiveOpKind::ReduceMax => cpu.reduce_max(input, axes),
         PrimitiveOpKind::ReduceMin => cpu.reduce_min(input, axes),

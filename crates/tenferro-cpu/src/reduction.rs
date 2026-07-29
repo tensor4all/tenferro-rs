@@ -8,6 +8,7 @@ use strided_kernel::{
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
 use crate::buffer_pool::BufferPool;
+use crate::elementwise;
 use crate::materialize_tensor_read;
 use tenferro_tensor::{
     DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView,
@@ -274,6 +275,96 @@ pub(crate) fn reduce_sum_read(
             "reduce_sum",
             exec_context,
         )?)),
+    }
+}
+
+/// # Errors
+///
+/// Returns a typed validation error for invalid axes or zero-length reduced
+/// dimensions, `Unsupported` for non-real floating dtypes, or a typed backend
+/// error while reading storage or executing the strided kernel.
+pub(crate) fn reduce_sum_squares(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<Tensor> {
+    if !matches!(input.dtype(), DType::F32 | DType::F64) {
+        return Err(crate::Error::unsupported(
+            "reduce_sum_squares",
+            format!("unsupported dtype {:?}", input.dtype()),
+        ));
+    }
+    validate_axes("reduce_sum_squares", axes, input.shape().len())?;
+    if axes.is_empty() {
+        return elementwise::mul_with_pool(buffers, input, input);
+    }
+
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_erased(
+            t,
+            axes,
+            ReduceOp::SumSquares,
+            "reduce_sum_squares",
+            exec_context,
+        )?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_erased(
+            t,
+            axes,
+            ReduceOp::SumSquares,
+            "reduce_sum_squares",
+            exec_context,
+        )?)),
+        _ => Err(crate::Error::unsupported(
+            "reduce_sum_squares",
+            format!("unsupported dtype {:?}", input.dtype()),
+        )),
+    }
+}
+
+pub(crate) fn reduce_sum_squares_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axes: &[usize],
+    exec_context: &ExecContext,
+) -> crate::Result<Tensor> {
+    if !matches!(input.dtype(), DType::F32 | DType::F64) {
+        return Err(crate::Error::unsupported(
+            "reduce_sum_squares",
+            format!("unsupported dtype {:?}", input.dtype()),
+        ));
+    }
+    validate_axes("reduce_sum_squares", axes, input.shape().len())?;
+    if axes.is_empty() {
+        let rhs = input.clone();
+        return elementwise::mul_read_with_pool(buffers, input, rhs);
+    }
+
+    match input {
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor("reduce_sum_squares", input)?;
+            reduce_sum_squares(buffers, input, axes, exec_context)
+        }
+        TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view_erased(
+            buffers,
+            &t,
+            axes,
+            ReduceOp::SumSquares,
+            "reduce_sum_squares",
+            exec_context,
+        )?)),
+        TensorRead::View(TensorView::F64(t)) => Ok(Tensor::F64(typed_reduce_view_erased(
+            buffers,
+            &t,
+            axes,
+            ReduceOp::SumSquares,
+            "reduce_sum_squares",
+            exec_context,
+        )?)),
+        _ => Err(crate::Error::unsupported(
+            "reduce_sum_squares",
+            format!("unsupported dtype {:?}", input.dtype()),
+        )),
     }
 }
 

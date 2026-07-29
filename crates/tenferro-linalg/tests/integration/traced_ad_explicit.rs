@@ -389,6 +389,69 @@ fn complex_svd_values_grad_executes_with_complex_input_dtype() {
 }
 
 #[test]
+fn frobenius_norm_jvp_matches_finite_diff_through_fused_sum_squares() {
+    let ad = ad_context();
+    let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
+    let tangent_data = vec![0.04, -0.03, 0.05, 0.02, -0.06, 0.01];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone())).unwrap();
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], tangent_data.clone()))
+            .unwrap();
+
+    let norm = matrix.norm(None, Some(&[0, 1]), false).unwrap();
+    assert!(
+        graph_op_debugs(&norm)
+            .iter()
+            .any(|op| op.contains("ReduceSumSquares")),
+        "Frobenius norm should retain the fused semantic primitive"
+    );
+    let jvp = ad.jvp(&norm, &matrix, &tangent).unwrap();
+
+    assert_close_scalar(
+        "Frobenius norm directional JVP",
+        get_f64_data(&eval(&jvp))[0],
+        finite_diff_directional_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
+                        .unwrap();
+                get_f64_data(&eval(&input.norm(None, Some(&[0, 1]), false).unwrap()))[0]
+            },
+            &data,
+            &tangent_data,
+            1.0e-6,
+        ),
+        1.0e-6,
+    );
+}
+
+#[test]
+fn frobenius_norm_grad_matches_finite_diff_through_fused_sum_squares() {
+    let ad = ad_context();
+    let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone())).unwrap();
+    let norm = matrix.norm(None, Some(&[0, 1]), false).unwrap();
+    let actual = eval(&ad.grad(&norm, &matrix).unwrap());
+
+    for (index, &value) in get_f64_data(&actual).iter().enumerate() {
+        let expected = finite_diff_scalar(
+            |xs| {
+                let input =
+                    TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
+                        .unwrap();
+                get_f64_data(&eval(&input.norm(None, Some(&[0, 1]), false).unwrap()))[0]
+            },
+            &data,
+            index,
+            1.0e-6,
+        );
+        assert_close_scalar("Frobenius norm gradient", value, expected, 1.0e-6);
+    }
+}
+
+#[test]
 fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
     let ad = ad_context();
     let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];

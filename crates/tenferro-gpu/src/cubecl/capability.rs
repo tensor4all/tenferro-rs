@@ -199,6 +199,8 @@ const CUDA_CAPABILITIES: &[OperationCapability] = &[
     same_dtype(PrimitiveOpKind::ReduceSum, DType::I64, N),
     same_dtype(PrimitiveOpKind::ReduceSum, DType::C32, N),
     same_dtype(PrimitiveOpKind::ReduceSum, DType::C64, N),
+    same_dtype(PrimitiveOpKind::ReduceSumSquares, DType::F32, N),
+    same_dtype(PrimitiveOpKind::ReduceSumSquares, DType::F64, N),
     same_dtype(PrimitiveOpKind::ReduceProd, DType::F32, N),
     same_dtype(PrimitiveOpKind::ReduceProd, DType::F64, N),
     same_dtype(PrimitiveOpKind::ReduceProd, DType::I32, N),

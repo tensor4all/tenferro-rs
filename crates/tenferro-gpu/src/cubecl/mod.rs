@@ -2074,6 +2074,49 @@ impl CudaBackend {
         })
     }
 
+    fn reduce_sum_squares_float_typed<F: CubeElement + CubeFloat + Clone>(
+        &self,
+        input: &TypedTensor<F>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<F>> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceSumSquares,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        ensure_axes_unique(op, "axes", axes, input.shape().len())?;
+        let final_shape = reduction_output_shape(input.shape(), axes);
+        let mut sorted_axes = axes.to_vec();
+        sorted_axes.sort_unstable();
+        let (&first_axis, remaining_axes) = sorted_axes
+            .split_first()
+            .ok_or_else(|| crate::Error::invalid_argument(op, "axes", "axes must not be empty"))?;
+
+        let mut current =
+            self.launch_reduce_axis_typed(input, first_axis, op, |client, input, output| {
+                cubecl_reduce::launch_sum_squares_float::<CubeclCudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    first_axis,
+                    ReduceStrategy::Auto,
+                )
+            })?;
+        for &axis in remaining_axes {
+            current =
+                self.launch_reduce_axis_typed(&current, axis, op, |client, input, output| {
+                    cubecl_reduce::launch_sum_float::<CubeclCudaRuntime, F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                })?;
+        }
+
+        cubecl_reshape_metadata(current, final_shape, op)
+    }
+
     fn reduce_sum_complex_typed<C: CubeElement + CubeComplex + Clone>(
         &self,
         input: &TypedTensor<C>,
@@ -4832,6 +4875,38 @@ impl TensorReduction for CudaBackend {
             Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
             Tensor::C32(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C64),
+        }
+    }
+
+    fn reduce_sum_squares_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceSumSquares,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        let Some(input) = input.as_tensor() else {
+            return Err(crate::Error::unsupported(
+                op,
+                "CUDA sum-of-squares requires a resident tensor",
+            ));
+        };
+        if axes.is_empty() {
+            return match input {
+                Tensor::F32(_) | Tensor::F64(_) => self.mul(input, input),
+                _ => Err(unsupported_dtype(op, input.dtype())),
+            };
+        }
+        match input {
+            Tensor::F32(t) => self
+                .reduce_sum_squares_float_typed(t, axes)
+                .map(Tensor::F32),
+            Tensor::F64(t) => self
+                .reduce_sum_squares_float_typed(t, axes)
+                .map(Tensor::F64),
+            _ => Err(unsupported_dtype(op, input.dtype())),
         }
     }
 

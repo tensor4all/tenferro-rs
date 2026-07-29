@@ -194,6 +194,7 @@ pub(crate) fn infer_output_dtype_at(
         | StdTensorOp::Reshape { .. }
         | StdTensorOp::BroadcastInDim { .. }
         | StdTensorOp::ReduceSum { .. }
+        | StdTensorOp::ReduceSumSquares { .. }
         | StdTensorOp::ReduceProd { .. }
         | StdTensorOp::ReduceMax { .. }
         | StdTensorOp::ReduceMin { .. }
@@ -305,6 +306,7 @@ pub fn infer_output_shapes(
         StdTensorOp::BroadcastInDim { shape, .. } => vec![shape.clone()],
         StdTensorOp::Constant { .. } => vec![Vec::new()],
         StdTensorOp::ReduceSum { axes, .. }
+        | StdTensorOp::ReduceSumSquares { axes, .. }
         | StdTensorOp::ReduceProd { axes, .. }
         | StdTensorOp::ReduceMax { axes, .. }
         | StdTensorOp::ReduceMin { axes, .. } => {

@@ -683,6 +683,67 @@ fn test_reduce_sum() {
 }
 
 #[test]
+fn test_reduce_sum_squares_f32_and_f64() {
+    let f64s =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, -2.0, 3.0, -4.0, 5.0, -6.0]).unwrap();
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let f64_rows = reduce_sum_squares(
+        &mut buffers,
+        &f64s,
+        &[0],
+        &strided_kernel::ExecContext::serial(),
+    )
+    .unwrap();
+    assert_eq!(f64_rows.as_slice::<f64>().unwrap(), &[5.0, 25.0, 61.0]);
+
+    let f32s = Tensor::from_vec_col_major(vec![4], vec![1.0_f32, -2.0, 3.0, -4.0]).unwrap();
+    let f32_total = reduce_sum_squares(
+        &mut buffers,
+        &f32s,
+        &[0],
+        &strided_kernel::ExecContext::serial(),
+    )
+    .unwrap();
+    assert_eq!(f32_total.as_slice::<f32>().unwrap(), &[30.0]);
+
+    let mut backend = CpuBackend::new();
+    let f32_squared = backend
+        .reduce_sum_squares_read(TensorRead::from_tensor(&f32s), &[])
+        .unwrap();
+    assert_eq!(
+        f32_squared.as_slice::<f32>().unwrap(),
+        &[1.0, 4.0, 9.0, 16.0]
+    );
+    let f32_squared_owned = reduce_sum_squares(
+        &mut buffers,
+        &f32s,
+        &[],
+        &strided_kernel::ExecContext::serial(),
+    )
+    .unwrap();
+    assert_eq!(
+        f32_squared_owned.as_slice::<f32>().unwrap(),
+        &[1.0, 4.0, 9.0, 16.0]
+    );
+}
+
+#[test]
+fn test_reduce_sum_squares_read_accepts_noncompact_view() {
+    let source =
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, -2.0, 3.0, -4.0, 5.0, -6.0])
+            .unwrap();
+    let transposed = source.as_view().transpose_view([1, 0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let output = backend
+        .reduce_sum_squares_read(TensorRead::from_view(TensorView::F64(transposed)), &[0])
+        .unwrap();
+
+    assert_eq!(output.shape(), &[2]);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[35.0, 56.0]);
+}
+
+#[test]
 fn test_reduce_prod() {
     let t = Tensor::F64(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),

@@ -238,6 +238,9 @@ fn lower_semantic_operation(
         SemanticOpRef::Core(CoreSemanticOp::ReduceSum { axes }) => {
             lower_reduce_sum(axes, &input_values, &output_ty, emitter)?
         }
+        SemanticOpRef::Core(CoreSemanticOp::ReduceSumSquares { axes }) => {
+            lower_reduce_sum_squares(axes, &input_values, &output_ty, emitter)?
+        }
         SemanticOpRef::Core(CoreSemanticOp::DotGeneral { config }) => {
             lower_dot_general(config, &input_values, &output_ty, emitter)?
         }
@@ -581,6 +584,7 @@ fn semantic_op_name(op: SemanticOpRef<'_>) -> &'static str {
             CoreSemanticOp::Convert { .. } => "Convert",
             CoreSemanticOp::Constant { .. } => "Constant",
             CoreSemanticOp::ReduceSum { .. } => "ReduceSum",
+            CoreSemanticOp::ReduceSumSquares { .. } => "ReduceSumSquares",
             CoreSemanticOp::Div => "Divide",
             CoreSemanticOp::Rem => "Remainder",
             CoreSemanticOp::Abs => "Abs",
@@ -801,6 +805,22 @@ fn lower_reduce_sum(
         name,
         ty: output_ty.clone(),
     })
+}
+
+fn lower_reduce_sum_squares(
+    axes: &[usize],
+    inputs: &[Value],
+    output_ty: &TensorType,
+    emitter: &mut Emitter,
+) -> Result<Value> {
+    require_input_count("reduce_sum_squares", inputs, 1)?;
+    let squared = lower_same_type_binary(
+        "stablehlo.multiply",
+        &[inputs[0].clone(), inputs[0].clone()],
+        &inputs[0].ty,
+        emitter,
+    )?;
+    lower_reduce_sum(axes, &[squared], output_ty, emitter)
 }
 
 fn lower_dot_general(

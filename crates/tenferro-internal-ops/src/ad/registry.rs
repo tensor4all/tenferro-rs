@@ -1,6 +1,6 @@
 use crate::ad::PrimitiveRuleBuilder;
 use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
-use computegraph::types::{LocalValueId, OperationRole, ValueKey};
+use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_core_ops::PrimitiveOpKind;
 
 use super::context::ShapeGuardContext;
@@ -245,6 +245,11 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
         kind: PrimitiveOpKind::ReduceSum,
         linearize: linearize_reduce_sum,
         transpose_rule: transpose_reduce_sum,
+    },
+    &FunctionPrimitiveAdRule {
+        kind: PrimitiveOpKind::ReduceSumSquares,
+        linearize: linearize_reduce_sum_squares,
+        transpose_rule: transpose_reduce_sum_squares,
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceProd,
@@ -882,6 +887,80 @@ fn transpose_reduce_sum(
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     contraction::transpose_reduce_sum_input(builder, cotangent_out, op, &inputs[0], ctx)
+}
+
+fn linearize_reduce_sum_squares(
+    op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let axes = catalog_payload!(
+        op,
+        ADRuleKind::Jvp,
+        StdTensorOp::ReduceSumSquares { axes } => axes
+    );
+    let square_tangent = semiring::linearize_mul(
+        builder,
+        &[primal_in[0].clone(), primal_in[0].clone()],
+        &[tangent_in[0], tangent_in[0]],
+        ctx,
+    )[0];
+    Ok(contraction::linearize_reduce_sum(
+        builder,
+        &[square_tangent],
+        &StdTensorOp::ReduceSum {
+            axes: axes.to_vec(),
+        },
+        axes,
+    ))
+}
+
+fn transpose_reduce_sum_squares(
+    op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
+    _mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let axes = catalog_payload!(
+        op,
+        ADRuleKind::Transpose,
+        StdTensorOp::ReduceSumSquares { axes } => axes
+    );
+    let broadcast = contraction::transpose_reduce_sum_input(
+        builder,
+        cotangent_out,
+        &StdTensorOp::ReduceSum {
+            axes: axes.to_vec(),
+        },
+        &inputs[0],
+        ctx,
+    )?[0];
+    let Some(broadcast) = broadcast else {
+        return Ok(vec![None]);
+    };
+    let product = builder.add_operation(
+        StdTensorOp::Mul,
+        vec![
+            inputs[0].fixed_value("reduce_sum_squares", 0)?,
+            ValueRef::Local(broadcast),
+        ],
+        OperationRole::Linearized {
+            active_mask: vec![false, true],
+        },
+    )[0];
+    let doubled = builder.add_operation(
+        StdTensorOp::Add,
+        vec![ValueRef::Local(product), ValueRef::Local(product)],
+        OperationRole::Linearized {
+            active_mask: vec![true, true],
+        },
+    )[0];
+    Ok(vec![Some(doubled)])
 }
 
 fn linearize_reduce_prod(

@@ -50,6 +50,7 @@ pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
         PrimitiveOpKind::Select => GpuLaunchKind::SelectBoolFloatInt,
         PrimitiveOpKind::Clamp => GpuLaunchKind::ClampFloat,
         PrimitiveOpKind::ReduceSum
+        | PrimitiveOpKind::ReduceSumSquares
         | PrimitiveOpKind::ReduceProd
         | PrimitiveOpKind::ReduceMax
         | PrimitiveOpKind::ReduceMin => GpuLaunchKind::Reduction,
