@@ -1,22 +1,33 @@
-use cubecl::prelude::{ArrayArg, CubeElement, CubePrimitive};
+use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
 use cubecl_wgpu::WgpuRuntime;
 use tenferro_tensor::validate::validate_permutation_axes;
 use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
+use crate::native_permutation::{
+    NativePermutationKind, NativePermutationPlan, NativeTransposeTile,
+};
+
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d,
-    ensure_placement_resident_on_runtime, ensure_resident_on_runtime,
-    typed_tensor_binding_with_layout, unsupported_dtype, WebGpuBackend, WebGpuBuffer,
+    ensure_placement_resident_on_runtime, ensure_resident_on_runtime, unsupported_dtype,
+    WebGpuBackend, WebGpuBuffer,
 };
 
 const TRANSPOSE_OP: &str = "webgpu_transpose";
 const MATERIALIZE_OP: &str = "WebGpuBackend::to_contiguous_read";
 
-fn dense_strides(shape: &[usize], op: &'static str) -> crate::Result<Vec<usize>> {
+fn dense_strides(shape: &[usize], op: &'static str) -> crate::Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(shape.len());
-    let mut stride = 1usize;
+    let mut stride = 1isize;
     for &dim in shape {
         strides.push(stride);
+        let dim = isize::try_from(dim).map_err(|_| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!("dimension {dim} cannot be represented as isize"),
+            )
+        })?;
         stride = stride.checked_mul(dim).ok_or_else(|| {
             crate::Error::invalid_argument(
                 op,
@@ -26,6 +37,156 @@ fn dense_strides(shape: &[usize], op: &'static str) -> crate::Result<Vec<usize>>
         })?;
     }
     Ok(strides)
+}
+
+fn view_allocation_len<T, R>(
+    view: &TypedTensorView<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<usize>
+where
+    T: 'static,
+    R: TensorRank,
+{
+    view.backend_buffer()
+        .map(|buffer| buffer.len())
+        .ok_or_else(|| {
+            crate::Error::runtime_state(
+                op,
+                "expected WebGPU view, got host view; upload before materializing",
+            )
+        })
+}
+
+fn strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
+    strides
+        .iter()
+        .map(|&stride| {
+            i64::try_from(stride).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "strides",
+                    format!("stride {stride} cannot be represented as i64"),
+                )
+            })
+        })
+        .collect()
+}
+
+fn tiled_cube_count(
+    op: &'static str,
+    plan: &NativePermutationPlan,
+    tile: usize,
+) -> crate::Result<CubeCount> {
+    let x = u32::try_from(plan.dims[1].div_ceil(tile)).map_err(|_| {
+        crate::Error::invalid_argument(op, "shape", "tiled transpose x grid exceeds u32::MAX")
+    })?;
+    let y = u32::try_from(plan.dims[0].div_ceil(tile)).map_err(|_| {
+        crate::Error::invalid_argument(op, "shape", "tiled transpose y grid exceeds u32::MAX")
+    })?;
+    Ok(CubeCount::Static(x.max(1), y.max(1), 1))
+}
+
+fn launch_materialization<T>(
+    backend: &WebGpuBackend,
+    output: &TypedTensor<T>,
+    input: ArrayArg<WgpuRuntime>,
+    plan: &NativePermutationPlan,
+    op: &'static str,
+) -> crate::Result<()>
+where
+    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+{
+    if plan.len == 0 {
+        return Ok(());
+    }
+    let output_arg = view_array_arg(backend, &output.as_view(), op)?;
+    if output_arg.size() != plan.len {
+        return Err(crate::Error::runtime_state(
+            op,
+            format!(
+                "native permutation output binding has {} elements, plan requires {}",
+                output_arg.size(),
+                plan.len
+            ),
+        ));
+    }
+    if input.size() < plan.len {
+        return Err(crate::Error::runtime_state(
+            op,
+            format!(
+                "native permutation input binding has {} elements, plan requires at least {}",
+                input.size(),
+                plan.len
+            ),
+        ));
+    }
+    if plan.kind == NativePermutationKind::TiledTranspose {
+        if let Some(config) = NativeTransposeTile::selected(op)? {
+            let tile = config.tile as usize;
+            let block_rows = config.block_rows as usize;
+            let padding = config.padding as usize;
+            let vector_width = config.vector_width as usize;
+            let src_offset = usize::try_from(plan.src_offset).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "offset",
+                    "tiled transpose requires a non-negative source offset",
+                )
+            })?;
+            let cube_dim = CubeDim::new_2d(config.tile / config.vector_width, config.block_rows);
+            unsafe {
+                // SAFETY: The tiled classification proves a compact 2D
+                // transpose. Bounds guards cover edge tiles and every unit
+                // reaches the shared-memory barrier.
+                crate::kernels::structural::tiled_transpose_kernel::launch_unchecked::<
+                    T,
+                    WgpuRuntime,
+                >(
+                    backend.runtime().client(),
+                    tiled_cube_count(op, plan, tile)?,
+                    cube_dim,
+                    output_arg,
+                    input,
+                    src_offset,
+                    plan.dims[0],
+                    plan.dims[1],
+                    tile,
+                    block_rows,
+                    padding,
+                    vector_width,
+                );
+            }
+            return Ok(());
+        }
+    }
+    let src_strides = strides_i64(&plan.src_strides, op)?;
+    let src_offset = i64::try_from(plan.src_offset).map_err(|_| {
+        crate::Error::invalid_argument(
+            op,
+            "offset",
+            format!(
+                "source offset {} cannot be represented as i64",
+                plan.src_offset
+            ),
+        )
+    })?;
+    unsafe {
+        // SAFETY: `NativePermutationPlan` validated source/destination bounds,
+        // destination non-overlap, shape products, and disjoint allocations.
+        crate::kernels::structural::materialize_strided_kernel::launch_unchecked::<T, WgpuRuntime>(
+            backend.runtime().client(),
+            cube_count_for_len(plan.len)?,
+            cube_dim_1d(),
+            output_arg,
+            input,
+            comptime_sequence(&plan.dims),
+            comptime_sequence(&src_strides),
+            src_offset,
+            plan.len,
+            plan.dims.len(),
+        );
+    }
+    Ok(())
 }
 
 fn view_array_arg<T, R>(
@@ -94,30 +255,20 @@ where
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
     ensure_resident_on_runtime(backend.runtime(), input, TRANSPOSE_OP)?;
     let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
-    let output = alloc_output::<T>(backend.runtime(), &output_shape, TRANSPOSE_OP)?;
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
     let input_strides = dense_strides(input.shape(), TRANSPOSE_OP)?;
-    let output_strides = dense_strides(&output_shape, TRANSPOSE_OP)?;
-    let input_arg =
-        typed_tensor_binding_with_layout(input, input.shape(), &input_strides, TRANSPOSE_OP)?;
-    let output_arg =
-        typed_tensor_binding_with_layout(&output, &output_shape, &output_strides, TRANSPOSE_OP)?;
-
-    unsafe {
-        // SAFETY: The permutation is validated and both bindings cover their
-        // complete compact allocations. The unchanged kernel guards every
-        // output position and maps it through the full permutation.
-        crate::kernels::structural::transpose_kernel::launch_unchecked::<T, WgpuRuntime>(
-            backend.runtime().client(),
-            cube_count_for_len(output.n_elements())?,
-            cube_dim_1d(),
-            output_arg.into_tensor_arg(),
-            input_arg.into_tensor_arg(),
-            comptime_sequence(perm),
-        );
-    }
+    let plan = NativePermutationPlan::for_transpose(
+        TRANSPOSE_OP,
+        input.shape(),
+        &input_strides,
+        perm,
+        0,
+        input.n_elements(),
+        input.n_elements(),
+        false,
+    )?;
+    let output = alloc_output::<T>(backend.runtime(), &output_shape, TRANSPOSE_OP)?;
+    let input_arg = view_array_arg(backend, &input.as_view(), TRANSPOSE_OP)?;
+    launch_materialization(backend, &output, input_arg, &plan, TRANSPOSE_OP)?;
     Ok(output)
 }
 
@@ -129,51 +280,29 @@ where
     T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
-    let output = alloc_output::<T>(backend.runtime(), view.shape(), MATERIALIZE_OP)?;
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let output_strides = dense_strides(view.shape(), MATERIALIZE_OP)?;
-    let output_arg =
-        typed_tensor_binding_with_layout(&output, view.shape(), &output_strides, MATERIALIZE_OP)?;
-    let input_arg = view_array_arg(backend, view, MATERIALIZE_OP)?;
-    let strides = view
-        .strides()
+    let len = view
+        .shape()
         .iter()
-        .copied()
-        .map(|stride| {
-            i64::try_from(stride).map_err(|_| {
-                crate::Error::invalid_argument(
-                    MATERIALIZE_OP,
-                    "strides",
-                    format!("view stride {stride} cannot be represented as i64"),
-                )
-            })
-        })
-        .collect::<crate::Result<Vec<_>>>()?;
-    let base_offset = i64::try_from(view.offset()).map_err(|_| {
-        crate::Error::invalid_argument(
-            MATERIALIZE_OP,
-            "offset",
-            format!("view offset {} cannot be represented as i64", view.offset()),
-        )
-    })?;
-
-    unsafe {
-        // SAFETY: The view constructor validated all signed offsets against
-        // the resident backing allocation. The unchanged kernel writes every
-        // compact output element once and reads only those validated offsets.
-        crate::kernels::structural::view_to_contiguous_kernel::launch_unchecked::<T, WgpuRuntime>(
-            backend.runtime().client(),
-            cube_count_for_len(output.n_elements())?,
-            cube_dim_1d(),
-            output_arg.into_tensor_arg(),
-            input_arg,
-            comptime_sequence(&strides),
-            base_offset,
-            view.shape().len(),
-        );
-    }
+        .try_fold(1usize, |len, &dim| len.checked_mul(dim))
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(
+                MATERIALIZE_OP,
+                "shape",
+                format!("shape product overflow for {:?}", view.shape()),
+            )
+        })?;
+    let plan = NativePermutationPlan::for_contiguous_output(
+        MATERIALIZE_OP,
+        view.shape(),
+        view.strides(),
+        view.offset(),
+        view_allocation_len(view, MATERIALIZE_OP)?,
+        len,
+        false,
+    )?;
+    let output = alloc_output::<T>(backend.runtime(), view.shape(), MATERIALIZE_OP)?;
+    let input_arg = view_array_arg(backend, view, MATERIALIZE_OP)?;
+    launch_materialization(backend, &output, input_arg, &plan, MATERIALIZE_OP)?;
     Ok(output)
 }
 

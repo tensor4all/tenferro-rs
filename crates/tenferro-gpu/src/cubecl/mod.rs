@@ -107,6 +107,9 @@ use crate::config::{
 };
 use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
+use crate::native_permutation::{
+    NativePermutationKind, NativePermutationPlan, NativeTransposeTile,
+};
 use crate::{
     Buffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRank,
     TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor, TypedTensorView,
@@ -212,6 +215,109 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
             format!("view offset {offset} exceeds CubeCL i64 metadata limit"),
         )
     })
+}
+
+fn compact_strides_isize(op: &'static str, shape: &[usize]) -> crate::Result<Vec<isize>> {
+    let mut strides = Vec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &dim in shape {
+        strides.push(stride);
+        let dim = isize::try_from(dim).map_err(|_| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!("dimension {dim} cannot be represented as isize"),
+            )
+        })?;
+        stride = stride.checked_mul(dim).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!("column-major stride overflow for shape {shape:?}"),
+            )
+        })?;
+    }
+    Ok(strides)
+}
+
+fn launch_native_materialization<E: CubePrimitive>(
+    backend: &CudaBackend,
+    output: ArrayArg<CubeclCudaRuntime>,
+    input: ArrayArg<CubeclCudaRuntime>,
+    plan: &NativePermutationPlan,
+    op: &'static str,
+) -> crate::Result<()> {
+    if plan.len == 0 {
+        return Ok(());
+    }
+    if plan.kind == NativePermutationKind::TiledTranspose {
+        if let Some(config) = NativeTransposeTile::selected(op)? {
+            let tile = config.tile as usize;
+            let block_rows = config.block_rows as usize;
+            let padding = config.padding as usize;
+            let vector_width = config.vector_width as usize;
+            let src_offset = usize::try_from(plan.src_offset).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "offset",
+                    "tiled transpose requires a non-negative source offset",
+                )
+            })?;
+            let cubes_x = u32::try_from(plan.dims[1].div_ceil(tile)).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "shape",
+                    "tiled transpose x grid exceeds u32::MAX",
+                )
+            })?;
+            let cubes_y = u32::try_from(plan.dims[0].div_ceil(tile)).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "shape",
+                    "tiled transpose y grid exceeds u32::MAX",
+                )
+            })?;
+            unsafe {
+                // SAFETY: The tiled classification proves a compact 2D
+                // transpose. Bounds guards cover edge tiles and every unit
+                // reaches the shared-memory barrier.
+                structural::tiled_transpose_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+                    backend.runtime().client(),
+                    CubeCount::Static(cubes_x.max(1), cubes_y.max(1), 1),
+                    CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
+                    output,
+                    input,
+                    src_offset,
+                    plan.dims[0],
+                    plan.dims[1],
+                    tile,
+                    block_rows,
+                    padding,
+                    vector_width,
+                );
+            }
+            return Ok(());
+        }
+    }
+    let src_strides = view_strides_i64(&plan.src_strides, op)?;
+    let src_offset = view_offset_i64(plan.src_offset, op)?;
+    unsafe {
+        // SAFETY: `NativePermutationPlan` validated both allocation ranges,
+        // destination non-overlap, and disjoint source/destination storage.
+        structural::materialize_strided_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+            backend.runtime().client(),
+            cube_count_for_len(plan.len)?,
+            cube_dim_1d(),
+            output,
+            input,
+            comptime_sequence(&plan.dims),
+            comptime_sequence(&src_strides),
+            src_offset,
+            plan.len,
+            plan.dims.len(),
+        );
+    }
+    Ok(())
 }
 
 fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
@@ -820,26 +926,27 @@ impl CudaBackend {
         perm: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
     {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
-        launch_unary_tensor(
-            self.runtime(),
-            input,
-            &output_shape,
+        ensure_resident_on_runtime(self.runtime(), input, "transpose")?;
+        let input_strides = compact_strides_isize("transpose", input.shape())?;
+        let plan = NativePermutationPlan::for_transpose(
             "transpose",
-            |client, count, dim, out, input_arg| unsafe {
-                structural::transpose_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out.into_tensor_arg(),
-                    input_arg.into_tensor_arg(),
-                    comptime_sequence(perm),
-                );
-            },
-        )
+            input.shape(),
+            &input_strides,
+            perm,
+            0,
+            input.n_elements(),
+            input.n_elements(),
+            false,
+        )?;
+        let output = alloc_output::<T>(self.runtime(), &output_shape)?;
+        let output_arg = typed_tensor_array_arg(&output, "transpose")?;
+        let input_arg = typed_tensor_array_arg(input, "transpose")?;
+        launch_native_materialization::<T>(self, output_arg, input_arg, &plan, "transpose")?;
+        Ok(output)
     }
 
     fn transpose_bool(
@@ -849,22 +956,23 @@ impl CudaBackend {
     ) -> crate::Result<TypedTensor<bool>> {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
-        launch_unary_bool_tensor(
-            self.runtime(),
-            input,
-            &output_shape,
+        ensure_resident_on_runtime(self.runtime(), input, "transpose")?;
+        let input_strides = compact_strides_isize("transpose", input.shape())?;
+        let plan = NativePermutationPlan::for_transpose(
             "transpose",
-            |client, count, dim, out, input_arg| unsafe {
-                structural::transpose_kernel::launch_unchecked::<u8, CubeclCudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out.into_tensor_arg(),
-                    input_arg.into_tensor_arg(),
-                    comptime_sequence(perm),
-                );
-            },
-        )
+            input.shape(),
+            &input_strides,
+            perm,
+            0,
+            input.n_elements(),
+            input.n_elements(),
+            false,
+        )?;
+        let output = alloc_bool_output(self.runtime(), &output_shape)?;
+        let output_arg = bool_tensor_array_arg(&output, "transpose")?;
+        let input_arg = bool_tensor_array_arg(input, "transpose")?;
+        launch_native_materialization::<u8>(self, output_arg, input_arg, &plan, "transpose")?;
+        Ok(output)
     }
 
     fn broadcast_typed<T>(
@@ -1019,32 +1127,26 @@ impl CudaBackend {
         R: TensorRank,
     {
         ensure_view_resident_on_runtime(self.runtime(), view, op)?;
+        let len = checked_dim_product(op, "output shape", view.shape())?;
+        let source_allocation_len = view
+            .backend_buffer()
+            .map(|buffer| buffer.len())
+            .ok_or_else(|| {
+                crate::Error::runtime_state(op, "expected CUDA backend view, got host view")
+            })?;
+        let plan = NativePermutationPlan::for_contiguous_output(
+            op,
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            source_allocation_len,
+            len,
+            false,
+        )?;
         let output = self.alloc_ranked_output::<T, R>(view.shape(), op)?;
-        let len = output.n_elements();
-        if len == 0 {
-            return Ok(output);
-        }
-        let strides = view_strides_i64(view.strides(), op)?;
-        let base_offset = view_offset_i64(view.offset(), op)?;
-        let output_arg = typed_tensor_binding(&output, op)?;
+        let output_arg = typed_tensor_array_arg(&output, op)?;
         let input_arg = typed_view_array_arg(view, op)?;
-        let rank = view.shape().len();
-        unsafe {
-            // SAFETY: The view constructor validated reachable offsets against
-            // the backing allocation, and `ensure_view_resident_on_runtime`
-            // proves this is a CubeCL buffer on this CUDA runtime. The launch
-            // domain covers every logical output element exactly once.
-            structural::view_to_contiguous_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                self.runtime().client(),
-                cube_count_for_len(len)?,
-                cube_dim_1d(),
-                output_arg.into_tensor_arg(),
-                input_arg,
-                comptime_sequence(&strides),
-                base_offset,
-                rank,
-            );
-        }
+        launch_native_materialization::<T>(self, output_arg, input_arg, &plan, op)?;
         Ok(output)
     }
 

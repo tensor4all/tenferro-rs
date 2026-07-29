@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use strided_perm::plan_bilateral_fusion;
 use tenferro_tensor::validate::{checked_shape_product, validate_permutation_axes};
 use tenferro_tensor::{DynRank, TensorLayout};
@@ -9,6 +7,56 @@ pub(crate) enum NativePermutationKind {
     LinearCopy,
     GenericStrided,
     TiledTranspose,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeTransposeTile {
+    pub(crate) tile: u32,
+    pub(crate) block_rows: u32,
+    pub(crate) padding: u32,
+    pub(crate) vector_width: u32,
+}
+
+impl NativeTransposeTile {
+    const DEFAULT_NAME: &'static str = "16x8-p1-v1";
+
+    pub(crate) fn selected(op: &'static str) -> crate::Result<Option<Self>> {
+        let value = std::env::var("TENFERRO_NATIVE_TRANSPOSE_TILE")
+            .unwrap_or_else(|_| Self::DEFAULT_NAME.to_owned());
+        Self::parse(op, &value)
+    }
+
+    fn parse(op: &'static str, value: &str) -> crate::Result<Option<Self>> {
+        let config = match value {
+            "generic" => return Ok(None),
+            "8x8-p1-v1" => Self::new(8, 8, 1, 1),
+            "16x8-p1-v1" => Self::new(16, 8, 1, 1),
+            "16x8-p1-v2" => Self::new(16, 8, 1, 2),
+            "32x8-p1-v1" => Self::new(32, 8, 1, 1),
+            "32x8-p1-v2" => Self::new(32, 8, 1, 2),
+            "32x8-p1-v4" => Self::new(32, 8, 1, 4),
+            _ => {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "TENFERRO_NATIVE_TRANSPOSE_TILE",
+                    format!(
+                        "unknown tile `{value}`; expected generic, 8x8-p1-v1, \
+                         16x8-p1-v1, 16x8-p1-v2, 32x8-p1-v1, 32x8-p1-v2, or 32x8-p1-v4"
+                    ),
+                ));
+            }
+        };
+        Ok(Some(config))
+    }
+
+    const fn new(tile: u32, block_rows: u32, padding: u32, vector_width: u32) -> Self {
+        Self {
+            tile,
+            block_rows,
+            padding,
+            vector_width,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +82,17 @@ impl NativePermutationPlan {
         allocations_overlap: bool,
     ) -> crate::Result<Self> {
         let len = checked_shape_product(op, "shape", dims)?;
+        let expected_dst_strides = compact_col_major_strides(op, dims)?;
+        if dst_strides != expected_dst_strides {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "destination strides",
+                format!(
+                    "native permutation destination must be compact column-major: \
+                     expected {expected_dst_strides:?}, got {dst_strides:?}"
+                ),
+            ));
+        }
         if allocations_overlap && len != 0 {
             return Err(crate::Error::invalid_argument(
                 op,
@@ -106,6 +165,29 @@ impl NativePermutationPlan {
             op,
             &dims,
             &src_strides,
+            &dst_strides,
+            src_offset,
+            src_allocation_len,
+            dst_allocation_len,
+            allocations_overlap,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_contiguous_output(
+        op: &'static str,
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        src_allocation_len: usize,
+        dst_allocation_len: usize,
+        allocations_overlap: bool,
+    ) -> crate::Result<Self> {
+        let dst_strides = compact_col_major_strides(op, dims)?;
+        Self::new(
+            op,
+            dims,
+            src_strides,
             &dst_strides,
             src_offset,
             src_allocation_len,
@@ -225,6 +307,45 @@ mod tests {
         assert_eq!(plan.dims, [3, 2]);
         assert_eq!(plan.src_strides, [2, 1]);
         assert_eq!(plan.dst_strides, [1, 3]);
+    }
+
+    #[test]
+    fn transpose_and_equivalent_view_share_one_plan() {
+        let transpose =
+            NativePermutationPlan::for_transpose(OP, &[2, 3], &[1, 2], &[1, 0], 0, 6, 6, false)
+                .unwrap();
+        let view =
+            NativePermutationPlan::for_contiguous_output(OP, &[3, 2], &[2, 1], 0, 6, 6, false)
+                .unwrap();
+        assert_eq!(transpose, view);
+    }
+
+    #[test]
+    fn three_dimensional_swap_preserves_output_axis_order() {
+        let plan = NativePermutationPlan::for_transpose(
+            OP,
+            &[256, 256, 240],
+            &[1, 256, 65_536],
+            &[1, 0, 2],
+            0,
+            15_728_640,
+            15_728_640,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plan.dims, [256, 256, 240]);
+        assert_eq!(plan.src_strides, [256, 1, 65_536]);
+        assert_eq!(plan.dst_strides, [1, 256, 65_536]);
+    }
+
+    #[test]
+    fn tile_selection_is_bounded_and_can_force_generic_fallback() {
+        assert_eq!(
+            NativeTransposeTile::parse(OP, "32x8-p1-v4").unwrap(),
+            Some(NativeTransposeTile::new(32, 8, 1, 4))
+        );
+        assert_eq!(NativeTransposeTile::parse(OP, "generic").unwrap(), None);
+        assert!(NativeTransposeTile::parse(OP, "64x1-p0-v8").is_err());
     }
 
     #[test]
