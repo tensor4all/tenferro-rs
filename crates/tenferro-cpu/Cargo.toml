@@ -65,6 +65,7 @@ cblas-src = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }
 lapack-src = { workspace = true, optional = true }
+lru.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

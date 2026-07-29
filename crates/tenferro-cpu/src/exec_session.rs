@@ -13,6 +13,7 @@ use tenferro_tensor::{
 use super::backend::{
     elementwise_read_into_fallback_with_pool, reclaim_typed, tag_fresh_output, FreshCpuOutput,
 };
+use super::indexed_plan_cache::IndexedPlanCache;
 use super::provider::{CpuExecutionContext, CpuOperationEntry};
 use super::CpuProviderBundle;
 use super::{
@@ -25,6 +26,7 @@ pub(crate) struct CpuExecSession<'a> {
     pub(crate) entered: Option<CpuExecutionContext<'a>>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
+    pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
     pub(crate) providers: &'a CpuProviderBundle,
 }
 
@@ -136,6 +138,36 @@ impl CpuExecSession<'_> {
             .enter(mode, |context| {
                 context.with_native_parallelism(|| {
                     let mut output = op(context, buffers)?;
+                    output.tag_fresh(context.domain_id());
+                    Ok(output)
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+    }
+
+    fn run_native_fresh_with_indexed_context<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(
+                &CpuExecutionContext<'_>,
+                &mut BufferPool,
+                &mut IndexedPlanCache,
+            ) -> crate::Result<R>
+            + Send,
+    ) -> crate::Result<R> {
+        let buffers = &mut *self.buffers;
+        let indexed_plan_cache = &mut *self.indexed_plan_cache;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| {
+                let mut output = op(&context, buffers, indexed_plan_cache)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
+            });
+        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    let mut output = op(context, buffers, indexed_plan_cache)?;
                     output.tag_fresh(context.domain_id());
                     Ok(output)
                 })
@@ -570,9 +602,16 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
-            indexing::gather_with_pool(buffers, &exec_context, operand, start_indices, config)
+            indexing::gather_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                start_indices,
+                config,
+            )
         })
     }
     fn scatter(
@@ -582,9 +621,17 @@ impl TensorIndexing for CpuExecSession<'_> {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
-            indexing::scatter_with_pool(buffers, &exec_context, operand, indices, updates, config)
+            indexing::scatter_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                indices,
+                updates,
+                config,
+            )
         })
     }
     delegate_with_pool!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice_with_pool);
@@ -594,9 +641,16 @@ impl TensorIndexing for CpuExecSession<'_> {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
-            indexing::dynamic_slice_with_pool(buffers, &exec_context, input, starts, slice_sizes)
+            indexing::dynamic_slice_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                input,
+                starts,
+                slice_sizes,
+            )
         })
     }
     fn dynamic_update_slice(
@@ -605,10 +659,11 @@ impl TensorIndexing for CpuExecSession<'_> {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::dynamic_update_slice_with_pool(
                 buffers,
+                cache,
                 &exec_context,
                 operand,
                 update,

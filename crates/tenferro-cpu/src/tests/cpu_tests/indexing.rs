@@ -735,3 +735,110 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&ds, &[0, 0]), 11.0);
     assert_eq!(get_f64(&ds, &[1, 1]), 16.0);
 }
+
+#[test]
+fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let operand = Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
+    );
+    let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
+    let config = simple_gather_config();
+
+    backend.gather(&operand, &indices, &config).unwrap();
+    let after_compile = backend.indexed_plan_cache_stats().unwrap();
+    assert_eq!(after_compile.entries, 1);
+    assert_eq!(after_compile.hits, 0);
+    assert_eq!(after_compile.misses, 1);
+    assert!(after_compile.retained_bytes > 0);
+
+    backend.gather(&operand, &indices, &config).unwrap();
+    let scatter_operand = Tensor::F64(TypedTensor::zeros(vec![5]).unwrap());
+    let updates =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap());
+    let scatter_config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let starts = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+    let update = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap());
+    for _ in 0..2 {
+        backend
+            .scatter(&scatter_operand, &indices, &updates, &scatter_config)
+            .unwrap();
+        backend.dynamic_slice(&operand, &starts, &[2]).unwrap();
+        backend
+            .dynamic_update_slice(&operand, &update, &starts)
+            .unwrap();
+    }
+
+    let after_replay = backend.indexed_plan_cache_stats().unwrap();
+    assert_eq!(after_replay.entries, 4);
+    assert_eq!(after_replay.hits, 4);
+    assert_eq!(after_replay.misses, 4);
+
+    backend
+        .set_indexed_plan_cache_limits(crate::IndexedPlanCacheLimits::new(0, 0))
+        .unwrap();
+    assert_eq!(backend.indexed_plan_cache_stats().unwrap().entries, 0);
+    backend.clear_indexed_plan_cache().unwrap();
+    assert_eq!(backend.indexed_plan_cache_stats().unwrap().clears, 1);
+}
+
+#[test]
+fn indexed_plan_cache_reuses_gather_plan_through_exec_session() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let operand = Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
+    );
+    let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
+    let config = simple_gather_config();
+
+    backend
+        .with_backend_session(|session| {
+            session.gather(&operand, &indices, &config)?;
+            session.gather(&operand, &indices, &config)?;
+            Ok::<(), crate::Error>(())
+        })
+        .unwrap();
+
+    let stats = backend.indexed_plan_cache_stats().unwrap();
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.hits, 1);
+}
+
+#[test]
+fn indexed_plan_cache_limit_snapshots_remain_coherent_across_clones() {
+    let backend = CpuBackend::with_threads(1).unwrap();
+    let mut writer = backend.clone();
+    let reader = backend.clone();
+    let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let writer_start = std::sync::Arc::clone(&start);
+
+    let update = std::thread::spawn(move || {
+        writer_start.wait();
+        for index in 0..2_000 {
+            let limits = if index % 2 == 0 {
+                crate::IndexedPlanCacheLimits::new(11, 1_111)
+            } else {
+                crate::IndexedPlanCacheLimits::new(22, 2_222)
+            };
+            writer.set_indexed_plan_cache_limits(limits).unwrap();
+        }
+    });
+
+    start.wait();
+    for _ in 0..2_000 {
+        let limits = reader.indexed_plan_cache_limits().unwrap();
+        assert!(
+            limits == crate::IndexedPlanCacheLimits::new(11, 1_111)
+                || limits == crate::IndexedPlanCacheLimits::new(22, 2_222)
+                || limits == crate::IndexedPlanCacheLimits::new(256, 8 * 1024 * 1024),
+            "cache limit readers must never observe a mixed configuration"
+        );
+    }
+    update.join().unwrap();
+}

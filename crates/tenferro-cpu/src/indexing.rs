@@ -7,6 +7,7 @@ use strided_kernel::{
     KernelDType, ScatterSpec,
 };
 
+use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
 use super::indexing_alloc::pooled_uninit_tensor;
 use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -91,6 +92,17 @@ fn scatter_spec(config: &ScatterConfig) -> ScatterSpec {
         scatter_dims_to_operand_dims: config.scatter_dims_to_operand_dims.clone(),
         index_vector_dim: config.index_vector_dim,
     }
+}
+
+fn indexed_plan_key(
+    family: IndexedPlanFamily,
+    dtype: KernelDType,
+    index_dtype: KernelDType,
+    dims: &[&[usize]],
+    strides: &[&[isize]],
+    config: &[&[usize]],
+) -> IndexedPlanKey {
+    IndexedPlanKey::from_slices(family, dtype, index_dtype, dims, strides, config)
 }
 
 macro_rules! dispatch_tensor_unary_result {
@@ -203,8 +215,10 @@ pub(crate) fn gather(
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
+        let mut cache = IndexedPlanCache::default();
         gather_with_pool(
             buffers,
+            &mut cache,
             &ExecContext::serial(),
             operand,
             start_indices,
@@ -215,6 +229,7 @@ pub(crate) fn gather(
 
 pub(crate) fn gather_with_pool(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     start_indices: &Tensor,
@@ -223,6 +238,7 @@ pub(crate) fn gather_with_pool(
     let start_indices = try_index_tensor(start_indices)?;
     dispatch_tensor_unary_result!(operand, |t| typed_gather(
         buffers,
+        cache,
         exec_context,
         t,
         &start_indices,
@@ -238,8 +254,10 @@ pub(crate) fn scatter(
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
+        let mut cache = IndexedPlanCache::default();
         scatter_with_pool(
             buffers,
+            &mut cache,
             &ExecContext::serial(),
             operand,
             scatter_indices,
@@ -251,6 +269,7 @@ pub(crate) fn scatter(
 
 pub(crate) fn scatter_with_pool(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     scatter_indices: &Tensor,
@@ -263,7 +282,15 @@ pub(crate) fn scatter_with_pool(
         operand,
         updates,
         "Bool data tensors are not supported by additive scatter",
-        |op, upd| typed_scatter(buffers, exec_context, op, &scatter_indices, upd, config)
+        |op, upd| typed_scatter(
+            buffers,
+            cache,
+            exec_context,
+            op,
+            &scatter_indices,
+            upd,
+            config
+        )
     )
 }
 
@@ -282,12 +309,21 @@ pub(crate) fn dynamic_slice(
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        dynamic_slice_with_pool(buffers, &ExecContext::serial(), input, starts, slice_sizes)
+        let mut cache = IndexedPlanCache::default();
+        dynamic_slice_with_pool(
+            buffers,
+            &mut cache,
+            &ExecContext::serial(),
+            input,
+            starts,
+            slice_sizes,
+        )
     })
 }
 
 pub(crate) fn dynamic_slice_with_pool(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     input: &Tensor,
     starts: &Tensor,
@@ -296,6 +332,7 @@ pub(crate) fn dynamic_slice_with_pool(
     let starts = try_index_tensor(starts)?;
     dispatch_tensor_unary_result!(input, |t| typed_dynamic_slice(
         buffers,
+        cache,
         exec_context,
         t,
         &starts,
@@ -329,12 +366,21 @@ pub(crate) fn dynamic_update_slice(
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        dynamic_update_slice_with_pool(buffers, &ExecContext::serial(), operand, update, starts)
+        let mut cache = IndexedPlanCache::default();
+        dynamic_update_slice_with_pool(
+            buffers,
+            &mut cache,
+            &ExecContext::serial(),
+            operand,
+            update,
+            starts,
+        )
     })
 }
 
 pub(crate) fn dynamic_update_slice_with_pool(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     update: &Tensor,
@@ -342,7 +388,7 @@ pub(crate) fn dynamic_update_slice_with_pool(
 ) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
     dispatch_same_dtype_result!("dynamic_update_slice", operand, update, |op, upd| {
-        typed_dynamic_update_slice(buffers, exec_context, op, upd, &starts)
+        typed_dynamic_update_slice(buffers, cache, exec_context, op, upd, &starts)
     })
 }
 
@@ -794,6 +840,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
 
 fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
@@ -942,18 +989,36 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     let operand_strides = col_major_strides(operand_shape);
     let index_strides = col_major_strides(&start_indices.shape);
     let out_strides = col_major_strides(&out_shape);
-    let plan = ErasedGatherPlan::compile(
+    let index_dtype = KernelDType::I64;
+    let key = indexed_plan_key(
+        IndexedPlanFamily::Gather,
         dtype,
-        KernelDType::I64,
-        operand_shape,
-        &operand_strides,
-        &start_indices.shape,
-        &index_strides,
-        &out_shape,
-        &out_strides,
-        gather_spec(config),
-    )
-    .map_err(|err| crate::Error::backend_source("gather", err))?;
+        index_dtype,
+        &[operand_shape, &start_indices.shape, &out_shape],
+        &[&operand_strides, &index_strides, &out_strides],
+        &[
+            &config.offset_dims,
+            &config.collapsed_slice_dims,
+            &config.start_index_map,
+            std::slice::from_ref(&config.index_vector_dim),
+            &config.slice_sizes,
+        ],
+    );
+    let plan = cache
+        .gather(key, || {
+            ErasedGatherPlan::compile(
+                dtype,
+                index_dtype,
+                operand_shape,
+                &operand_strides,
+                &start_indices.shape,
+                &index_strides,
+                &out_shape,
+                &out_strides,
+                gather_spec(config),
+            )
+        })
+        .map_err(|err| crate::Error::backend_source("gather", err))?;
 
     let operand_ref = ErasedRawStridedRef::new(
         dtype,
@@ -964,7 +1029,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("gather", err))?;
     let index_ref = ErasedRawStridedRef::new(
-        KernelDType::I64,
+        index_dtype,
         typed_bytes(&start_indices.values),
         &start_indices.shape,
         &index_strides,
@@ -987,6 +1052,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
 
 fn typed_scatter<T>(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     scatter_indices: &IndexTensor,
@@ -1161,20 +1227,46 @@ where
     let index_strides = col_major_strides(&scatter_indices.shape);
     let update_strides = col_major_strides(updates_shape);
     let out_strides = col_major_strides(operand_shape);
-    let plan = ErasedScatterPlan::compile(
+    let key = indexed_plan_key(
+        IndexedPlanFamily::Scatter,
         dtype,
         index_dtype,
-        operand_shape,
-        &operand_strides,
-        &scatter_indices.shape,
-        &index_strides,
-        updates_shape,
-        &update_strides,
-        operand_shape,
-        &out_strides,
-        scatter_spec(config),
-    )
-    .map_err(|err| crate::Error::backend_source("scatter", err))?;
+        &[
+            operand_shape,
+            &scatter_indices.shape,
+            updates_shape,
+            operand_shape,
+        ],
+        &[
+            &operand_strides,
+            &index_strides,
+            &update_strides,
+            &out_strides,
+        ],
+        &[
+            &config.update_window_dims,
+            &config.inserted_window_dims,
+            &config.scatter_dims_to_operand_dims,
+            std::slice::from_ref(&config.index_vector_dim),
+        ],
+    );
+    let plan = cache
+        .scatter(key, || {
+            ErasedScatterPlan::compile(
+                dtype,
+                index_dtype,
+                operand_shape,
+                &operand_strides,
+                &scatter_indices.shape,
+                &index_strides,
+                updates_shape,
+                &update_strides,
+                operand_shape,
+                &out_strides,
+                scatter_spec(config),
+            )
+        })
+        .map_err(|err| crate::Error::backend_source("scatter", err))?;
 
     // INVARIANT: ErasedScatterPlan first copies the full operand into `out`,
     // then applies every additive update.
@@ -1225,6 +1317,7 @@ where
 
 fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1271,18 +1364,30 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     let input_strides = col_major_strides(input_shape);
     let start_strides = col_major_strides(&starts.shape);
     let out_strides = col_major_strides(&out_shape);
-    let plan = ErasedDynamicSlicePlan::compile(
+    let index_dtype = KernelDType::I64;
+    let key = indexed_plan_key(
+        IndexedPlanFamily::DynamicSlice,
         dtype,
-        KernelDType::I64,
-        input_shape,
-        &input_strides,
-        &starts.shape,
-        &start_strides,
-        &out_shape,
-        &out_strides,
-        slice_sizes,
-    )
-    .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
+        index_dtype,
+        &[input_shape, &starts.shape, &out_shape],
+        &[&input_strides, &start_strides, &out_strides],
+        &[slice_sizes],
+    );
+    let plan = cache
+        .dynamic_slice(key, || {
+            ErasedDynamicSlicePlan::compile(
+                dtype,
+                index_dtype,
+                input_shape,
+                &input_strides,
+                &starts.shape,
+                &start_strides,
+                &out_shape,
+                &out_strides,
+                slice_sizes,
+            )
+        })
+        .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     // INVARIANT: ErasedDynamicSlicePlan writes every output coordinate exactly once.
     let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
     if T::dtype() == DType::Bool {
@@ -1297,7 +1402,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     let start_ref = ErasedRawStridedRef::new(
-        KernelDType::I64,
+        index_dtype,
         typed_bytes(&starts.values),
         &starts.shape,
         &start_strides,
@@ -1320,6 +1425,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
 
 fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    cache: &mut IndexedPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     update: &TypedTensor<T>,
@@ -1367,19 +1473,36 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     let start_strides = col_major_strides(&starts.shape);
     let update_strides = col_major_strides(update_shape);
     let out_strides = col_major_strides(operand_shape);
-    let plan = ErasedDynamicUpdateSlicePlan::compile(
+    let index_dtype = KernelDType::I64;
+    let key = indexed_plan_key(
+        IndexedPlanFamily::DynamicUpdateSlice,
         dtype,
-        KernelDType::I64,
-        operand_shape,
-        &operand_strides,
-        &starts.shape,
-        &start_strides,
-        update_shape,
-        &update_strides,
-        operand_shape,
-        &out_strides,
-    )
-    .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
+        index_dtype,
+        &[operand_shape, &starts.shape, update_shape, operand_shape],
+        &[
+            &operand_strides,
+            &start_strides,
+            &update_strides,
+            &out_strides,
+        ],
+        &[],
+    );
+    let plan = cache
+        .dynamic_update_slice(key, || {
+            ErasedDynamicUpdateSlicePlan::compile(
+                dtype,
+                index_dtype,
+                operand_shape,
+                &operand_strides,
+                &starts.shape,
+                &start_strides,
+                update_shape,
+                &update_strides,
+                operand_shape,
+                &out_strides,
+            )
+        })
+        .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     // INVARIANT: ErasedDynamicUpdateSlicePlan copies the full operand into
     // `out` before overwriting the update window.
     let mut out = pooled_uninit_tensor(buffers, operand_shape.to_vec())?;
@@ -1403,7 +1526,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     let start_ref = ErasedRawStridedRef::new(
-        KernelDType::I64,
+        index_dtype,
         typed_bytes(&starts.values),
         &starts.shape,
         &start_strides,

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::buffer_pool::BufferPool;
 use crate::gemm::GemmAnalysisCache;
+use crate::indexed_plan_cache::IndexedPlanCache;
 use crate::resource_domain::CpuResourceDomain;
 use crate::{
     CpuContext, CpuContextError, CpuDomainExecutor, CpuDomainId, CpuDomainOwnership,
@@ -13,6 +14,7 @@ use crate::{
 pub(crate) struct EngineResources {
     pub(crate) buffers: BufferPool,
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
+    pub(crate) indexed_plan_cache: IndexedPlanCache,
 }
 
 impl EngineResources {
@@ -20,6 +22,7 @@ impl EngineResources {
         Self {
             buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
             gemm_analysis_cache: GemmAnalysisCache::default(),
+            indexed_plan_cache: IndexedPlanCache::default(),
         }
     }
 }
