@@ -57,6 +57,24 @@ impl NativeTransposeTile {
             vector_width,
         }
     }
+
+    pub(crate) fn dispatch_grid(
+        self,
+        op: &'static str,
+        dims: &[usize],
+        max_dimension: u32,
+    ) -> crate::Result<Option<(u32, u32)>> {
+        let x = u32::try_from(dims[1].div_ceil(self.tile as usize)).map_err(|_| {
+            crate::Error::invalid_argument(op, "shape", "tiled transpose x grid exceeds u32::MAX")
+        })?;
+        let y = u32::try_from(dims[0].div_ceil(self.tile as usize)).map_err(|_| {
+            crate::Error::invalid_argument(op, "shape", "tiled transpose y grid exceeds u32::MAX")
+        })?;
+        if x > max_dimension || y > max_dimension {
+            return Ok(None);
+        }
+        Ok(Some((x.max(1), y.max(1))))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -346,6 +364,19 @@ mod tests {
         );
         assert_eq!(NativeTransposeTile::parse(OP, "generic").unwrap(), None);
         assert!(NativeTransposeTile::parse(OP, "64x1-p0-v8").is_err());
+    }
+
+    #[test]
+    fn tile_grid_falls_back_when_a_dispatch_dimension_exceeds_the_runtime_limit() {
+        let tile = NativeTransposeTile::new(16, 8, 1, 1);
+        assert_eq!(
+            tile.dispatch_grid(OP, &[1024, 2048], 65_535).unwrap(),
+            Some((128, 64))
+        );
+        assert_eq!(
+            tile.dispatch_grid(OP, &[4_782_976, 16], 65_535).unwrap(),
+            None
+        );
     }
 
     #[test]

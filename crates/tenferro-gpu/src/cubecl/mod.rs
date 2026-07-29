@@ -252,7 +252,6 @@ fn launch_native_materialization<E: CubePrimitive>(
     }
     if plan.kind == NativePermutationKind::TiledTranspose {
         if let Some(config) = NativeTransposeTile::selected(op)? {
-            let tile = config.tile as usize;
             let block_rows = config.block_rows as usize;
             let padding = config.padding as usize;
             let vector_width = config.vector_width as usize;
@@ -263,40 +262,28 @@ fn launch_native_materialization<E: CubePrimitive>(
                     "tiled transpose requires a non-negative source offset",
                 )
             })?;
-            let cubes_x = u32::try_from(plan.dims[1].div_ceil(tile)).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "shape",
-                    "tiled transpose x grid exceeds u32::MAX",
-                )
-            })?;
-            let cubes_y = u32::try_from(plan.dims[0].div_ceil(tile)).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "shape",
-                    "tiled transpose y grid exceeds u32::MAX",
-                )
-            })?;
-            unsafe {
-                // SAFETY: The tiled classification proves a compact 2D
-                // transpose. Bounds guards cover edge tiles and every unit
-                // reaches the shared-memory barrier.
-                structural::tiled_transpose_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
-                    backend.runtime().client(),
-                    CubeCount::Static(cubes_x.max(1), cubes_y.max(1), 1),
-                    CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
-                    output,
-                    input,
-                    src_offset,
-                    plan.dims[0],
-                    plan.dims[1],
-                    tile,
-                    block_rows,
-                    padding,
-                    vector_width,
-                );
+            if let Some((cubes_x, cubes_y)) = config.dispatch_grid(op, &plan.dims, 65_535)? {
+                unsafe {
+                    // SAFETY: The tiled classification proves a compact 2D
+                    // transpose. Bounds guards cover edge tiles and every unit
+                    // reaches the shared-memory barrier.
+                    structural::tiled_transpose_kernel::launch_unchecked::<E, CubeclCudaRuntime>(
+                        backend.runtime().client(),
+                        CubeCount::Static(cubes_x, cubes_y, 1),
+                        CubeDim::new_2d(config.tile / config.vector_width, config.block_rows),
+                        output,
+                        input,
+                        src_offset,
+                        plan.dims[0],
+                        plan.dims[1],
+                        config.tile as usize,
+                        block_rows,
+                        padding,
+                        vector_width,
+                    );
+                }
+                return Ok(());
             }
-            return Ok(());
         }
     }
     let src_strides = view_strides_i64(&plan.src_strides, op)?;

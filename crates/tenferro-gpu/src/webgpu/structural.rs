@@ -72,20 +72,6 @@ fn strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
         .collect()
 }
 
-fn tiled_cube_count(
-    op: &'static str,
-    plan: &NativePermutationPlan,
-    tile: usize,
-) -> crate::Result<CubeCount> {
-    let x = u32::try_from(plan.dims[1].div_ceil(tile)).map_err(|_| {
-        crate::Error::invalid_argument(op, "shape", "tiled transpose x grid exceeds u32::MAX")
-    })?;
-    let y = u32::try_from(plan.dims[0].div_ceil(tile)).map_err(|_| {
-        crate::Error::invalid_argument(op, "shape", "tiled transpose y grid exceeds u32::MAX")
-    })?;
-    Ok(CubeCount::Static(x.max(1), y.max(1), 1))
-}
-
 fn launch_materialization<T>(
     backend: &WebGpuBackend,
     output: &TypedTensor<T>,
@@ -122,7 +108,6 @@ where
     }
     if plan.kind == NativePermutationKind::TiledTranspose {
         if let Some(config) = NativeTransposeTile::selected(op)? {
-            let tile = config.tile as usize;
             let block_rows = config.block_rows as usize;
             let padding = config.padding as usize;
             let vector_width = config.vector_width as usize;
@@ -133,30 +118,33 @@ where
                     "tiled transpose requires a non-negative source offset",
                 )
             })?;
-            let cube_dim = CubeDim::new_2d(config.tile / config.vector_width, config.block_rows);
-            unsafe {
-                // SAFETY: The tiled classification proves a compact 2D
-                // transpose. Bounds guards cover edge tiles and every unit
-                // reaches the shared-memory barrier.
-                crate::kernels::structural::tiled_transpose_kernel::launch_unchecked::<
-                    T,
-                    WgpuRuntime,
-                >(
-                    backend.runtime().client(),
-                    tiled_cube_count(op, plan, tile)?,
-                    cube_dim,
-                    output_arg,
-                    input,
-                    src_offset,
-                    plan.dims[0],
-                    plan.dims[1],
-                    tile,
-                    block_rows,
-                    padding,
-                    vector_width,
-                );
+            if let Some((cubes_x, cubes_y)) = config.dispatch_grid(op, &plan.dims, 65_535)? {
+                let cube_dim =
+                    CubeDim::new_2d(config.tile / config.vector_width, config.block_rows);
+                unsafe {
+                    // SAFETY: The tiled classification proves a compact 2D
+                    // transpose. Bounds guards cover edge tiles and every unit
+                    // reaches the shared-memory barrier.
+                    crate::kernels::structural::tiled_transpose_kernel::launch_unchecked::<
+                        T,
+                        WgpuRuntime,
+                    >(
+                        backend.runtime().client(),
+                        CubeCount::Static(cubes_x, cubes_y, 1),
+                        cube_dim,
+                        output_arg,
+                        input,
+                        src_offset,
+                        plan.dims[0],
+                        plan.dims[1],
+                        config.tile as usize,
+                        block_rows,
+                        padding,
+                        vector_width,
+                    );
+                }
+                return Ok(());
             }
-            return Ok(());
         }
     }
     let src_strides = strides_i64(&plan.src_strides, op)?;
