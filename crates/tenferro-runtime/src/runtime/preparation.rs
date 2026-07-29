@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::error::Error as StdError;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -770,6 +771,13 @@ fn candidate_storage_classes(
                     classes.push(storage.clone());
                 }
             }
+            for engine in candidates {
+                for storage in engine.storage_classes() {
+                    if !classes.iter().any(|existing| existing == storage) {
+                        classes.push(storage.clone());
+                    }
+                }
+            }
             classes
         }
     }
@@ -1075,7 +1083,7 @@ fn search_dispatch_preferences(
     engine_preferences: &[super::EngineSnapshotView<'_>],
     mut build: impl FnMut(Vec<SelectedOperationDispatch>) -> PreparedProgramResult<PreparationContext>,
 ) -> PreparedProgramResult<PreparationContext> {
-    let mut attempted = Vec::<Vec<(EngineId, StorageClass)>>::new();
+    let mut attempted = HashSet::<Vec<(EngineId, StorageClass)>>::new();
     let mut last_route_error = None;
     for preference in engine_preferences {
         let selected = dispatch_candidates
@@ -1103,10 +1111,9 @@ fn search_dispatch_preferences(
                 )
             })
             .collect::<Vec<_>>();
-        if attempted.iter().any(|existing| existing == &key) {
+        if !attempted.insert(key) {
             continue;
         }
-        attempted.push(key);
 
         match build(selected) {
             Ok(context) => return Ok(context),
@@ -1116,6 +1123,57 @@ fn search_dispatch_preferences(
             Err(error) => return Err(error),
         }
     }
+
+    // INVARIANT: the engine-anchor pass above keeps the successful common case
+    // polynomial in engine, operation, and candidate count. Arbitrary transfer
+    // graphs form a general constraint-satisfaction problem, so a complete
+    // fallback has unavoidable worst-case cost `product(candidate_counts)`.
+    // Accept that cost only after every anchor has a route-specific failure;
+    // `attempted` ensures each distinct placement vector is built at most once.
+    let mut indices = vec![0_usize; dispatch_candidates.len()];
+    loop {
+        let selected = dispatch_candidates
+            .iter()
+            .zip(&indices)
+            .map(|(candidates, &index)| candidates[index].clone())
+            .collect::<Vec<_>>();
+        let key = selected
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.dispatch.binding.engine_id().clone(),
+                    candidate
+                        .dispatch
+                        .resolved_placement
+                        .storage_class()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if attempted.insert(key) {
+            match build(selected) {
+                Ok(context) => return Ok(context),
+                Err(error) if is_route_specific_prepare_error(error.as_ref()) => {
+                    last_route_error = Some(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        let mut advanced = false;
+        for operation_index in (0..indices.len()).rev() {
+            indices[operation_index] += 1;
+            if indices[operation_index] < dispatch_candidates[operation_index].len() {
+                advanced = true;
+                break;
+            }
+            indices[operation_index] = 0;
+        }
+        if !advanced {
+            break;
+        }
+    }
+
     Err(last_route_error.unwrap_or_else(|| {
         Arc::new(PrepareError::NoEligibleEngine {
             constraint: ProgramPlacementConstraint::any(),
@@ -1232,6 +1290,22 @@ fn operation_dispatch_candidates_any_storage(
             options,
             missing_extension_family,
         )?);
+    }
+    for engine in candidates {
+        for storage_class in engine.storage_classes() {
+            if storage_class == engine.default_storage_class() {
+                continue;
+            }
+            selected.extend(operation_dispatch_candidates(
+                runtime,
+                snapshot,
+                std::slice::from_ref(engine),
+                operation,
+                storage_class,
+                options,
+                missing_extension_family,
+            )?);
+        }
     }
     Ok(selected)
 }

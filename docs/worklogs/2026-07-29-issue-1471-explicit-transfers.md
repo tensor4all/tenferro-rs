@@ -211,6 +211,26 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   later-storage variant, and location loss at the terminal lazy-read boundary.
   The focused tests passed after their owning changes.
 
+## Exact-Commit Review Follow-Up
+
+- Preserved the deterministic engine-anchor placement search as the polynomial
+  fast path, then added a complete Cartesian fallback only after every anchor
+  fails with a route-specific typed error. A hash set skips anchor vectors
+  already covered by the fallback without quadratic duplicate scans.
+- Enumerated every registered storage class for root and per-operation
+  placement. Engine defaults remain globally preferred before non-default
+  classes, and explicit storage constraints remain unchanged.
+- Replaced the synthetic admission epoch test and the racy immediate-
+  reconfigure integration test with a deterministic two-barrier test through
+  `submit_with_spawner`, real graph preparation, and real scheduled output
+  materialization. The replacement executor deliberately rejects
+  materialization, proving admitted work retains and uses the prior executor.
+- TDD RED reproduced both placement defects as typed `NoInputIngress`:
+  the only valid two-operation combination was `B -> D`, and a single engine's
+  only valid ingress was its non-default registered storage class.
+- TDD GREEN covers the exact `B -> D` execution and transfer endpoints, the
+  non-default storage execution, existing route retries, and typed exhaustion.
+
 ## Deferred Scope
 
 - Event-domain schedulers and device-native asynchronous completion.
@@ -258,6 +278,22 @@ the additive `TransferRequest` endpoint accessors, `TransferError`,
   tenferro-gpu --features cuda,webgpu -j 48` passed.
 - On merged main `1cbee7a7`, `cargo test -p tenferro-runtime -j 48` passed 336
   unit tests, 93 integration tests, and 369 doctests.
+- After the exact-commit review follow-up, `cargo test -p tenferro-runtime -j
+  48` passed 341 unit tests, 102 integration tests, and 371 doctests.
+- `python3 scripts/ci/run_profile.py fmt` and
+  `python3 scripts/ci/run_profile.py clippy` passed, including all workspace
+  targets and extension manifests with warnings denied.
+- `python3 scripts/repository-rules-review.py --base HEAD --worktree --timeout
+  120` passed with no findings after documenting the complete placement
+  fallback's explicit complexity invariant.
+- After rebasing the exact-commit review tree onto `origin/main` at
+  `39e96af5`, `scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test
+  -p tenferro-runtime -j 48'` passed. This includes workspace and extension
+  fmt/clippy plus 341 unit tests, 102 integration tests, and 371 doctests.
+- The final run used a branch-specific Cargo target. Reusing one target across
+  divergent worktrees incorrectly reused a generated core-op macro artifact
+  from the sum-of-squares branch; isolating the target restored source-consistent
+  compilation without changing this branch.
 - On the same integrated tree, `cargo test -p tenferro-cpu runtime_adapter -j
   48` passed 10 focused tests, `cargo check -p tenferro-gpu --features
   cuda,webgpu -j 48` passed, and the CUDA/WebGPU ingress test filter passed two

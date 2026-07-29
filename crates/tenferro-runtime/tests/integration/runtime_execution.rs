@@ -934,6 +934,59 @@ fn cpu_registration_with_storage_id(
     })
 }
 
+fn cpu_registration_with_storage_classes(
+    backend: &CpuBackend,
+    engine_id: &str,
+    storage_classes: Vec<StorageClass>,
+    default_storage: StorageClass,
+    ingress_storage: StorageClass,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let backend = Arc::new(backend.clone());
+    EngineRegistration::new(
+        EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        ExecutionContextIdentity::of::<CpuBackend>(),
+        HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
+        Arc::from(storage_classes),
+        default_storage,
+        CoreCapabilityBundle::builder().build(),
+    )
+    .map(|registration| {
+        registration
+            .with_input_signature_validator({
+                let ingress_storage = ingress_storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |placement, family, domain, candidate| {
+                    candidate == &ingress_storage
+                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
+                }
+            })
+            .with_input_ingress_validator(
+                {
+                    let ingress_storage = ingress_storage.clone();
+                    move |placement, candidate| {
+                        test_cpu_placement(placement) && candidate == &ingress_storage
+                    }
+                },
+                {
+                    let ingress_storage = ingress_storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &ingress_storage
+                            && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+                {
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &ingress_storage
+                            && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+            )
+            .with_tensor_backend_executor(backend.as_ref().clone())
+    })
+}
+
 #[test]
 fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
 ) -> Result<(), Box<dyn StdError>> {
@@ -1381,6 +1434,165 @@ fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), B
     assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     assert_eq!(first_counters.execute.load(Ordering::SeqCst), 0);
     assert_eq!(second_counters.execute.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_operation_placement_explores_complete_multi_op_combinations(
+) -> Result<(), Box<dyn StdError>> {
+    let a_backend = CpuBackend::new()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let b_allocation_domain = Arc::new(TestAllocationDomain(AllocationDomainId::fresh()));
+    let b_backend = CpuBackend::new().with_allocation_domain(b_allocation_domain.clone());
+    let c_backend = CpuBackend::new()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let d_backend = CpuBackend::new()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let a_storage = StorageClass::new("tenferro-test.storage.complete-a.v1")?;
+    let b_storage = StorageClass::new("tenferro-test.storage.complete-b.v1")?;
+    let c_storage = StorageClass::new("tenferro-test.storage.complete-c.v1")?;
+    let d_storage = StorageClass::new("tenferro-test.storage.complete-d.v1")?;
+    let a_counters = Arc::new(ExtensionCounters::default());
+    let b_counters = Arc::new(ExtensionCounters::default());
+    let c_counters = Arc::new(ExtensionCounters::default());
+    let d_counters = Arc::new(ExtensionCounters::default());
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
+        b_storage.clone(),
+        d_storage.clone(),
+        d_backend.clone(),
+    ));
+
+    let mut builder = Runtime::builder();
+    for (backend, engine_id, storage) in [
+        (&a_backend, "tenferro-test.complete-a.v1", &a_storage),
+        (&b_backend, "tenferro-test.complete-b.v1", &b_storage),
+        (&c_backend, "tenferro-test.complete-c.v1", &c_storage),
+        (&d_backend, "tenferro-test.complete-d.v1", &d_storage),
+    ] {
+        builder.register_engine(cpu_registration_with_storage_id(
+            backend,
+            engine_id,
+            storage.as_str(),
+            false,
+            true,
+        )?)?;
+    }
+    builder.register_transfer_provider(b_storage.clone(), d_storage.clone(), transfer.clone())?;
+    for (module_id, family_id, engine_id, counters) in [
+        (
+            "tenferro-test.complete.first-a",
+            COUNTING_EXTENSION_FAMILY,
+            "tenferro-test.complete-a.v1",
+            Arc::clone(&a_counters),
+        ),
+        (
+            "tenferro-test.complete.first-b",
+            COUNTING_EXTENSION_FAMILY,
+            "tenferro-test.complete-b.v1",
+            Arc::clone(&b_counters),
+        ),
+        (
+            "tenferro-test.complete.second-c",
+            DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+            "tenferro-test.complete-c.v1",
+            Arc::clone(&c_counters),
+        ),
+        (
+            "tenferro-test.complete.second-d",
+            DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+            "tenferro-test.complete-d.v1",
+            Arc::clone(&d_counters),
+        ),
+    ] {
+        builder.install_extension_module(Arc::new(CountingExtensionModule {
+            module_id: ExtensionModuleId::new(module_id)?,
+            family_id,
+            engine_id: EngineId::new(engine_id)?,
+            counters,
+        }))?;
+    }
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let first = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("first extension has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&first],
+    )?
+    .pop()
+    .expect("second extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = b_allocation_domain.allocate(DType::F64, &[2])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
+    assert_eq!(a_counters.execute.load(Ordering::SeqCst), 0);
+    assert_eq!(b_counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(c_counters.execute.load(Ordering::SeqCst), 0);
+    assert_eq!(d_counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(transfer.calls(), 1);
+    assert_eq!(transfer.requests()[0].source_storage_class, b_storage);
+    assert_eq!(transfer.requests()[0].destination_storage_class, d_storage);
+    Ok(())
+}
+
+#[test]
+fn runtime_operation_placement_enumerates_non_default_registered_storage(
+) -> Result<(), Box<dyn StdError>> {
+    let domain = Arc::new(TestAllocationDomain(AllocationDomainId::fresh()));
+    let backend = CpuBackend::new().with_allocation_domain(domain.clone());
+    let default_storage = StorageClass::new("tenferro-test.storage.default-unreachable.v1")?;
+    let secondary_storage = StorageClass::new("tenferro-test.storage.secondary-reachable.v1")?;
+    let counters = Arc::new(ExtensionCounters::default());
+    let engine_id = "tenferro-test.secondary-storage-engine.v1";
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_classes(
+        &backend,
+        engine_id,
+        vec![default_storage.clone(), secondary_storage.clone()],
+        default_storage,
+        secondary_storage.clone(),
+    )?)?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.secondary-storage-module")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(engine_id)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = domain.allocate(DType::F64, &[2])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        TensorRead::from_tensor(&output[0]).allocation_domain(),
+        backend.allocation_domain()
+    );
     Ok(())
 }
 
@@ -2398,29 +2610,6 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
 
     assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
     assert!(runtime.cache_stats()?.prepared_plans.entries > 0);
-
-    Ok(())
-}
-
-#[test]
-fn runtime_submit_owns_admitted_epoch_across_immediate_reconfigure() -> Result<(), Box<dyn StdError>>
-{
-    let backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x + &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-
-    let handle = runtime.submit(&program, &[&input])?;
-    runtime.reconfigure(|edit| {
-        edit.replace_engine(cpu_registration(&CpuBackend::new(), true)?)?;
-        Ok(())
-    })?;
-
-    let output = handle.wait()?;
-    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
 
     Ok(())
 }
