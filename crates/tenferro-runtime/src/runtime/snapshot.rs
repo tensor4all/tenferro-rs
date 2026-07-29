@@ -558,9 +558,11 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns metadata validation errors for incompatible inputs, or a runtime
-    /// state error if the prepared handle belongs to a different runtime or a
-    /// stale runtime epoch.
+    /// Returns metadata validation errors for incompatible inputs, a runtime
+    /// state error with [`crate::InputIngressContractError`] as its typed source
+    /// when an input's physical residency does not match the prepared ingress,
+    /// or a runtime state error if the prepared handle belongs to a different
+    /// runtime or a stale runtime epoch.
     pub fn run_prepared(
         &self,
         prepared: &super::execution::PreparedCompiledGraph,

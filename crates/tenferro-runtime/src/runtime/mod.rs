@@ -32,9 +32,9 @@ pub use capability::{
 pub use engine_registration::EngineRegistration;
 pub use error::{
     EngineExecutionContractError, ExecutionContextMismatch, ExecutionPolicyError,
-    ExtensionModuleError, IdentityError, IdentityKind, InputSignatureError,
-    InputSpecializationRequirementsError, PlacementConstraintError, PrepareError,
-    ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
+    ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,
+    InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
+    PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
     RuntimeReconfigureError, SpecializationError,
 };
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};

@@ -10,7 +10,7 @@ use super::policy::{ProgramPlacementConstraint, StorageClass};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_ops::ShapeGuardError;
-use tenferro_tensor::{AllocationDomainId, Error as TensorError};
+use tenferro_tensor::{AllocationDomainId, Error as TensorError, Placement};
 
 /// Classifies a malformed runtime identifier without retaining its input.
 ///
@@ -324,6 +324,50 @@ pub enum EngineExecutionContractError {
         /// Physical backend family reported by the tensor.
         backend_family: Option<&'static str>,
         /// Physical allocation domain reported by the tensor.
+        allocation_domain: Option<AllocationDomainId>,
+    },
+}
+
+/// Reports a runtime input that violates a prepared ingress contract.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineId, InputIngressContractError, StorageClass};
+/// use tenferro_tensor::Placement;
+///
+/// let error = InputIngressContractError::ResidencyMismatch {
+///     input_slot: 0,
+///     ingress_engine_id: EngineId::new("tenferro.cpu")?,
+///     ingress_storage_class: StorageClass::new("tenferro.storage.host")?,
+///     placement: Placement::default(),
+///     backend_family: Some("foreign-backend"),
+///     allocation_domain: None,
+/// };
+/// assert!(error.to_string().contains("input slot 0"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum InputIngressContractError {
+    /// A runtime input's physical residency is incompatible with its prepared ingress.
+    #[error(
+        "input slot {input_slot} at placement {placement:?} with backend family \
+         {backend_family:?} and allocation domain {allocation_domain:?} is not accepted by \
+         ingress engine {ingress_engine_id:?} storage {ingress_storage_class:?}"
+    )]
+    ResidencyMismatch {
+        /// Execution slot containing the rejected runtime input.
+        input_slot: usize,
+        /// Engine selected as the prepared input ingress.
+        ingress_engine_id: EngineId,
+        /// Storage class selected as the prepared input ingress.
+        ingress_storage_class: StorageClass,
+        /// Logical placement reported by the input.
+        placement: Placement,
+        /// Physical backend family reported by the input.
+        backend_family: Option<&'static str>,
+        /// Physical allocation domain reported by the input.
         allocation_domain: Option<AllocationDomainId>,
     },
 }

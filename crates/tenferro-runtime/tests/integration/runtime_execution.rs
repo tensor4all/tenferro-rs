@@ -15,11 +15,11 @@ use tenferro_runtime::{
     ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
     ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
     ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
-    IndexingRuntime, LayoutRuntime, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan, ReductionRuntime,
-    RegistrationKey, Runtime, RuntimeCacheOwner, RuntimeConfigError, SpecializationProjection,
-    StorageClass, TracedTensor, TransferError, TransferProvider, TransferProviderContractError,
-    TransferRequest,
+    IndexingRuntime, InputIngressContractError, LayoutRuntime, PrepareCapability, PrepareError,
+    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
+    ReductionRuntime, RegistrationKey, Runtime, RuntimeCacheOwner, RuntimeConfigError,
+    SpecializationProjection, StorageClass, TracedTensor, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -1075,6 +1075,40 @@ fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), 
         } if *actual == foreign_domain
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_run_prepared_reports_rejected_physical_input_residency() -> Result<(), Box<dyn StdError>>
+{
+    let backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let host_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let prepared = runtime.prepare_compiled(&program, &[&host_input])?;
+    let foreign_domain = AllocationDomainId::fresh();
+    let foreign_input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
+
+    let error = runtime
+        .run_prepared(&prepared, &[&foreign_input])
+        .unwrap_err();
+
+    let contract = error
+        .source()
+        .and_then(|source| source.downcast_ref::<InputIngressContractError>())
+        .expect("typed input ingress contract source");
+    assert!(matches!(
+        contract,
+        InputIngressContractError::ResidencyMismatch {
+            input_slot: 0,
+            backend_family: Some("tenferro-test.allocation-domain"),
+            allocation_domain: Some(actual),
+            ..
+        } if *actual == foreign_domain
+    ));
     Ok(())
 }
 

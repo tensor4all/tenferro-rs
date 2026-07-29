@@ -1234,17 +1234,17 @@ fn validate_runtime_input_ingress(
     if accepted {
         return Ok(());
     }
-    let placement = input.placement();
-    Err(Error::runtime_state(
+    Err(Error::runtime_state_source(
         "Runtime::run_compiled",
         ErrorPhase::Execution,
-        format!(
-            "input slot {slot} placement {:?} is incompatible with prepared ingress \
-             {:?}/{:?}",
-            placement,
-            location.engine_id(),
-            location.storage_class()
-        ),
+        super::InputIngressContractError::ResidencyMismatch {
+            input_slot: slot,
+            ingress_engine_id: location.engine_id().clone(),
+            ingress_storage_class: location.storage_class().clone(),
+            placement: input.placement().clone(),
+            backend_family: input.backend_family(),
+            allocation_domain: input.allocation_domain(),
+        },
     ))
 }
 
