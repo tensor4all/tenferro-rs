@@ -21,7 +21,7 @@ use super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedValue, RuntimeCacheSet, SharedRetention,
 };
 use super::extension::ExtensionFamilyId;
-use super::schedule::ScheduledGraph;
+use super::schedule::{ExecutionLocation, ScheduleBuildError, ScheduledGraph};
 use super::{
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, ExecutionContextIdentity,
@@ -198,9 +198,15 @@ impl PreparedProgramRoot {
         identity: Arc<PreparedRootIdentity>,
         staging: Arc<ExecProgram>,
         extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
-    ) -> Self {
+        root_location: ExecutionLocation,
+        operation_locations: &[ExecutionLocation],
+    ) -> Result<Self, ScheduleBuildError> {
         let semantic = Arc::clone(&identity.semantic);
-        let schedule = Arc::new(ScheduledGraph::from_exec_program(&staging));
+        let schedule = Arc::new(ScheduledGraph::from_exec_program(
+            &staging,
+            root_location,
+            operation_locations,
+        )?);
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
             &semantic,
@@ -208,14 +214,14 @@ impl PreparedProgramRoot {
             &schedule,
             &extension_planning,
         );
-        Self {
+        Ok(Self {
             identity,
             semantic,
             staging,
             schedule,
             extension_planning,
             logical_retained_bytes,
-        }
+        })
     }
 
     fn shared_retention(self: &Arc<Self>) -> SharedRetention<Self> {
@@ -365,6 +371,8 @@ impl PreparedValue for PreparedProgram {
 struct PreparationContext {
     root_identity: Arc<PreparedRootIdentity>,
     operation_dispatch: Arc<[OperationDispatch]>,
+    root_location: ExecutionLocation,
+    operation_locations: Arc<[ExecutionLocation]>,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
 }
 
@@ -607,6 +615,22 @@ fn candidate_storage_classes(
     }
 }
 
+pub(crate) fn execution_location(
+    snapshot: &super::RuntimeConfigSnapshot,
+    placement: &ResolvedProgramPlacement,
+) -> PreparedProgramResult<ExecutionLocation> {
+    let engine = snapshot.engine(placement.engine_id()).ok_or_else(|| {
+        Arc::new(PrepareError::ResolvedEngineUnavailable {
+            engine_id: placement.engine_id().clone(),
+        })
+    })?;
+    Ok(ExecutionLocation::new(
+        placement.engine_id().clone(),
+        engine.event_domain_id(),
+        placement.storage_class().clone(),
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_operation_dispatch(
     runtime: &Runtime,
@@ -691,6 +715,12 @@ fn build_operation_dispatch(
         };
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
 
+    let root_location = execution_location(snapshot, &primary_resolved_placement)?;
+    let operation_locations: Arc<[_]> = placements
+        .iter()
+        .map(|placement| execution_location(snapshot, placement))
+        .collect::<PreparedProgramResult<Vec<_>>>()?
+        .into();
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
@@ -712,6 +742,8 @@ fn build_operation_dispatch(
     Ok(Some(PreparationContext {
         root_identity,
         operation_dispatch: dispatch.into(),
+        root_location,
+        operation_locations,
         extension_planning: extension_planning.into(),
     }))
 }
@@ -759,6 +791,12 @@ fn build_cross_storage_operation_dispatch(
     };
     let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
     let primary_binding = primary.binding.clone();
+    let root_location = execution_location(snapshot, &primary.resolved_placement)?;
+    let operation_locations: Arc<[_]> = placements
+        .iter()
+        .map(|placement| execution_location(snapshot, placement))
+        .collect::<PreparedProgramResult<Vec<_>>>()?
+        .into();
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
@@ -780,6 +818,8 @@ fn build_cross_storage_operation_dispatch(
     Ok(Some(PreparationContext {
         root_identity,
         operation_dispatch: dispatch.into(),
+        root_location,
+        operation_locations,
         extension_planning: extension_planning.into(),
     }))
 }
@@ -1084,11 +1124,19 @@ fn root_for_key(
             })
         },
     )?;
-    Ok(Arc::new(PreparedProgramRoot::new(
+    PreparedProgramRoot::new(
         identity,
         Arc::new(staging),
         Arc::clone(&context.extension_planning),
-    )))
+        context.root_location.clone(),
+        &context.operation_locations,
+    )
+    .map(Arc::new)
+    .map_err(|source| {
+        Arc::new(PrepareError::Engine {
+            source: Arc::new(source),
+        })
+    })
 }
 
 fn prepare_operation(

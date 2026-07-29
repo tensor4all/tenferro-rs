@@ -19,11 +19,13 @@ use crate::exec::{
 };
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
-use crate::runtime::schedule::{ScheduledGraph, ScheduledNode};
+use crate::runtime::schedule::{
+    ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
+};
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferProvider,
-    TransferRequest,
+    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferError,
+    TransferProvider, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -594,7 +596,7 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
 #[derive(Debug)]
 struct PreparedExecutionEngines {
     root: Arc<dyn ErasedTensorBackendExecutor>,
-    root_storage_class: StorageClass,
+    root_location: ExecutionLocation,
     operations: Box<[PreparedOperationExecution]>,
     transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
 }
@@ -602,7 +604,7 @@ struct PreparedExecutionEngines {
 #[derive(Debug)]
 struct PreparedOperationExecution {
     executor: Arc<dyn ErasedTensorBackendExecutor>,
-    storage_class: StorageClass,
+    location: ExecutionLocation,
 }
 
 pub(super) fn run_compiled(
@@ -751,6 +753,21 @@ fn execution_engines(
         ));
     }
     let storage_class = root.resolved_placement().storage_class();
+    let root_engine = snapshot.engine(root.engine_id()).ok_or_else(|| {
+        Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            format!(
+                "prepared root engine {:?} is no longer registered",
+                root.engine_id()
+            ),
+        )
+    })?;
+    let root_location = ExecutionLocation::new(
+        root.engine_id().clone(),
+        root_engine.event_domain_id(),
+        storage_class.clone(),
+    );
     let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
     let operation_placements = root.operation_placements();
     if operation_placements.len() != prepared.operations().len() {
@@ -786,12 +803,16 @@ fn execution_engines(
         }
         operation_executors.push(PreparedOperationExecution {
             executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
-            storage_class: placement.storage_class().clone(),
+            location: ExecutionLocation::new(
+                engine_id.clone(),
+                engine.event_domain_id(),
+                placement.storage_class().clone(),
+            ),
         });
     }
     Ok(PreparedExecutionEngines {
         root: root_executor,
-        root_storage_class: storage_class.clone(),
+        root_location,
         operations: operation_executors.into_boxed_slice(),
         transfers: snapshot.transfers_for_execution(),
     })
@@ -884,59 +905,73 @@ fn execute_scheduled_slots<'input>(
     } else {
         Vec::new()
     };
-    let mut slots = Vec::new();
-    let mut slot_storage = vec![None; program.n_slots];
+    let mut staged = Vec::new();
+    let mut located = (0..program.n_slots)
+        .map(|_| Vec::new())
+        .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
     let result = (|| {
-        crate::exec::initialize_exec_slots_in(program, inputs, &mut slots)?;
+        crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
         for &slot in &program.input_slots {
-            if let Some(storage) = slot_storage.get_mut(slot) {
-                *storage = Some(execution.root_storage_class.clone());
-            }
+            let value = staged
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            located[slot].push(LocatedExecSlot {
+                location: execution.root_location.clone(),
+                value,
+            });
         }
-        if schedule.nodes().len() != program.instructions.len() {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "scheduled graph has {} nodes for {} execution instructions",
-                    schedule.nodes().len(),
-                    program.instructions.len()
-                ),
-            ));
-        }
-        for (instruction_index, node) in schedule.nodes().iter().enumerate() {
+        for node in schedule.nodes() {
             match node {
-                ScheduledNode::Operation(_) => {
-                    let instruction = &program.instructions[instruction_index];
+                ScheduledNode::Operation(operation_node) => {
+                    let instruction_index = operation_node.instruction_index();
+                    let instruction =
+                        program.instructions.get(instruction_index).ok_or_else(|| {
+                            Error::runtime_state(
+                                "Runtime::run_compiled",
+                                ErrorPhase::Execution,
+                                format!(
+                                    "scheduled operation references instruction \
+                                     {instruction_index}, but the execution program has {} \
+                                     instructions",
+                                    program.instructions.len()
+                                ),
+                            )
+                        })?;
                     let operation = instruction_execution(execution, instruction)?;
-                    ensure_instruction_inputs_in_storage(
-                        execution,
+                    if operation.location() != operation_node.location() {
+                        return Err(Error::runtime_state(
+                            "Runtime::run_compiled",
+                            ErrorPhase::Execution,
+                            format!(
+                                "scheduled instruction {instruction_index} location does not \
+                                 match its prepared executor"
+                            ),
+                        ));
+                    }
+                    stage_instruction_inputs(
                         instruction,
-                        operation.storage_class(),
-                        &mut slots,
-                        &mut slot_storage,
+                        operation.location(),
+                        &mut located,
+                        &mut staged,
                     )?;
                     operation.executor().execute_slot_instruction(
                         instruction_index,
                         instruction,
                         operations,
-                        &mut slots,
+                        &mut staged,
                         output_mode,
                         &terminal_slots,
                     )?;
-                    for &slot in &instruction.output_slots {
-                        if let Some(storage) = slot_storage.get_mut(slot) {
-                            *storage = Some(operation.storage_class().clone());
-                        }
-                    }
-                    clear_last_use_storage(instruction, &mut slot_storage);
+                    retain_instruction_results(
+                        instruction,
+                        operation.location(),
+                        &mut located,
+                        &mut staged,
+                    )?;
                 }
-                ScheduledNode::Transfer(_) => {
-                    return Err(Error::runtime_state(
-                        "Runtime::run_compiled",
-                        ErrorPhase::Execution,
-                        "transfer node execution is not implemented before U3",
-                    ));
+                ScheduledNode::Transfer(transfer) => {
+                    execute_scheduled_transfer(execution, transfer, &mut located)?;
                 }
                 ScheduledNode::Collective(_) => {
                     return Err(Error::runtime_state(
@@ -948,13 +983,16 @@ fn execute_scheduled_slots<'input>(
                 ScheduledNode::Barrier(_) => {}
             }
         }
-        Ok(())
+        collect_located_outputs(program, &mut located)
     })();
-    if let Err(error) = result {
-        slots.clear();
-        return Err(error);
+    match result {
+        Ok(slots) => Ok(slots),
+        Err(error) => {
+            staged.clear();
+            located.clear();
+            Err(error)
+        }
     }
-    Ok(slots)
 }
 
 fn instruction_execution<'a>(
@@ -964,7 +1002,7 @@ fn instruction_execution<'a>(
     let Some(operation_index) = instruction.semantic_operation_index else {
         return Ok(InstructionExecution {
             executor: &execution.root,
-            storage_class: &execution.root_storage_class,
+            location: &execution.root_location,
         });
     };
     let operation = execution.operations.get(operation_index).ok_or_else(|| {
@@ -979,13 +1017,13 @@ fn instruction_execution<'a>(
         })?;
     Ok(InstructionExecution {
         executor: operation.executor(),
-        storage_class: operation.storage_class(),
+        location: operation.location(),
     })
 }
 
 struct InstructionExecution<'a> {
     executor: &'a Arc<dyn ErasedTensorBackendExecutor>,
-    storage_class: &'a StorageClass,
+    location: &'a ExecutionLocation,
 }
 
 impl InstructionExecution<'_> {
@@ -993,8 +1031,8 @@ impl InstructionExecution<'_> {
         self.executor
     }
 
-    fn storage_class(&self) -> &StorageClass {
-        self.storage_class
+    fn location(&self) -> &ExecutionLocation {
+        self.location
     }
 }
 
@@ -1003,75 +1041,172 @@ impl PreparedOperationExecution {
         &self.executor
     }
 
-    fn storage_class(&self) -> &StorageClass {
-        &self.storage_class
+    fn location(&self) -> &ExecutionLocation {
+        &self.location
     }
 }
 
-fn ensure_instruction_inputs_in_storage<'input>(
-    execution: &PreparedExecutionEngines,
+pub(crate) struct LocatedExecSlot<'input> {
+    pub(crate) location: ExecutionLocation,
+    pub(crate) value: ExecSlot<'input>,
+}
+
+fn stage_instruction_inputs<'input>(
     instruction: &ExecInstruction,
-    destination: &StorageClass,
-    slots: &mut [Option<ExecSlot<'input>>],
-    slot_storage: &mut [Option<StorageClass>],
+    location: &ExecutionLocation,
+    located: &mut [Vec<LocatedExecSlot<'input>>],
+    staged: &mut [Option<ExecSlot<'input>>],
 ) -> Result<()> {
     for &slot in &instruction.input_slots {
-        ensure_slot_in_storage(execution, slot, destination, slots, slot_storage)?;
-    }
-    Ok(())
-}
-
-fn ensure_slot_in_storage<'input>(
-    execution: &PreparedExecutionEngines,
-    slot: usize,
-    destination: &StorageClass,
-    slots: &mut [Option<ExecSlot<'input>>],
-    slot_storage: &mut [Option<StorageClass>],
-) -> Result<()> {
-    let source = slot_storage
-        .get(slot)
-        .and_then(Option::as_ref)
-        .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
-    if source == destination {
-        return Ok(());
-    }
-    let provider = execution
-        .transfers
-        .get(&(source.clone(), destination.clone()))
-        .ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "no transfer provider registered from {:?} to {:?}",
-                    source.as_str(),
-                    destination.as_str()
-                ),
-            )
-        })?;
-    let transferred = {
-        let value = slots
+        if staged
             .get(slot)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
-        provider.transfer(TransferRequest::new(source, destination, value.as_read()))?
-    };
-    slots[slot] = Some(ExecSlot::Owned(transferred));
-    slot_storage[slot] = Some(destination.clone());
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?
+            .is_some()
+        {
+            continue;
+        }
+        let values = located
+            .get_mut(slot)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        let value_index = values
+            .iter()
+            .position(|value| &value.location == location)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        staged[slot] = Some(values.swap_remove(value_index).value);
+    }
     Ok(())
 }
 
-fn clear_last_use_storage(
+pub(crate) fn retain_instruction_results<'input>(
     instruction: &ExecInstruction,
-    slot_storage: &mut [Option<StorageClass>],
-) {
-    for (index, &slot) in instruction.input_slots.iter().enumerate() {
-        if instruction.last_use.get(index).copied().unwrap_or(false) {
-            if let Some(storage) = slot_storage.get_mut(slot) {
-                *storage = None;
+    location: &ExecutionLocation,
+    located: &mut [Vec<LocatedExecSlot<'input>>],
+    staged: &mut [Option<ExecSlot<'input>>],
+) -> Result<()> {
+    for &slot in &instruction.input_slots {
+        let is_output = instruction.output_slots.contains(&slot);
+        let is_last_use = instruction
+            .input_slots
+            .iter()
+            .enumerate()
+            .any(|(index, &candidate)| {
+                candidate == slot && instruction.last_use.get(index).copied().unwrap_or(false)
+            });
+        if is_last_use {
+            located[slot].clear();
+            if !is_output {
+                staged[slot].take();
+            }
+        } else if !is_output {
+            if let Some(value) = staged[slot].take() {
+                located[slot].push(LocatedExecSlot {
+                    location: location.clone(),
+                    value,
+                });
             }
         }
     }
+
+    for &slot in &instruction.output_slots {
+        let value = staged
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        let values = located
+            .get_mut(slot)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        values.clear();
+        values.push(LocatedExecSlot {
+            location: location.clone(),
+            value,
+        });
+    }
+    Ok(())
+}
+
+fn execute_scheduled_transfer<'input>(
+    execution: &PreparedExecutionEngines,
+    transfer: &ScheduledTransfer,
+    located: &mut [Vec<LocatedExecSlot<'input>>],
+) -> Result<()> {
+    let source = transfer.source_location();
+    let destination = transfer.destination_location();
+    let provider = execution
+        .transfers
+        .get(&(
+            source.storage_class().clone(),
+            destination.storage_class().clone(),
+        ))
+        .ok_or_else(|| {
+            Error::runtime_state_source(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                TransferError::MissingProvider {
+                    source_engine_id: source.engine_id().clone(),
+                    source_event_domain_id: source.event_domain_id(),
+                    source_storage_class: source.storage_class().clone(),
+                    destination_engine_id: destination.engine_id().clone(),
+                    destination_event_domain_id: destination.event_domain_id(),
+                    destination_storage_class: destination.storage_class().clone(),
+                },
+            )
+        })?;
+    let values =
+        located
+            .get_mut(transfer.value_slot())
+            .ok_or(tenferro_tensor::Error::MissingValue {
+                slot: transfer.value_slot(),
+            })?;
+    if values.iter().any(|value| &value.location == destination) {
+        return Err(Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            format!(
+                "scheduled transfer destination already contains value slot {}",
+                transfer.value_slot()
+            ),
+        ));
+    }
+    let transferred = {
+        let source_value = values
+            .iter()
+            .find(|value| &value.location == source)
+            .ok_or(tenferro_tensor::Error::MissingValue {
+                slot: transfer.value_slot(),
+            })?;
+        provider.transfer(TransferRequest::new(
+            source,
+            destination,
+            source_value.value.as_read(),
+        ))?
+    };
+    values.push(LocatedExecSlot {
+        location: destination.clone(),
+        value: ExecSlot::Owned(transferred),
+    });
+    Ok(())
+}
+
+fn collect_located_outputs<'input>(
+    program: &ExecProgram,
+    located: &mut [Vec<LocatedExecSlot<'input>>],
+) -> Result<Vec<Option<ExecSlot<'input>>>> {
+    let mut outputs = (0..program.n_slots).map(|_| None).collect::<Vec<_>>();
+    for &slot in &program.output_slots {
+        if outputs[slot].is_some() {
+            continue;
+        }
+        let values = located
+            .get_mut(slot)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        let value = values
+            .pop()
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        values.clear();
+        outputs[slot] = Some(value.value);
+    }
+    located.iter_mut().for_each(Vec::clear);
+    Ok(outputs)
 }
 
 fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {

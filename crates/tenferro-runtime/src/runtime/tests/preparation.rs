@@ -22,6 +22,27 @@ use crate::runtime::{
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
 
+#[test]
+fn missing_resolved_engine_returns_typed_prepare_error() {
+    let runtime = Runtime::builder().build().expect("empty runtime");
+    let snapshot = runtime.snapshot().expect("runtime snapshot");
+    let engine_id = EngineId::new("tenferro-test.missing-resolved-engine").expect("test engine id");
+    let placement = ResolvedProgramPlacement::new(
+        engine_id.clone(),
+        StorageClass::new("tenferro-test.missing-resolved-storage").expect("test storage class"),
+    );
+
+    let error = crate::runtime::preparation::execution_location(&snapshot, &placement)
+        .expect_err("missing engine must fail");
+
+    assert!(matches!(
+        error.as_ref(),
+        PrepareError::ResolvedEngineUnavailable {
+            engine_id: actual
+        } if actual == &engine_id
+    ));
+}
+
 #[derive(Clone, Debug)]
 enum ProviderAction {
     Prepared { retained_bytes: usize },
