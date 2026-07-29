@@ -943,6 +943,31 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
 }
 
 #[test]
+fn uninit_output_partial_write_then_panic_replenishes_only_capacity() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    backend
+        .with_linalg_pool(|_, pool| {
+            <bool as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
+            Ok(())
+        })
+        .unwrap();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = backend.with_linalg_pool::<()>(|_, pool| {
+            let mut output =
+                crate::indexing_alloc::PooledUninitOutput::<bool>::new(pool, vec![1024]).unwrap();
+            output.as_uninit_bytes_mut()[0].write(1);
+            panic!("forced panic after a partial uninitialized output write");
+        });
+    }));
+
+    assert!(result.is_err());
+    let resources = backend.engine.resources.lock().unwrap_err().into_inner();
+    assert_eq!(resources.buffers.len(), 1);
+    assert_eq!(resources.buffers.stats().capacity_bytes, 1024);
+}
+
+#[test]
 fn cached_dot_dispatch_reports_dtype_mismatches() {
     let mut backend = CpuBackend::new();
     let mut cache = gemm::GemmAnalysisCache::default();

@@ -40,6 +40,8 @@ where
 {
     pub(crate) fn new(buffers: &mut BufferPool, shape: Vec<usize>) -> crate::Result<Self> {
         let len = checked_shape_product("cpu_pooled_output", &shape)?;
+        // INVARIANT: this owner exposes only MaybeUninit storage until a
+        // full-overwrite caller proves initialization through assume_init.
         Ok(Self {
             shape,
             data: T::pool_acquire_uninit(buffers, len),
@@ -47,6 +49,10 @@ where
     }
 
     pub(crate) fn as_uninit_bytes_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        // INVARIANT: MaybeUninit<T> may be viewed as size_of::<T>() uninitialized
+        // bytes; no initialized T reference is constructed at this boundary.
+        // SAFETY: MaybeUninit<T> and its byte range share the same allocation,
+        // and the returned lifetime remains bounded by this exclusive borrow.
         unsafe {
             std::slice::from_raw_parts_mut(
                 self.data.as_mut_ptr().cast::<MaybeUninit<u8>>(),
@@ -63,6 +69,10 @@ where
     pub(crate) unsafe fn assume_init(self) -> crate::Result<TypedTensor<T>> {
         let Self { shape, data } = self;
         let mut data = ManuallyDrop::new(data);
+        // INVARIANT: the caller's successful full-overwrite replay initialized
+        // every element, and MaybeUninit<T> has the same allocation layout as T.
+        // SAFETY: the caller guarantees every element is initialized, while
+        // ManuallyDrop transfers the unchanged allocation exactly once.
         let initialized = unsafe {
             Vec::from_raw_parts(data.as_mut_ptr().cast::<T>(), data.len(), data.capacity())
         };
@@ -108,5 +118,18 @@ mod tests {
         let output = unsafe { output.assume_init() }.unwrap();
 
         assert_eq!(output.as_slice().unwrap(), &[false; 6]);
+    }
+
+    #[test]
+    fn pooled_uninit_output_error_drop_clears_in_flight_accounting() {
+        let mut buffers = BufferPool::new();
+        <bool as PoolScalar>::pool_release(&mut buffers, Vec::with_capacity(6));
+
+        let output = PooledUninitOutput::<bool>::new(&mut buffers, vec![2, 3]).unwrap();
+        drop(output);
+        buffers.clear_in_flight_retained();
+
+        assert_eq!(buffers.stats().buffers, 0);
+        assert_eq!(buffers.stats().capacity_bytes, 0);
     }
 }

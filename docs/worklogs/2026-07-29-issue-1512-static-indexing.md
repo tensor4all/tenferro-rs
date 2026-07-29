@@ -94,6 +94,12 @@ rule, so strided-rs #174 / PR #175 added a narrow
 Issue #1516 continues to track the remaining legacy typed-uninitialized
 callers outside this static indexing scope.
 
+The follow-up unsafe review found no memory-safety defect. It required explicit
+`// INVARIANT:` markers at each raw acquisition, byte-view, and initialized
+handoff boundary, plus direct normal-error, panic-replenishment, and
+success-release accounting tests. Those tests confirm that partial storage is
+never returned to the pool and that replacement capacity is accounted once.
+
 The same review found unchecked arithmetic in the inline stride helper. The
 helper now returns typed validation errors on conversion or multiplication
 overflow, and tests cover overflow, a zero extent followed by an unreachable

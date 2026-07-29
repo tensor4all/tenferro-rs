@@ -135,6 +135,62 @@ fn uninit_acquire_reuses_storage_and_can_be_initialized_before_release() {
 }
 
 #[test]
+fn uninit_acquire_error_cleanup_drops_owner_and_clears_in_flight_accounting() {
+    let mut pool = BufferPool::new();
+    <bool as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
+
+    let in_flight = <bool as PoolScalar>::pool_acquire_uninit(&mut pool, 4);
+    drop(in_flight);
+    pool.clear_in_flight_retained();
+
+    assert_eq!(pool.stats().buffers, 0);
+    assert_eq!(pool.stats().capacity_bytes, 0);
+    assert!(pool.bool_in_flight.is_empty());
+}
+
+#[test]
+fn uninit_acquire_panic_cleanup_replenishes_only_an_empty_replacement() {
+    let mut pool = BufferPool::new();
+    <bool as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
+
+    let mut in_flight = <bool as PoolScalar>::pool_acquire_uninit(&mut pool, 4);
+    in_flight[0].write(true);
+    drop(in_flight);
+    pool.replenish_in_flight_retained();
+
+    let replacements = pool.bool_pool.get(&4).unwrap();
+    assert_eq!(replacements.len(), 1);
+    assert!(replacements[0].is_empty());
+    assert_eq!(pool.retained_capacity_bytes(), 4 * size_of::<bool>());
+    assert!(pool.bool_in_flight.is_empty());
+}
+
+#[test]
+fn uninit_acquire_success_release_is_accounted_once() {
+    let mut pool = BufferPool::new();
+    <bool as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
+    let expected = pool.stats();
+
+    let mut reused = <bool as PoolScalar>::pool_acquire_uninit(&mut pool, 4);
+    reused.iter_mut().for_each(|value| {
+        value.write(true);
+    });
+    let mut reused = ManuallyDrop::new(reused);
+    let initialized = unsafe {
+        Vec::from_raw_parts(
+            reused.as_mut_ptr().cast::<bool>(),
+            reused.len(),
+            reused.capacity(),
+        )
+    };
+    <bool as PoolScalar>::pool_release(&mut pool, initialized);
+    pool.replenish_in_flight_retained();
+
+    assert_eq!(pool.stats(), expected);
+    assert!(pool.bool_in_flight.is_empty());
+}
+
+#[test]
 fn zero_len_not_pooled() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::new());

@@ -524,7 +524,9 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("slice", err))?;
 
-    // SAFETY: successful static-slice replay initializes every logical output.
+    // INVARIANT: the compact output has no unreachable storage, so successful
+    // static-slice replay initializes every element.
+    // SAFETY: every element contains a valid T after successful replay.
     unsafe { out.assume_init() }
 }
 
@@ -669,7 +671,9 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptrs)
         .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
-    // SAFETY: successful concatenate replay initializes every logical output.
+    // INVARIANT: the compact output has no unreachable storage, so successful
+    // concatenate replay initializes every element.
+    // SAFETY: every element contains a valid T after successful replay.
     unsafe { out.assume_init() }
 }
 
@@ -714,7 +718,9 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
-    // SAFETY: successful reverse replay initializes every logical output.
+    // INVARIANT: the compact output has no unreachable storage, so successful
+    // reverse replay initializes every element.
+    // SAFETY: every element contains a valid T after successful replay.
     unsafe { out.assume_init() }
 }
 
@@ -1717,7 +1723,9 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
 
-    // SAFETY: successful pad replay initializes every logical output.
+    // INVARIANT: the compact output has no unreachable storage, so successful
+    // pad replay initializes every element.
+    // SAFETY: every element contains a valid T after successful replay.
     unsafe { out.assume_init() }
 }
 

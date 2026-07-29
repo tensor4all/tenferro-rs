@@ -151,6 +151,18 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// The returned `MaybeUninit` vector remains safe to drop after an error
     /// or panic. Convert it back to `Vec<Self>` only after every element has
     /// been initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::new();
+    /// let mut buf = <f64 as PoolScalar>::pool_acquire_uninit(&mut pool, 2);
+    /// buf[0].write(1.0);
+    /// buf[1].write(2.0);
+    /// assert_eq!(unsafe { buf[1].assume_init_ref() }, &2.0);
+    /// ```
     fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>>;
 
     /// Acquire a buffer with length `len` and every element set to zero.
@@ -313,6 +325,8 @@ macro_rules! impl_pool_scalar {
             }
 
             fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>> {
+                // INVARIANT: PoolScalar is sealed to Copy scalars, so
+                // MaybeUninit<Self> preserves allocation layout and drop safety.
                 match take_best_fit(&mut pool.$field, len) {
                     Some(buf) => {
                         pool.retained_capacity_bytes = pool
