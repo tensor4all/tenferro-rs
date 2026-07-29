@@ -242,6 +242,10 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   documented immediate destination readability as a provider requirement.
   Native stream/queue enqueue belongs to the event-domain driver contract and
   cannot be registered through this interface.
+- Kept runtime ingress distinct from direct backend error handling. CPU runtime
+  ingress rejects GPU residency so routing must use an explicit transfer
+  provider; it does not replace the existing direct `CpuBackend` runtime-state
+  error and its actionable "download to host" diagnostic.
 
 ## Deferred Scope
 

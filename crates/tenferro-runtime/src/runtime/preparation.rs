@@ -1188,17 +1188,17 @@ fn search_dispatch_preferences(
 }
 
 #[derive(Debug)]
-struct DispatchSearchBudget {
+pub(super) struct DispatchSearchBudget {
     attempts: usize,
     limit: usize,
 }
 
 impl DispatchSearchBudget {
-    fn new(limit: usize) -> Self {
+    pub(super) fn new(limit: usize) -> Self {
         Self { attempts: 0, limit }
     }
 
-    fn try_attempt(&mut self) -> bool {
+    pub(super) fn try_attempt(&mut self) -> bool {
         if self.attempts >= self.limit {
             return false;
         }
@@ -1206,11 +1206,11 @@ impl DispatchSearchBudget {
         true
     }
 
-    fn attempts(&self) -> usize {
+    pub(super) fn attempts(&self) -> usize {
         self.attempts
     }
 
-    fn limit(&self) -> usize {
+    pub(super) fn limit(&self) -> usize {
         self.limit
     }
 }
@@ -1349,23 +1349,6 @@ fn operation_dispatch_candidates_any_storage(
         }
     }
     Ok(selected)
-}
-
-#[cfg(test)]
-mod dispatch_search_budget_tests {
-    use super::DispatchSearchBudget;
-
-    #[test]
-    fn dispatch_search_budget_stops_before_unbounded_cartesian_enumeration() {
-        let mut budget = DispatchSearchBudget::new(3);
-
-        assert!(budget.try_attempt());
-        assert!(budget.try_attempt());
-        assert!(budget.try_attempt());
-        assert!(!budget.try_attempt());
-        assert_eq!(budget.attempts(), 3);
-        assert_eq!(budget.limit(), 3);
-    }
 }
 
 fn provider_for_operation(

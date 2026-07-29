@@ -95,6 +95,10 @@ pub fn runtime_engine_registration(
                     && cpu_input_signature(placement, family, domain, allocation_domain)
             })
             .with_input_ingress_validator(
+                // Runtime ingress is a routing boundary, not a CpuBackend op.
+                // Reject device residency here so the scheduler must select an
+                // explicit transfer provider. Direct CpuBackend operations keep
+                // their RuntimeState error with the "download to host" remedy.
                 move |placement, candidate| {
                     cpu_input_placement(placement) && candidate == &placement_storage
                 },

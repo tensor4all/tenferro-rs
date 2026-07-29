@@ -24,6 +24,18 @@ use crate::runtime::{
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
 
 #[test]
+fn dispatch_search_budget_stops_before_unbounded_cartesian_enumeration() {
+    let mut budget = crate::runtime::preparation::DispatchSearchBudget::new(3);
+
+    assert!(budget.try_attempt());
+    assert!(budget.try_attempt());
+    assert!(budget.try_attempt());
+    assert!(!budget.try_attempt());
+    assert_eq!(budget.attempts(), 3);
+    assert_eq!(budget.limit(), 3);
+}
+
+#[test]
 fn missing_resolved_engine_returns_typed_prepare_error() {
     let runtime = Runtime::builder().build().expect("empty runtime");
     let snapshot = runtime.snapshot().expect("runtime snapshot");
