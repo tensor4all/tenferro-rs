@@ -12,10 +12,10 @@ use tenferro_runtime::{
     SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 use tenferro_tensor::{
-    AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead,
+    AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView,
 };
 
-use super::WebGpuBackend;
+use super::{WebGpuBackend, WebGpuBuffer};
 
 const WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
 const WEBGPU_HARDWARE_CLASS_ID: &str = "tenferro-webgpu.device.v1";
@@ -185,6 +185,35 @@ fn webgpu_input_tensor(
     webgpu_input_placement(input.placement(), device_ordinal, allocation_domain)
         && input.backend_family() == Some("cubecl-webgpu")
         && input.allocation_domain() == allocation_domain
+        && webgpu_input_has_owned_buffer(input, device_ordinal)
+}
+
+fn webgpu_input_has_owned_buffer(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+    match input.clone().tensor_view() {
+        TensorView::F32(view) => webgpu_view_has_owner::<f32>(&view, device_ordinal),
+        TensorView::F64(view) => webgpu_view_has_owner::<f64>(&view, device_ordinal),
+        TensorView::I32(view) => webgpu_view_has_owner::<i32>(&view, device_ordinal),
+        TensorView::I64(view) => webgpu_view_has_owner::<i64>(&view, device_ordinal),
+        TensorView::Bool(view) => webgpu_view_has_owner::<bool>(&view, device_ordinal),
+        TensorView::C32(view) => {
+            webgpu_view_has_owner::<num_complex::Complex32>(&view, device_ordinal)
+        }
+        TensorView::C64(view) => {
+            webgpu_view_has_owner::<num_complex::Complex64>(&view, device_ordinal)
+        }
+    }
+}
+
+fn webgpu_view_has_owner<T: 'static>(
+    view: &tenferro_tensor::TypedTensorView<'_, T>,
+    device_ordinal: usize,
+) -> bool {
+    view.backend_buffer().is_some_and(|buffer| {
+        buffer
+            .as_any()
+            .downcast_ref::<WebGpuBuffer<T>>()
+            .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+    })
 }
 
 #[cfg(test)]

@@ -11,7 +11,12 @@ use super::{EngineId, StorageClass};
 /// request also identifies the concrete engines and event domains at its
 /// endpoints.
 pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
-    /// Transfer one tensor read into the destination execution location.
+    /// Complete one blocking transfer into the destination execution location.
+    ///
+    /// The returned tensor must be immediately readable by the destination
+    /// executor. Providers must not return after merely enqueueing work on an
+    /// asynchronous stream or queue. Native asynchronous transfers use the
+    /// event-domain driver contract instead of this interface.
     ///
     /// # Errors
     ///
@@ -19,7 +24,7 @@ pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
     /// failure when the provider cannot materialize the destination tensor, or
     /// a validation error such as dtype, shape, placement, or buffer mismatch
     /// when the transfer request is unsupported.
-    fn transfer(&self, request: TransferRequest<'_>) -> crate::Result<Tensor>;
+    fn transfer_blocking(&self, request: TransferRequest<'_>) -> crate::Result<Tensor>;
 }
 
 /// Borrowed request passed to a [`TransferProvider`].

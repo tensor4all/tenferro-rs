@@ -15,7 +15,7 @@ use tenferro_runtime::{
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     UnsupportedReason,
 };
-use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead};
+use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView};
 
 use super::CudaBackend;
 
@@ -136,6 +136,41 @@ fn cuda_input_tensor(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
     cuda_input_placement(input.placement(), device_ordinal)
         && input.backend_family() == Some("cubecl")
         && input.allocation_domain().is_none()
+        && cuda_input_has_owned_buffer(input, device_ordinal)
+}
+
+fn cuda_input_has_owned_buffer(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+    match input.clone().tensor_view() {
+        TensorView::F32(view) => cubecl_view_has_owner::<f32>(&view, device_ordinal),
+        TensorView::F64(view) => cubecl_view_has_owner::<f64>(&view, device_ordinal),
+        TensorView::I32(view) => cubecl_view_has_owner::<i32>(&view, device_ordinal),
+        TensorView::I64(view) => cubecl_view_has_owner::<i64>(&view, device_ordinal),
+        TensorView::Bool(view) => cubecl_view_has_owner::<bool>(&view, device_ordinal),
+        TensorView::C32(view) => view.backend_buffer().is_some_and(|buffer| {
+            buffer
+                .as_any()
+                .downcast_ref::<crate::CubeclBuffer<num_complex::Complex32>>()
+                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+        }),
+        TensorView::C64(view) => view.backend_buffer().is_some_and(|buffer| {
+            buffer
+                .as_any()
+                .downcast_ref::<crate::CubeclBuffer<num_complex::Complex64>>()
+                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+        }),
+    }
+}
+
+fn cubecl_view_has_owner<T: 'static>(
+    view: &tenferro_tensor::TypedTensorView<'_, T>,
+    device_ordinal: usize,
+) -> bool {
+    view.backend_buffer().is_some_and(|buffer| {
+        buffer
+            .as_any()
+            .downcast_ref::<crate::CubeclBuffer<T>>()
+            .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+    })
 }
 
 #[cfg(test)]

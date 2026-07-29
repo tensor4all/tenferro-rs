@@ -214,9 +214,12 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
 ## Exact-Commit Review Follow-Up
 
 - Preserved the deterministic engine-anchor placement search as the polynomial
-  fast path, then added a complete Cartesian fallback only after every anchor
-  fails with a route-specific typed error. A hash set skips anchor vectors
-  already covered by the fallback without quadratic duplicate scans.
+  fast path, then added a bounded Cartesian fallback only after every anchor
+  fails with a route-specific typed error. The fallback has a hard 4,096-build
+  budget and returns `DispatchSearchBudgetExceeded` instead of allowing an
+  unsatisfiable graph to grow exponentially without bound. A hash set skips
+  anchor vectors already covered by the fallback without quadratic duplicate
+  scans.
 - Enumerated every registered storage class for root and per-operation
   placement. Engine defaults remain globally preferred before non-default
   classes, and explicit storage constraints remain unchanged.
@@ -230,6 +233,15 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   only valid ingress was its non-default registered storage class.
 - TDD GREEN covers the exact `B -> D` execution and transfer endpoints, the
   non-default storage execution, existing route retries, and typed exhaustion.
+- Follow-up review found that GPU ingress trusted forgeable family metadata.
+  CUDA and WebGPU buffers now retain their private source-device ordinal, and
+  runtime ingress requires both the concrete executor-owned buffer type and
+  matching source ordinal. Tests reject synthetic family matches and relabeled
+  real buffers; backend-created CUDA and WebGPU tensors remain accepted.
+- Renamed the synchronous transfer entry point to `transfer_blocking` and
+  documented immediate destination readability as a provider requirement.
+  Native stream/queue enqueue belongs to the event-domain driver contract and
+  cannot be registered through this interface.
 
 ## Deferred Scope
 
@@ -302,3 +314,6 @@ the additive `TransferRequest` endpoint accessors, `TransferError`,
   tenferro-runtime -j 48` passed 341 unit tests, 101 integration tests, and 371
   doctests. CPU adapter tests passed 10/10; the combined CUDA/WebGPU feature
   check and two ingress tests also passed.
+- The final review repair ran the forged/owned/relabeled CUDA ingress tests on
+  the local A100 (2/2 passed), the equivalent WebGPU tests (2/2 passed), the
+  bounded-search unit test, and all 13 transfer-focused runtime tests.

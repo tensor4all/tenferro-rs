@@ -856,6 +856,17 @@ pub enum PrepareError {
         /// Placement rejected by every eligible engine ingress.
         placement: tenferro_tensor::Placement,
     },
+    /// Placement resolution exceeded its bounded combination-search budget.
+    #[error(
+        "placement resolution exhausted its search budget after {attempts} attempts \
+         (limit {limit})"
+    )]
+    DispatchSearchBudgetExceeded {
+        /// Number of dispatch combinations attempted.
+        attempts: usize,
+        /// Configured hard limit for this search.
+        limit: usize,
+    },
     /// No available copy of a value has a registered direct transfer provider
     /// to the storage required by its consumer.
     #[error(

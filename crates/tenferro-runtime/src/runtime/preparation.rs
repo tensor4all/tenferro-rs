@@ -1083,7 +1083,10 @@ fn search_dispatch_preferences(
     engine_preferences: &[super::EngineSnapshotView<'_>],
     mut build: impl FnMut(Vec<SelectedOperationDispatch>) -> PreparedProgramResult<PreparationContext>,
 ) -> PreparedProgramResult<PreparationContext> {
+    const MAX_DISPATCH_SEARCH_ATTEMPTS: usize = 4_096;
+
     let mut attempted = HashSet::<Vec<(EngineId, StorageClass)>>::new();
+    let mut budget = DispatchSearchBudget::new(MAX_DISPATCH_SEARCH_ATTEMPTS);
     let mut last_route_error = None;
     for preference in engine_preferences {
         let selected = dispatch_candidates
@@ -1114,6 +1117,9 @@ fn search_dispatch_preferences(
         if !attempted.insert(key) {
             continue;
         }
+        if !budget.try_attempt() {
+            return Err(dispatch_search_budget_error(&budget));
+        }
 
         match build(selected) {
             Ok(context) => return Ok(context),
@@ -1124,12 +1130,9 @@ fn search_dispatch_preferences(
         }
     }
 
-    // INVARIANT: the engine-anchor pass above keeps the successful common case
-    // polynomial in engine, operation, and candidate count. Arbitrary transfer
-    // graphs form a general constraint-satisfaction problem, so a complete
-    // fallback has unavoidable worst-case cost `product(candidate_counts)`.
-    // Accept that cost only after every anchor has a route-specific failure;
-    // `attempted` ensures each distinct placement vector is built at most once.
+    // INVARIANT: arbitrary transfer graphs form a general constraint-satisfaction
+    // problem. The hard attempt budget keeps an unsatisfiable graph from turning
+    // complete Cartesian fallback into unbounded preparation work.
     let mut indices = vec![0_usize; dispatch_candidates.len()];
     loop {
         let selected = dispatch_candidates
@@ -1151,6 +1154,9 @@ fn search_dispatch_preferences(
             })
             .collect::<Vec<_>>();
         if attempted.insert(key) {
+            if !budget.try_attempt() {
+                return Err(dispatch_search_budget_error(&budget));
+            }
             match build(selected) {
                 Ok(context) => return Ok(context),
                 Err(error) if is_route_specific_prepare_error(error.as_ref()) => {
@@ -1179,6 +1185,41 @@ fn search_dispatch_preferences(
             constraint: ProgramPlacementConstraint::any(),
         })
     }))
+}
+
+#[derive(Debug)]
+struct DispatchSearchBudget {
+    attempts: usize,
+    limit: usize,
+}
+
+impl DispatchSearchBudget {
+    fn new(limit: usize) -> Self {
+        Self { attempts: 0, limit }
+    }
+
+    fn try_attempt(&mut self) -> bool {
+        if self.attempts >= self.limit {
+            return false;
+        }
+        self.attempts += 1;
+        true
+    }
+
+    fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+fn dispatch_search_budget_error(budget: &DispatchSearchBudget) -> Arc<PrepareError> {
+    Arc::new(PrepareError::DispatchSearchBudgetExceeded {
+        attempts: budget.attempts(),
+        limit: budget.limit(),
+    })
 }
 
 fn operation_dispatch_candidates(
@@ -1308,6 +1349,23 @@ fn operation_dispatch_candidates_any_storage(
         }
     }
     Ok(selected)
+}
+
+#[cfg(test)]
+mod dispatch_search_budget_tests {
+    use super::DispatchSearchBudget;
+
+    #[test]
+    fn dispatch_search_budget_stops_before_unbounded_cartesian_enumeration() {
+        let mut budget = DispatchSearchBudget::new(3);
+
+        assert!(budget.try_attempt());
+        assert!(budget.try_attempt());
+        assert!(budget.try_attempt());
+        assert!(!budget.try_attempt());
+        assert_eq!(budget.attempts(), 3);
+        assert_eq!(budget.limit(), 3);
+    }
 }
 
 fn provider_for_operation(

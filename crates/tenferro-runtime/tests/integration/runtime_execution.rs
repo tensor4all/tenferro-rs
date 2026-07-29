@@ -312,7 +312,7 @@ impl RecordingTransferProvider {
 }
 
 impl TransferProvider for RecordingTransferProvider {
-    fn transfer(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
+    fn transfer_blocking(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
         assert_eq!(request.source_storage_class(), &self.source);
         assert_eq!(request.destination_storage_class(), &self.destination);
         self.requests
@@ -395,10 +395,10 @@ struct FailingTransferProvider {
 }
 
 impl TransferProvider for FailingTransferProvider {
-    fn transfer(&self, _request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
+    fn transfer_blocking(&self, _request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(Error::runtime_state_source(
-            "FailingTransferProvider::transfer",
+            "FailingTransferProvider::transfer_blocking",
             ErrorPhase::Execution,
             TestTransferFailure,
         ))
@@ -420,7 +420,7 @@ struct FaultyTransferProvider {
 }
 
 impl TransferProvider for FaultyTransferProvider {
-    fn transfer(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
+    fn transfer_blocking(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
         match self.fault {
             FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),

@@ -615,7 +615,10 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
 struct PreparationOnlyTransfer;
 
 impl TransferProvider for PreparationOnlyTransfer {
-    fn transfer(&self, _request: TransferRequest<'_>) -> crate::Result<tenferro_tensor::Tensor> {
+    fn transfer_blocking(
+        &self,
+        _request: TransferRequest<'_>,
+    ) -> crate::Result<tenferro_tensor::Tensor> {
         Err(crate::Error::Internal(
             "preparation-only transfer provider must not execute".into(),
         ))

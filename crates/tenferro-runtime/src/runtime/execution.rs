@@ -1430,7 +1430,7 @@ fn execute_scheduled_transfer<'input>(
         let expected_dtype = source_read.dtype();
         let expected_shape = source_read.shape().to_vec();
         let transferred =
-            provider.transfer(TransferRequest::new(source, destination, source_read))?;
+            provider.transfer_blocking(TransferRequest::new(source, destination, source_read))?;
         validate_transfer_output(
             execution,
             destination,

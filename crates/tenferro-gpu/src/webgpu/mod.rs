@@ -40,6 +40,7 @@ pub use runtime_adapter::{
 pub(crate) struct WebGpuBuffer<T> {
     handle: cubecl_runtime::server::Handle,
     len: usize,
+    device_ordinal: usize,
     managed: Option<Arc<cubecl_runtime::storage::ManagedResource<cubecl_wgpu::WgpuResource>>>,
     domain: Option<Arc<apple::AppleDomainState>>,
     _marker: std::marker::PhantomData<T>,
@@ -49,6 +50,7 @@ impl<T> std::fmt::Debug for WebGpuBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebGpuBuffer")
             .field("len", &self.len)
+            .field("device_ordinal", &self.device_ordinal)
             .field(
                 "allocation_domain",
                 &self.domain.as_ref().map(|domain| domain.id),
@@ -58,10 +60,11 @@ impl<T> std::fmt::Debug for WebGpuBuffer<T> {
 }
 
 impl<T> WebGpuBuffer<T> {
-    fn new(handle: cubecl_runtime::server::Handle, len: usize) -> Self {
+    fn new(handle: cubecl_runtime::server::Handle, len: usize, device_ordinal: usize) -> Self {
         Self {
             handle,
             len,
+            device_ordinal,
             managed: None,
             domain: None,
             _marker: std::marker::PhantomData,
@@ -75,7 +78,7 @@ impl<T> WebGpuBuffer<T> {
         op: &'static str,
     ) -> crate::Result<Self> {
         let Some(domain) = rt.allocation_domain() else {
-            return Ok(Self::new(handle, len));
+            return Ok(Self::new(handle, len, rt.device_ordinal()));
         };
         let managed = rt
             .client()
@@ -84,6 +87,7 @@ impl<T> WebGpuBuffer<T> {
         Ok(Self {
             handle,
             len,
+            device_ordinal: rt.device_ordinal(),
             managed: Some(Arc::new(managed)),
             domain: Some(Arc::clone(domain)),
             _marker: std::marker::PhantomData,
@@ -96,6 +100,10 @@ impl<T> WebGpuBuffer<T> {
 
     fn element_len(&self) -> usize {
         self.len
+    }
+
+    fn device_ordinal(&self) -> usize {
+        self.device_ordinal
     }
 }
 
