@@ -2,8 +2,8 @@ use std::mem::align_of;
 use std::mem::size_of;
 
 use tenferro_tensor::{
-    DType, Placement, ShapeVec, StrideVec, Tensor, TensorRead, TensorScalar, TensorView,
-    TypedTensor, TypedTensorView,
+    AllocationDomainId, DType, Placement, ShapeVec, StrideVec, Tensor, TensorRead, TensorScalar,
+    TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{InputSignatureError, LayoutClass, PrepareError};
@@ -40,6 +40,14 @@ pub struct InputSignatureEntry {
     layout_class: LayoutClass,
     strides: StrideVec,
     alignment_log2: Option<u8>,
+    backend_family: Option<&'static str>,
+    allocation_domain: Option<AllocationDomainId>,
+}
+
+#[derive(Clone, Copy)]
+struct InputPhysicalIdentity {
+    backend_family: Option<&'static str>,
+    allocation_domain: Option<AllocationDomainId>,
 }
 
 impl InputSignatureEntry {
@@ -86,16 +94,19 @@ impl InputSignatureEntry {
             layout_class,
             strides,
             alignment_log2,
+            backend_family: None,
+            allocation_domain: None,
         })
     }
 
-    pub(super) fn from_validated_metadata(
+    fn from_validated_metadata(
         dtype: DType,
         shape: ShapeVec,
         placement: Placement,
         layout_class: LayoutClass,
         strides: StrideVec,
         alignment_log2: Option<u8>,
+        physical_identity: InputPhysicalIdentity,
     ) -> Self {
         Self {
             dtype,
@@ -104,6 +115,8 @@ impl InputSignatureEntry {
             layout_class,
             strides,
             alignment_log2,
+            backend_family: physical_identity.backend_family,
+            allocation_domain: physical_identity.allocation_domain,
         }
     }
 
@@ -258,6 +271,14 @@ impl InputSignatureEntry {
         self.alignment_log2
     }
 
+    pub(super) fn backend_family(&self) -> Option<&'static str> {
+        self.backend_family
+    }
+
+    pub(super) fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.allocation_domain
+    }
+
     pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
         checked_sum([
             spilled_bytes::<usize>(self.shape.spilled(), self.shape.len())?,
@@ -336,6 +357,10 @@ impl InputSignature {
                 layout_class(compact),
                 strides.into_iter().collect(),
                 read_alignment_log2(read),
+                InputPhysicalIdentity {
+                    backend_family: read.backend_family(),
+                    allocation_domain: read.allocation_domain(),
+                },
             ));
         }
         Ok(Self { entries })

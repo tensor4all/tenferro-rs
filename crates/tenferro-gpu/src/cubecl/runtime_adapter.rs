@@ -76,6 +76,7 @@ pub fn cuda_runtime_engine_registration(
 
     let storage = cuda_runtime_storage_class()?;
     let placement_storage = storage.clone();
+    let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let device_ordinal = backend.runtime().device_ordinal();
@@ -91,6 +92,10 @@ pub fn cuda_runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
+            .with_input_signature_validator(move |placement, family, domain, candidate| {
+                candidate == &signature_storage
+                    && cuda_input_signature(placement, family, domain, device_ordinal)
+            })
             .with_input_ingress_validator(
                 move |placement, candidate| {
                     candidate == &placement_storage
@@ -104,6 +109,17 @@ pub fn cuda_runtime_engine_registration(
                 },
             )
     })
+}
+
+fn cuda_input_signature(
+    placement: &Placement,
+    backend_family: Option<&'static str>,
+    allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
+    device_ordinal: usize,
+) -> bool {
+    cuda_input_placement(placement, device_ordinal)
+        && backend_family == Some("cubecl")
+        && allocation_domain.is_none()
 }
 
 fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {

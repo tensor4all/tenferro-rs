@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use super::{
     execution, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
-    RuntimeCacheOwner, RuntimeConfigError, StorageClass,
+    InputSignatureEntry, RuntimeCacheOwner, RuntimeConfigError, StorageClass,
 };
-use tenferro_tensor::{Placement, TensorBackend, TensorRead};
+use tenferro_tensor::{AllocationDomainId, Placement, TensorBackend, TensorRead};
 
 #[derive(Debug)]
 struct CandidateRegistrationToken;
@@ -52,12 +52,17 @@ pub struct EngineRegistration {
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
     input_placement_validator: Option<Arc<InputPlacementValidator>>,
+    input_signature_validator: Option<Arc<InputSignatureValidator>>,
     runtime_input_validator: Option<Arc<InputTensorValidator>>,
     resident_tensor_validator: Option<Arc<InputTensorValidator>>,
     candidate_token: Arc<CandidateRegistrationToken>,
 }
 
 type InputPlacementValidator = dyn Fn(&Placement, &StorageClass) -> bool + Send + Sync + 'static;
+type InputSignatureValidator = dyn Fn(&Placement, Option<&'static str>, Option<AllocationDomainId>, &StorageClass) -> bool
+    + Send
+    + Sync
+    + 'static;
 type InputTensorValidator =
     dyn for<'a> Fn(&TensorRead<'a>, &StorageClass) -> bool + Send + Sync + 'static;
 
@@ -89,6 +94,7 @@ impl EngineRegistration {
             cache_owner: None,
             execution_engine: None,
             input_placement_validator: None,
+            input_signature_validator: None,
             runtime_input_validator: None,
             resident_tensor_validator: None,
             candidate_token: Arc::new(CandidateRegistrationToken),
@@ -209,7 +215,55 @@ impl EngineRegistration {
         self
     }
 
-    /// Declare preparation, runtime-input, and destination-residency ingress rules.
+    /// Declare which physical input signatures may enter this engine.
+    ///
+    /// The runtime uses this value-free validator while selecting a prepared
+    /// input ingress and keeps the concrete tensor validator as the execution
+    /// boundary check.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("example.host")?;
+    /// let expected = storage.clone();
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("example.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.cpu")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::default(),
+    /// )?
+    /// .with_input_signature_validator(move |_, family, domain, candidate| {
+    ///     candidate == &expected && family.is_none() && domain.is_none()
+    /// });
+    /// assert_eq!(registration.engine_id().as_str(), "example.cpu");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_input_signature_validator<F>(mut self, validator: F) -> Self
+    where
+        F: Fn(&Placement, Option<&'static str>, Option<AllocationDomainId>, &StorageClass) -> bool
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.input_signature_validator = Some(Arc::new(validator));
+        self
+    }
+
+    /// Declare placement, runtime-input, and destination-residency ingress rules.
+    ///
+    /// Execution-bridge registrations must also call
+    /// [`Self::with_input_signature_validator`] so preparation can select
+    /// ingress from value-free physical input metadata.
     ///
     /// # Examples
     ///
@@ -232,6 +286,9 @@ impl EngineRegistration {
     ///     storage,
     ///     CoreCapabilityBundle::default(),
     /// )?
+    /// .with_input_signature_validator(|_, family, domain, _| {
+    ///     family.is_none() && domain.is_none()
+    /// })
     /// .with_input_ingress_validator(
     ///     move |placement, storage| {
     ///         placement.memory_kind == MemoryKind::UnpinnedHost && storage == &candidate
@@ -291,8 +348,28 @@ impl EngineRegistration {
 
     pub(super) fn has_input_ingress_validator(&self) -> bool {
         self.input_placement_validator.is_some()
+            && self.input_signature_validator.is_some()
             && self.runtime_input_validator.is_some()
             && self.resident_tensor_validator.is_some()
+    }
+
+    pub(super) fn accepts_input_signature(
+        &self,
+        input: &InputSignatureEntry,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.storage_classes.contains(storage_class)
+            && self
+                .input_signature_validator
+                .as_ref()
+                .is_some_and(|validator| {
+                    validator(
+                        input.placement(),
+                        input.backend_family(),
+                        input.allocation_domain(),
+                        storage_class,
+                    )
+                })
     }
 
     pub(super) fn accepts_input_placement(

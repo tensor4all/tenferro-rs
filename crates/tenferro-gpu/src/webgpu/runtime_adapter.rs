@@ -102,6 +102,7 @@ pub fn webgpu_runtime_engine_registration(
 
     let storage = webgpu_runtime_storage_class()?;
     let placement_storage = storage.clone();
+    let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let runtime = backend.runtime();
@@ -118,6 +119,16 @@ pub fn webgpu_runtime_engine_registration(
     .map(|registration| {
         registration
             .with_tensor_backend_executor(execution_backend)
+            .with_input_signature_validator(move |placement, family, domain, candidate| {
+                candidate == &signature_storage
+                    && webgpu_input_signature(
+                        placement,
+                        family,
+                        domain,
+                        device_ordinal,
+                        allocation_domain,
+                    )
+            })
             .with_input_ingress_validator(
                 move |placement, candidate| {
                     candidate == &placement_storage
@@ -133,6 +144,18 @@ pub fn webgpu_runtime_engine_registration(
                 },
             )
     })
+}
+
+fn webgpu_input_signature(
+    placement: &Placement,
+    backend_family: Option<&'static str>,
+    input_domain: Option<AllocationDomainId>,
+    device_ordinal: usize,
+    allocation_domain: Option<AllocationDomainId>,
+) -> bool {
+    webgpu_input_placement(placement, device_ordinal, allocation_domain)
+        && backend_family == Some("cubecl-webgpu")
+        && input_domain == allocation_domain
 }
 
 fn webgpu_input_placement(

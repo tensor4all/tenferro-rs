@@ -10,7 +10,7 @@ use super::policy::{ProgramPlacementConstraint, StorageClass};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_ops::ShapeGuardError;
-use tenferro_tensor::Error as TensorError;
+use tenferro_tensor::{AllocationDomainId, Error as TensorError};
 
 /// Classifies a malformed runtime identifier without retaining its input.
 ///
@@ -282,6 +282,49 @@ pub enum RuntimeConfigError {
         /// Typed extension module source.
         #[source]
         source: ExtensionModuleError,
+    },
+}
+
+/// Reports a runtime execution bridge that violated its output contract.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineExecutionContractError, EngineId, StorageClass};
+///
+/// let error = EngineExecutionContractError::OutputResidencyMismatch {
+///     instruction_index: 3,
+///     output_slot: 7,
+///     engine_id: EngineId::new("tenferro.cpu")?,
+///     storage_class: StorageClass::new("tenferro.storage.host")?,
+///     backend_family: Some("foreign-backend"),
+///     allocation_domain: None,
+/// };
+/// assert!(error.to_string().contains("output slot 7"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EngineExecutionContractError {
+    /// An executor returned a tensor not owned by its scheduled engine/storage.
+    #[error(
+        "instruction {instruction_index} output slot {output_slot} is not resident in \
+         engine {engine_id:?} storage {storage_class:?} \
+         (backend family {backend_family:?}, allocation domain {allocation_domain:?})"
+    )]
+    OutputResidencyMismatch {
+        /// Execution-program instruction that produced the invalid tensor.
+        instruction_index: usize,
+        /// Execution slot containing the invalid tensor.
+        output_slot: usize,
+        /// Engine selected by the prepared schedule.
+        engine_id: EngineId,
+        /// Storage class selected by the prepared schedule.
+        storage_class: StorageClass,
+        /// Physical backend family reported by the tensor.
+        backend_family: Option<&'static str>,
+        /// Physical allocation domain reported by the tensor.
+        allocation_domain: Option<AllocationDomainId>,
     },
 }
 

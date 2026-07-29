@@ -126,6 +126,22 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   shape-product helper and preserved its typed source through
   `TransferProviderContractError::LogicalElementCount`.
 
+## Independent Review High Findings
+
+- Validate every executor-produced output against the scheduled engine's
+  resident-tensor contract before retaining or publishing the slot. A foreign
+  allocation-domain output now fails with typed
+  `EngineExecutionContractError::OutputResidencyMismatch`.
+- Include backend family and allocation domain in input signatures so prepared
+  cache roots cannot alias physically incompatible ingress schedules that have
+  the same logical placement and layout.
+- Select input ingress using both the physical input signature and direct
+  transfer reachability to the input's first scheduled consumer. A candidate
+  that accepts the input but cannot reach that consumer is skipped.
+- Added regression coverage for a faulty executor, alternating same-placement
+  inputs from two allocation domains across cache reuse, and choosing a
+  route-capable ingress over an earlier registered dead end.
+
 ## Deferred Scope
 
 - Submit/event schedulers and asynchronous completion.
@@ -164,3 +180,16 @@ limited to the additive `TransferRequest` endpoint accessors and
 - `cargo test -p tenferro-runtime --doc` (367 passed) and
   `cargo test -p tenferro-tensor --doc` (307 passed), including the new public
   ingress, transfer-contract, and tensor-buffer identity examples.
+- After the independent-review fixes, `cargo test -p tenferro-runtime` passed:
+  336 unit tests, 93 integration tests, and 369 doctests.
+- `cargo test -p tenferro-cpu runtime_adapter -j 48` passed 10 focused tests.
+- `cargo test -p tenferro-gpu --features cuda,webgpu registration_ingress -j
+  48` passed the CUDA and WebGPU ingress tests, and `cargo check -p
+  tenferro-gpu --features cuda,webgpu -j 48` passed.
+- The fast PR check passed against the branch base `035c02b0`, including
+  workspace and extension clippy with warnings denied and 17 focused runtime
+  execution integration tests. The ordinary `origin/main` freshness check
+  remains pending because this existing review branch has not yet been rebased.
+- Deterministic repository-rules review of the uncommitted delta against
+  `1eef5ce2` passed; external LLM review was intentionally skipped before PR
+  creation.

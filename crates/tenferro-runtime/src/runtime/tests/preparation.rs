@@ -380,6 +380,7 @@ fn engine_registration(
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities.elementwise(provider);
     let ingress_storage = storage.clone();
+    let signature_storage = storage.clone();
     EngineRegistration::new(
         engine_id(id),
         ExecutionContextIdentity::of::<RecordingElementwise>(),
@@ -394,6 +395,14 @@ fn engine_registration(
             placement.memory_kind,
             MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
         ) && candidate == &ingress_storage
+    })
+    .with_input_signature_validator(move |placement, family, domain, candidate| {
+        matches!(
+            placement.memory_kind,
+            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+        ) && family.is_none()
+            && domain.is_none()
+            && candidate == &signature_storage
     })
 }
 

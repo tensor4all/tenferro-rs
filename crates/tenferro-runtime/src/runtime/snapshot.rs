@@ -1153,6 +1153,16 @@ impl<'a> EngineSnapshotView<'a> {
             .accepts_runtime_input(input, storage_class)
     }
 
+    pub(super) fn accepts_input_signature(
+        &self,
+        input: &super::InputSignatureEntry,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_input_signature(input, storage_class)
+    }
+
     pub(super) fn owns_resident_tensor(
         &self,
         input: &tenferro_tensor::TensorRead<'_>,

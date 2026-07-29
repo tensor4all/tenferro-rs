@@ -74,6 +74,7 @@ pub fn runtime_engine_registration(
 
     let storage = runtime_storage_class()?;
     let placement_storage = storage.clone();
+    let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let allocation_domain = backend.allocation_domain();
@@ -89,6 +90,10 @@ pub fn runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
+            .with_input_signature_validator(move |placement, family, domain, candidate| {
+                candidate == &signature_storage
+                    && cpu_input_signature(placement, family, domain, allocation_domain)
+            })
             .with_input_ingress_validator(
                 move |placement, candidate| {
                     cpu_input_placement(placement) && candidate == &placement_storage
@@ -97,18 +102,23 @@ pub fn runtime_engine_registration(
                     candidate == &runtime_storage && cpu_runtime_input(input, allocation_domain)
                 },
                 move |input: &TensorRead<'_>, candidate| {
-                    candidate == &resident_storage
-                        && cpu_input_placement(input.placement())
-                        && match allocation_domain {
-                            Some(expected) => input.allocation_domain() == Some(expected),
-                            None => {
-                                input.allocation_domain().is_none()
-                                    && input.backend_family().is_none()
-                            }
-                        }
+                    candidate == &resident_storage && cpu_runtime_input(input, allocation_domain)
                 },
             )
     })
+}
+
+fn cpu_input_signature(
+    placement: &tenferro_tensor::Placement,
+    backend_family: Option<&'static str>,
+    input_domain: Option<tenferro_tensor::AllocationDomainId>,
+    allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
+) -> bool {
+    cpu_input_placement(placement)
+        && match backend_family {
+            None => input_domain.is_none(),
+            Some(_) => allocation_domain.is_some() && input_domain == allocation_domain,
+        }
 }
 
 fn cpu_input_placement(placement: &tenferro_tensor::Placement) -> bool {

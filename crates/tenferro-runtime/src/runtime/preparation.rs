@@ -606,26 +606,49 @@ fn resolve_preparation_context(
 fn resolve_input_locations(
     candidates: &[super::EngineSnapshotView<'_>],
     signature: &InputSignature,
+    semantic: &SemanticProgram,
+    root_location: &ExecutionLocation,
+    operation_locations: &[ExecutionLocation],
+    transfer_reachability: &TransferReachability,
 ) -> PreparedProgramResult<Arc<[ExecutionLocation]>> {
     signature
         .entries()
         .iter()
         .enumerate()
         .map(|(input_index, entry)| {
+            let input = semantic.inputs().get(input_index).ok_or_else(|| {
+                Arc::new(PrepareError::NoInputIngress {
+                    input_index,
+                    placement: entry.placement().clone(),
+                })
+            })?;
+            let destination = semantic
+                .operations()
+                .enumerate()
+                .find(|(_, operation)| operation.inputs().contains(input))
+                .and_then(|(operation_index, _)| operation_locations.get(operation_index))
+                .unwrap_or(root_location);
             candidates
                 .iter()
-                .find_map(|engine| {
+                .flat_map(|engine| {
                     engine
                         .storage_classes()
                         .iter()
-                        .find(|storage| engine.accepts_input_placement(entry.placement(), storage))
-                        .map(|storage| {
+                        .filter(move |storage| engine.accepts_input_signature(entry, storage))
+                        .map(move |storage| {
                             ExecutionLocation::new(
                                 engine.engine_id().clone(),
                                 engine.event_domain_id(),
                                 storage.clone(),
                             )
                         })
+                })
+                .find(|source| {
+                    source == destination
+                        || transfer_reachability.contains(&(
+                            source.storage_class().clone(),
+                            destination.storage_class().clone(),
+                        ))
                 })
                 .ok_or_else(|| {
                     Arc::new(PrepareError::NoInputIngress {
@@ -765,15 +788,22 @@ fn build_operation_dispatch(
                 prepare_options_key,
             )
         };
-    let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
-    let input_locations = resolve_input_locations(candidates, signature)?;
-
     let root_location = execution_location(snapshot, &primary_resolved_placement)?;
     let operation_locations: Arc<[_]> = placements
         .iter()
         .map(|placement| execution_location(snapshot, placement))
         .collect::<PreparedProgramResult<Vec<_>>>()?
         .into();
+    let transfer_reachability = snapshot.transfer_reachability_for_preparation();
+    let input_locations = resolve_input_locations(
+        candidates,
+        signature,
+        &frozen.program,
+        &root_location,
+        &operation_locations,
+        &transfer_reachability,
+    )?;
+    let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
@@ -798,7 +828,7 @@ fn build_operation_dispatch(
         operation_dispatch: dispatch.into(),
         root_location,
         operation_locations,
-        transfer_reachability: Arc::new(snapshot.transfer_reachability_for_preparation()),
+        transfer_reachability: Arc::new(transfer_reachability),
         extension_planning: extension_planning.into(),
     }))
 }
@@ -846,15 +876,23 @@ fn build_cross_storage_operation_dispatch(
     let Some(primary) = dispatch.first() else {
         return Ok(None);
     };
-    let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
     let primary_binding = primary.binding.clone();
-    let input_locations = resolve_input_locations(candidates, signature)?;
     let root_location = execution_location(snapshot, &primary.resolved_placement)?;
     let operation_locations: Arc<[_]> = placements
         .iter()
         .map(|placement| execution_location(snapshot, placement))
         .collect::<PreparedProgramResult<Vec<_>>>()?
         .into();
+    let transfer_reachability = snapshot.transfer_reachability_for_preparation();
+    let input_locations = resolve_input_locations(
+        candidates,
+        signature,
+        &frozen.program,
+        &root_location,
+        &operation_locations,
+        &transfer_reachability,
+    )?;
+    let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
@@ -879,7 +917,7 @@ fn build_cross_storage_operation_dispatch(
         operation_dispatch: dispatch.into(),
         root_location,
         operation_locations,
-        transfer_reachability: Arc::new(snapshot.transfer_reachability_for_preparation()),
+        transfer_reachability: Arc::new(transfer_reachability),
         extension_planning: extension_planning.into(),
     }))
 }

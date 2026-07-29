@@ -1008,6 +1008,13 @@ fn execute_scheduled_slots<'input>(
                         output_mode,
                         &terminal_slots,
                     )?;
+                    validate_instruction_outputs(
+                        execution,
+                        instruction_index,
+                        instruction,
+                        operation.location(),
+                        &staged,
+                    )?;
                     retain_instruction_results(
                         instruction,
                         operation.location(),
@@ -1118,6 +1125,50 @@ fn stage_instruction_inputs<'input>(
             .position(|value| &value.location == location)
             .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
         staged[slot] = Some(values.swap_remove(value_index).value);
+    }
+    Ok(())
+}
+
+fn validate_instruction_outputs(
+    execution: &PreparedExecutionEngines,
+    instruction_index: usize,
+    instruction: &ExecInstruction,
+    location: &ExecutionLocation,
+    staged: &[Option<ExecSlot<'_>>],
+) -> Result<()> {
+    let engine = execution
+        .snapshot
+        .engine(location.engine_id())
+        .ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "scheduled output engine {:?} is no longer registered",
+                    location.engine_id()
+                ),
+            )
+        })?;
+    for &output_slot in &instruction.output_slots {
+        let output = staged
+            .get(output_slot)
+            .and_then(Option::as_ref)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot: output_slot })?;
+        let output = output.as_read();
+        if !engine.owns_resident_tensor(&output, location.storage_class()) {
+            return Err(Error::runtime_state_source(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                super::EngineExecutionContractError::OutputResidencyMismatch {
+                    instruction_index,
+                    output_slot,
+                    engine_id: location.engine_id().clone(),
+                    storage_class: location.storage_class().clone(),
+                    backend_family: output.backend_family(),
+                    allocation_domain: output.allocation_domain(),
+                },
+            ));
+        }
     }
     Ok(())
 }

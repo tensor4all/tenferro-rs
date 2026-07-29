@@ -10,15 +10,16 @@ use tenferro_ops::{
     ExtensionShapeContext, SymDim,
 };
 use tenferro_runtime::{
-    CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime, EngineId,
-    EngineRegistration, ErasedExecutionContext, Error, ErrorPhase, EventDomainId,
-    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, GraphCompiler, HardwareClassId, IndexingRuntime, LayoutRuntime,
-    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
-    PreparedOperationExecutor, PreparedOperationPlan, ReductionRuntime, RegistrationKey, Runtime,
-    RuntimeCacheOwner, RuntimeConfigError, SpecializationProjection, StorageClass, TracedTensor,
-    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+    CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
+    EngineExecutionContractError, EngineId, EngineRegistration, ErasedExecutionContext, Error,
+    ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
+    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
+    IndexingRuntime, LayoutRuntime, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan, ReductionRuntime,
+    RegistrationKey, Runtime, RuntimeCacheOwner, RuntimeConfigError, SpecializationProjection,
+    StorageClass, TracedTensor, TransferError, TransferProvider, TransferProviderContractError,
+    TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -64,6 +65,14 @@ fn cpu_registration(
     .map(|registration| {
         let registration = registration
             .with_cache_owner(cache_owner)
+            .with_input_signature_validator({
+                let storage = storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |placement, family, domain, candidate| {
+                    candidate == &storage
+                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
+                }
+            })
             .with_input_ingress_validator(
                 {
                     let storage = storage.clone();
@@ -82,15 +91,7 @@ fn cpu_registration(
                     let storage = storage.clone();
                     let allocation_domain = backend.allocation_domain();
                     move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage
-                            && test_cpu_placement(input.placement())
-                            && match allocation_domain {
-                                Some(expected) => input.allocation_domain() == Some(expected),
-                                None => {
-                                    input.allocation_domain().is_none()
-                                        && input.backend_family().is_none()
-                                }
-                            }
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
                     }
                 },
             );
@@ -128,6 +129,19 @@ fn test_cpu_runtime_input(
         }
 }
 
+fn test_cpu_input_signature(
+    placement: &Placement,
+    backend_family: Option<&'static str>,
+    input_domain: Option<AllocationDomainId>,
+    allocation_domain: Option<AllocationDomainId>,
+) -> bool {
+    test_cpu_placement(placement)
+        && match backend_family {
+            None => input_domain.is_none(),
+            Some(_) => allocation_domain.is_some() && input_domain == allocation_domain,
+        }
+}
+
 fn tensor_f64_values(tensor: &Tensor) -> tenferro_tensor::Result<Vec<f64>> {
     let Tensor::F64(tensor) = tensor else {
         return Err(tenferro_tensor::Error::dtype_mismatch(
@@ -151,6 +165,7 @@ struct ExtensionCounters {
     execute: AtomicUsize,
     last_execute_domain: Mutex<Option<AllocationDomainId>>,
     tracked_output_drops: Mutex<Option<Arc<AtomicUsize>>>,
+    foreign_output_domain: Mutex<Option<AllocationDomainId>>,
 }
 
 #[derive(Debug)]
@@ -439,16 +454,17 @@ impl TransferProvider for FaultyTransferProvider {
                 Ok(tensor.into())
             }
             FaultyTransferOutput::Residency => {
-                let mut tensor = request.input().as_tensor().cloned().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?;
-                let Tensor::F64(tensor) = &mut tensor else {
-                    return Err(Error::Internal(
-                        "test transfer expected an f64 tensor".into(),
-                    ));
-                };
-                tensor.set_placement(Placement::default());
-                Ok(tensor.clone().into())
+                let domain = AllocationDomainId::fresh();
+                let buffer = Buffer::Backend(Arc::new(TestDomainBuffer::<f64> {
+                    values: Arc::new(Mutex::new(vec![0.0; 2])),
+                    domain,
+                }));
+                Ok(TypedTensor::<f64>::from_buffer_col_major(
+                    vec![2],
+                    buffer,
+                    Placement::default(),
+                )?
+                .into())
             }
         }
     }
@@ -481,6 +497,7 @@ impl BackendBuffer<f64> for MutableLengthBuffer {
 struct DropTrackedBuffer {
     len: usize,
     drops: Arc<AtomicUsize>,
+    domain: AllocationDomainId,
 }
 
 impl Drop for DropTrackedBuffer {
@@ -496,6 +513,10 @@ impl BackendBuffer<f64> for DropTrackedBuffer {
 
     fn len(&self) -> usize {
         self.len
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -663,6 +684,29 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             .last_execute_domain
             .lock()
             .expect("domain lock") = backend.allocation_domain();
+        if let Some(domain) = *self
+            .counters
+            .foreign_output_domain
+            .lock()
+            .expect("foreign output domain lock")
+        {
+            let shape = inputs[0].shape().to_vec();
+            let len = tenferro_tensor::validate::checked_shape_product(
+                "foreign-output-test",
+                "shape",
+                &shape,
+            )?;
+            let buffer = Buffer::Backend(Arc::new(TestDomainBuffer::<f64> {
+                values: Arc::new(Mutex::new(vec![0.0; len])),
+                domain,
+            }));
+            return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
+                shape,
+                buffer,
+                Placement::default(),
+            )?
+            .into()]);
+        }
         if let Some(drops) = self
             .counters
             .tracked_output_drops
@@ -672,7 +716,10 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
         {
             let shape = inputs[0].shape().to_vec();
             let len = shape.iter().product();
-            let buffer = Buffer::Backend(Arc::new(DropTrackedBuffer { len, drops }));
+            let domain = backend.allocation_domain().ok_or_else(|| {
+                Error::Internal("drop-tracked output requires an allocation domain".into())
+            })?;
+            let buffer = Buffer::Backend(Arc::new(DropTrackedBuffer { len, drops, domain }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
                 shape,
                 buffer,
@@ -776,34 +823,37 @@ fn cpu_registration_with_id(
         capabilities.build(),
     )
     .map(|registration| {
-        let registration = registration.with_input_ingress_validator(
-            {
-                let storage = storage.clone();
-                move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
-            },
-            {
+        let registration = registration
+            .with_input_signature_validator({
                 let storage = storage.clone();
                 let allocation_domain = backend.allocation_domain();
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                }
-            },
-            {
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |input: &TensorRead<'_>, candidate| {
+                move |placement, family, domain, candidate| {
                     candidate == &storage
-                        && test_cpu_placement(input.placement())
-                        && match allocation_domain {
-                            Some(expected) => input.allocation_domain() == Some(expected),
-                            None => {
-                                input.allocation_domain().is_none()
-                                    && input.backend_family().is_none()
-                            }
-                        }
+                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
                 }
-            },
-        );
+            })
+            .with_input_ingress_validator(
+                {
+                    let storage = storage.clone();
+                    move |placement, candidate| {
+                        test_cpu_placement(placement) && candidate == &storage
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+            );
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -845,34 +895,37 @@ fn cpu_registration_with_storage_id(
         capabilities.build(),
     )
     .map(|registration| {
-        let registration = registration.with_input_ingress_validator(
-            {
-                let storage = storage.clone();
-                move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
-            },
-            {
+        let registration = registration
+            .with_input_signature_validator({
                 let storage = storage.clone();
                 let allocation_domain = backend.allocation_domain();
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                }
-            },
-            {
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |input: &TensorRead<'_>, candidate| {
+                move |placement, family, domain, candidate| {
                     candidate == &storage
-                        && test_cpu_placement(input.placement())
-                        && match allocation_domain {
-                            Some(expected) => input.allocation_domain() == Some(expected),
-                            None => {
-                                input.allocation_domain().is_none()
-                                    && input.backend_family().is_none()
-                            }
-                        }
+                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
                 }
-            },
-        );
+            })
+            .with_input_ingress_validator(
+                {
+                    let storage = storage.clone();
+                    move |placement, candidate| {
+                        test_cpu_placement(placement) && candidate == &storage
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+            );
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -979,6 +1032,195 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
     );
     assert_eq!(counters.execute.load(Ordering::SeqCst), 2);
 
+    Ok(())
+}
+
+#[test]
+fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), Box<dyn StdError>> {
+    let expected_domain = AllocationDomainId::fresh();
+    let foreign_domain = AllocationDomainId::fresh();
+    let backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(expected_domain)));
+    let counters = Arc::new(ExtensionCounters::default());
+    *counters
+        .foreign_output_domain
+        .lock()
+        .expect("foreign output domain lock") = Some(foreign_domain);
+    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+
+    let contract = error
+        .source()
+        .and_then(|source| source.downcast_ref::<EngineExecutionContractError>())
+        .expect("typed engine execution contract source");
+    assert!(matches!(
+        contract,
+        EngineExecutionContractError::OutputResidencyMismatch {
+            output_slot: 1,
+            allocation_domain: Some(actual),
+            ..
+        } if *actual == foreign_domain
+    ));
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
+) -> Result<(), Box<dyn StdError>> {
+    let first_domain = AllocationDomainId::fresh();
+    let second_domain = AllocationDomainId::fresh();
+    let first_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)));
+    let second_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(second_domain)));
+    let first_engine = "tenferro-test.a-domain-engine.v1";
+    let second_engine = "tenferro-test.b-domain-engine.v1";
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let counters = Arc::new(ExtensionCounters::default());
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
+        storage.clone(),
+        storage.clone(),
+        first_backend.clone(),
+    ));
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_id(
+        &first_backend,
+        first_engine,
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_id(
+        &second_backend,
+        second_engine,
+        false,
+        true,
+    )?)?;
+    builder.register_transfer_provider(
+        storage,
+        StorageClass::new(CPU_STORAGE_CLASS_ID)?,
+        transfer.clone(),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.domain-cache")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(first_engine)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let first_input = TestAllocationDomain(first_domain).allocate(DType::F64, &[2])?;
+    let second_input = TestAllocationDomain(second_domain).allocate(DType::F64, &[2])?;
+
+    for input in [&first_input, &second_input, &first_input, &second_input] {
+        let output = runtime.run_compiled(&program, &[input])?;
+        assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
+    }
+
+    assert_eq!(
+        transfer.calls(),
+        2,
+        "only the second allocation domain requires transfer to the selected engine"
+    );
+    assert_eq!(
+        counters.prepare.load(Ordering::SeqCst),
+        2,
+        "each physical ingress schedule is prepared once and then reused"
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
+) -> Result<(), Box<dyn StdError>> {
+    let dead_backend = CpuBackend::new();
+    let routed_backend = CpuBackend::new();
+    let consumer_backend = CpuBackend::new();
+    let dead_storage = StorageClass::new("tenferro-test.storage.dead-ingress.v1")?;
+    let routed_storage = StorageClass::new("tenferro-test.storage.routed-ingress.v1")?;
+    let consumer_storage = StorageClass::new("tenferro-test.storage.routed-consumer.v1")?;
+    let transfer = Arc::new(RecordingTransferProvider::new(
+        routed_storage.clone(),
+        consumer_storage.clone(),
+    ));
+    let counters = Arc::new(ExtensionCounters::default());
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &dead_backend,
+        "tenferro-test.a-dead-ingress.v1",
+        dead_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &routed_backend,
+        "tenferro-test.b-routed-ingress.v1",
+        routed_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &consumer_backend,
+        "tenferro-test.z-routed-consumer.v1",
+        consumer_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_transfer_provider(
+        routed_storage.clone(),
+        consumer_storage,
+        transfer.clone(),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.routed-ingress")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.z-routed-consumer.v1")?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
+    assert_eq!(transfer.calls(), 1);
+    assert_eq!(transfer.requests()[0].source_storage_class, routed_storage);
     Ok(())
 }
 
@@ -1469,7 +1711,9 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
 fn transfer_failure_skips_downstream_execution_and_releases_located_values(
 ) -> Result<(), Box<dyn StdError>> {
     let core_backend = CpuBackend::new();
-    let extension_backend = CpuBackend::new();
+    let extension_domain = AllocationDomainId::fresh();
+    let extension_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
     let drops = Arc::new(AtomicUsize::new(0));
     let upstream_counters = Arc::new(ExtensionCounters::default());
     let downstream_counters = Arc::new(ExtensionCounters::default());
@@ -1481,9 +1725,10 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
     let extension_engine_id = "tenferro-test.extension-transfer-failure.v1";
     let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let destination_storage = StorageClass::new("tenferro-test.storage.failure-destination.v1")?;
-    let forward = Arc::new(RecordingTransferProvider::new(
+    let forward = Arc::new(RecordingTransferProvider::materializing(
         source_storage.clone(),
         destination_storage.clone(),
+        extension_backend.clone(),
     ));
     let failing = Arc::new(FailingTransferProvider {
         calls: AtomicUsize::new(0),
