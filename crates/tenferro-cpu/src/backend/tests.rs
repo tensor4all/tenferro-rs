@@ -65,8 +65,8 @@ fn fresh_tagging_is_field_only_and_has_no_dynamic_lookup_or_metadata_clone() {
         .split_once("fn tag_fresh_output")
         .expect("CPU backend should define one fresh-output tagger")
         .1
-        .split_once("struct CpuSessionProfileEntry")
-        .expect("session profiling should follow fresh-output tagging")
+        .split_once("pub(crate) fn elementwise_read_into_fallback_with_pool(")
+        .expect("the pooled elementwise fallback should follow fresh-output tagging")
         .0;
 
     assert!(tagging.contains("set_cpu_affinity(Some(domain))"));
