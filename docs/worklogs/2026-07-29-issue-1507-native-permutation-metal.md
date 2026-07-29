@@ -47,6 +47,14 @@ All values are within 0.02 ms because the profile includes fresh output
 allocation and explicit synchronization. `16x8-p1-v1` is the development
 default; it is not a substitute for the final M4 sweep.
 
+An allocation/synchronization diagnostic explains why the per-call sweep
+looks flat. Raw output allocation averaged 0.002 ms. When 51 dispatches shared
+one final synchronization, the selected tile averaged 1.153 ms per transpose
+versus 1.431 ms for the generic kernel, a roughly 20% throughput improvement.
+The profile intentionally keeps per-call synchronization for comparable
+public-API latency, where the fixed flush/synchronization cost masks most of
+that kernel gain.
+
 ## Rejected batched-tile experiment
 
 The remaining `mac_transpose_3d_102` framework gap motivated an experiment
@@ -62,16 +70,32 @@ material improvement under the profile's public-API allocation and
 synchronization contract, so commit `585c28dd` was reverted by `5586394f`.
 The two-dimensional tiled specialization remains unchanged.
 
+## Rejected native-vector experiment
+
+The configured tile vector width originally unrolled scalar lanes. An
+experimental kernel instead bound source and destination arrays as CubeCL
+`Vector<E, N>` values, performing native vector loads and stores while keeping
+the same shared-memory transpose. Metal correctness passed for vector widths
+1, 2, and 4.
+
+With 10 warmups and 51 measured iterations on `mac_transpose_2d`, the
+`32x8-p1` transpose medians for vector widths 1, 2, and 4 were 1.740 ms,
+1.727 ms, and 1.726 ms. View materialization measured 1.733 ms, 1.735 ms, and
+1.722 ms. These differences are within run-to-run noise, so the native-vector
+experiment was not retained.
+
 ## Framework-gap inspection
 
 The PyTorch comparison exceeded the 2x inspection threshold for the baseline
 2D case. PyTorch's current MPS `Copy.mm` routes strided views through its unary
 copy machinery. `OperationUtils.mm` uses a 2D strided dispatch, detects
 inner-contiguous layouts, and can move aligned 16-byte chunks. The benchmark
-also reuses a PyTorch destination while tenferro allocates a fresh output per
-call. This explains why the reported framework gap is not an isolated
-transpose-kernel comparison. The tenferro kernel was independently implemented;
-no PyTorch source was copied.
+was then corrected so PyTorch, like tenferro, allocates a fresh destination on
+every timed call. Focused 51-iteration medians under the matched allocation
+contract were 0.552 ms for the 2D case and 1.037 ms for `mac_transpose_3d_102`.
+The remaining framework gap is an end-to-end host-API comparison, not an
+isolated transpose-kernel comparison. The tenferro kernel was independently
+implemented; no PyTorch source was copied.
 
 ## Verification status
 
