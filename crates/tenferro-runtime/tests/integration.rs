@@ -2,6 +2,8 @@
 mod public_surface_contract;
 #[path = "integration/runtime_error_api.rs"]
 mod runtime_error_api;
+#[path = "integration/runtime_event_domains.rs"]
+mod runtime_event_domains;
 #[path = "integration/runtime_execution.rs"]
 mod runtime_execution;
 #[path = "integration/runtime_foundations.rs"]

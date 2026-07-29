@@ -3,6 +3,7 @@ mod cache_owner;
 mod capability;
 mod engine_registration;
 mod error;
+mod event_domain;
 mod execution;
 mod extension;
 mod extension_provider;
@@ -36,6 +37,9 @@ pub use error::{
     InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
     PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
     RuntimeReconfigureError, SpecializationError, SubmissionError,
+};
+pub use event_domain::{
+    EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver, ReadyEventToken,
 };
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
