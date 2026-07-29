@@ -45,7 +45,9 @@ The `mac_transpose_2d` transpose medians were:
 
 All values are within 0.02 ms because the profile includes fresh output
 allocation and explicit synchronization. `16x8-p1-v1` is the development
-default; it is not a substitute for the final M4 sweep.
+default and the selected final tile. The user approved this recorded M5
+bounded sweep as the final Apple Silicon gate; no additional M4 rerun is
+required.
 
 Allocation/submission diagnostics explain why the per-call sweep looks flat.
 Raw output allocation averaged 0.002 ms and an idle synchronization averaged
@@ -108,11 +110,18 @@ implemented; no PyTorch source was copied.
 
 ## Verification status
 
-- Metal/WebGPU integration: 84 tests passed.
+- Metal/WebGPU integration: 86 tests passed.
 - `tenferro-gpu` WebGPU clippy with warnings denied: passed.
 - Combined `cuda,webgpu,cpu-faer` compile: passed.
 - M5 profile correctness: all participating tenferro patterns passed.
-- Linux A100 CUDA plus wgpu/Vulkan runtime execution: pending. Configured A100
-  SSH endpoints were unreachable from the development session because the
-  internal network/VPN and DNS were unavailable.
-- Final Apple M4 tile sweep: pending and required for the release judgment.
+- Linux A100 CUDA native structural runtime: 27 passed, 0 failed. A direct
+  native `I32` batched partial-tile diagnostic for shape `[17, 19, 3]` and
+  permutation `[1, 0, 2]` matched the complete column-major reference.
+- Linux A100 wgpu/Vulkan structural runtime: 6 passed, 0 failed. The Vulkan
+  inventory contained only the NVIDIA A100 80GB PCIe through the NVIDIA ICD,
+  excluding software and CPU adapter fallback.
+- Final Apple Silicon bounded tile sweep: passed on the approved M5 Max;
+  `16x8-p1-v1` remains selected and no M4 rerun is required.
+
+The A100 environment, commands, and full results are recorded in
+[issue comment 5112907691](https://github.com/tensor4all/tenferro-rs/issues/1507#issuecomment-5112907691).
