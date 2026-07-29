@@ -280,16 +280,8 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
     ) -> Result<()>;
-    fn collect_slot_outputs<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<Tensor>>;
-    fn collect_slot_output_values<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<TensorValue>>;
+    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor>;
+    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue>;
 }
 
 pub(super) fn erased_tensor_backend_executor<B>(backend: B) -> Arc<dyn ErasedTensorBackendExecutor>
@@ -679,26 +671,16 @@ where
         Ok(())
     }
 
-    fn collect_slot_outputs<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<Tensor>> {
+    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
         let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| crate::exec::collect_outputs_from(program, slots, exec))
+        backend.with_backend_session(|exec| slot.into_tensor(exec))
     }
 
-    fn collect_slot_output_values<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<TensorValue>> {
+    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
         let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| {
-            crate::exec::collect_output_values_from(program, slots, exec)
-        })
+        backend.with_backend_session(|exec| slot.into_value(exec))
     }
 }
 
@@ -1030,7 +1012,12 @@ fn execute_scheduled_tensor_refs(
         inputs,
         RuntimeOutputMode::Tensor,
     )
-    .and_then(|mut slots| execution.root.collect_slot_outputs(program, &mut slots))
+    .and_then(|mut slots| {
+        collect_tensor_outputs_with(program, &mut slots, |location, slot| {
+            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .materialize_slot(slot)
+        })
+    })
 }
 
 fn execute_scheduled_value_refs(
@@ -1056,9 +1043,10 @@ fn execute_scheduled_value_refs(
         RuntimeOutputMode::Value,
     )
     .and_then(|mut slots| {
-        execution
-            .root
-            .collect_slot_output_values(program, &mut slots)
+        collect_value_outputs_with(program, &mut slots, |location, slot| {
+            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .materialize_slot_value(slot)
+        })
     })
 }
 
@@ -1069,7 +1057,7 @@ fn execute_scheduled_slots<'input>(
     operations: &[PreparedOperationPlan],
     inputs: Vec<ExecSlot<'input>>,
     output_mode: RuntimeOutputMode,
-) -> Result<Vec<Option<ExecSlot<'input>>>> {
+) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
         crate::exec::terminal_output_slots(program)
     } else {
@@ -1578,7 +1566,7 @@ mod transfer_validation_tests {
 fn collect_located_outputs<'input>(
     program: &ExecProgram,
     located: &mut [Vec<LocatedExecSlot<'input>>],
-) -> Result<Vec<Option<ExecSlot<'input>>>> {
+) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let mut outputs = (0..program.n_slots).map(|_| None).collect::<Vec<_>>();
     for &slot in &program.output_slots {
         if outputs[slot].is_some() {
@@ -1591,10 +1579,46 @@ fn collect_located_outputs<'input>(
             .pop()
             .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
         values.clear();
-        outputs[slot] = Some(value.value);
+        outputs[slot] = Some(value);
     }
     located.iter_mut().for_each(Vec::clear);
     Ok(outputs)
+}
+
+pub(super) fn collect_tensor_outputs_with<'input>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'input>>],
+    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<Tensor>,
+) -> Result<Vec<Tensor>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            let located = outputs
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            materialize(&located.location, located.value)
+        })
+        .collect()
+}
+
+fn collect_value_outputs_with<'input>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'input>>],
+    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<TensorValue>,
+) -> Result<Vec<TensorValue>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            let located = outputs
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            materialize(&located.location, located.value)
+        })
+        .collect()
 }
 
 fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {

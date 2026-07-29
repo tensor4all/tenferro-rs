@@ -1,19 +1,64 @@
+use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Barrier};
+use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{
+    AllocationDomainId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
+    HostWriteGuard, Placement, Tensor, TensorOwnedView, TypedTensor,
+};
 
 use crate::exec::{ExecInstruction, ExecOp, ExecSlot};
 use crate::runtime::execution::{
-    retain_instruction_results, spawn_in_flight, InFlightSubmission, LocatedExecSlot,
-    OsThreadSpawner, SubmissionSpawner,
+    collect_tensor_outputs_with, retain_instruction_results, spawn_in_flight, InFlightSubmission,
+    LocatedExecSlot, OsThreadSpawner, SubmissionSpawner,
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{EngineId, EventDomainId, StorageClass, SubmissionError};
 use crate::{Error, ErrorPhase};
+
+#[derive(Debug)]
+struct ForeignProbeBuffer {
+    values: Arc<Mutex<Vec<f64>>>,
+    domain: AllocationDomainId,
+}
+
+impl BackendBuffer<f64> for ForeignProbeBuffer {
+    fn backend_family(&self) -> &'static str {
+        "tenferro-test.foreign-output-probe"
+    }
+
+    fn len(&self) -> usize {
+        self.values.lock().expect("probe buffer lock").len()
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn map_read(&self) -> Result<HostReadGuard<'_, f64>, HostAccessError> {
+        Ok(HostReadGuard::new(
+            self.values.lock().expect("probe buffer lock"),
+        ))
+    }
+
+    fn map_write(&self) -> Result<HostWriteGuard<'_, f64>, HostAccessError> {
+        let values = Arc::clone(&self.values);
+        Ok(HostWriteGuard::new(self.len(), move |source| {
+            values
+                .lock()
+                .expect("probe buffer lock")
+                .clone_from_slice(source);
+            Ok(())
+        }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 #[derive(Debug)]
 struct DelayedSpawner {
@@ -135,6 +180,56 @@ fn worker_panic_and_execution_error_complete_handle() -> Result<(), Box<dyn StdE
     assert!(execution_error
         .to_string()
         .contains("injected execution error"));
+    Ok(())
+}
+
+#[test]
+fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(), Box<dyn StdError>>
+{
+    let root_location = ExecutionLocation::new(
+        EngineId::new("tenferro-test.output-root")?,
+        EventDomainId::runtime_created_for_test(1),
+        StorageClass::new("tenferro-test.output-root-storage")?,
+    );
+    let output_location = ExecutionLocation::new(
+        EngineId::new("tenferro-test.output-nonroot")?,
+        EventDomainId::runtime_created_for_test(2),
+        StorageClass::new("tenferro-test.output-nonroot-storage")?,
+    );
+    let domain = AllocationDomainId::fresh();
+    let buffer = Buffer::Backend(Arc::new(ForeignProbeBuffer {
+        values: Arc::new(Mutex::new(vec![1.0, 2.0, 3.0, 4.0])),
+        domain,
+    }));
+    let base: Tensor =
+        TypedTensor::<f64>::from_buffer_col_major(vec![4], buffer, Placement::default())?.into();
+    let view = TensorOwnedView::from_parts(Arc::new(base), vec![2], vec![2], 0)?;
+    let program = crate::exec::ExecProgram {
+        instructions: Vec::new(),
+        input_slots: vec![0],
+        output_slots: vec![0],
+        n_slots: 1,
+        shape_guards: Vec::new(),
+    };
+    let mut outputs = vec![Some(LocatedExecSlot {
+        location: output_location.clone(),
+        value: ExecSlot::Read(view.tensor_read()),
+    })];
+    let mut materialized_at = None;
+
+    let tensors = collect_tensor_outputs_with(&program, &mut outputs, |location, value| {
+        assert_ne!(location, &root_location);
+        assert_eq!(
+            value.as_read().backend_family(),
+            Some("tenferro-test.foreign-output-probe")
+        );
+        assert_eq!(value.as_read().allocation_domain(), Some(domain));
+        materialized_at = Some(location.clone());
+        Ok(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?)
+    })?;
+
+    assert_eq!(materialized_at, Some(output_location));
+    assert_eq!(tensors[0].as_slice::<f64>()?, &[1.0, 3.0]);
     Ok(())
 }
 
