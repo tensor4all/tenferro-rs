@@ -3,6 +3,7 @@ mod cache_owner;
 mod capability;
 mod engine_registration;
 mod error;
+mod event_domain;
 mod execution;
 mod extension;
 mod extension_provider;
@@ -37,6 +38,7 @@ pub use error::{
     PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
     RuntimeReconfigureError, SpecializationError, SubmissionError,
 };
+pub use event_domain::{EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver};
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};

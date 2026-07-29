@@ -3,6 +3,7 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
+use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
     CacheOwnerError, CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
@@ -88,6 +89,7 @@ pub fn runtime_engine_registration(
     )
     .map(|registration| {
         registration
+            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
             .with_input_signature_validator(move |placement, family, domain, candidate| {
