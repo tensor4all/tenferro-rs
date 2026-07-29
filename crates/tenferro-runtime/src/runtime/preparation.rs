@@ -398,6 +398,7 @@ struct OperationDispatch {
     provider: OperationProvider,
 }
 
+#[derive(Clone)]
 struct SelectedOperationDispatch {
     dispatch: OperationDispatch,
     extension_identity: Option<ExtensionPlanningIdentity>,
@@ -789,14 +790,9 @@ fn build_operation_dispatch(
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
-    let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
-    let mut bindings = Vec::with_capacity(frozen.program.operations().len());
-    let mut placements = Vec::with_capacity(frozen.program.operations().len());
-    let mut extension_identities = Vec::new();
-    let mut extension_planning = Vec::new();
-
+    let mut dispatch_candidates = Vec::with_capacity(frozen.program.operations().len());
     for operation in frozen.program.operations() {
-        let Some(selected) = select_operation_dispatch(
+        let selected = operation_dispatch_candidates(
             runtime,
             snapshot,
             candidates,
@@ -804,10 +800,71 @@ fn build_operation_dispatch(
             &storage_class,
             options,
             missing_extension_family,
-        )?
+        )?;
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        dispatch_candidates.push(selected);
+    }
+
+    if dispatch_candidates.is_empty() {
+        let Some(engine) = candidates
+            .iter()
+            .find(|engine| engine.storage_classes().contains(&storage_class))
         else {
             return Ok(None);
         };
+        return build_preparation_context(
+            runtime,
+            snapshot,
+            frozen,
+            compiler_options,
+            staging,
+            candidates,
+            signature,
+            options,
+            Vec::new(),
+            Some((engine, storage_class)),
+        )
+        .map(Some);
+    }
+
+    search_dispatch_combinations(&dispatch_candidates, |selected| {
+        build_preparation_context(
+            runtime,
+            snapshot,
+            frozen,
+            compiler_options,
+            staging,
+            candidates,
+            signature,
+            options,
+            selected,
+            None,
+        )
+    })
+    .map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_preparation_context(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
+    staging: &Arc<ExecProgram>,
+    candidates: &[super::EngineSnapshotView<'_>],
+    signature: &InputSignature,
+    options: &PrepareOptions,
+    selected: Vec<SelectedOperationDispatch>,
+    empty_root: Option<(&super::EngineSnapshotView<'_>, StorageClass)>,
+) -> PreparedProgramResult<PreparationContext> {
+    let mut dispatch = Vec::with_capacity(selected.len());
+    let mut bindings = Vec::with_capacity(selected.len());
+    let mut placements = Vec::with_capacity(selected.len());
+    let mut extension_identities = Vec::new();
+    let mut extension_planning = Vec::new();
+    for selected in selected {
         bindings.push(selected.dispatch.binding.clone());
         placements.push(selected.dispatch.resolved_placement.clone());
         if let Some(identity) = selected.extension_identity {
@@ -828,14 +885,16 @@ fn build_operation_dispatch(
                 primary.prepare_options_key.clone(),
             )
         } else {
-            let Some(engine) = candidates
-                .iter()
-                .find(|engine| engine.storage_classes().contains(&storage_class))
-            else {
-                return Ok(None);
-            };
+            let (engine, storage_class) = empty_root.ok_or_else(|| {
+                Arc::new(PrepareError::NoEligibleEngine {
+                    constraint: options
+                        .placement()
+                        .cloned()
+                        .unwrap_or_else(ProgramPlacementConstraint::any),
+                })
+            })?;
             let resolved_placement =
-                ResolvedProgramPlacement::new(engine.engine_id().clone(), storage_class.clone());
+                ResolvedProgramPlacement::new(engine.engine_id().clone(), storage_class);
             let planning = ResolvedPlanningConfig::resolve(
                 snapshot.execution_policy(),
                 options,
@@ -875,6 +934,14 @@ fn build_operation_dispatch(
         &operation_locations,
         &transfer_reachability,
     )?;
+    ScheduledGraph::from_exec_program(
+        staging,
+        root_location.clone(),
+        &input_locations,
+        &operation_locations,
+        &transfer_reachability,
+    )
+    .map_err(schedule_prepare_error)?;
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
@@ -895,7 +962,7 @@ fn build_operation_dispatch(
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
-    Ok(Some(PreparationContext {
+    Ok(PreparationContext {
         root_identity,
         operation_dispatch: dispatch.into(),
         staging: Arc::clone(staging),
@@ -903,7 +970,33 @@ fn build_operation_dispatch(
         operation_locations,
         transfer_reachability: Arc::new(transfer_reachability),
         extension_planning: extension_planning.into(),
-    }))
+    })
+}
+
+fn is_route_specific_prepare_error(error: &PrepareError) -> bool {
+    matches!(
+        error,
+        PrepareError::NoInputIngress { .. } | PrepareError::MissingTransferProvider { .. }
+    )
+}
+
+fn schedule_prepare_error(source: ScheduleBuildError) -> Arc<PrepareError> {
+    match source {
+        ScheduleBuildError::MissingTransferProvider {
+            instruction_index,
+            slot,
+            destination_storage_class,
+            available_storage_classes,
+        } => Arc::new(PrepareError::MissingTransferProvider {
+            instruction_index,
+            value_slot: slot,
+            destination_storage_class,
+            available_storage_classes,
+        }),
+        source => Arc::new(PrepareError::Engine {
+            source: Arc::new(source),
+        }),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -918,86 +1011,76 @@ fn build_cross_storage_operation_dispatch(
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
-    let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
-    let mut bindings = Vec::with_capacity(frozen.program.operations().len());
-    let mut placements = Vec::with_capacity(frozen.program.operations().len());
-    let mut extension_identities = Vec::new();
-    let mut extension_planning = Vec::new();
-
+    let mut dispatch_candidates = Vec::with_capacity(frozen.program.operations().len());
     for operation in frozen.program.operations() {
-        let Some(selected) = select_operation_dispatch_any_storage(
+        let selected = operation_dispatch_candidates_any_storage(
             runtime,
             snapshot,
             candidates,
             operation,
             options,
             missing_extension_family,
-        )?
-        else {
+        )?;
+        if selected.is_empty() {
             return Ok(None);
-        };
-        bindings.push(selected.dispatch.binding.clone());
-        placements.push(selected.dispatch.resolved_placement.clone());
-        if let Some(identity) = selected.extension_identity {
-            extension_identities.push(identity);
         }
-        if let Some(config) = selected.extension_config {
-            extension_planning.push(config);
-        }
-        dispatch.push(selected.dispatch);
+        dispatch_candidates.push(selected);
     }
 
-    let Some(primary) = dispatch.first() else {
+    if dispatch_candidates.is_empty() {
         return Ok(None);
-    };
-    let primary_binding = primary.binding.clone();
-    let root_location = execution_location(snapshot, &primary.resolved_placement)?;
-    let operation_locations: Arc<[_]> = placements
-        .iter()
-        .map(|placement| execution_location(snapshot, placement))
-        .collect::<PreparedProgramResult<Vec<_>>>()?
-        .into();
-    let transfer_reachability = snapshot.transfer_reachability_for_preparation();
-    let input_locations = resolve_input_locations(
-        candidates,
-        signature,
-        staging,
-        &root_location,
-        &operation_locations,
-        &transfer_reachability,
-    )?;
-    let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
-    let root_identity = Arc::new(PreparedRootIdentity {
-        semantic_fingerprint: frozen.program.semantic_fingerprint(),
-        semantic: Arc::clone(&frozen.program),
-        runtime_id: runtime.id(),
-        epoch: snapshot.epoch(),
-        resolved_placement: primary.resolved_placement.clone(),
-        engine_id: primary_binding.engine_id().clone(),
-        registration_identity: primary_binding.registration_identity(),
-        context_identity: primary_binding.context_identity(),
-        hardware_class: primary_binding.hardware_class().clone(),
-        compiler_options,
-        resolved_planning: planning_key,
-        prepare_options: primary.prepare_options_key.clone(),
-        operation_bindings: bindings.into_boxed_slice(),
-        operation_placements: placements.into_boxed_slice(),
-        input_locations: input_locations.to_vec().into_boxed_slice(),
-        extension_planning: extension_identities.into_boxed_slice(),
-    });
+    }
 
-    Ok(Some(PreparationContext {
-        root_identity,
-        operation_dispatch: dispatch.into(),
-        staging: Arc::clone(staging),
-        root_location,
-        operation_locations,
-        transfer_reachability: Arc::new(transfer_reachability),
-        extension_planning: extension_planning.into(),
-    }))
+    search_dispatch_combinations(&dispatch_candidates, |selected| {
+        build_preparation_context(
+            runtime,
+            snapshot,
+            frozen,
+            compiler_options,
+            staging,
+            candidates,
+            signature,
+            options,
+            selected,
+            None,
+        )
+    })
+    .map(Some)
 }
 
-fn select_operation_dispatch(
+fn search_dispatch_combinations(
+    candidates: &[Vec<SelectedOperationDispatch>],
+    mut build: impl FnMut(Vec<SelectedOperationDispatch>) -> PreparedProgramResult<PreparationContext>,
+) -> PreparedProgramResult<PreparationContext> {
+    let mut indices = vec![0usize; candidates.len()];
+    loop {
+        let selected = candidates
+            .iter()
+            .zip(&indices)
+            .map(|(candidates, &index)| candidates[index].clone())
+            .collect();
+        let route_error = match build(selected) {
+            Ok(context) => return Ok(context),
+            Err(error) if is_route_specific_prepare_error(error.as_ref()) => error,
+            Err(error) => return Err(error),
+        };
+
+        let mut cursor = indices.len();
+        while cursor > 0 {
+            cursor -= 1;
+            indices[cursor] += 1;
+            if indices[cursor] < candidates[cursor].len() {
+                break;
+            }
+            indices[cursor] = 0;
+        }
+        if cursor == 0 && indices[0] == 0 {
+            return Err(route_error);
+        }
+    }
+}
+
+fn operation_dispatch_candidates(
     runtime: &Runtime,
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     candidates: &[super::EngineSnapshotView<'_>],
@@ -1005,7 +1088,8 @@ fn select_operation_dispatch(
     storage_class: &StorageClass,
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
-) -> PreparedProgramResult<Option<SelectedOperationDispatch>> {
+) -> PreparedProgramResult<Vec<SelectedOperationDispatch>> {
+    let mut selected_dispatches = Vec::new();
     for engine in candidates {
         if !engine.storage_classes().contains(storage_class) {
             continue;
@@ -1070,7 +1154,7 @@ fn select_operation_dispatch(
                 )
             }
         };
-        return Ok(Some(SelectedOperationDispatch {
+        selected_dispatches.push(SelectedOperationDispatch {
             dispatch: OperationDispatch {
                 binding,
                 resolved_placement,
@@ -1080,22 +1164,23 @@ fn select_operation_dispatch(
             },
             extension_identity,
             extension_config,
-        }));
+        });
     }
-    Ok(None)
+    Ok(selected_dispatches)
 }
 
-fn select_operation_dispatch_any_storage(
+fn operation_dispatch_candidates_any_storage(
     runtime: &Runtime,
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     candidates: &[super::EngineSnapshotView<'_>],
     operation: SemanticOperationView<'_>,
     options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
-) -> PreparedProgramResult<Option<SelectedOperationDispatch>> {
+) -> PreparedProgramResult<Vec<SelectedOperationDispatch>> {
+    let mut selected = Vec::new();
     for engine in candidates {
         let storage_class = engine.default_storage_class().clone();
-        if let Some(selected) = select_operation_dispatch(
+        selected.extend(operation_dispatch_candidates(
             runtime,
             snapshot,
             std::slice::from_ref(engine),
@@ -1103,11 +1188,9 @@ fn select_operation_dispatch_any_storage(
             &storage_class,
             options,
             missing_extension_family,
-        )? {
-            return Ok(Some(selected));
-        }
+        )?);
     }
-    Ok(None)
+    Ok(selected)
 }
 
 fn provider_for_operation(
