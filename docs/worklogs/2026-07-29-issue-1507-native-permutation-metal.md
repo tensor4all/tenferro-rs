@@ -47,13 +47,20 @@ All values are within 0.02 ms because the profile includes fresh output
 allocation and explicit synchronization. `16x8-p1-v1` is the development
 default; it is not a substitute for the final M4 sweep.
 
-An allocation/synchronization diagnostic explains why the per-call sweep
-looks flat. Raw output allocation averaged 0.002 ms. When 51 dispatches shared
-one final synchronization, the selected tile averaged 1.153 ms per transpose
-versus 1.431 ms for the generic kernel, a roughly 20% throughput improvement.
-The profile intentionally keeps per-call synchronization for comparable
-public-API latency, where the fixed flush/synchronization cost masks most of
-that kernel gain.
+Allocation/submission diagnostics explain why the per-call sweep looks flat.
+Raw output allocation averaged 0.002 ms and an idle synchronization averaged
+0.017 ms. In three 101-iteration passes where warmed dispatches shared one
+final synchronization, the median per-transpose times were 0.427 ms for
+`16x8-p1-v1` and 0.516 ms for the generic kernel, a 17% throughput
+improvement. The selected tile was also the fastest of the bounded candidates;
+the next-best `32x8-p1-v1` measured 0.432 ms.
+
+The selected kernel's queued throughput is effectively the same as the
+0.422 ms Metal device-copy reference and is faster than the allocation-matched
+PyTorch MPS end-to-end median. The remaining synchronized single-call latency
+comes from encoding and submitting one CubeCL/wgpu command buffer per call,
+not from output allocation or an inferior transpose kernel. The profile keeps
+per-call synchronization to preserve its public-API latency contract.
 
 ## Rejected batched-tile experiment
 

@@ -31,6 +31,24 @@ fn webgpu_transfer_helpers_are_provider_specific() {
 }
 
 #[test]
+fn webgpu_synchronize_uses_one_cubecl_server_round_trip() {
+    let source = include_str!("../../src/webgpu/runtime.rs");
+    let body = source
+        .split_once("pub fn synchronize(&self)")
+        .expect("WebGPU runtime must expose synchronize")
+        .1
+        .split_once("\n    }")
+        .expect("synchronize method must have a body")
+        .0;
+
+    assert!(
+        body.contains("future::block_on(self.client.sync())") && !body.contains(".flush()"),
+        "CubeCL sync already flushes its scheduler and command stream; an explicit client.flush() \
+         adds a redundant blocking server round trip"
+    );
+}
+
+#[test]
 fn webgpu_download_checks_runtime_residency_before_reading_backend_handle() {
     let source = include_str!("../../src/webgpu/memory.rs");
 
