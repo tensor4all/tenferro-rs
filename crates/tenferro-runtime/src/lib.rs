@@ -92,8 +92,9 @@ pub use runtime::{
     ResolvedProgramPlacement, Runtime, RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats,
     RuntimeConfigBuilder, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId,
     RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TransferError,
-    TransferProvider, TransferProviderContractError, TransferRequest, UnsupportedReason,
+    SpecializationProjection, SpecializationRequirements, StorageClass, SubmissionError,
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+    UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;

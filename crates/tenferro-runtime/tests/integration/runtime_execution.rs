@@ -2212,6 +2212,29 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
 }
 
 #[test]
+fn runtime_submit_owns_admitted_epoch_across_immediate_reconfigure() -> Result<(), Box<dyn StdError>>
+{
+    let backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+
+    let handle = runtime.submit(&program, &[&input])?;
+    runtime.reconfigure(|edit| {
+        edit.replace_engine(cpu_registration(&CpuBackend::new(), true)?)?;
+        Ok(())
+    })?;
+
+    let output = handle.wait()?;
+    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
+
+    Ok(())
+}
+
+#[test]
 fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<dyn StdError>> {
     let backend = CpuBackend::new();
     let runtime = runtime_with_cpu(&backend)?;

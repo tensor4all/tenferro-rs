@@ -583,7 +583,9 @@ impl Runtime {
     /// [`crate::PrepareError::NoEligibleEngine`],
     /// [`crate::PrepareError::NoInputIngress`], and
     /// [`crate::PrepareError::MissingTransferProvider`] failures as
-    /// [`Self::run_compiled`] before the worker is submitted.
+    /// [`Self::run_compiled`] before the worker is submitted. Returns a runtime
+    /// state error with [`crate::SubmissionError`] as its typed source if the
+    /// operating system rejects worker creation after admission.
     pub fn submit(
         &self,
         program: &CompiledGraph,

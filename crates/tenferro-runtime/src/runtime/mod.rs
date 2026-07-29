@@ -35,7 +35,7 @@ pub use error::{
     ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,
     InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
     PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
-    RuntimeReconfigureError, SpecializationError,
+    RuntimeReconfigureError, SpecializationError, SubmissionError,
 };
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};

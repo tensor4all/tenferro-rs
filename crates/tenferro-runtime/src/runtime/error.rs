@@ -372,6 +372,31 @@ pub enum InputIngressContractError {
     },
 }
 
+/// Reports failure to admit an asynchronous runtime submission.
+///
+/// # Examples
+///
+/// ```
+/// use std::io;
+/// use tenferro_runtime::SubmissionError;
+///
+/// let error = SubmissionError::WorkerSpawn {
+///     source: io::Error::other("worker unavailable"),
+/// };
+/// assert!(error.to_string().contains("spawn"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SubmissionError {
+    /// The runtime could not create the worker after synchronous preparation.
+    #[error("failed to spawn runtime submission worker")]
+    WorkerSpawn {
+        /// Operating-system thread creation failure.
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 impl From<IdentityError> for RuntimeConfigError {
     fn from(source: IdentityError) -> Self {
         Self::MalformedIdentity {

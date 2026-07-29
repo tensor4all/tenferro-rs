@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
@@ -24,8 +25,8 @@ use crate::runtime::schedule::{
 };
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferError,
-    TransferProvider, TransferProviderContractError, TransferRequest,
+    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, SubmissionError,
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -56,7 +57,7 @@ pub struct PreparedCompiledGraph {
 
 /// Asynchronous runtime execution handle returned by [`Runtime::submit`].
 pub struct ExecutionHandle {
-    join: Option<thread::JoinHandle<Result<Vec<Tensor>>>>,
+    submission: Arc<InFlightSubmission>,
 }
 
 impl ExecutionHandle {
@@ -67,21 +68,8 @@ impl ExecutionHandle {
     /// Returns the submitted runtime execution [`Error`], including
     /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
     /// when the handle was already consumed or the worker panicked.
-    pub fn wait(mut self) -> Result<Vec<Tensor>> {
-        let Some(join) = self.join.take() else {
-            return Err(Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                "execution handle was already consumed",
-            ));
-        };
-        join.join().map_err(|payload| {
-            Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                panic_payload_message(payload),
-            )
-        })?
+    pub fn wait(self) -> Result<Vec<Tensor>> {
+        self.submission.wait()
     }
 }
 
@@ -89,8 +77,144 @@ impl fmt::Debug for ExecutionHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ExecutionHandle")
-            .field("pending", &self.join.is_some())
+            .field("pending", &self.submission.is_pending())
             .finish_non_exhaustive()
+    }
+}
+
+pub(super) struct InFlightSubmission {
+    work: Mutex<Option<InFlightWork>>,
+    completion: Mutex<Option<Result<Vec<Tensor>>>>,
+    completed: Condvar,
+}
+
+struct AdmittedExecution {
+    prepared: PreparedCompiledGraph,
+    inputs: Vec<Tensor>,
+}
+
+enum InFlightWork {
+    Admitted(AdmittedExecution),
+    #[cfg(test)]
+    Test(Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>),
+}
+
+impl InFlightSubmission {
+    fn new(prepared: PreparedCompiledGraph, inputs: Vec<Tensor>) -> Self {
+        Self {
+            work: Mutex::new(Some(InFlightWork::Admitted(AdmittedExecution {
+                prepared,
+                inputs,
+            }))),
+            completion: Mutex::new(None),
+            completed: Condvar::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(work: impl FnOnce() -> Result<Vec<Tensor>> + Send + 'static) -> Self {
+        Self {
+            work: Mutex::new(Some(InFlightWork::Test(Box::new(work)))),
+            completion: Mutex::new(None),
+            completed: Condvar::new(),
+        }
+    }
+
+    pub(super) fn run(&self) {
+        let work = match self.work.lock() {
+            Ok(mut work) => work.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| match work {
+            Some(InFlightWork::Admitted(admitted)) => {
+                let input_refs = admitted.inputs.iter().collect::<Vec<_>>();
+                execute_admitted(&admitted.prepared, &input_refs)
+            }
+            #[cfg(test)]
+            Some(InFlightWork::Test(work)) => work(),
+            None => Err(Error::runtime_state(
+                "Runtime::submit",
+                ErrorPhase::Execution,
+                "in-flight submission work was already consumed",
+            )),
+        }))
+        .unwrap_or_else(|payload| {
+            Err(Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            ))
+        });
+        match self.completion.lock() {
+            Ok(mut completion) => {
+                *completion = Some(result);
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner() = Some(Err(Error::runtime_state(
+                    "ExecutionHandle::wait",
+                    ErrorPhase::Execution,
+                    "in-flight completion lock poisoned",
+                )));
+            }
+        }
+        self.completed.notify_all();
+    }
+
+    fn wait(&self) -> Result<Vec<Tensor>> {
+        let mut completion = self.completion.lock().map_err(|_| {
+            Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                "in-flight completion lock poisoned",
+            )
+        })?;
+        loop {
+            if let Some(result) = completion.take() {
+                return result;
+            }
+            completion = self.completed.wait(completion).map_err(|_| {
+                Error::runtime_state(
+                    "ExecutionHandle::wait",
+                    ErrorPhase::Execution,
+                    "in-flight completion lock poisoned while waiting",
+                )
+            })?;
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.completion
+            .lock()
+            .map_or(true, |completion| completion.is_none())
+    }
+}
+
+pub(super) trait SubmissionSpawner {
+    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()>;
+}
+
+pub(super) fn spawn_in_flight(
+    submission: Arc<InFlightSubmission>,
+    spawner: &dyn SubmissionSpawner,
+) -> Result<ExecutionHandle> {
+    spawner.spawn(Arc::clone(&submission)).map_err(|source| {
+        Error::runtime_state_source(
+            "Runtime::submit",
+            ErrorPhase::Execution,
+            SubmissionError::WorkerSpawn { source },
+        )
+    })?;
+    Ok(ExecutionHandle { submission })
+}
+
+pub(super) struct OsThreadSpawner;
+
+impl SubmissionSpawner for OsThreadSpawner {
+    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()> {
+        thread::Builder::new()
+            .name("tenferro-runtime-submit".to_string())
+            .spawn(move || submission.run())
+            .map(drop)
     }
 }
 
@@ -650,18 +774,23 @@ pub(super) fn submit(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<ExecutionHandle> {
+    submit_with_spawner(runtime, program, inputs, &OsThreadSpawner)
+}
+
+pub(super) fn submit_with_spawner(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+    spawner: &dyn SubmissionSpawner,
+) -> Result<ExecutionHandle> {
     let inputs = resolve_input_refs(program, inputs)?
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
     let input_refs = inputs.iter().collect::<Vec<_>>();
     let prepared = prepare_compiled(runtime, program, &input_refs)?;
-    let runtime = runtime.clone();
-    let join = thread::spawn(move || {
-        let input_refs = inputs.iter().collect::<Vec<_>>();
-        run_prepared(&runtime, &prepared, &input_refs)
-    });
-    Ok(ExecutionHandle { join: Some(join) })
+    let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
+    spawn_in_flight(submission, spawner)
 }
 
 pub(super) fn run_prepared(
@@ -670,6 +799,17 @@ pub(super) fn run_prepared(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
+    let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    execute_scheduled_tensor_refs(
+        &prepared.execution,
+        prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
+        prepared.prepared.operations(),
+        &inputs,
+    )
+}
+
+fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
         &prepared.execution,
