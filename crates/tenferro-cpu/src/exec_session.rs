@@ -2,15 +2,17 @@ use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
 use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
-    Buffer, CompareDir, ContractionScalar, DType, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, TypedTensor,
+    Buffer, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
-use super::backend::{reclaim_typed, tag_fresh_output, FreshCpuOutput};
+use super::backend::{
+    elementwise_read_into_fallback_with_pool, reclaim_typed, tag_fresh_output, FreshCpuOutput,
+};
 use super::provider::{CpuExecutionContext, CpuOperationEntry};
 use super::CpuProviderBundle;
 use super::{
@@ -101,6 +103,22 @@ impl CpuExecSession<'_> {
             .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
 
+    fn run_native_with_context<R: Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| op(&context, buffers));
+        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| op(context, buffers))
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+    }
+
     fn run_native_fresh_with_context<R: FreshCpuOutput + Send>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
@@ -168,6 +186,24 @@ macro_rules! delegate_with_pool {
 
 impl TensorElementwise for CpuExecSession<'_> {
     // Elementwise — direct delegation within the current session scope.
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        self.run_native_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            tenferro_tensor::backend::elementwise_read_into_with_context(
+                op,
+                inputs,
+                out,
+                &exec_context,
+                |inputs, out| elementwise_read_into_fallback_with_pool(buffers, op, inputs, out),
+            )
+        })
+    }
+
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {

@@ -333,6 +333,28 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
 }
 
 #[test]
+fn cpu_surfaces_override_elementwise_read_into_with_pooled_context() {
+    let backend_source = include_str!("../../src/backend.rs");
+    let session_source = include_str!("../../src/exec_session.rs");
+
+    for (surface, source) in [
+        ("CpuBackend", backend_source),
+        ("CpuExecSession", session_source),
+    ] {
+        let elementwise_impl = source
+            .split_once(&format!("impl TensorElementwise for {surface}"))
+            .expect("TensorElementwise implementation must exist")
+            .1;
+        let implementation = rust_function_body(elementwise_impl, "elementwise_read_into")
+            .unwrap_or_else(|| panic!("{surface}::elementwise_read_into must be implemented"));
+        assert!(
+            implementation.contains("strided_exec_context"),
+            "{surface}::elementwise_read_into must inject its pooled ExecContext"
+        );
+    }
+}
+
+#[test]
 fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
     let backend_source = include_str!("../../src/backend.rs");
     let session_source = include_str!("../../src/exec_session.rs");

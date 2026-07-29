@@ -642,31 +642,31 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
     backend
         .add_into(&a, &b, TensorWrite::from_tensor(&mut out))
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
     backend
         .sub_into(&a, &b, TensorWrite::from_tensor(&mut out))
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
     backend
         .mul_into(&a, &b, TensorWrite::from_tensor(&mut out))
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
     backend
         .neg_into(&a, TensorWrite::from_tensor(&mut out))
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
     backend
         .conj_into(&a, TensorWrite::from_tensor(&mut out))
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
     backend
@@ -676,7 +676,11 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
             TensorWrite::from_tensor(&mut out),
         )
         .unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[42.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[0.5]);
+    assert!(
+        backend.calls.is_empty(),
+        "host elementwise into defaults must not allocate through the backend"
+    );
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
     let err = backend
@@ -701,6 +705,66 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
             ..
         }
     ));
+}
+
+#[test]
+fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
+    let shared: std::sync::Arc<dyn crate::BackendBuffer<f64>> =
+        std::sync::Arc::new(crate::BufferHandle::<f64>::new_with_len(17, 1));
+    let placement = crate::Placement {
+        memory_kind: crate::MemoryKind::Device,
+        device: Some(crate::DeviceId {
+            kind: crate::DeviceKind::Gpu(crate::GpuBackendKind::Cuda),
+            ordinal: 0,
+        }),
+        cpu_affinity: None,
+    };
+    let lhs = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![1],
+            crate::Buffer::Backend(std::sync::Arc::clone(&shared)),
+            placement.clone(),
+        )
+        .unwrap(),
+    );
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let mut out = Tensor::F64(
+        TypedTensor::from_buffer_col_major(vec![1], crate::Buffer::Backend(shared), placement)
+            .unwrap(),
+    );
+
+    let error = DefaultReadBackend::default()
+        .add_into(&lhs, &rhs, TensorWrite::from_tensor(&mut out))
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::Validation {
+            op: "add",
+            source: crate::ValidationError::InvalidArgument {
+                argument: "out",
+                ..
+            },
+        }
+    ));
+}
+
+#[test]
+fn elementwise_into_updates_caller_view_storage_after_handoff() {
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    let mut storage = vec![-1.0_f64, 0.0, 0.0, -1.0];
+
+    {
+        let view = TypedTensorViewMut::from_slice(vec![2], vec![1], 1, &mut storage).unwrap();
+        DefaultReadBackend::default()
+            .add_into(&lhs, &rhs, TensorWrite::from_view(TensorViewMut::F64(view)))
+            .unwrap();
+    }
+
+    assert_eq!(storage, vec![-1.0, 4.0, 6.0, -1.0]);
+    storage[2] = 9.0;
+    assert_eq!(storage, vec![-1.0, 4.0, 9.0, -1.0]);
 }
 
 #[test]
