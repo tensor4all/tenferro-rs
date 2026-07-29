@@ -681,7 +681,7 @@ impl TensorLinalgExt for Tensor {
         Ok(self.eigh(backend)?.0)
     }
     fn eigvals<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        Ok(self.eig(backend)?.0)
+        backend.eig_values(self)
     }
     fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
         pinv_owned(self, None, backend)
