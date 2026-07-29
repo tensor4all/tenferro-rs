@@ -80,6 +80,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
     src: &Array<E>,
     src_offset: usize,
+    #[comptime] batch_stride: usize,
     #[comptime] dst_fast_extent: usize,
     #[comptime] src_fast_extent: usize,
     #[comptime] tile: usize,
@@ -93,6 +94,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
     let unit_y = UNIT_POS_Y as usize;
     let tile_src_fast = CUBE_POS_X as usize * tile;
     let tile_dst_fast = CUBE_POS_Y as usize * tile;
+    let batch_base = CUBE_POS_Z as usize * batch_stride;
 
     let mut row = unit_y;
     while row < tile {
@@ -102,7 +104,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
             let local_src_fast = unit_x * vector_width + lane;
             let src_fast = tile_src_fast + local_src_fast;
             if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
-                let src_index = src_offset + dst_fast * src_fast_extent + src_fast;
+                let src_index = src_offset + batch_base + dst_fast * src_fast_extent + src_fast;
                 shared[row * pitch + local_src_fast] = src[src_index];
             }
         }
@@ -119,7 +121,7 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
             let local_dst_fast = unit_x * vector_width + lane;
             let dst_fast = tile_dst_fast + local_dst_fast;
             if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
-                let dst_index = dst_fast + src_fast * dst_fast_extent;
+                let dst_index = batch_base + dst_fast + src_fast * dst_fast_extent;
                 dst[dst_index] = shared[local_dst_fast * pitch + row];
             }
         }

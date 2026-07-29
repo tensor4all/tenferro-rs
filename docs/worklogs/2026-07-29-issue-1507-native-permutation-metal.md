@@ -62,7 +62,7 @@ comes from encoding and submitting one CubeCL/wgpu command buffer per call,
 not from output allocation or an inferior transpose kernel. The profile keeps
 per-call synchronization to preserve its public-API latency contract.
 
-## Rejected batched-tile experiment
+## Batched-tile follow-up
 
 The remaining `mac_transpose_3d_102` framework gap motivated an experiment
 that classified `[1,0,2]` as a batch of compact 2D transposes and mapped the
@@ -70,12 +70,14 @@ batch index to the CubeCL dispatch Z dimension. A partial-edge, multi-batch
 Metal correctness test passed, and CUDA plus WebGPU compiled from the same
 kernel.
 
-With 20 warmups and 101 measured iterations, however, the selected tiled path
-measured 1.726 ms for transpose and 1.731 ms for view materialization. The
-generic path measured 1.729 ms and 1.733 ms, respectively. This is not a
-material improvement under the profile's public-API allocation and
-synchronization contract, so commit `585c28dd` was reverted by `5586394f`.
-The two-dimensional tiled specialization remains unchanged.
+The first per-call measurement showed no material difference because command
+submission dominated: tile measured 1.726 ms and generic measured 1.729 ms.
+After the queue-throughput diagnostic exposed that masking effect, three
+warmed 101-iteration comparisons were repeated with one final synchronization.
+The batched tile measured 0.414, 0.401, and 0.405 ms per transpose; generic
+measured 0.495, 0.471, and 0.490 ms. The 0.405 versus 0.490 ms medians are a
+17% kernel-throughput improvement, so the earlier revert was superseded and
+the batched compact-transpose specialization was reinstated.
 
 ## Rejected native-vector experiment
 
