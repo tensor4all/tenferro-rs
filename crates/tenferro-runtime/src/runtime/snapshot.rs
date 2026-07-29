@@ -21,11 +21,11 @@ use super::extension::{
 use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResult};
 use super::schedule::EventDomainId;
 use super::{
-    CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
-    ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
-    InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
-    RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
-    RuntimeStateError, StorageClass, TransferProvider,
+    CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainDriver,
+    ExecutionContextIdentity, ExecutionPolicy, ExtensionModule, ExtensionModuleError,
+    ExtensionModuleId, HardwareClassId, InputSignature, PrepareOptions, RegistrationIdentity,
+    RegistrationKey, RuntimeCacheError, RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch,
+    RuntimeId, RuntimeReconfigureError, RuntimeStateError, StorageClass, TransferProvider,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -1130,6 +1130,22 @@ impl<'a> EngineSnapshotView<'a> {
     /// Return this engine's runtime event domain.
     pub fn event_domain_id(&self) -> EventDomainId {
         self.slot.event_domain_id
+    }
+
+    /// Return the driver that owns this engine's per-run event-domain state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{EngineSnapshotView, Result};
+    ///
+    /// fn begin_and_drain(view: &EngineSnapshotView<'_>) -> Result<()> {
+    ///     let mut run = view.event_domain_driver().begin_run()?;
+    ///     run.drain()
+    /// }
+    /// ```
+    pub fn event_domain_driver(&self) -> &'a Arc<dyn EventDomainDriver> {
+        self.slot.registration.event_domain_driver()
     }
 
     /// Return the hardware class for this slot.

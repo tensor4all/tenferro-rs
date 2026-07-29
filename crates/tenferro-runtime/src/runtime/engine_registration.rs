@@ -2,8 +2,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::{
-    execution, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
-    InputSignatureEntry, RuntimeCacheOwner, RuntimeConfigError, StorageClass,
+    execution, CoreCapabilityBundle, EngineId, EventDomainDriver, ExecutionContextIdentity,
+    HardwareClassId, ImmediateEventDomainDriver, InputSignatureEntry, RuntimeCacheOwner,
+    RuntimeConfigError, StorageClass,
 };
 use tenferro_tensor::{AllocationDomainId, Placement, TensorBackend, TensorRead};
 
@@ -49,6 +50,7 @@ pub struct EngineRegistration {
     storage_classes: Arc<[StorageClass]>,
     default_storage_class: StorageClass,
     capabilities: CoreCapabilityBundle,
+    event_domain_driver: Arc<dyn EventDomainDriver>,
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
     input_placement_validator: Option<Arc<InputPlacementValidator>>,
@@ -91,6 +93,7 @@ impl EngineRegistration {
             storage_classes,
             default_storage_class,
             capabilities,
+            event_domain_driver: Arc::new(ImmediateEventDomainDriver::new()),
             cache_owner: None,
             execution_engine: None,
             input_placement_validator: None,
@@ -129,6 +132,38 @@ impl EngineRegistration {
     /// Return direct core capability slots.
     pub fn capabilities(&self) -> &CoreCapabilityBundle {
         &self.capabilities
+    }
+
+    /// Attach the driver that owns this engine's per-run event-domain state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::runtime::ImmediateEventDomainDriver;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("tenferro.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("tenferro.cpu.host")?,
+    ///     Arc::from([storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::default(),
+    /// )?
+    /// .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()));
+    /// assert_eq!(registration.engine_id().as_str(), "tenferro.cpu");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_event_domain_driver(mut self, driver: Arc<dyn EventDomainDriver>) -> Self {
+        self.event_domain_driver = driver;
+        self
     }
 
     /// Attach a runtime cache owner to this registration.
@@ -438,6 +473,10 @@ impl EngineRegistration {
         self.execution_engine.is_some()
     }
 
+    pub(super) fn event_domain_driver(&self) -> &Arc<dyn EventDomainDriver> {
+        &self.event_domain_driver
+    }
+
     pub(super) fn candidate_identical(&self, other: &Self) -> bool {
         self.engine_id == other.engine_id
             && Arc::ptr_eq(&self.candidate_token, &other.candidate_token)
@@ -454,6 +493,7 @@ impl fmt::Debug for EngineRegistration {
             .field("storage_class_count", &self.storage_classes.len())
             .field("default_storage_class", &self.default_storage_class)
             .field("capabilities", &self.capabilities)
+            .field("event_domain_driver", &self.event_domain_driver)
             .field("cache_owner", &self.cache_owner.is_some())
             .field("execution_engine", &self.has_execution_engine())
             .field(

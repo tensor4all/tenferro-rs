@@ -92,6 +92,68 @@ mod identity {
     }
 }
 
+mod event_domain_driver_ownership {
+    use std::fmt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use tenferro_runtime::runtime::{
+        EventDomainDriver, EventDomainRun, ImmediateEventDomainDriver,
+    };
+    use tenferro_runtime::{
+        CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+        HardwareClassId, Runtime, StorageClass,
+    };
+
+    struct CountingEventDomainDriver {
+        begin_count: Arc<AtomicUsize>,
+    }
+
+    impl fmt::Debug for CountingEventDomainDriver {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("CountingEventDomainDriver")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl EventDomainDriver for CountingEventDomainDriver {
+        fn begin_run(&self) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
+            self.begin_count.fetch_add(1, Ordering::SeqCst);
+            ImmediateEventDomainDriver::new().begin_run()
+        }
+    }
+
+    #[test]
+    fn custom_event_domain_driver_survives_freeze_and_begins_snapshot_run() {
+        let begin_count = Arc::new(AtomicUsize::new(0));
+        let storage = StorageClass::new("tenferro.storage.host").unwrap();
+        let engine_id = EngineId::new("tenferro.cpu.event-domain-test").unwrap();
+        let registration = EngineRegistration::new(
+            engine_id.clone(),
+            ExecutionContextIdentity::of::<()>(),
+            HardwareClassId::new("tenferro.cpu.host").unwrap(),
+            Arc::from([storage.clone()]),
+            storage,
+            CoreCapabilityBundle::default(),
+        )
+        .unwrap()
+        .with_event_domain_driver(Arc::new(CountingEventDomainDriver {
+            begin_count: Arc::clone(&begin_count),
+        }));
+        let mut builder = Runtime::builder();
+        builder.register_engine(registration).unwrap();
+        let runtime = builder.build().unwrap();
+
+        let snapshot = runtime.snapshot().unwrap();
+        let engine = snapshot.engine(&engine_id).unwrap();
+        let mut run = engine.event_domain_driver().begin_run().unwrap();
+        run.drain().unwrap();
+
+        assert_eq!(begin_count.load(Ordering::SeqCst), 1);
+    }
+}
+
 mod policy {
     use std::fmt::Debug;
 
