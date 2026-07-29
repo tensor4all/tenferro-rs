@@ -740,7 +740,7 @@ git commit -m "bench: record optimized Metal permutation results"
 
 - [ ] **Step 1: Update architecture and work log**
 
-Document the profile-first order, shared `strided-perm` planner, unified native route, compile-time tile parameters, validation/fallback policy, unchanged cuTENSOR route, Linux A100 CUDA+wgpu/Vulkan development validation, Metal acceptance baseline, and M5 Max final sweep approved in place of M4.
+Document the profile-first order, shared `strided-perm` planner, unified native route, compile-time tile parameters, validation/fallback policy, unchanged cuTENSOR route, Linux A100 CUDA+wgpu/Vulkan development validation, Metal acceptance baseline, M5 development sweep, and the required final M4 tile sweep.
 
 - [ ] **Step 2: Run focused and broad tenferro verification**
 
