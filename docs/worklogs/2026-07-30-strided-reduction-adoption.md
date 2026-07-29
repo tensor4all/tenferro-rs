@@ -59,6 +59,9 @@ that reference, and the worst baseline-relative change is +2.7 percent.
   no records by filter.
 - The repository-rules review is run against the committed adoption diff
   before the PR is opened.
+- The CI build-artifact source-contract test is advanced with the pin so it
+  continues to require one exact merged revision across all five strided
+  workspace dependencies.
 
 ## Remaining Work
 
