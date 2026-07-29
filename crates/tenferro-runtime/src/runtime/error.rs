@@ -256,6 +256,13 @@ pub enum RuntimeConfigError {
         /// Missing default storage class.
         default_storage_class: StorageClass,
     },
+    /// An execution bridge omitted the validators required for explicit input
+    /// ingress and destination-buffer residency.
+    #[error("engine {engine_id:?} execution bridge has no complete input ingress validator")]
+    MissingInputIngressValidator {
+        /// Engine with the incomplete execution contract.
+        engine_id: EngineId,
+    },
     /// A replacement attempted to reuse an engine ID with a different execution
     /// context identity in a context where that is invalid.
     #[error("engine {engine_id:?} context identity mismatch")]
@@ -736,6 +743,22 @@ pub enum PrepareError {
         input_index: usize,
         /// Placement rejected by every eligible engine ingress.
         placement: tenferro_tensor::Placement,
+    },
+    /// No available copy of a value has a registered direct transfer provider
+    /// to the storage required by its consumer.
+    #[error(
+        "instruction {instruction_index} has no direct transfer provider for value slot \
+         {value_slot} from {available_storage_classes:?} to {destination_storage_class:?}"
+    )]
+    MissingTransferProvider {
+        /// Staged instruction whose input cannot be reached.
+        instruction_index: usize,
+        /// Value slot required by the instruction.
+        value_slot: usize,
+        /// Storage class required by the instruction.
+        destination_storage_class: StorageClass,
+        /// Storage classes retaining an available copy.
+        available_storage_classes: Vec<StorageClass>,
     },
     /// A resolved placement references an engine absent from its preparation snapshot.
     #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]

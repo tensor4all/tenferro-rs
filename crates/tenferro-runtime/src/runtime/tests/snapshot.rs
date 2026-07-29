@@ -204,7 +204,9 @@ fn engine_registration_records_tensor_backend_execution_bridge() -> Result<(), B
     let registration = registration("tenferro.engine.bridge", 1)?;
     assert!(!registration.has_execution_engine());
 
-    let registration = registration.with_tensor_backend_executor(tenferro_cpu::CpuBackend::new());
+    let registration = registration
+        .with_tensor_backend_executor(tenferro_cpu::CpuBackend::new())
+        .with_input_ingress_validator(|_, _| true, |_, _| true, |_, _| true);
     assert!(registration.has_execution_engine());
 
     let mut builder = Runtime::builder();

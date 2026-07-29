@@ -3629,6 +3629,56 @@ impl<'a> TensorView<'a> {
         }
     }
 
+    fn placement(&self) -> &Placement {
+        match self {
+            Self::F32(t) => t.placement(),
+            Self::F64(t) => t.placement(),
+            Self::I32(t) => t.placement(),
+            Self::I64(t) => t.placement(),
+            Self::Bool(t) => t.placement(),
+            Self::C32(t) => t.placement(),
+            Self::C64(t) => t.placement(),
+        }
+    }
+
+    fn backend_family(&self) -> Option<&'static str> {
+        match self {
+            Self::F32(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::F64(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::I32(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::I64(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::Bool(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::C32(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+            Self::C64(t) => t.backend_buffer().map(|buffer| buffer.backend_family()),
+        }
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        match self {
+            Self::F32(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::F64(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::I32(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::I64(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::Bool(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::C32(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+            Self::C64(t) => t
+                .backend_buffer()
+                .and_then(|buffer| buffer.allocation_domain()),
+        }
+    }
+
     /// Return strides in element units.
     pub fn strides(&self) -> &[isize] {
         match self {
@@ -3905,6 +3955,77 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return the placement metadata carried by this read target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryKind, Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let read = TensorRead::from_tensor(&tensor);
+    /// assert_eq!(read.placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn placement(&self) -> &Placement {
+        match self {
+            Self::Tensor(tensor) => tensor.placement(),
+            Self::View(view) => view.placement(),
+        }
+    }
+
+    /// Return the physical backend family of this read target, when backend-owned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert_eq!(TensorRead::from_tensor(&tensor).backend_family(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn backend_family(&self) -> Option<&'static str> {
+        match self {
+            Self::Tensor(tensor) => match tensor {
+                Tensor::F32(t) => buffer_backend_family(t.buffer()),
+                Tensor::F64(t) => buffer_backend_family(t.buffer()),
+                Tensor::I32(t) => buffer_backend_family(t.buffer()),
+                Tensor::I64(t) => buffer_backend_family(t.buffer()),
+                Tensor::Bool(t) => buffer_backend_family(t.buffer()),
+                Tensor::C32(t) => buffer_backend_family(t.buffer()),
+                Tensor::C64(t) => buffer_backend_family(t.buffer()),
+            },
+            Self::View(view) => view.backend_family(),
+        }
+    }
+
+    /// Return the shared allocation domain of this read target, when present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert_eq!(TensorRead::from_tensor(&tensor).allocation_domain(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        match self {
+            Self::Tensor(tensor) => match tensor {
+                Tensor::F32(t) => t.allocation_domain(),
+                Tensor::F64(t) => t.allocation_domain(),
+                Tensor::I32(t) => t.allocation_domain(),
+                Tensor::I64(t) => t.allocation_domain(),
+                Tensor::Bool(t) => t.allocation_domain(),
+                Tensor::C32(t) => t.allocation_domain(),
+                Tensor::C64(t) => t.allocation_domain(),
+            },
+            Self::View(view) => view.allocation_domain(),
+        }
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -3982,6 +4103,13 @@ impl<'a> TensorRead<'a> {
             Self::Tensor(tensor) => Some(*tensor),
             Self::View(_) => None,
         }
+    }
+}
+
+fn buffer_backend_family<T: 'static>(buffer: &Buffer<T>) -> Option<&'static str> {
+    match buffer {
+        Buffer::Host(_) => None,
+        Buffer::Backend(buffer) => Some(buffer.backend_family()),
     }
 }
 

@@ -138,6 +138,9 @@ pub fn checked_shape_product(
     role: &'static str,
     shape: &[usize],
 ) -> Result<usize> {
+    if shape.contains(&0) {
+        return Ok(0);
+    }
     shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))

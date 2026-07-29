@@ -99,6 +99,33 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   `// INVARIANT` markers remain at both deferred `schedule.rs` dead-code
   allowances.
 
+## W7 Ingress And Reachability Follow-up
+
+- Replaced the placement-only execution ingress assumption with an explicit
+  three-part registration contract: preparation placement eligibility, actual
+  runtime-input acceptance, and destination-buffer residency.
+- Made execution-bridge registration without the complete ingress contract a
+  typed `RuntimeConfigError::MissingInputIngressValidator` failure at
+  registration and candidate validation.
+- Added CPU, CUDA, and WebGPU contracts. GPU ingress requires the expected
+  device kind and ordinal plus the backend family; WebGPU also requires the
+  expected allocation domain.
+- Validated transfer outputs against destination residency after dtype, shape,
+  checked logical element count, buffer length, and placement validation.
+  Metadata-only retagging of a foreign allocation now returns
+  `TransferProviderContractError::DestinationResidencyMismatch`.
+- Passed the registered direct storage-class reachability set into schedule
+  construction. A transfer source is selected only from an available copy with
+  a registered direct provider; no route now returns typed
+  `PrepareError::MissingTransferProvider` before execution.
+- Added fake allocation-domain buffers and a materializing two-location
+  provider test. The provider allocates and copies into the destination domain,
+  and the test asserts that source and destination allocation identities
+  differ.
+- Replaced the unchecked transfer shape product with the shared checked tensor
+  shape-product helper and preserved its typed source through
+  `TransferProviderContractError::LogicalElementCount`.
+
 ## Deferred Scope
 
 - Submit/event schedulers and asynchronous completion.
@@ -130,3 +157,10 @@ limited to the additive `TransferRequest` endpoint accessors and
   passed.
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree`:
   passed. Follow-up unit tests are organized under `src/runtime/tests/`.
+- Rebased the complete W7 follow-up onto `origin/main` at `035c02b0`, then
+  reran `cargo test -p tenferro-runtime --lib` (336 passed), the 14 focused
+  production runtime execution integration tests, CUDA and WebGPU ingress
+  validator tests, and `cargo check -p tenferro-gpu --features cuda,webgpu`.
+- `cargo test -p tenferro-runtime --doc` (367 passed) and
+  `cargo test -p tenferro-tensor --doc` (307 passed), including the new public
+  ingress, transfer-contract, and tensor-buffer identity examples.

@@ -1,6 +1,6 @@
 use super::super::schedule::{
     EventDomainId, ExecutionLocation, ScheduledCollective, ScheduledGraph, ScheduledNode,
-    ScheduledOperation, ScheduledTransfer,
+    ScheduledOperation, ScheduledTransfer, TransferReachability,
 };
 use super::super::{EngineId, StorageClass};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
@@ -61,6 +61,10 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
         source.clone(),
         std::slice::from_ref(&source),
         &[source.clone(), destination.clone(), source.clone()],
+        &TransferReachability::from([(
+            source.storage_class().clone(),
+            destination.storage_class().clone(),
+        )]),
     )
     .expect("schedule");
 
@@ -87,6 +91,59 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
         ScheduledNode::Operation(operation)
             if operation.instruction_index() == 2 && operation.location() == &source
     ));
+}
+
+#[test]
+fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
+    let first = location(
+        "tenferro-test.engine.first",
+        1,
+        "tenferro-test.storage.first",
+    );
+    let reachable = location(
+        "tenferro-test.engine.reachable",
+        2,
+        "tenferro-test.storage.reachable",
+    );
+    let destination = location(
+        "tenferro-test.engine.destination",
+        3,
+        "tenferro-test.storage.destination",
+    );
+    let program = ExecProgram {
+        instructions: vec![
+            instruction(0, 0, 1, true),
+            instruction(1, 1, 2, false),
+            instruction(2, 1, 3, true),
+        ],
+        input_slots: vec![0],
+        output_slots: vec![2, 3],
+        n_slots: 4,
+        shape_guards: Vec::new(),
+    };
+
+    let graph = ScheduledGraph::from_exec_program(
+        &program,
+        first.clone(),
+        std::slice::from_ref(&first),
+        &[first.clone(), reachable.clone(), destination.clone()],
+        &TransferReachability::from([
+            (
+                first.storage_class().clone(),
+                reachable.storage_class().clone(),
+            ),
+            (
+                reachable.storage_class().clone(),
+                destination.storage_class().clone(),
+            ),
+        ]),
+    )
+    .expect("schedule");
+    let transfers = graph.transfers_for_test().collect::<Vec<_>>();
+
+    assert_eq!(transfers.len(), 2);
+    assert_eq!(transfers[1].source_location(), &reachable);
+    assert_eq!(transfers[1].destination_location(), &destination);
 }
 
 #[test]

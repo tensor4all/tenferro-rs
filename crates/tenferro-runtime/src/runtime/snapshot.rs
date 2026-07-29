@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -198,6 +198,12 @@ impl RuntimeConfigSnapshot {
         &self,
     ) -> BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>> {
         self.transfers.clone()
+    }
+
+    pub(super) fn transfer_reachability_for_preparation(
+        &self,
+    ) -> BTreeSet<(StorageClass, StorageClass)> {
+        self.transfers.keys().cloned().collect()
     }
 
     #[cfg(test)]
@@ -1137,6 +1143,26 @@ impl<'a> EngineSnapshotView<'a> {
             .accepts_input_placement(placement, storage_class)
     }
 
+    pub(super) fn accepts_runtime_input(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_runtime_input(input, storage_class)
+    }
+
+    pub(super) fn owns_resident_tensor(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .owns_resident_tensor(input, storage_class)
+    }
+
     pub(super) fn execution_engine(
         &self,
     ) -> Option<&'a Arc<dyn super::execution::ErasedTensorBackendExecutor>> {
@@ -1171,6 +1197,7 @@ fn register_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
+    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     match candidate.engines.get(&engine_id) {
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
@@ -1194,6 +1221,7 @@ fn replace_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
+    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     match candidate.engines.get_mut(&engine_id) {
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
@@ -1300,6 +1328,9 @@ fn register_transfer_provider_candidate(
 }
 
 fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigError> {
+    for record in candidate.engines.values() {
+        validate_engine_execution_contract(&record.registration)?;
+    }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
         for family_engine in module.engines.keys() {
@@ -1318,6 +1349,17 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
                 });
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_engine_execution_contract(
+    registration: &EngineRegistration,
+) -> Result<(), RuntimeConfigError> {
+    if registration.has_execution_engine() && !registration.has_input_ingress_validator() {
+        return Err(RuntimeConfigError::MissingInputIngressValidator {
+            engine_id: registration.engine_id().clone(),
+        });
     }
     Ok(())
 }

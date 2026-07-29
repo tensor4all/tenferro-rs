@@ -13,7 +13,7 @@ use tenferro_runtime::{
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
     ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
-    UnsupportedReason,
+    TensorRead, UnsupportedReason,
 };
 
 use crate::CpuBackend;
@@ -73,7 +73,10 @@ pub fn runtime_engine_registration(
         .layout(layout);
 
     let storage = runtime_storage_class()?;
-    let ingress_storage = storage.clone();
+    let placement_storage = storage.clone();
+    let runtime_storage = storage.clone();
+    let resident_storage = storage.clone();
+    let allocation_domain = backend.allocation_domain();
     EngineRegistration::new(
         runtime_engine_id()?,
         ExecutionContextIdentity::of::<CpuBackend>(),
@@ -86,13 +89,46 @@ pub fn runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
-            .with_input_placement_validator(move |placement, candidate| {
-                matches!(
-                    placement.memory_kind,
-                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-                ) && candidate == &ingress_storage
-            })
+            .with_input_ingress_validator(
+                move |placement, candidate| {
+                    cpu_input_placement(placement) && candidate == &placement_storage
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &runtime_storage && cpu_runtime_input(input, allocation_domain)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &resident_storage
+                        && cpu_input_placement(input.placement())
+                        && match allocation_domain {
+                            Some(expected) => input.allocation_domain() == Some(expected),
+                            None => {
+                                input.allocation_domain().is_none()
+                                    && input.backend_family().is_none()
+                            }
+                        }
+                },
+            )
     })
+}
+
+fn cpu_input_placement(placement: &tenferro_tensor::Placement) -> bool {
+    matches!(
+        placement.memory_kind,
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+    )
+}
+
+fn cpu_runtime_input(
+    input: &TensorRead<'_>,
+    allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
+) -> bool {
+    cpu_input_placement(input.placement())
+        && match input.backend_family() {
+            None => true,
+            Some(_) => {
+                allocation_domain.is_some() && input.allocation_domain() == allocation_domain
+            }
+        }
 }
 
 fn runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {

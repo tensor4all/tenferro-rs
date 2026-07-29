@@ -5,7 +5,7 @@ use super::{
     execution, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
     RuntimeCacheOwner, RuntimeConfigError, StorageClass,
 };
-use tenferro_tensor::{Placement, TensorBackend};
+use tenferro_tensor::{Placement, TensorBackend, TensorRead};
 
 #[derive(Debug)]
 struct CandidateRegistrationToken;
@@ -52,10 +52,14 @@ pub struct EngineRegistration {
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
     input_placement_validator: Option<Arc<InputPlacementValidator>>,
+    runtime_input_validator: Option<Arc<InputTensorValidator>>,
+    resident_tensor_validator: Option<Arc<InputTensorValidator>>,
     candidate_token: Arc<CandidateRegistrationToken>,
 }
 
 type InputPlacementValidator = dyn Fn(&Placement, &StorageClass) -> bool + Send + Sync + 'static;
+type InputTensorValidator =
+    dyn for<'a> Fn(&TensorRead<'a>, &StorageClass) -> bool + Send + Sync + 'static;
 
 impl EngineRegistration {
     /// Build an immutable engine registration candidate.
@@ -85,6 +89,8 @@ impl EngineRegistration {
             cache_owner: None,
             execution_engine: None,
             input_placement_validator: None,
+            runtime_input_validator: None,
+            resident_tensor_validator: None,
             candidate_token: Arc::new(CandidateRegistrationToken),
         })
     }
@@ -163,8 +169,10 @@ impl EngineRegistration {
 
     /// Declare which tensor placements may enter this engine at each storage class.
     ///
-    /// The runtime uses this predicate both to place compiled-program inputs and
-    /// to validate tensors returned by transfer providers.
+    /// This placement-only hook supports preparation-only registrations.
+    /// Registrations with an execution bridge must instead use
+    /// [`Self::with_input_ingress_validator`] to declare the complete ingress
+    /// contract.
     ///
     /// # Examples
     ///
@@ -201,6 +209,57 @@ impl EngineRegistration {
         self
     }
 
+    /// Declare preparation, runtime-input, and destination-residency ingress rules.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    /// use tenferro_tensor::{MemoryKind, TensorRead};
+    ///
+    /// let storage = StorageClass::new("example.host")?;
+    /// let candidate = storage.clone();
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("example.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.cpu")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::default(),
+    /// )?
+    /// .with_input_ingress_validator(
+    ///     move |placement, storage| {
+    ///         placement.memory_kind == MemoryKind::UnpinnedHost && storage == &candidate
+    ///     },
+    ///     |input: &TensorRead<'_>, _| input.backend_family().is_none(),
+    ///     |input: &TensorRead<'_>, _| input.backend_family().is_none(),
+    /// );
+    /// assert!(registration.has_input_placement_validator());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_input_ingress_validator<P, I, R>(
+        mut self,
+        placement_validator: P,
+        runtime_input_validator: I,
+        resident_tensor_validator: R,
+    ) -> Self
+    where
+        P: Fn(&Placement, &StorageClass) -> bool + Send + Sync + 'static,
+        I: for<'a> Fn(&TensorRead<'a>, &StorageClass) -> bool + Send + Sync + 'static,
+        R: for<'a> Fn(&TensorRead<'a>, &StorageClass) -> bool + Send + Sync + 'static,
+    {
+        self.input_placement_validator = Some(Arc::new(placement_validator));
+        self.runtime_input_validator = Some(Arc::new(runtime_input_validator));
+        self.resident_tensor_validator = Some(Arc::new(resident_tensor_validator));
+        self
+    }
+
     /// Return whether this registration declares an input-placement validator.
     ///
     /// # Examples
@@ -230,6 +289,12 @@ impl EngineRegistration {
         self.input_placement_validator.is_some()
     }
 
+    pub(super) fn has_input_ingress_validator(&self) -> bool {
+        self.input_placement_validator.is_some()
+            && self.runtime_input_validator.is_some()
+            && self.resident_tensor_validator.is_some()
+    }
+
     pub(super) fn accepts_input_placement(
         &self,
         placement: &Placement,
@@ -240,6 +305,30 @@ impl EngineRegistration {
                 .input_placement_validator
                 .as_ref()
                 .is_some_and(|validator| validator(placement, storage_class))
+    }
+
+    pub(super) fn accepts_runtime_input(
+        &self,
+        input: &TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.storage_classes.contains(storage_class)
+            && self
+                .runtime_input_validator
+                .as_ref()
+                .is_some_and(|validator| validator(input, storage_class))
+    }
+
+    pub(super) fn owns_resident_tensor(
+        &self,
+        input: &TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.storage_classes.contains(storage_class)
+            && self
+                .resident_tensor_validator
+                .as_ref()
+                .is_some_and(|validator| validator(input, storage_class))
     }
 
     /// Return whether this registration carries a runtime-owned execution
@@ -293,6 +382,10 @@ impl fmt::Debug for EngineRegistration {
             .field(
                 "input_placement_validator",
                 &self.has_input_placement_validator(),
+            )
+            .field(
+                "input_ingress_validator",
+                &self.has_input_ingress_validator(),
             )
             .finish_non_exhaustive()
     }

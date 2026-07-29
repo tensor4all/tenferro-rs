@@ -17,7 +17,8 @@ use crate::runtime::{
     InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
     PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
-    SpecializationProjection, SpecializationRequirements, StorageClass,
+    SpecializationProjection, SpecializationRequirements, StorageClass, TransferProvider,
+    TransferRequest,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
@@ -560,7 +561,7 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
                 ExecutionContextIdentity::of::<RecordingExtensionEngine>(),
                 hardware_id("tenferro.cpu.host"),
                 Arc::from(vec![storage.clone()]),
-                storage,
+                storage.clone(),
                 CoreCapabilityBundle::builder().build(),
             )
             .expect("extension engine registration"),
@@ -570,6 +571,16 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
             engine: extension_engine.clone(),
         }),
     );
+    runtime
+        .reconfigure(|edit| {
+            edit.register_transfer_provider(
+                storage.clone(),
+                storage.clone(),
+                Arc::new(PreparationOnlyTransfer),
+            )?;
+            Ok(())
+        })
+        .expect("same-storage transfer route");
 
     let prepared = runtime
         .prepare_for(
@@ -589,6 +600,17 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
         prepared.operations_for_test()[1].binding().engine_id(),
         &extension_engine_id
     );
+}
+
+#[derive(Debug)]
+struct PreparationOnlyTransfer;
+
+impl TransferProvider for PreparationOnlyTransfer {
+    fn transfer(&self, _request: TransferRequest<'_>) -> crate::Result<tenferro_tensor::Tensor> {
+        Err(crate::Error::Internal(
+            "preparation-only transfer provider must not execute".into(),
+        ))
+    }
 }
 
 #[test]

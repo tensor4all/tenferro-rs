@@ -11,6 +11,9 @@ use tenferro_runtime::{
     ProviderContractError, RuntimeConfigError, SpecializationError, SpecializationProjection,
     SpecializationRequirements, StorageClass, UnsupportedReason,
 };
+use tenferro_tensor::{
+    AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead,
+};
 
 use super::WebGpuBackend;
 
@@ -98,6 +101,12 @@ pub fn webgpu_runtime_engine_registration(
     capabilities.dot_general(dot_general);
 
     let storage = webgpu_runtime_storage_class()?;
+    let placement_storage = storage.clone();
+    let runtime_storage = storage.clone();
+    let resident_storage = storage.clone();
+    let runtime = backend.runtime();
+    let device_ordinal = runtime.device_ordinal();
+    let allocation_domain = runtime.allocation_domain().map(|domain| domain.id);
     EngineRegistration::new(
         webgpu_runtime_engine_id()?,
         ExecutionContextIdentity::of::<WebGpuBackend>(),
@@ -106,8 +115,58 @@ pub fn webgpu_runtime_engine_registration(
         storage,
         capabilities.build(),
     )
-    .map(|registration| registration.with_tensor_backend_executor(execution_backend))
+    .map(|registration| {
+        registration
+            .with_tensor_backend_executor(execution_backend)
+            .with_input_ingress_validator(
+                move |placement, candidate| {
+                    candidate == &placement_storage
+                        && webgpu_input_placement(placement, device_ordinal, allocation_domain)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &runtime_storage
+                        && webgpu_input_tensor(input, device_ordinal, allocation_domain)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &resident_storage
+                        && webgpu_input_tensor(input, device_ordinal, allocation_domain)
+                },
+            )
+    })
 }
+
+fn webgpu_input_placement(
+    placement: &Placement,
+    device_ordinal: usize,
+    allocation_domain: Option<AllocationDomainId>,
+) -> bool {
+    placement.memory_kind
+        == if allocation_domain.is_some() {
+            MemoryKind::Managed
+        } else {
+            MemoryKind::Device
+        }
+        && matches!(
+            &placement.device,
+            Some(device)
+                if device.kind == DeviceKind::Gpu(GpuBackendKind::WebGpu)
+                    && device.ordinal == device_ordinal
+        )
+}
+
+fn webgpu_input_tensor(
+    input: &TensorRead<'_>,
+    device_ordinal: usize,
+    allocation_domain: Option<AllocationDomainId>,
+) -> bool {
+    webgpu_input_placement(input.placement(), device_ordinal, allocation_domain)
+        && input.backend_family() == Some("cubecl-webgpu")
+        && input.allocation_domain() == allocation_domain
+}
+
+#[cfg(test)]
+#[path = "tests/runtime_adapter.rs"]
+mod ingress_tests;
 
 fn webgpu_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
     StorageClass::new(WEBGPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)

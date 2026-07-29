@@ -15,6 +15,7 @@ use tenferro_runtime::{
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     UnsupportedReason,
 };
+use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead};
 
 use super::CudaBackend;
 
@@ -74,6 +75,10 @@ pub fn cuda_runtime_engine_registration(
         .layout(layout);
 
     let storage = cuda_runtime_storage_class()?;
+    let placement_storage = storage.clone();
+    let runtime_storage = storage.clone();
+    let resident_storage = storage.clone();
+    let device_ordinal = backend.runtime().device_ordinal();
     EngineRegistration::new(
         cuda_runtime_engine_id()?,
         ExecutionContextIdentity::of::<CudaBackend>(),
@@ -86,8 +91,40 @@ pub fn cuda_runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
+            .with_input_ingress_validator(
+                move |placement, candidate| {
+                    candidate == &placement_storage
+                        && cuda_input_placement(placement, device_ordinal)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &runtime_storage && cuda_input_tensor(input, device_ordinal)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &resident_storage && cuda_input_tensor(input, device_ordinal)
+                },
+            )
     })
 }
+
+fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
+    placement.memory_kind == MemoryKind::Device
+        && matches!(
+            &placement.device,
+            Some(device)
+                if device.kind == DeviceKind::Gpu(GpuBackendKind::Cuda)
+                    && device.ordinal == device_ordinal
+        )
+}
+
+fn cuda_input_tensor(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+    cuda_input_placement(input.placement(), device_ordinal)
+        && input.backend_family() == Some("cubecl")
+        && input.allocation_domain().is_none()
+}
+
+#[cfg(test)]
+#[path = "tests/runtime_adapter.rs"]
+mod ingress_tests;
 
 fn cuda_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
     StorageClass::new(CUDA_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)

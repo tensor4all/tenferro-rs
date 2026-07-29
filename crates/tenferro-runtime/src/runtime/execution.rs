@@ -1175,14 +1175,14 @@ fn validate_runtime_input_ingress(
     input: &TensorRead<'_>,
     slot: usize,
 ) -> Result<()> {
-    let placement = super::signature::read_placement(input);
     let accepted = execution
         .snapshot
         .engine(location.engine_id())
-        .is_some_and(|engine| engine.accepts_input_placement(&placement, location.storage_class()));
+        .is_some_and(|engine| engine.accepts_runtime_input(input, location.storage_class()));
     if accepted {
         return Ok(());
     }
+    let placement = input.placement();
     Err(Error::runtime_state(
         "Runtime::run_compiled",
         ErrorPhase::Execution,
@@ -1274,6 +1274,13 @@ fn validate_transfer_output(
     expected_shape: &[usize],
     output: &Tensor,
 ) -> Result<()> {
+    let expected_elements = checked_transfer_element_count(expected_shape).map_err(|source| {
+        Error::runtime_state_source(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            TransferError::ProviderContract { source },
+        )
+    })?;
     let contract_error = if output.dtype() != expected_dtype {
         Some(TransferProviderContractError::DTypeMismatch {
             expected: expected_dtype,
@@ -1283,6 +1290,11 @@ fn validate_transfer_output(
         Some(TransferProviderContractError::ShapeMismatch {
             expected: expected_shape.to_vec(),
             actual: output.shape().to_vec(),
+        })
+    } else if tensor_buffer_len(output) != expected_elements {
+        Some(TransferProviderContractError::InvalidBufferLength {
+            expected: expected_elements,
+            actual: tensor_buffer_len(output),
         })
     } else if !execution
         .snapshot
@@ -1298,11 +1310,26 @@ fn validate_transfer_output(
                 actual: output.placement().clone(),
             },
         )
+    } else if !execution
+        .snapshot
+        .engine(destination.engine_id())
+        .is_some_and(|engine| {
+            engine.owns_resident_tensor(
+                &TensorRead::from_tensor(output),
+                destination.storage_class(),
+            )
+        })
+    {
+        Some(
+            TransferProviderContractError::DestinationResidencyMismatch {
+                destination_engine_id: destination.engine_id().clone(),
+                destination_storage_class: destination.storage_class().clone(),
+                actual_backend_family: TensorRead::from_tensor(output).backend_family(),
+                actual_allocation_domain: TensorRead::from_tensor(output).allocation_domain(),
+            },
+        )
     } else {
-        let expected = expected_shape.iter().copied().product::<usize>();
-        let actual = tensor_buffer_len(output);
-        (actual != expected)
-            .then_some(TransferProviderContractError::InvalidBufferLength { expected, actual })
+        None
     };
     match contract_error {
         None => Ok(()),
@@ -1314,6 +1341,17 @@ fn validate_transfer_output(
     }
 }
 
+fn checked_transfer_element_count(
+    shape: &[usize],
+) -> std::result::Result<usize, TransferProviderContractError> {
+    tenferro_tensor::validate::checked_shape_product(
+        "Runtime::run_compiled",
+        "transfer source shape",
+        shape,
+    )
+    .map_err(|source| TransferProviderContractError::LogicalElementCount { source })
+}
+
 fn tensor_buffer_len(tensor: &Tensor) -> usize {
     match tensor {
         Tensor::F32(tensor) => tensor.buffer().len(),
@@ -1323,6 +1361,25 @@ fn tensor_buffer_len(tensor: &Tensor) -> usize {
         Tensor::Bool(tensor) => tensor.buffer().len(),
         Tensor::C32(tensor) => tensor.buffer().len(),
         Tensor::C64(tensor) => tensor.buffer().len(),
+    }
+}
+
+#[cfg(test)]
+mod transfer_validation_tests {
+    use std::error::Error as _;
+
+    use super::checked_transfer_element_count;
+    use crate::TransferProviderContractError;
+
+    #[test]
+    fn transfer_element_count_overflow_is_typed_and_preserves_source() {
+        let error = checked_transfer_element_count(&[usize::MAX, 2]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TransferProviderContractError::LogicalElementCount { .. }
+        ));
+        assert!(error.source().is_some());
     }
 }
 

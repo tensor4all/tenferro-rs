@@ -21,7 +21,9 @@ use super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedValue, RuntimeCacheSet, SharedRetention,
 };
 use super::extension::ExtensionFamilyId;
-use super::schedule::{ExecutionLocation, ScheduleBuildError, ScheduledGraph};
+use super::schedule::{
+    ExecutionLocation, ScheduleBuildError, ScheduledGraph, TransferReachability,
+};
 use super::{
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, ExecutionContextIdentity,
@@ -202,6 +204,7 @@ impl PreparedProgramRoot {
         extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
         root_location: ExecutionLocation,
         operation_locations: &[ExecutionLocation],
+        transfer_reachability: &TransferReachability,
     ) -> Result<Self, ScheduleBuildError> {
         let semantic = Arc::clone(&identity.semantic);
         let schedule = Arc::new(ScheduledGraph::from_exec_program(
@@ -209,6 +212,7 @@ impl PreparedProgramRoot {
             root_location,
             &identity.input_locations,
             operation_locations,
+            transfer_reachability,
         )?);
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
@@ -380,6 +384,7 @@ struct PreparationContext {
     operation_dispatch: Arc<[OperationDispatch]>,
     root_location: ExecutionLocation,
     operation_locations: Arc<[ExecutionLocation]>,
+    transfer_reachability: Arc<TransferReachability>,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
 }
 
@@ -793,6 +798,7 @@ fn build_operation_dispatch(
         operation_dispatch: dispatch.into(),
         root_location,
         operation_locations,
+        transfer_reachability: Arc::new(snapshot.transfer_reachability_for_preparation()),
         extension_planning: extension_planning.into(),
     }))
 }
@@ -873,6 +879,7 @@ fn build_cross_storage_operation_dispatch(
         operation_dispatch: dispatch.into(),
         root_location,
         operation_locations,
+        transfer_reachability: Arc::new(snapshot.transfer_reachability_for_preparation()),
         extension_planning: extension_planning.into(),
     }))
 }
@@ -1184,12 +1191,24 @@ fn root_for_key(
         Arc::clone(&context.extension_planning),
         context.root_location.clone(),
         &context.operation_locations,
+        &context.transfer_reachability,
     )
     .map(Arc::new)
-    .map_err(|source| {
-        Arc::new(PrepareError::Engine {
+    .map_err(|source| match source {
+        ScheduleBuildError::MissingTransferProvider {
+            instruction_index,
+            slot,
+            destination_storage_class,
+            available_storage_classes,
+        } => Arc::new(PrepareError::MissingTransferProvider {
+            instruction_index,
+            value_slot: slot,
+            destination_storage_class,
+            available_storage_classes,
+        }),
+        source => Arc::new(PrepareError::Engine {
             source: Arc::new(source),
-        })
+        }),
     })
 }
 

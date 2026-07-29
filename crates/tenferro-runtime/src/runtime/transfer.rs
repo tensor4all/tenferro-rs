@@ -1,6 +1,6 @@
 use std::fmt;
 
-use tenferro_tensor::{DType, Placement, Tensor, TensorRead};
+use tenferro_tensor::{AllocationDomainId, DType, Placement, Tensor, TensorRead};
 
 use super::schedule::{EventDomainId, ExecutionLocation};
 use super::{EngineId, StorageClass};
@@ -204,6 +204,13 @@ pub enum TransferError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TransferProviderContractError {
+    /// The logical source shape cannot be represented as an element count.
+    #[error("transfer source logical element count is invalid")]
+    LogicalElementCount {
+        /// Checked tensor shape-product failure.
+        #[source]
+        source: tenferro_tensor::Error,
+    },
     /// The returned tensor changed the source dtype.
     #[error("transfer output dtype mismatch: expected {expected:?}, actual {actual:?}")]
     DTypeMismatch {
@@ -232,6 +239,23 @@ pub enum TransferProviderContractError {
         destination_storage_class: StorageClass,
         /// Placement returned by the provider.
         actual: Placement,
+    },
+    /// The returned tensor has compatible metadata but is not owned by the
+    /// destination engine's backend or allocation domain.
+    #[error(
+        "transfer output storage family {actual_backend_family:?} and allocation domain \
+         {actual_allocation_domain:?} are not resident in destination storage \
+         {destination_storage_class:?} on engine {destination_engine_id:?}"
+    )]
+    DestinationResidencyMismatch {
+        /// Destination engine from the transfer request.
+        destination_engine_id: EngineId,
+        /// Destination storage class from the transfer request.
+        destination_storage_class: StorageClass,
+        /// Physical backend family returned by the provider.
+        actual_backend_family: Option<&'static str>,
+        /// Shared allocation domain returned by the provider.
+        actual_allocation_domain: Option<AllocationDomainId>,
     },
     /// The returned tensor's buffer length does not match its shape.
     #[error(

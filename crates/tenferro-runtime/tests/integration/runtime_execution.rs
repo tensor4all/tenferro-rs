@@ -21,8 +21,9 @@ use tenferro_runtime::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, MemoryKind, Placement,
-    SharedTensorAllocationDomain, Tensor, TensorRead, TypedTensor,
+    AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
+    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, Tensor, TensorRead,
+    TypedTensor,
 };
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -52,24 +53,47 @@ fn cpu_registration(
         .layout(layout);
 
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
-        storage,
+        storage.clone(),
         capabilities.build(),
     )
     .map(|registration| {
         let registration = registration
             .with_cache_owner(cache_owner)
-            .with_input_placement_validator(move |placement, candidate| {
-                matches!(
-                    placement.memory_kind,
-                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-                ) && candidate == &ingress_storage
-            });
+            .with_input_ingress_validator(
+                {
+                    let storage = storage.clone();
+                    move |placement, candidate| {
+                        test_cpu_placement(placement) && candidate == &storage
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                    }
+                },
+                {
+                    let storage = storage.clone();
+                    let allocation_domain = backend.allocation_domain();
+                    move |input: &TensorRead<'_>, candidate| {
+                        candidate == &storage
+                            && test_cpu_placement(input.placement())
+                            && match allocation_domain {
+                                Some(expected) => input.allocation_domain() == Some(expected),
+                                None => {
+                                    input.allocation_domain().is_none()
+                                        && input.backend_family().is_none()
+                                }
+                            }
+                    }
+                },
+            );
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -82,6 +106,43 @@ fn runtime_with_cpu(backend: &CpuBackend) -> Result<Runtime, RuntimeConfigError>
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration(backend, true)?)?;
     builder.build()
+}
+
+fn test_cpu_placement(placement: &Placement) -> bool {
+    matches!(
+        placement.memory_kind,
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+    )
+}
+
+fn test_cpu_runtime_input(
+    input: &TensorRead<'_>,
+    allocation_domain: Option<AllocationDomainId>,
+) -> bool {
+    test_cpu_placement(input.placement())
+        && match input.backend_family() {
+            None => true,
+            Some(_) => {
+                allocation_domain.is_some() && input.allocation_domain() == allocation_domain
+            }
+        }
+}
+
+fn tensor_f64_values(tensor: &Tensor) -> tenferro_tensor::Result<Vec<f64>> {
+    let Tensor::F64(tensor) = tensor else {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
+            "tensor_f64_values",
+            DType::F64,
+            tensor.dtype(),
+        ));
+    };
+    match tensor.buffer() {
+        Buffer::Host(values) => Ok(values.clone()),
+        Buffer::Backend(buffer) => buffer
+            .map_read()
+            .map(|values| values.to_vec())
+            .map_err(|source| tenferro_tensor::Error::host_access("tensor_f64_values", source)),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -100,11 +161,77 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
         self.0
     }
 
-    fn allocate(&self, _dtype: DType, _shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::unsupported(
+    fn allocate(&self, dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
+        let len = tenferro_tensor::validate::checked_shape_product(
             "test-allocation-domain",
-            "allocation not implemented for runtime execution tests",
+            "shape",
+            shape,
+        )?;
+        macro_rules! allocate {
+            ($scalar:ty, $variant:ident) => {{
+                let buffer = TestDomainBuffer::<$scalar> {
+                    values: Arc::new(Mutex::new(vec![<$scalar>::default(); len])),
+                    domain: self.0,
+                };
+                TypedTensor::from_buffer_col_major(
+                    shape.to_vec(),
+                    Buffer::Backend(Arc::new(buffer)),
+                    Placement::default(),
+                )
+                .map(Tensor::$variant)
+            }};
+        }
+        match dtype {
+            DType::F32 => allocate!(f32, F32),
+            DType::F64 => allocate!(f64, F64),
+            DType::I32 => allocate!(i32, I32),
+            DType::I64 => allocate!(i64, I64),
+            DType::Bool => allocate!(bool, Bool),
+            DType::C32 => allocate!(num_complex::Complex32, C32),
+            DType::C64 => allocate!(num_complex::Complex64, C64),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TestDomainBuffer<T> {
+    values: Arc<Mutex<Vec<T>>>,
+    domain: AllocationDomainId,
+}
+
+impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendBuffer<T> for TestDomainBuffer<T> {
+    fn backend_family(&self) -> &'static str {
+        "tenferro-test.allocation-domain"
+    }
+
+    fn len(&self) -> usize {
+        self.values.lock().expect("domain buffer lock").len()
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
+        Ok(HostReadGuard::new(
+            self.values.lock().expect("domain buffer lock"),
         ))
+    }
+
+    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+        let values = Arc::clone(&self.values);
+        let len = self.len();
+        Ok(HostWriteGuard::new(len, move |source| {
+            values
+                .lock()
+                .expect("domain buffer lock")
+                .clone_from_slice(source);
+            Ok(())
+        }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -114,6 +241,8 @@ struct RecordingTransferProvider {
     destination: StorageClass,
     calls: AtomicUsize,
     requests: Mutex<Vec<RecordedTransferRequest>>,
+    destination_backend: Option<CpuBackend>,
+    materialized_domains: Mutex<Vec<(Option<AllocationDomainId>, Option<AllocationDomainId>)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,6 +262,19 @@ impl RecordingTransferProvider {
             destination,
             calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
+            destination_backend: None,
+            materialized_domains: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn materializing(
+        source: StorageClass,
+        destination: StorageClass,
+        destination_backend: CpuBackend,
+    ) -> Self {
+        Self {
+            destination_backend: Some(destination_backend),
+            ..Self::new(source, destination)
         }
     }
 
@@ -142,6 +284,15 @@ impl RecordingTransferProvider {
 
     fn requests(&self) -> Vec<RecordedTransferRequest> {
         self.requests.lock().expect("request lock").clone()
+    }
+
+    fn materialized_domains(
+        &self,
+    ) -> Vec<(Option<AllocationDomainId>, Option<AllocationDomainId>)> {
+        self.materialized_domains
+            .lock()
+            .expect("materialized domain lock")
+            .clone()
     }
 }
 
@@ -161,11 +312,65 @@ impl TransferProvider for RecordingTransferProvider {
                 destination_storage_class: request.destination_storage_class().clone(),
             });
         self.calls.fetch_add(1, Ordering::SeqCst);
-        request
-            .input()
-            .as_tensor()
-            .cloned()
-            .ok_or_else(|| Error::Internal("test transfer expected an owned tensor".into()))
+        let source_domain = request.input().allocation_domain();
+        let output = match &self.destination_backend {
+            Some(backend) => {
+                let domain = backend.shared_allocation_domain().ok_or_else(|| {
+                    Error::Internal("materializing transfer requires an allocation domain".into())
+                })?;
+                let mut output =
+                    domain.allocate(request.input().dtype(), request.input().shape())?;
+                let source = request.input().as_tensor().ok_or_else(|| {
+                    Error::Internal("test transfer expected an owned tensor".into())
+                })?;
+                let (Tensor::F64(source), Tensor::F64(destination)) = (source, &mut output) else {
+                    return Err(Error::Internal(
+                        "materializing test transfer currently expects f64 tensors".into(),
+                    ));
+                };
+                let values = match source.buffer() {
+                    Buffer::Host(values) => values.clone(),
+                    Buffer::Backend(buffer) => buffer
+                        .map_read()
+                        .map_err(|source| {
+                            tenferro_tensor::Error::host_access("test-transfer-read", source)
+                        })?
+                        .to_vec(),
+                };
+                match destination.buffer() {
+                    Buffer::Host(_) => {
+                        return Err(Error::Internal(
+                            "test allocation domain returned host storage".into(),
+                        ));
+                    }
+                    Buffer::Backend(buffer) => {
+                        buffer
+                            .map_write()
+                            .map_err(|source| {
+                                tenferro_tensor::Error::host_access("test-transfer-write", source)
+                            })?
+                            .copy_from_slice(&values)
+                            .map_err(|source| {
+                                tenferro_tensor::Error::host_access("test-transfer-write", source)
+                            })?;
+                    }
+                }
+                output
+            }
+            None => {
+                request.input().as_tensor().cloned().ok_or_else(|| {
+                    Error::Internal("test transfer expected an owned tensor".into())
+                })?
+            }
+        };
+        self.materialized_domains
+            .lock()
+            .expect("materialized domain lock")
+            .push((
+                source_domain,
+                TensorRead::from_tensor(&output).allocation_domain(),
+            ));
+        Ok(output)
     }
 }
 
@@ -191,6 +396,7 @@ enum FaultyTransferOutput {
     Shape,
     Placement,
     BufferLength,
+    Residency,
 }
 
 #[derive(Debug)]
@@ -231,6 +437,18 @@ impl TransferProvider for FaultyTransferProvider {
                 )?;
                 len.store(1, Ordering::SeqCst);
                 Ok(tensor.into())
+            }
+            FaultyTransferOutput::Residency => {
+                let mut tensor = request.input().as_tensor().cloned().ok_or_else(|| {
+                    Error::Internal("test transfer expected an owned tensor".into())
+                })?;
+                let Tensor::F64(tensor) = &mut tensor else {
+                    return Err(Error::Internal(
+                        "test transfer expected an f64 tensor".into(),
+                    ));
+                };
+                tensor.set_placement(Placement::default());
+                Ok(tensor.clone().into())
             }
         }
     }
@@ -462,6 +680,17 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             )?
             .into()]);
         }
+        if inputs[0].allocation_domain() == backend.allocation_domain() {
+            return inputs[0]
+                .as_tensor()
+                .cloned()
+                .map(|tensor| vec![tensor])
+                .ok_or_else(|| {
+                    Error::Internal(
+                        "allocation-domain test executor expected an owned tensor".into(),
+                    )
+                });
+        }
         Ok(vec![backend.with_backend_session(|session| {
             session.to_contiguous_read(inputs[0].clone())
         })?])
@@ -538,23 +767,43 @@ fn cpu_registration_with_id(
     }
 
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
-        storage,
+        storage.clone(),
         capabilities.build(),
     )
     .map(|registration| {
-        let registration =
-            registration.with_input_placement_validator(move |placement, candidate| {
-                matches!(
-                    placement.memory_kind,
-                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-                ) && candidate == &ingress_storage
-            });
+        let registration = registration.with_input_ingress_validator(
+            {
+                let storage = storage.clone();
+                move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
+            },
+            {
+                let storage = storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                }
+            },
+            {
+                let storage = storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &storage
+                        && test_cpu_placement(input.placement())
+                        && match allocation_domain {
+                            Some(expected) => input.allocation_domain() == Some(expected),
+                            None => {
+                                input.allocation_domain().is_none()
+                                    && input.backend_family().is_none()
+                            }
+                        }
+                }
+            },
+        );
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -587,23 +836,43 @@ fn cpu_registration_with_storage_id(
     }
 
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
-    let ingress_storage = storage.clone();
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
-        storage,
+        storage.clone(),
         capabilities.build(),
     )
     .map(|registration| {
-        let registration =
-            registration.with_input_placement_validator(move |placement, candidate| {
-                matches!(
-                    placement.memory_kind,
-                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-                ) && candidate == &ingress_storage
-            });
+        let registration = registration.with_input_ingress_validator(
+            {
+                let storage = storage.clone();
+                move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
+            },
+            {
+                let storage = storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+                }
+            },
+            {
+                let storage = storage.clone();
+                let allocation_domain = backend.allocation_domain();
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &storage
+                        && test_cpu_placement(input.placement())
+                        && match allocation_domain {
+                            Some(expected) => input.allocation_domain() == Some(expected),
+                            None => {
+                                input.allocation_domain().is_none()
+                                    && input.backend_family().is_none()
+                            }
+                        }
+                }
+            },
+        );
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -649,6 +918,31 @@ fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
                 destination: actual_destination,
             },
         } if actual_source == source && actual_destination == destination
+    ));
+    Ok(())
+}
+
+#[test]
+fn execution_bridge_registration_requires_explicit_ingress_contract(
+) -> Result<(), Box<dyn StdError>> {
+    let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
+    let registration = EngineRegistration::new(
+        EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
+        ExecutionContextIdentity::of::<CpuBackend>(),
+        HardwareClassId::new("tenferro-test.hardware.missing-ingress.v1")?,
+        Arc::from(vec![storage.clone()]),
+        storage,
+        CoreCapabilityBundle::default(),
+    )?
+    .with_tensor_backend_executor(CpuBackend::new());
+    let mut builder = Runtime::builder();
+
+    let error = builder.register_engine(registration).unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeConfigError::MissingInputIngressValidator { engine_id }
+            if engine_id.as_str() == "tenferro-test.engine.missing-ingress.v1"
     ));
     Ok(())
 }
@@ -701,9 +995,10 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     let core_engine_id = "tenferro-test.core-engine.v1";
     let extension_engine_id = "tenferro-test.extension-engine.v1";
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let transfer = Arc::new(RecordingTransferProvider::new(
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
+        extension_backend.clone(),
     ));
 
     let mut builder = Runtime::builder();
@@ -754,10 +1049,14 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 
     let output = runtime.run_compiled(&program, &[&input])?;
 
-    assert_eq!(output[0].as_slice::<f64>()?, &[6.0, 10.0]);
+    assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
     assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
     assert_eq!(transfer.calls(), 1);
+    assert_eq!(
+        transfer.materialized_domains(),
+        vec![(None, Some(extension_domain))]
+    );
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
@@ -792,9 +1091,10 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     let extension_engine_id = "tenferro-test.extension-transfer-destination.v1";
     let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let destination_storage = StorageClass::new("tenferro-test.storage.destination.v1")?;
-    let transfer = Arc::new(RecordingTransferProvider::new(
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
         source_storage.clone(),
         destination_storage.clone(),
+        extension_backend.clone(),
     ));
 
     let mut builder = Runtime::builder();
@@ -852,8 +1152,12 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
 
     let output = runtime.run_compiled(&program, &[&input])?;
 
-    assert_eq!(output[0].as_slice::<f64>()?, &[6.0, 10.0]);
+    assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
     assert_eq!(transfer.calls(), 1);
+    assert_eq!(
+        transfer.materialized_domains(),
+        vec![(None, Some(extension_domain))]
+    );
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
@@ -877,16 +1181,21 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
 #[test]
 fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer(
 ) -> Result<(), Box<dyn StdError>> {
-    let ingress_backend = CpuBackend::new();
-    let consumer_backend = CpuBackend::new();
+    let ingress_domain = AllocationDomainId::fresh();
+    let consumer_domain = AllocationDomainId::fresh();
+    let ingress_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(ingress_domain)));
+    let consumer_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)));
     let counters = Arc::new(ExtensionCounters::default());
     let ingress_engine_id = "tenferro-test.a-input-ingress.v1";
     let consumer_engine_id = "tenferro-test.z-input-consumer.v1";
     let ingress_storage = StorageClass::new("tenferro-test.storage.input-ingress.v1")?;
     let consumer_storage = StorageClass::new("tenferro-test.storage.input-consumer.v1")?;
-    let transfer = Arc::new(RecordingTransferProvider::new(
+    let transfer = Arc::new(RecordingTransferProvider::materializing(
         ingress_storage.clone(),
         consumer_storage.clone(),
+        consumer_backend.clone(),
     ));
 
     let mut builder = Runtime::builder();
@@ -942,9 +1251,18 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
 
     let output = runtime.run_compiled(&program, &[&input])?;
 
-    assert_eq!(output[0].as_slice::<f64>()?, &[3.0, 5.0]);
+    assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
     assert_eq!(transfer.calls(), 1);
+    assert_eq!(
+        transfer.materialized_domains(),
+        vec![(None, Some(consumer_domain))]
+    );
+    assert_ne!(
+        transfer.materialized_domains()[0].0,
+        transfer.materialized_domains()[0].1,
+        "the provider must materialize into the destination allocation domain"
+    );
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
@@ -980,9 +1298,12 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
         FaultyTransferOutput::Shape,
         FaultyTransferOutput::Placement,
         FaultyTransferOutput::BufferLength,
+        FaultyTransferOutput::Residency,
     ] {
         let ingress_backend = CpuBackend::new();
-        let consumer_backend = CpuBackend::new();
+        let consumer_domain = AllocationDomainId::fresh();
+        let consumer_backend = CpuBackend::new()
+            .with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)));
         let counters = Arc::new(ExtensionCounters::default());
         let ingress_storage = StorageClass::new("tenferro-test.storage.faulty-ingress.v1")?;
         let consumer_storage = StorageClass::new("tenferro-test.storage.faulty-consumer.v1")?;
@@ -1047,6 +1368,9 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
                 ) | (
                     FaultyTransferOutput::BufferLength,
                     TransferProviderContractError::InvalidBufferLength { .. }
+                ) | (
+                    FaultyTransferOutput::Residency,
+                    TransferProviderContractError::DestinationResidencyMismatch { .. }
                 )
             ),
             "unexpected contract error for {fault:?}: {source}"
@@ -1281,15 +1605,6 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
-    let snapshot = runtime.snapshot()?;
-    let source_event_domain = snapshot
-        .engine(&EngineId::new(core_engine_id)?)
-        .expect("source engine")
-        .event_domain_id();
-    let destination_event_domain = snapshot
-        .engine(&EngineId::new(extension_engine_id)?)
-        .expect("destination engine")
-        .event_domain_id();
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
@@ -1307,25 +1622,19 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
-    assert!(error.to_string().contains("no transfer provider"));
-    let transfer_error = error
+    assert!(error.to_string().contains("no direct transfer provider"));
+    let prepare_error = error
         .source()
-        .and_then(|source| source.downcast_ref::<TransferError>())
-        .expect("typed transfer error source");
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<PrepareError>())
+        .expect("typed prepare error source");
     assert!(matches!(
-        transfer_error,
-        TransferError::MissingProvider {
-            source_engine_id,
-            source_event_domain_id: actual_source_event_domain,
-            source_storage_class,
-            destination_engine_id,
-            destination_event_domain_id: actual_destination_event_domain,
+        prepare_error,
+        PrepareError::MissingTransferProvider {
             destination_storage_class,
-        } if source_engine_id == &EngineId::new(core_engine_id)?
-            && *actual_source_event_domain == source_event_domain
-            && source_storage_class == &source_storage
-            && destination_engine_id == &EngineId::new(extension_engine_id)?
-            && *actual_destination_event_domain == destination_event_domain
+            available_storage_classes,
+            ..
+        } if available_storage_classes == std::slice::from_ref(&source_storage)
             && destination_storage_class == &destination_storage
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
