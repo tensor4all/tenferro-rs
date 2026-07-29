@@ -195,6 +195,7 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
     let elementwise = include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
     let indexing = include_str!("../indexing.rs");
     let reduction = include_str!("../reduction.rs");
+    let structural = include_str!("../structural.rs");
 
     assert!(
         elementwise.contains("ErasedFusedPlan::compile"),
@@ -211,6 +212,13 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
         "CPU indexed slice/update/scatter execution should delegate to erased strided plans"
     );
     assert!(
+        indexing.contains("ErasedSlicePlan::compile")
+            && indexing.contains("ErasedPadPlan::compile")
+            && indexing.contains("ErasedConcatenatePlan::compile")
+            && indexing.contains("ErasedReversePlan::compile"),
+        "CPU static indexing execution should delegate to erased strided plans"
+    );
+    assert!(
         reduction.contains("ErasedReducePlan::compile_axes"),
         "CPU sum/product axis reductions should delegate to erased strided reduce plans"
     );
@@ -225,6 +233,16 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
             "{name} erased strided replay should inherit CpuExecutionContext, not force serial"
         );
     }
+    let pooled_triangular = structural
+        .split_once("fn typed_triangular_mask_with_fill_pool")
+        .and_then(|(_, rest)| rest.split_once("fn checked_triangular_extent"))
+        .map(|(body, _)| body)
+        .expect("pooled triangular kernel should remain discoverable");
+    assert!(
+        !pooled_triangular.contains("for row in 0..rows")
+            && pooled_triangular.contains("data[start..end].fill(fill)"),
+        "CPU pooled triangular masks should operate on contiguous column runs"
+    );
 }
 
 #[test]
@@ -922,6 +940,31 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
         backend.buffer_pool_len().unwrap_err().kind(),
         tenferro_tensor::ErrorKind::RuntimeState
     );
+}
+
+#[test]
+fn uninit_output_partial_write_then_panic_replenishes_only_capacity() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    backend
+        .with_linalg_pool(|_, pool| {
+            <bool as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
+            Ok(())
+        })
+        .unwrap();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = backend.with_linalg_pool::<()>(|_, pool| {
+            let mut output =
+                crate::indexing_alloc::PooledUninitOutput::<bool>::new(pool, vec![1024]).unwrap();
+            output.as_uninit_bytes_mut()[0].write(1);
+            panic!("forced panic after a partial uninitialized output write");
+        });
+    }));
+
+    assert!(result.is_err());
+    let resources = backend.engine.resources.lock().unwrap_err().into_inner();
+    assert_eq!(resources.buffers.len(), 1);
+    assert_eq!(resources.buffers.stats().capacity_bytes, 1024);
 }
 
 #[test]

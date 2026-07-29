@@ -211,9 +211,8 @@ fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
         "CPU concatenate must check output-axis extent accumulation"
     );
     assert!(
-        concat_section.contains("segment_end")
-            && concat_section.contains(".checked_add(input.shape()[axis])"),
-        "CPU concatenate must check segment prefix offsets"
+        concat_section.contains("ErasedConcatenatePlan::compile"),
+        "CPU concatenate must delegate checked segment prefix arithmetic to strided-kernel"
     );
 
     let scatter_section = source_section(indexing, "fn typed_scatter", "fn typed_dynamic_slice");

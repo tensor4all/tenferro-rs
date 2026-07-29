@@ -418,12 +418,9 @@ fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
     let indexing_source = include_str!("../../src/indexing.rs");
 
     assert!(
-        !indexing_source.contains(".position(|&end| concat_idx < end)"),
-        "concatenate should not linearly scan all input segment ends for each output element"
-    );
-    assert!(
-        indexing_source.contains("partition_point"),
-        "concatenate should use precomputed ordered segment boundaries for logarithmic lookup"
+        indexing_source.contains("ErasedConcatenatePlan::compile")
+            && !indexing_source.contains("partition_point"),
+        "concatenate traversal and segment lookup should be owned by strided-kernel"
     );
 }
 

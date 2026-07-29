@@ -320,6 +320,85 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
 }
 
 #[test]
+fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut input = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).unwrap();
+    let sliced = backend
+        .slice(
+            &input,
+            &SliceConfig {
+                starts: vec![1],
+                limits: vec![4],
+                strides: vec![2],
+            },
+        )
+        .unwrap();
+    assert_eq!(sliced.as_slice::<bool>().unwrap(), &[false, false]);
+
+    let reversed = backend.reverse(&input, &[0]).unwrap();
+    assert_eq!(
+        reversed.as_slice::<bool>().unwrap(),
+        &[false, true, false, true]
+    );
+    let concatenated = backend.concatenate(&[&sliced, &reversed], 0).unwrap();
+    assert_eq!(
+        concatenated.as_slice::<bool>().unwrap(),
+        &[false, false, false, true, false, true]
+    );
+    let Tensor::Bool(input) = &mut input else {
+        panic!("test input must remain Bool");
+    };
+    input.host_data_mut().unwrap().fill(true);
+    assert_eq!(
+        sliced.as_slice::<bool>().unwrap(),
+        &[false, false],
+        "mutating the input after handoff must not change the copied output"
+    );
+    assert_eq!(
+        reversed.as_slice::<bool>().unwrap(),
+        &[false, true, false, true],
+        "static replay outputs must own their destination storage"
+    );
+
+    let empty = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new()).unwrap();
+    let empty_slice = backend
+        .slice(
+            &empty,
+            &SliceConfig {
+                starts: vec![0],
+                limits: vec![0],
+                strides: vec![1],
+            },
+        )
+        .unwrap();
+    assert!(empty_slice.as_slice::<bool>().unwrap().is_empty());
+    assert!(backend
+        .reverse(&empty, &[0])
+        .unwrap()
+        .as_slice::<bool>()
+        .unwrap()
+        .is_empty());
+    assert!(backend
+        .concatenate(&[&empty, &empty], 0)
+        .unwrap()
+        .as_slice::<bool>()
+        .unwrap()
+        .is_empty());
+
+    let padded = backend
+        .pad(
+            &empty,
+            &PadConfig {
+                edge_padding_low: vec![1],
+                edge_padding_high: vec![2],
+                interior_padding: vec![0],
+            },
+        )
+        .unwrap();
+    assert_eq!(padded.as_slice::<bool>().unwrap(), &[false; 3]);
+}
+
+#[test]
 fn cpu_indexing_validation_covers_error_branches() {
     let mut backend = CpuBackend::new();
     let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());

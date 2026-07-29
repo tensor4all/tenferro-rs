@@ -3211,7 +3211,10 @@ impl TensorIndexing for CpuBackend {
     }
 
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| indexing::try_slice_with_pool(buffers, input, config))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::try_slice_with_pool(buffers, &exec_context, input, config)
+        })
     }
 
     fn dynamic_slice(
@@ -3253,15 +3256,24 @@ impl TensorIndexing for CpuBackend {
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| indexing::try_pad_with_pool(buffers, input, config))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::try_pad_with_pool(buffers, &exec_context, input, config)
+        })
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::try_concatenate_with_pool(buffers, &exec_context, inputs, axis)
+        })
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| indexing::reverse_with_pool(buffers, input, axes))
+        self.install_with_pool_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::reverse_with_pool(buffers, &exec_context, input, axes)
+        })
     }
 }
 
