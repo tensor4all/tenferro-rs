@@ -37,9 +37,9 @@ The work is profile-first:
 - Neither native path fuses dimensions or tiles stride-hostile transposes.
 - The existing GPU permutation benchmark is CUDA-only and uses A100-sized
   `F64` patterns.
-- The development Mac is an Apple M5 Max. The user explicitly approved using
-  it for the final Apple Silicon sweep even though the issue originally named
-  M4.
+- The development Mac is an Apple M5 Max. The user explicitly approved the
+  recorded M5 bounded tile sweep as the final Apple Silicon sweep even though
+  the issue originally named M4. No additional M4 rerun is required.
 
 ## Entry Gate
 
@@ -312,10 +312,10 @@ runtimes. CUDA numbers are diagnostic because cuTENSOR remains the production
 CUDA route for supported dtypes.
 
 Improvement decisions are based on the Step 0 Metal baseline, not on native
-CUDA performance. The final Apple Silicon pass sweeps the compile-time tile
-candidates and reruns the complete `mac-gpu` profile. The issue named M4; the
-approved local execution uses the available M5 Max and records that device
-truthfully.
+CUDA performance. The final Apple Silicon pass sweeps the bounded compile-time
+tile candidates and reruns the complete `mac-gpu` profile. The recorded M5 Max
+execution is the approved final pass and records the device truthfully; an M4
+rerun is not a completion requirement.
 
 ## Performance Gates
 
