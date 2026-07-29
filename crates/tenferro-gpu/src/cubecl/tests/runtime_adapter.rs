@@ -1,14 +1,32 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TypedTensor};
+use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
+use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
 use super::*;
-use crate::{gpu_available, upload_tensor, CudaRuntime};
+use crate::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaRuntime};
 
 #[derive(Debug)]
 struct TestCudaBuffer {
     family: &'static str,
+}
+
+#[derive(Debug)]
+struct FailingEventToken;
+
+impl EventToken for FailingEventToken {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn wait(&self) -> tenferro_runtime::Result<()> {
+        Err(tenferro_runtime::Error::runtime_state(
+            "failing_event_token",
+            tenferro_runtime::ErrorPhase::Execution,
+            "injected dependency failure",
+        ))
+    }
 }
 
 impl BackendBuffer<f32> for TestCudaBuffer {
@@ -107,4 +125,125 @@ fn sum_squares_routes_through_runtime_reduction_preparation() {
         core_operation_name(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
         "reduce_sum_squares"
     );
+}
+
+#[test]
+fn cuda_registration_installs_native_event_domain_driver() {
+    let source = include_str!("../runtime_adapter.rs");
+    assert!(
+        source.contains(".with_event_domain_driver(Arc::new(CudaEventDomainDriver::new(")
+            && source.contains("backend.runtime().clone(),"),
+        "CUDA registration must install its native event-domain driver"
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
+    if !gpu_available() {
+        return;
+    }
+
+    let backend = CudaBackend::new(0).expect("CUDA backend");
+    let runtime = backend.runtime().clone();
+    let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host input");
+    let input = upload_tensor(&runtime, &host).expect("CUDA upload");
+    let driver = CudaEventDomainDriver::new(runtime.clone());
+    let run = driver.begin_run().expect("CUDA event-domain run");
+
+    // A run may cross scheduler worker threads. Its captured CubeCL stream must
+    // remain stable rather than following each worker's thread-local stream.
+    let input_for_first = input.clone();
+    let (mut run, mut backend, first_output, first_completion, first_launches) =
+        std::thread::spawn(move || {
+            let mut run = run;
+            let mut backend = backend;
+            let mut first_output = None;
+            let mut first_launches = 0;
+            let mut first = || {
+                first_launches += 1;
+                first_output = Some(
+                    backend
+                        .add(&input_for_first, &input_for_first)
+                        .map_err(tenferro_runtime::Error::from)?,
+                );
+                Ok(())
+            };
+            let first_completion = run.enqueue(&[], &mut first).expect("first enqueue");
+            drop(first);
+            (
+                run,
+                backend,
+                first_output.expect("first output"),
+                first_completion,
+                first_launches,
+            )
+        })
+        .join()
+        .expect("CUDA launch worker");
+    assert_eq!(first_launches, 1);
+
+    let mut second_output = None;
+    let mut second_launches = 0;
+    let mut second = || {
+        second_launches += 1;
+        second_output = Some(
+            backend
+                .add(&first_output, &input)
+                .map_err(tenferro_runtime::Error::from)?,
+        );
+        Ok(())
+    };
+    let second_completion = run
+        .enqueue(&[first_completion], &mut second)
+        .expect("dependent enqueue");
+    drop(second);
+    assert_eq!(second_launches, 1);
+
+    second_completion.wait().expect("first completion wait");
+    second_completion.wait().expect("repeat completion wait");
+    run.drain().expect("CUDA event-domain drain");
+
+    let mut forbidden_launches = 0;
+    let mut forbidden = || {
+        forbidden_launches += 1;
+        Ok(())
+    };
+    let dependency_error = run.enqueue(&[Arc::new(FailingEventToken)], &mut forbidden);
+    assert!(dependency_error.is_err());
+    drop(forbidden);
+    assert_eq!(forbidden_launches, 0);
+
+    let mut panic_output = None;
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut panicking = || -> tenferro_runtime::Result<()> {
+            panic_output = Some(
+                backend
+                    .add(&input, &input)
+                    .map_err(tenferro_runtime::Error::from)?,
+            );
+            panic!("injected post-launch panic");
+        };
+        let _ = run.enqueue(&[], &mut panicking);
+    }));
+    assert!(unwind.is_err());
+    let panic_output = download_tensor(
+        &runtime,
+        panic_output.as_ref().expect("panic-path output retained"),
+    )
+    .expect("panic-path work retired before unwind returned");
+    let Tensor::F32(panic_output) = panic_output else {
+        unreachable!("f32 panic-path output")
+    };
+    assert_eq!(
+        panic_output.as_slice().expect("panic-path host slice"),
+        &[2.0, 4.0]
+    );
+
+    let output = download_tensor(&runtime, second_output.as_ref().expect("second output"))
+        .expect("CUDA download");
+    let Tensor::F32(output) = output else {
+        unreachable!("f32 elementwise output")
+    };
+    assert_eq!(output.as_slice().expect("host slice"), &[3.0, 6.0]);
 }

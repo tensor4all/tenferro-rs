@@ -17,6 +17,7 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView};
 
+use super::event_domain::CudaEventDomainDriver;
 use super::CudaBackend;
 
 const CUDA_ENGINE_ID: &str = "tenferro-cuda.default.v1";
@@ -90,6 +91,9 @@ pub fn cuda_runtime_engine_registration(
     )
     .map(|registration| {
         registration
+            .with_event_domain_driver(Arc::new(CudaEventDomainDriver::new(
+                backend.runtime().clone(),
+            )))
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
             .with_input_signature_validator(move |placement, family, domain, candidate| {

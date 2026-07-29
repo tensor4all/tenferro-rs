@@ -119,6 +119,7 @@ use crate::{
 mod capability;
 mod dispatch;
 mod error;
+mod event_domain;
 mod ffi;
 mod fusion;
 mod gemm;
