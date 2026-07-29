@@ -142,4 +142,3 @@ Update the worklog and benchmark report with the measured result, run
 `git diff --check`, and commit the accepted implementation and evidence. If
 the hypothesis fails, revert the implementation commits and record the
 negative experiment instead.
-

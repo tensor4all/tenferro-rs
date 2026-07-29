@@ -54,4 +54,3 @@ hypothesis.
   without causing any wgpu row to exceed the +20% regression gate.
 - CUDA plus WebGPU compile together; Linux A100 CUDA and wgpu/Vulkan runtime
   execution remains the required pre-merge validation.
-
