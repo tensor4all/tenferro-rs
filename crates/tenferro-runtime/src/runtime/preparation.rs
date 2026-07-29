@@ -382,6 +382,7 @@ impl PreparedValue for PreparedProgram {
 struct PreparationContext {
     root_identity: Arc<PreparedRootIdentity>,
     operation_dispatch: Arc<[OperationDispatch]>,
+    staging: Arc<ExecProgram>,
     root_location: ExecutionLocation,
     operation_locations: Arc<[ExecutionLocation]>,
     transfer_reachability: Arc<TransferReachability>,
@@ -561,6 +562,13 @@ fn resolve_preparation_context(
     } else {
         candidates.extend(explicit.iter().filter_map(|engine| snapshot.engine(engine)));
     }
+    let staging = Arc::new(
+        stage_semantic_program(&frozen.program, compiler_options).map_err(|source| {
+            Arc::new(PrepareError::Engine {
+                source: Arc::new(source),
+            })
+        })?,
+    );
 
     let mut missing_extension_family = None;
     let storage_candidates = candidate_storage_classes(&candidates, &constraint);
@@ -570,6 +578,7 @@ fn resolve_preparation_context(
             snapshot,
             frozen,
             compiler_options,
+            &staging,
             &candidates,
             storage_class,
             signature,
@@ -585,6 +594,7 @@ fn resolve_preparation_context(
             snapshot,
             frozen,
             compiler_options,
+            &staging,
             &candidates,
             signature,
             options,
@@ -606,59 +616,120 @@ fn resolve_preparation_context(
 fn resolve_input_locations(
     candidates: &[super::EngineSnapshotView<'_>],
     signature: &InputSignature,
-    semantic: &SemanticProgram,
+    program: &ExecProgram,
     root_location: &ExecutionLocation,
     operation_locations: &[ExecutionLocation],
     transfer_reachability: &TransferReachability,
 ) -> PreparedProgramResult<Arc<[ExecutionLocation]>> {
-    signature
-        .entries()
-        .iter()
-        .enumerate()
-        .map(|(input_index, entry)| {
-            let input = semantic.inputs().get(input_index).ok_or_else(|| {
+    let consumers = physical_input_consumers(program, root_location, operation_locations).map_err(
+        |source| {
+            Arc::new(PrepareError::Engine {
+                source: Arc::new(source),
+            })
+        },
+    )?;
+    let mut selected = Vec::with_capacity(signature.entries().len());
+    for (input_index, entry) in signature.entries().iter().enumerate() {
+        let input_consumers = consumers.get(input_index).ok_or_else(|| {
+            Arc::new(PrepareError::NoInputIngress {
+                input_index,
+                placement: entry.placement().clone(),
+            })
+        })?;
+        let source = candidates
+            .iter()
+            .flat_map(|engine| {
+                engine
+                    .storage_classes()
+                    .iter()
+                    .filter(move |storage| engine.accepts_input_signature(entry, storage))
+                    .map(move |storage| {
+                        ExecutionLocation::new(
+                            engine.engine_id().clone(),
+                            engine.event_domain_id(),
+                            storage.clone(),
+                        )
+                    })
+            })
+            .find(|source| {
+                source_reaches_all_consumers(source, input_consumers, transfer_reachability)
+            })
+            .ok_or_else(|| {
                 Arc::new(PrepareError::NoInputIngress {
                     input_index,
                     placement: entry.placement().clone(),
                 })
             })?;
-            let destination = semantic
-                .operations()
-                .enumerate()
-                .find(|(_, operation)| operation.inputs().contains(input))
-                .and_then(|(operation_index, _)| operation_locations.get(operation_index))
-                .unwrap_or(root_location);
-            candidates
-                .iter()
-                .flat_map(|engine| {
-                    engine
-                        .storage_classes()
-                        .iter()
-                        .filter(move |storage| engine.accepts_input_signature(entry, storage))
-                        .map(move |storage| {
-                            ExecutionLocation::new(
-                                engine.engine_id().clone(),
-                                engine.event_domain_id(),
-                                storage.clone(),
-                            )
-                        })
-                })
-                .find(|source| {
-                    source == destination
-                        || transfer_reachability.contains(&(
-                            source.storage_class().clone(),
-                            destination.storage_class().clone(),
-                        ))
-                })
-                .ok_or_else(|| {
-                    Arc::new(PrepareError::NoInputIngress {
-                        input_index,
-                        placement: entry.placement().clone(),
-                    })
-                })
-        })
-        .collect::<PreparedProgramResult<Vec<_>>>()
-        .map(Arc::from)
+        selected.push(source);
+    }
+    Ok(Arc::from(selected))
+}
+
+fn physical_input_consumers(
+    program: &ExecProgram,
+    root_location: &ExecutionLocation,
+    operation_locations: &[ExecutionLocation],
+) -> Result<Vec<Vec<ExecutionLocation>>, ScheduleBuildError> {
+    let mut input_by_slot = vec![None; program.n_slots];
+    for (input_index, &slot) in program.input_slots.iter().enumerate() {
+        let input =
+            input_by_slot
+                .get_mut(slot)
+                .ok_or(ScheduleBuildError::ValueSlotOutOfBounds {
+                    slot,
+                    value_count: program.n_slots,
+                })?;
+        *input = Some(input_index);
+    }
+    let mut consumers = vec![Vec::new(); program.input_slots.len()];
+    for (instruction_index, instruction) in program.instructions.iter().enumerate() {
+        let location = match instruction.semantic_operation_index {
+            Some(operation_index) => operation_locations.get(operation_index).cloned().ok_or(
+                ScheduleBuildError::MissingOperationLocation {
+                    instruction_index,
+                    operation_index,
+                },
+            )?,
+            None => root_location.clone(),
+        };
+        for &slot in &instruction.input_slots {
+            let input_index =
+                input_by_slot
+                    .get(slot)
+                    .ok_or(ScheduleBuildError::ValueSlotOutOfBounds {
+                        slot,
+                        value_count: program.n_slots,
+                    })?;
+            if let Some(input_index) = input_index {
+                consumers[*input_index].push(location.clone());
+            }
+        }
+    }
+    Ok(consumers)
+}
+
+fn source_reaches_all_consumers(
+    source: &ExecutionLocation,
+    consumers: &[ExecutionLocation],
+    transfer_reachability: &TransferReachability,
+) -> bool {
+    let mut available = Vec::with_capacity(consumers.len().saturating_add(1));
+    available.push(source.clone());
+    for destination in consumers {
+        if available.iter().any(|location| location == destination) {
+            continue;
+        }
+        if !available.iter().any(|location| {
+            transfer_reachability.contains(&(
+                location.storage_class().clone(),
+                destination.storage_class().clone(),
+            ))
+        }) {
+            return false;
+        }
+        available.push(destination.clone());
+    }
+    true
 }
 
 fn candidate_storage_classes(
@@ -711,6 +782,7 @@ fn build_operation_dispatch(
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
     compiler_options: CompilerOptions,
+    staging: &Arc<ExecProgram>,
     candidates: &[super::EngineSnapshotView<'_>],
     storage_class: StorageClass,
     signature: &InputSignature,
@@ -798,7 +870,7 @@ fn build_operation_dispatch(
     let input_locations = resolve_input_locations(
         candidates,
         signature,
-        &frozen.program,
+        staging,
         &root_location,
         &operation_locations,
         &transfer_reachability,
@@ -826,6 +898,7 @@ fn build_operation_dispatch(
     Ok(Some(PreparationContext {
         root_identity,
         operation_dispatch: dispatch.into(),
+        staging: Arc::clone(staging),
         root_location,
         operation_locations,
         transfer_reachability: Arc::new(transfer_reachability),
@@ -839,6 +912,7 @@ fn build_cross_storage_operation_dispatch(
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
     compiler_options: CompilerOptions,
+    staging: &Arc<ExecProgram>,
     candidates: &[super::EngineSnapshotView<'_>],
     signature: &InputSignature,
     options: &PrepareOptions,
@@ -887,7 +961,7 @@ fn build_cross_storage_operation_dispatch(
     let input_locations = resolve_input_locations(
         candidates,
         signature,
-        &frozen.program,
+        staging,
         &root_location,
         &operation_locations,
         &transfer_reachability,
@@ -915,6 +989,7 @@ fn build_cross_storage_operation_dispatch(
     Ok(Some(PreparationContext {
         root_identity,
         operation_dispatch: dispatch.into(),
+        staging: Arc::clone(staging),
         root_location,
         operation_locations,
         transfer_reachability: Arc::new(transfer_reachability),
@@ -1216,16 +1291,9 @@ fn root_for_key(
         PreparedRootKey::Identity(identity) => Arc::clone(identity),
         PreparedRootKey::Prepared(_) => unreachable!(),
     };
-    let staging = stage_semantic_program(&identity.semantic, identity.compiler_options).map_err(
-        |source| {
-            Arc::new(PrepareError::Engine {
-                source: Arc::new(source),
-            })
-        },
-    )?;
     PreparedProgramRoot::new(
         identity,
-        Arc::new(staging),
+        Arc::clone(&context.staging),
         Arc::clone(&context.extension_planning),
         context.root_location.clone(),
         &context.operation_locations,

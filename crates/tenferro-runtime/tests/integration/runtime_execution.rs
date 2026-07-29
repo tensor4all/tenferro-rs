@@ -1225,6 +1225,233 @@ fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
 }
 
 #[test]
+fn runtime_input_ingress_covers_all_split_consumers() -> Result<(), Box<dyn StdError>> {
+    let dead_backend = CpuBackend::new();
+    let routed_backend = CpuBackend::new();
+    let first_consumer_backend = CpuBackend::new();
+    let second_consumer_backend = CpuBackend::new();
+    let dead_storage = StorageClass::new("tenferro-test.storage.split-dead.v1")?;
+    let routed_storage = StorageClass::new("tenferro-test.storage.split-routed.v1")?;
+    let first_storage = StorageClass::new("tenferro-test.storage.split-first.v1")?;
+    let second_storage = StorageClass::new("tenferro-test.storage.split-second.v1")?;
+    let dead_to_first = Arc::new(RecordingTransferProvider::new(
+        dead_storage.clone(),
+        first_storage.clone(),
+    ));
+    let routed_to_first = Arc::new(RecordingTransferProvider::new(
+        routed_storage.clone(),
+        first_storage.clone(),
+    ));
+    let routed_to_second = Arc::new(RecordingTransferProvider::new(
+        routed_storage.clone(),
+        second_storage.clone(),
+    ));
+    let first_counters = Arc::new(ExtensionCounters::default());
+    let second_counters = Arc::new(ExtensionCounters::default());
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &dead_backend,
+        "tenferro-test.a-split-dead.v1",
+        dead_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &routed_backend,
+        "tenferro-test.b-split-routed.v1",
+        routed_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &first_consumer_backend,
+        "tenferro-test.y-split-first.v1",
+        first_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &second_consumer_backend,
+        "tenferro-test.z-split-second.v1",
+        second_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_transfer_provider(
+        dead_storage,
+        first_storage.clone(),
+        dead_to_first.clone(),
+    )?;
+    builder.register_transfer_provider(
+        routed_storage.clone(),
+        first_storage,
+        routed_to_first.clone(),
+    )?;
+    builder.register_transfer_provider(
+        routed_storage.clone(),
+        second_storage,
+        routed_to_second.clone(),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.split-first")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.y-split-first.v1")?,
+        counters: Arc::clone(&first_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.split-second")?,
+        family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.z-split-second.v1")?,
+        counters: Arc::clone(&second_counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let first = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("first extension has one output");
+    let second = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("second extension has one output");
+    let program = GraphCompiler::new().compile_many(&[&first, &second])?;
+
+    let output = runtime.run_compiled(&program, &[])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
+    assert_eq!(tensor_f64_values(&output[1])?, [3.0, 5.0]);
+    assert_eq!(dead_to_first.calls(), 0);
+    assert_eq!(routed_to_first.calls(), 1);
+    assert_eq!(routed_to_second.calls(), 1);
+    assert_eq!(
+        routed_to_first.requests()[0].source_storage_class,
+        routed_storage
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Box<dyn StdError>> {
+    let root_domain = AllocationDomainId::fresh();
+    let source_domain = AllocationDomainId::fresh();
+    let core_domain = AllocationDomainId::fresh();
+    let root_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(root_domain)));
+    let dead_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
+    let routed_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
+    let core_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
+    let root_storage = StorageClass::new("tenferro-test.storage.synth-root.v1")?;
+    let dead_storage = StorageClass::new("tenferro-test.storage.synth-dead.v1")?;
+    let routed_storage = StorageClass::new("tenferro-test.storage.synth-routed.v1")?;
+    let core_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let dead_to_core = Arc::new(RecordingTransferProvider::materializing(
+        dead_storage.clone(),
+        core_storage.clone(),
+        core_backend.clone(),
+    ));
+    let routed_to_root = Arc::new(RecordingTransferProvider::materializing(
+        routed_storage.clone(),
+        root_storage.clone(),
+        root_backend.clone(),
+    ));
+    let routed_to_core = Arc::new(RecordingTransferProvider::materializing(
+        routed_storage.clone(),
+        core_storage.clone(),
+        core_backend.clone(),
+    ));
+    let root_to_core = Arc::new(RecordingTransferProvider::materializing(
+        root_storage.clone(),
+        core_storage.clone(),
+        core_backend.clone(),
+    ));
+    let root_counters = Arc::new(ExtensionCounters::default());
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &root_backend,
+        "tenferro-test.a-synth-root.v1",
+        root_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &dead_backend,
+        "tenferro-test.b-synth-dead.v1",
+        dead_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &routed_backend,
+        "tenferro-test.c-synth-routed.v1",
+        routed_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &core_backend,
+        "tenferro-test.z-synth-core.v1",
+        core_storage.as_str(),
+        true,
+        true,
+    )?)?;
+    builder.register_transfer_provider(dead_storage, core_storage.clone(), dead_to_core.clone())?;
+    builder.register_transfer_provider(
+        routed_storage.clone(),
+        root_storage.clone(),
+        routed_to_root.clone(),
+    )?;
+    builder.register_transfer_provider(
+        routed_storage.clone(),
+        core_storage.clone(),
+        routed_to_core.clone(),
+    )?;
+    builder.register_transfer_provider(root_storage, core_storage, root_to_core)?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.synth-root")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.a-synth-root.v1")?,
+        counters: Arc::clone(&root_counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let root_input = TracedTensor::from_tensor_concrete_shape(
+        TestAllocationDomain(root_domain).allocate(DType::F64, &[2])?,
+    )?;
+    let root_output = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&root_input],
+    )?
+    .pop()
+    .expect("root extension has one output");
+    let source_input = TracedTensor::from_tensor_concrete_shape(
+        TestAllocationDomain(source_domain).allocate(DType::F64, &[2, 2])?,
+    )?;
+    let synthesized_output = source_input.transpose(&[1, 0])?.conj()?;
+    let program = GraphCompiler::new().compile_many(&[&root_output, &synthesized_output])?;
+
+    let _prepared = runtime.prepare_compiled(&program, &[])?;
+
+    assert_eq!(dead_to_core.calls(), 0);
+    assert_eq!(routed_to_root.calls(), 0);
+    assert_eq!(routed_to_core.calls(), 0);
+    Ok(())
+}
+
+#[test]
 fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 ) -> Result<(), Box<dyn StdError>> {
     let core_domain = AllocationDomainId::fresh();
