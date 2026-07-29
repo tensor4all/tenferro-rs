@@ -598,7 +598,9 @@ impl ScheduledGraph {
             {
                 return Err(ScheduleValidationError::DependencyNotPriorCompletion { index });
             }
-            known_completions.insert(EventDependency::from_completion(node.completion()));
+            if !known_completions.insert(EventDependency::from_completion(node.completion())) {
+                return Err(ScheduleValidationError::DuplicateCompletion { index });
+            }
         }
         Ok(())
     }
@@ -673,6 +675,8 @@ pub(crate) enum ScheduleValidationError {
     DependencyEventDomainMismatch { index: usize },
     #[error("schedule node {index} dependency does not refer to a prior completion")]
     DependencyNotPriorCompletion { index: usize },
+    #[error("schedule node {index} reuses a prior completion identity")]
+    DuplicateCompletion { index: usize },
 }
 
 #[derive(Debug, thiserror::Error)]

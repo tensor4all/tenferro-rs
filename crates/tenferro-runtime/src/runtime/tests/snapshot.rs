@@ -75,6 +75,36 @@ fn single_identity(runtime: &Runtime, engine_name: &str) -> RegistrationIdentity
 }
 
 #[test]
+fn engine_registration_has_no_implicit_event_domain_driver() {
+    let registration = registration("tenferro.engine.no-event-driver", 1).unwrap();
+    assert!(registration.event_domain_driver().is_none());
+}
+
+#[test]
+fn custom_event_domain_driver_survives_snapshot_freeze() -> Result<(), Box<dyn StdError>> {
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(ImmediateEventDomainDriver::new());
+    let weak_driver = Arc::downgrade(&driver);
+    let registration = registration("tenferro.engine.event-driver", 1)?
+        .with_event_domain_driver(Arc::clone(&driver));
+    let mut builder = Runtime::builder();
+    builder.register_engine(registration)?;
+    let runtime = builder.build()?;
+    drop(driver);
+
+    let snapshot = runtime.snapshot()?;
+    let frozen = snapshot
+        .engine(&engine_id("tenferro.engine.event-driver"))
+        .expect("engine slot")
+        .event_domain_driver()
+        .expect("explicit event-domain driver");
+    assert!(Arc::ptr_eq(
+        frozen,
+        &weak_driver.upgrade().expect("snapshot retains driver")
+    ));
+    Ok(())
+}
+
+#[test]
 fn fresh_builds_have_distinct_runtime_and_registration_identities() -> Result<(), Box<dyn StdError>>
 {
     let first = runtime_with("tenferro.engine.same", 1)?;

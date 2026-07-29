@@ -1,88 +1,90 @@
-# Worklog: #1471 Event-Domain Scheduler
+# Worklog: #1471 Event-Domain Contract
 
 ## Scope
 
-Implement the backend-neutral event-domain scheduler after the production
-transfer and submission-admission PRs. This PR covers runtime scheduling and
-deterministic fake domains only. CUDA and WebGPU adapters remain separate.
+This PR defines the backend-neutral event-domain contract required by the
+production scheduler. It also attaches deterministic dependency and completion
+metadata to scheduled nodes and retains explicitly registered drivers in
+immutable runtime snapshots.
 
-## Design
+This PR does not execute scheduled nodes through event domains. Production
+activation, native CUDA/WebGPU adapters, fail-fast draining, and asynchronous
+buffer retirement remain follow-up PRs under #1471.
 
-Each frozen engine owns an `EventDomainDriver`. A driver creates a per-run
-`EventDomainRun` that accepts dependency tokens and a one-shot launch closure,
-enqueues the launch in its native domain, and returns an opaque completion
-token. The immediate driver invokes the closure synchronously and returns a
-ready token, preserving the current CPU behavior.
+## Implemented Contract
 
-The scheduler stores completion tokens by the schedule's event point. Before
-enqueuing a node it resolves all declared dependencies and passes their tokens
-to the destination domain run. Independent nodes therefore enqueue without a
-host wait. The domain adapter, rather than the scheduler, decides whether a
-dependency becomes a native stream wait, queue dependency, or immediate host
-completion.
+`EventDomainDriver` creates per-execution `EventDomainRun` state. A run admits a
+submission closure after its dependency tokens and returns an opaque
+`EventToken`. Tokens support repeatable, concurrent host waits because one
+completion may fan out to multiple foreign event domains.
 
-On the first enqueue or launch error, the scheduler stops admitting new nodes.
-It drains every started domain in ascending event-domain ID order and returns
-the first error. Drain errors after an earlier failure are retained as
-secondary diagnostics rather than replacing the original cause. No scheduler
-mutex is held while calling an engine, transfer provider, or domain driver.
+The blocking `ImmediateEventDomainDriver` waits dependencies before invoking
+the closure and returns an already-ready token. CPU registration opts into this
+driver explicitly. `EngineRegistration::new` leaves the driver absent so CUDA
+or WebGPU registration cannot silently inherit synchronous completion
+semantics.
 
-Logical last-use remains unchanged, but slots removed at last use move into a
-per-run retired-value owner. They are dropped only after every started domain
-has drained. This separates logical reuse from physical buffer lifetime and
-prevents asynchronous work from observing freed storage.
+Drivers are retained by `EngineRegistration`, then by the immutable runtime
+snapshot. Driver lookup remains runtime-internal; external callers cannot start
+runs outside scheduler admission.
 
-`EventToken::wait` is the typed host fallback for dependencies that a native
-driver cannot encode directly. Native drivers should downcast same-backend
-tokens and encode stream or queue waits; only foreign token types use the host
-fallback. The immediate CPU driver waits every dependency before launch.
+`ScheduledGraph::validate` rejects dependencies that do not name prior
+completions and rejects duplicate completion identities. Operation and transfer
+nodes carry deterministic, deduplicated dependency metadata.
 
-The borrowed launch closure is submission-only: a driver calls it exactly once
-before `enqueue` returns, without holding a driver lock. Fake domains may delay
-their completion token, but they do not retain and execute the Rust closure on
-another thread. `drain` observes work that is already progressing and must not
-depend on another domain's `drain` call to start progress.
+## Activation Requirements
 
-## Review Boundary
+The production activation stack must:
 
-This work is split into a contract PR and a production-activation stack. The
-contract PR defines drivers/tokens, freezes driver ownership in engine
-snapshots, and attaches schedule dependencies. It does not activate the
-production scheduler.
+- reject a scheduled engine that has no explicit event-domain driver;
+- install native CUDA and WebGPU drivers before enabling their scheduled
+  execution paths;
+- keep same-backend dependencies as native stream or queue waits and use
+  `EventToken::wait` only for foreign-domain fallback;
+- stop admitting nodes after the first enqueue or launch error;
+- drain every started domain in canonical event-domain order without holding a
+  runtime, driver, backend, or provider lock;
+- drain during panic unwinding before releasing retired values;
+- retain logically dead buffers until all started domains have drained;
+- exercise transfer ordering, failure cleanup, fanout waits, and lock ordering
+  with two logical CPU-backed devices.
 
-Production activation is blocked until CUDA and WebGPU registrations install
-explicit drivers. `ImmediateEventDomainDriver` is valid only for synchronous
-engines; silently applying it to an asynchronous GPU engine would publish a
-ready token before device work completes. The activation stack must also drain
-started domains during panic unwinding before retired buffers are released.
+## TDD Record
 
-## TDD Order
+RED:
 
-1. Schedule operations carry deterministic, deduplicated producer
-   dependencies and reject unknown or forward event references.
-2. Immediate domains preserve existing execution behavior.
-3. A delayed fake domain proves transfer completion precedes its consumer
-   while independent nodes enqueue before the final drain.
-4. A failing fake domain proves first-error fail-fast and draining of
-   previously started work.
-5. Retired-value probes prove buffers outlive the completion that consumes
-   them.
-6. Opposing engine order proves canonical drain order and callback execution
-   without runtime lock inversion.
+- an engine registration inherited an immediate driver without opting in;
+- schedule validation accepted duplicate completion identities;
+- the immediate-domain contract did not test repeated waits or dependency
+  failure before launch.
+
+GREEN:
+
+- registrations represent driver absence explicitly and CPU registration adds
+  the immediate driver;
+- snapshot tests retain an explicitly registered driver;
+- repeated/concurrent waits and dependency-failure launch suppression are
+  covered;
+- duplicate completion identities are rejected.
 
 ## Explicit Non-Goals
 
-- CUDA events, streams, peer transfer, or host-staging policy.
+- Production dispatch through `EventDomainRun`.
+- CUDA events or streams.
 - WebGPU submission-index or queue-future integration.
 - Collectives, distributed tensors, real two-card CI, event-slot recycling, or
   cancellation.
 
 ## Verification
 
-Pending implementation. Required before PR:
-
-- focused schedule tests with recorded RED and GREEN results;
-- runtime event-domain integration tests;
-- complete `tenferro-runtime` tests and doctests;
-- CUDA/WebGPU feature checks to preserve adapter compilation;
-- repository fast check and repository-rules review.
+- `cargo test -p tenferro-runtime --lib`: 349 passed.
+- `cargo test -p tenferro-runtime --test integration runtime_event_domains`:
+  4 passed.
+- `cargo test -p tenferro-runtime --doc`: 382 passed.
+- `cargo check -p tenferro-runtime`: passed.
+- `cargo check -p tenferro-cpu`: passed.
+- `scripts/check-pr-fast.sh --coverage-reviewed` with the focused runtime
+  commands: passed, including workspace and extension clippy checks.
+- `scripts/repository-rules-review.py`: passed with no findings.
+- Independent contract review: architecture and correctness findings resolved;
+  public per-item doctests added in response to the final documentation review.

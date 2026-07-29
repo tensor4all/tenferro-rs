@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use super::{
     execution, CoreCapabilityBundle, EngineId, EventDomainDriver, ExecutionContextIdentity,
-    HardwareClassId, ImmediateEventDomainDriver, InputSignatureEntry, RuntimeCacheOwner,
-    RuntimeConfigError, StorageClass,
+    HardwareClassId, InputSignatureEntry, RuntimeCacheOwner, RuntimeConfigError, StorageClass,
 };
 use tenferro_tensor::{AllocationDomainId, Placement, TensorBackend, TensorRead};
 
@@ -50,7 +49,7 @@ pub struct EngineRegistration {
     storage_classes: Arc<[StorageClass]>,
     default_storage_class: StorageClass,
     capabilities: CoreCapabilityBundle,
-    event_domain_driver: Arc<dyn EventDomainDriver>,
+    event_domain_driver: Option<Arc<dyn EventDomainDriver>>,
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
     input_placement_validator: Option<Arc<InputPlacementValidator>>,
@@ -93,7 +92,7 @@ impl EngineRegistration {
             storage_classes,
             default_storage_class,
             capabilities,
-            event_domain_driver: Arc::new(ImmediateEventDomainDriver::new()),
+            event_domain_driver: None,
             cache_owner: None,
             execution_engine: None,
             input_placement_validator: None,
@@ -162,7 +161,7 @@ impl EngineRegistration {
     /// # }
     /// ```
     pub fn with_event_domain_driver(mut self, driver: Arc<dyn EventDomainDriver>) -> Self {
-        self.event_domain_driver = driver;
+        self.event_domain_driver = Some(driver);
         self
     }
 
@@ -473,8 +472,9 @@ impl EngineRegistration {
         self.execution_engine.is_some()
     }
 
-    pub(super) fn event_domain_driver(&self) -> &Arc<dyn EventDomainDriver> {
-        &self.event_domain_driver
+    #[cfg(test)]
+    pub(crate) fn event_domain_driver(&self) -> Option<&Arc<dyn EventDomainDriver>> {
+        self.event_domain_driver.as_ref()
     }
 
     pub(super) fn candidate_identical(&self, other: &Self) -> bool {
@@ -493,7 +493,7 @@ impl fmt::Debug for EngineRegistration {
             .field("storage_class_count", &self.storage_classes.len())
             .field("default_storage_class", &self.default_storage_class)
             .field("capabilities", &self.capabilities)
-            .field("event_domain_driver", &self.event_domain_driver)
+            .field("event_domain_driver", &self.event_domain_driver.is_some())
             .field("cache_owner", &self.cache_owner.is_some())
             .field("execution_engine", &self.has_execution_engine())
             .field(

@@ -236,6 +236,20 @@ fn schedule_validation_rejects_dependency_without_prior_completion() {
 }
 
 #[test]
+fn schedule_validation_rejects_duplicate_completion_identity() {
+    let domain = EventDomainId::runtime_created_for_test(1);
+    let graph = ScheduledGraph::for_test(vec![
+        ScheduledNode::Operation(ScheduledOperation::for_test(domain)),
+        ScheduledNode::Operation(ScheduledOperation::for_test(domain)),
+    ]);
+
+    assert!(matches!(
+        graph.validate(),
+        Err(super::super::schedule::ScheduleValidationError::DuplicateCompletion { index: 1 })
+    ));
+}
+
+#[test]
 fn retained_bytes_include_operation_dependencies() {
     let execution = location(
         "tenferro-test.engine.execution",
@@ -304,7 +318,18 @@ fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() 
     let graph = ScheduledGraph::for_test(vec![
         ScheduledNode::Operation(ScheduledOperation::for_test(source)),
         ScheduledNode::Transfer(ScheduledTransfer::for_test(source, destination)),
-        ScheduledNode::Operation(ScheduledOperation::for_test(destination)),
+        ScheduledNode::Operation(ScheduledOperation::new(
+            1,
+            location(
+                "tenferro-test.engine.destination",
+                8,
+                "tenferro-test.storage.destination",
+            ),
+            [],
+            [],
+            [EventDependency::new(destination, EventSlotId::new(0), 0)],
+            super::super::schedule::EventCompletion::new(destination, EventSlotId::new(1), 0),
+        )),
     ]);
 
     let transfer = graph
