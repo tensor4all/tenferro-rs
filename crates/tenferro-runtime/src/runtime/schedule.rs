@@ -320,11 +320,15 @@ impl ScheduledBarrier {
 pub(crate) enum ScheduledNode {
     Operation(ScheduledOperation),
     Transfer(ScheduledTransfer),
+    // INVARIANT: collective nodes remain representation-only until the
+    // explicitly deferred collective scheduler work lands.
     #[allow(
         dead_code,
         reason = "collective scheduling remains representation-only in this scoped change"
     )]
     Collective(ScheduledCollective),
+    // INVARIANT: barrier nodes remain representation-only until the explicitly
+    // deferred asynchronous event scheduler work lands.
     #[allow(
         dead_code,
         reason = "barrier scheduling remains representation-only in this scoped change"
