@@ -1872,6 +1872,13 @@ fn execute_one_shot_elementwise(
 /// Execute the shared elementwise-into path with an explicit replay context.
 ///
 /// This is backend glue for implementations that own an execution context.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] when the input arity or tensor
+/// metadata is invalid, or when the destination overlaps an input. Returns
+/// [`crate::Error::BackendSource`] when an eligible strided replay fails.
+/// Errors returned by `fallback` are preserved unchanged.
 #[doc(hidden)]
 pub fn elementwise_read_into_with_context(
     op: ElementwiseReadOp,
