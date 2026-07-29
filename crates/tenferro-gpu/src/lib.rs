@@ -91,6 +91,7 @@ pub(crate) mod types {
 pub(crate) struct CubeclBuffer<T> {
     handle: cubecl_runtime::server::Handle,
     len: usize,
+    device_ordinal: usize,
     pub(crate) _marker: std::marker::PhantomData<T>,
 }
 
@@ -99,16 +100,22 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
             .field("len", &self.len)
+            .field("device_ordinal", &self.device_ordinal)
             .finish()
     }
 }
 
 #[cfg(feature = "cuda")]
 impl<T> CubeclBuffer<T> {
-    pub(crate) fn new(handle: cubecl_runtime::server::Handle, len: usize) -> Self {
+    pub(crate) fn new(
+        handle: cubecl_runtime::server::Handle,
+        len: usize,
+        device_ordinal: usize,
+    ) -> Self {
         Self {
             handle,
             len,
+            device_ordinal,
             _marker: std::marker::PhantomData,
         }
     }
@@ -119,6 +126,10 @@ impl<T> CubeclBuffer<T> {
 
     pub(crate) fn element_len(&self) -> usize {
         self.len
+    }
+
+    pub(crate) fn device_ordinal(&self) -> usize {
+        self.device_ordinal
     }
 }
 

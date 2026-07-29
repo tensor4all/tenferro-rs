@@ -457,7 +457,7 @@ mod signature {
     }
 
     #[test]
-    fn signature_from_reads_copies_only_dtype_shape_strides_placement_layout_and_alignment() {
+    fn signature_from_reads_copies_value_free_logical_and_physical_metadata() {
         let mut data = vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0];
         let expected_placement = Placement::default();
         let expected_alignment = host_alignment_log2(data[1..].as_ptr());

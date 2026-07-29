@@ -1096,7 +1096,11 @@ impl CudaBackend {
             .map_err(|err| crate::Error::validation(op, err))?;
         Ok(TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(crate::CubeclBuffer::new(handle, len))),
+            Buffer::Backend(Arc::new(crate::CubeclBuffer::new(
+                handle,
+                len,
+                self.runtime().device_ordinal(),
+            ))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

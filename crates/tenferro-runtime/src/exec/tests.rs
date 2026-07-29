@@ -160,6 +160,80 @@ fn lazy_view_input_conversion_shares_live_owned_tensor() {
 }
 
 #[test]
+fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let value = tenferro_tensor::TensorValue::from_tensor(tensor.clone());
+    let view = value.reshape_view([1, 2]).unwrap();
+    let owned = ExecSlot::Owned(tensor.clone());
+    let stored = ExecSlot::Value(value.clone());
+    let read = ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor));
+
+    assert_eq!(owned.as_tensor("test").unwrap().shape(), &[2]);
+    assert_eq!(stored.as_tensor("test").unwrap().shape(), &[2]);
+    assert_eq!(read.as_tensor("test").unwrap().shape(), &[2]);
+    assert_eq!(owned.shape(), &[2]);
+    assert_eq!(stored.shape(), &[2]);
+    assert_eq!(read.shape(), &[2]);
+    assert!(matches!(
+        ExecSlot::Value(view.clone()).as_tensor("test"),
+        Err(crate::Error::Internal(message)) if message.contains("owned TensorValue view")
+    ));
+    assert!(matches!(
+        ExecSlot::Read(view.tensor_read()).as_tensor("test"),
+        Err(crate::Error::Internal(message)) if message.contains("borrowed TensorView")
+    ));
+
+    let mut backend = CpuBackend::new();
+    backend
+        .with_backend_session(|exec| {
+            assert_eq!(
+                ExecSlot::Owned(tensor.clone()).into_tensor(exec)?.shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Value(value.clone()).into_tensor(exec)?.shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor))
+                    .into_tensor(exec)?
+                    .shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Value(view.clone()).into_tensor(exec)?.shape(),
+                &[1, 2]
+            );
+            assert_eq!(
+                ExecSlot::Read(view.tensor_read())
+                    .into_tensor(exec)?
+                    .shape(),
+                &[1, 2]
+            );
+            assert_eq!(
+                ExecSlot::Owned(tensor.clone()).into_value(exec)?.shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Value(value.clone()).into_value(exec)?.shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor))
+                    .into_value(exec)?
+                    .shape(),
+                &[2]
+            );
+            assert_eq!(
+                ExecSlot::Read(view.tensor_read()).into_value(exec)?.shape(),
+                &[1, 2]
+            );
+            Ok::<(), crate::Error>(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
     let slots = [Some(ExecSlot::Owned(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),

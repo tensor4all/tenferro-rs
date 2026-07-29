@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
-use tenferro_tensor::{DType, Placement, ShapeVec, StrideVec, Tensor};
+use tenferro_tensor::{DType, MemoryKind, Placement, ShapeVec, StrideVec, Tensor};
 
 use crate::program::{CoreSemanticOp, FrozenProgram, ProgramInputSpec, SemanticProgramBuilder};
 use crate::runtime::{
@@ -17,10 +17,23 @@ use crate::runtime::{
     InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
     PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
-    SpecializationProjection, SpecializationRequirements, StorageClass,
+    SpecializationProjection, SpecializationRequirements, StorageClass, TransferProvider,
+    TransferRequest,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
+
+#[test]
+fn dispatch_search_budget_stops_before_unbounded_cartesian_enumeration() {
+    let mut budget = crate::runtime::preparation::DispatchSearchBudget::new(3);
+
+    assert!(budget.try_attempt());
+    assert!(budget.try_attempt());
+    assert!(budget.try_attempt());
+    assert!(!budget.try_attempt());
+    assert_eq!(budget.attempts(), 3);
+    assert_eq!(budget.limit(), 3);
+}
 
 #[test]
 fn missing_resolved_engine_returns_typed_prepare_error() {
@@ -378,6 +391,8 @@ fn engine_registration(
 ) -> EngineRegistration {
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities.elementwise(provider);
+    let ingress_storage = storage.clone();
+    let signature_storage = storage.clone();
     EngineRegistration::new(
         engine_id(id),
         ExecutionContextIdentity::of::<RecordingElementwise>(),
@@ -387,6 +402,20 @@ fn engine_registration(
         capabilities.build(),
     )
     .expect("engine registration")
+    .with_input_placement_validator(move |placement, candidate| {
+        matches!(
+            placement.memory_kind,
+            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+        ) && candidate == &ingress_storage
+    })
+    .with_input_signature_validator(move |placement, family, domain, candidate| {
+        matches!(
+            placement.memory_kind,
+            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+        ) && family.is_none()
+            && domain.is_none()
+            && candidate == &signature_storage
+    })
 }
 
 fn runtime_with_engines(registrations: Vec<EngineRegistration>) -> Runtime {
@@ -553,7 +582,7 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
                 ExecutionContextIdentity::of::<RecordingExtensionEngine>(),
                 hardware_id("tenferro.cpu.host"),
                 Arc::from(vec![storage.clone()]),
-                storage,
+                storage.clone(),
                 CoreCapabilityBundle::builder().build(),
             )
             .expect("extension engine registration"),
@@ -563,6 +592,16 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
             engine: extension_engine.clone(),
         }),
     );
+    runtime
+        .reconfigure(|edit| {
+            edit.register_transfer_provider(
+                storage.clone(),
+                storage.clone(),
+                Arc::new(PreparationOnlyTransfer),
+            )?;
+            Ok(())
+        })
+        .expect("same-storage transfer route");
 
     let prepared = runtime
         .prepare_for(
@@ -582,6 +621,20 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
         prepared.operations_for_test()[1].binding().engine_id(),
         &extension_engine_id
     );
+}
+
+#[derive(Debug)]
+struct PreparationOnlyTransfer;
+
+impl TransferProvider for PreparationOnlyTransfer {
+    fn transfer_blocking(
+        &self,
+        _request: TransferRequest<'_>,
+    ) -> crate::Result<tenferro_tensor::Tensor> {
+        Err(crate::Error::Internal(
+            "preparation-only transfer provider must not execute".into(),
+        ))
+    }
 }
 
 #[test]

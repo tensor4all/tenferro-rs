@@ -3,6 +3,7 @@
 //! This representation remains crate-private. Later phases attach native
 //! GPU/XLA dispatch and asynchronous completion to the same node families.
 
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::error::Error as StdError;
 #[cfg(test)]
@@ -11,6 +12,8 @@ use std::fmt;
 use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
 use crate::{EngineId, Error, StorageClass};
+
+pub(crate) type TransferReachability = BTreeSet<(StorageClass, StorageClass)>;
 
 /// Opaque runtime event-domain identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -369,11 +372,19 @@ impl ScheduledGraph {
     pub(crate) fn from_exec_program(
         program: &ExecProgram,
         root_location: ExecutionLocation,
+        input_locations: &[ExecutionLocation],
         operation_locations: &[ExecutionLocation],
+        transfer_reachability: &TransferReachability,
     ) -> Result<Self, ScheduleBuildError> {
         let mut nodes = Vec::with_capacity(program.instructions.len());
         let mut available = vec![Vec::<AvailableValue>::new(); program.n_slots];
-        for &slot in &program.input_slots {
+        if input_locations.len() != program.input_slots.len() {
+            return Err(ScheduleBuildError::InputLocationCountMismatch {
+                expected: program.input_slots.len(),
+                actual: input_locations.len(),
+            });
+        }
+        for (&slot, location) in program.input_slots.iter().zip(input_locations) {
             let values =
                 available
                     .get_mut(slot)
@@ -382,7 +393,7 @@ impl ScheduledGraph {
                         value_count: program.n_slots,
                     })?;
             values.push(AvailableValue {
-                location: root_location.clone(),
+                location: location.clone(),
                 completion: None,
             });
         }
@@ -409,14 +420,33 @@ impl ScheduledGraph {
                 if values.iter().any(|value| value.location == location) {
                     continue;
                 }
-                let source =
-                    values
-                        .first()
-                        .cloned()
-                        .ok_or(ScheduleBuildError::ValueUnavailable {
-                            instruction_index,
-                            slot,
-                        })?;
+                let source = values
+                    .iter()
+                    .find(|value| {
+                        transfer_reachability.contains(&(
+                            value.location.storage_class().clone(),
+                            location.storage_class().clone(),
+                        ))
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        if values.is_empty() {
+                            ScheduleBuildError::ValueUnavailable {
+                                instruction_index,
+                                slot,
+                            }
+                        } else {
+                            ScheduleBuildError::MissingTransferProvider {
+                                instruction_index,
+                                slot,
+                                destination_storage_class: location.storage_class().clone(),
+                                available_storage_classes: values
+                                    .iter()
+                                    .map(|value| value.location.storage_class().clone())
+                                    .collect(),
+                            }
+                        }
+                    })?;
                 let completion = event_completion(&nodes, location.event_domain_id())?;
                 let dependencies = source
                     .completion
@@ -602,6 +632,8 @@ pub(crate) enum ScheduleValidationError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScheduleBuildError {
+    #[error("schedule has {actual} input locations for {expected} program inputs")]
+    InputLocationCountMismatch { expected: usize, actual: usize },
     #[error(
         "instruction {instruction_index} references semantic operation {operation_index}, \
          but that operation has no execution location"
@@ -614,6 +646,16 @@ pub(crate) enum ScheduleBuildError {
     ValueUnavailable {
         instruction_index: usize,
         slot: usize,
+    },
+    #[error(
+        "instruction {instruction_index} has no direct transfer provider for value slot {slot} \
+         from {available_storage_classes:?} to {destination_storage_class:?}"
+    )]
+    MissingTransferProvider {
+        instruction_index: usize,
+        slot: usize,
+        destination_storage_class: StorageClass,
+        available_storage_classes: Vec<StorageClass>,
     },
     #[error("value slot {slot} is outside schedule value count {value_count}")]
     ValueSlotOutOfBounds { slot: usize, value_count: usize },

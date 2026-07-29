@@ -31,10 +31,11 @@ pub use capability::{
 };
 pub use engine_registration::EngineRegistration;
 pub use error::{
-    ExecutionContextMismatch, ExecutionPolicyError, ExtensionModuleError, IdentityError,
-    IdentityKind, InputSignatureError, InputSpecializationRequirementsError,
-    PlacementConstraintError, PrepareError, ProviderContractError, RankRequirement,
-    RegistrationKey, RuntimeConfigError, RuntimeReconfigureError, SpecializationError,
+    EngineExecutionContractError, ExecutionContextMismatch, ExecutionPolicyError,
+    ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,
+    InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
+    PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
+    RuntimeReconfigureError, SpecializationError, SubmissionError,
 };
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
@@ -60,7 +61,9 @@ pub use specialization::{
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
 };
-pub use transfer::{TransferError, TransferProvider, TransferRequest};
+pub use transfer::{
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+};
 
 #[cfg(test)]
 mod tests;

@@ -197,7 +197,7 @@ where
     let handle = rt.client().create_from_slice(T::as_bytes(&data));
     dispatch::typed_from_cubecl(
         shape,
-        crate::CubeclBuffer::new(handle, len),
+        crate::CubeclBuffer::new(handle, len, rt.device_ordinal()),
         rt.device_ordinal(),
     )
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -198,6 +198,12 @@ impl RuntimeConfigSnapshot {
         &self,
     ) -> BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>> {
         self.transfers.clone()
+    }
+
+    pub(super) fn transfer_reachability_for_preparation(
+        &self,
+    ) -> BTreeSet<(StorageClass, StorageClass)> {
+        self.transfers.keys().cloned().collect()
     }
 
     #[cfg(test)]
@@ -500,10 +506,14 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine. Backend execution may also
-    /// return concrete backend variants such as [`crate::Error::Unsupported`],
-    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine. Backend execution may
+    /// also return concrete backend variants such as
+    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
+    /// [`crate::Error::Extension`].
     pub fn run_compiled(
         &self,
         program: &CompiledGraph,
@@ -531,8 +541,11 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine.
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine.
     pub fn prepare_compiled(
         &self,
         program: &CompiledGraph,
@@ -545,9 +558,11 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns metadata validation errors for incompatible inputs, or a runtime
-    /// state error if the prepared handle belongs to a different runtime or a
-    /// stale runtime epoch.
+    /// Returns metadata validation errors for incompatible inputs, a runtime
+    /// state error with [`crate::InputIngressContractError`] as its typed source
+    /// when an input's physical residency does not match the prepared ingress,
+    /// or a runtime state error if the prepared handle belongs to a different
+    /// runtime or a stale runtime epoch.
     pub fn run_prepared(
         &self,
         prepared: &super::execution::PreparedCompiledGraph,
@@ -565,8 +580,12 @@ impl Runtime {
     ///
     /// Returns the same [`crate::PrepareError::InputSignature`],
     /// [`crate::PrepareError::Specialization`],
-    /// [`crate::PrepareError::NoEligibleEngine`], and other preparation
-    /// failures as [`Self::run_compiled`] before the worker is submitted.
+    /// [`crate::PrepareError::NoEligibleEngine`],
+    /// [`crate::PrepareError::NoInputIngress`], and
+    /// [`crate::PrepareError::MissingTransferProvider`] failures as
+    /// [`Self::run_compiled`] before the worker is submitted. Returns a runtime
+    /// state error with [`crate::SubmissionError`] as its typed source if the
+    /// operating system rejects worker creation after admission.
     pub fn submit(
         &self,
         program: &CompiledGraph,
@@ -604,10 +623,14 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine. Backend execution may also
-    /// return concrete backend variants such as [`crate::Error::Unsupported`],
-    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine. Backend execution may
+    /// also return concrete backend variants such as
+    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
+    /// [`crate::Error::Extension`].
     pub fn run_compiled_values(
         &self,
         program: &CompiledGraph,
@@ -1127,6 +1150,46 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot.registration.default_storage_class()
     }
 
+    pub(super) fn accepts_input_placement(
+        &self,
+        placement: &tenferro_tensor::Placement,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_input_placement(placement, storage_class)
+    }
+
+    pub(super) fn accepts_runtime_input(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_runtime_input(input, storage_class)
+    }
+
+    pub(super) fn accepts_input_signature(
+        &self,
+        input: &super::InputSignatureEntry,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .accepts_input_signature(input, storage_class)
+    }
+
+    pub(super) fn owns_resident_tensor(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.slot
+            .registration
+            .owns_resident_tensor(input, storage_class)
+    }
+
     pub(super) fn execution_engine(
         &self,
     ) -> Option<&'a Arc<dyn super::execution::ErasedTensorBackendExecutor>> {
@@ -1161,6 +1224,7 @@ fn register_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
+    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     match candidate.engines.get(&engine_id) {
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
@@ -1184,6 +1248,7 @@ fn replace_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
+    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     match candidate.engines.get_mut(&engine_id) {
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
@@ -1290,6 +1355,9 @@ fn register_transfer_provider_candidate(
 }
 
 fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigError> {
+    for record in candidate.engines.values() {
+        validate_engine_execution_contract(&record.registration)?;
+    }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
         for family_engine in module.engines.keys() {
@@ -1308,6 +1376,17 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
                 });
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_engine_execution_contract(
+    registration: &EngineRegistration,
+) -> Result<(), RuntimeConfigError> {
+    if registration.has_execution_engine() && !registration.has_input_ingress_validator() {
+        return Err(RuntimeConfigError::MissingInputIngressValidator {
+            engine_id: registration.engine_id().clone(),
+        });
     }
     Ok(())
 }

@@ -256,7 +256,7 @@ fn cubecl_tensor_with_len(
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len))),
+        Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

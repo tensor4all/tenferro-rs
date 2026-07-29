@@ -121,7 +121,11 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = client.create_from_slice(T::as_bytes(host_data));
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
+        Buffer::Backend(Arc::new(CubeclBuffer::new(
+            handle,
+            host_data.len(),
+            device_ordinal,
+        ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -182,7 +186,11 @@ fn upload_bool(
     let handle = client.create_from_slice(&bytes);
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
+        Buffer::Backend(Arc::new(CubeclBuffer::new(
+            handle,
+            host_data.len(),
+            device_ordinal,
+        ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

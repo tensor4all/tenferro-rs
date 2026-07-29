@@ -1,4 +1,5 @@
 use num_complex::{Complex32, Complex64};
+use std::error::Error as StdError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 mod support;
@@ -9,7 +10,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_fft::EagerTensorFftExt;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
-    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor, TracedTensor,
+    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, PrepareError, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
@@ -162,7 +163,7 @@ fn traced_tensor_fft_ext_exposes_fft() {
 }
 
 #[test]
-fn registered_runtime_reports_gpu_input_as_unsupported() {
+fn registered_runtime_rejects_gpu_input_without_ingress() {
     let x = TracedTensor::input_concrete_shape(DType::C64, &[2]).unwrap();
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -182,10 +183,16 @@ fn registered_runtime_reports_gpu_input_as_unsupported() {
     );
     let err = result
         .unwrap()
-        .expect_err("FFT GPU input should be unsupported");
-    let message = err.to_string();
-    assert!(message.contains("unsupported"), "{message}");
-    assert!(message.contains("download"), "{message}");
+        .expect_err("FFT GPU input should be rejected without an ingress");
+    let prepare_error = err
+        .source()
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<PrepareError>())
+        .expect("typed prepare error");
+    assert!(matches!(
+        prepare_error,
+        PrepareError::NoInputIngress { input_index: 0, .. }
+    ));
 }
 
 #[test]

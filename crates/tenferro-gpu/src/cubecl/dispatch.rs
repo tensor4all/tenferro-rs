@@ -442,7 +442,7 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = rt.client().empty(byte_len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(handle, len),
+        CubeclBuffer::new(handle, len, rt.device_ordinal()),
         rt.device_ordinal(),
     )
 }
@@ -455,7 +455,7 @@ pub(crate) fn alloc_bool_output(
     let handle = rt.client().empty(len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(handle, len),
+        CubeclBuffer::new(handle, len, rt.device_ordinal()),
         rt.device_ordinal(),
     )
 }

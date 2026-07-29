@@ -1,12 +1,12 @@
 use crate::support;
+use std::error::Error as StdError;
 use std::sync::Arc;
 use tenferro_ad::TracedTensorAdExt;
 
 use support::{cpu_runtime, RunTraced};
-use tenferro_runtime::{DType, Error as RuntimeError, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{DType, PrepareError, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, Error as TensorError, ErrorKind, GpuBackendKind,
-    MemoryKind, Placement,
+    Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
 };
 
 const TOL: f64 = 1.0e-5;
@@ -144,13 +144,14 @@ fn dynamic_truncate_rejects_backend_size_binding_on_cpu() {
         .run_with_inputs_auto(&engine, &[(&size, &backend_f64_scalar())])
         .unwrap_err();
 
-    assert_eq!(err.kind(), ErrorKind::RuntimeState);
+    let prepare_error = err
+        .source()
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<PrepareError>())
+        .expect("typed prepare error");
     assert!(matches!(
-        err,
-        RuntimeError::TensorRuntime(TensorError::RuntimeState {
-            op: "CpuBackend::download_to_host",
-            ..
-        })
+        prepare_error,
+        PrepareError::NoInputIngress { input_index: 0, .. }
     ));
 }
 

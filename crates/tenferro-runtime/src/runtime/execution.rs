@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
@@ -24,8 +25,8 @@ use crate::runtime::schedule::{
 };
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, TransferError,
-    TransferProvider, TransferRequest,
+    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, SubmissionError,
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -56,7 +57,7 @@ pub struct PreparedCompiledGraph {
 
 /// Asynchronous runtime execution handle returned by [`Runtime::submit`].
 pub struct ExecutionHandle {
-    join: Option<thread::JoinHandle<Result<Vec<Tensor>>>>,
+    submission: Arc<InFlightSubmission>,
 }
 
 impl ExecutionHandle {
@@ -67,21 +68,8 @@ impl ExecutionHandle {
     /// Returns the submitted runtime execution [`Error`], including
     /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
     /// when the handle was already consumed or the worker panicked.
-    pub fn wait(mut self) -> Result<Vec<Tensor>> {
-        let Some(join) = self.join.take() else {
-            return Err(Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                "execution handle was already consumed",
-            ));
-        };
-        join.join().map_err(|payload| {
-            Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                panic_payload_message(payload),
-            )
-        })?
+    pub fn wait(self) -> Result<Vec<Tensor>> {
+        self.submission.wait()
     }
 }
 
@@ -89,8 +77,144 @@ impl fmt::Debug for ExecutionHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ExecutionHandle")
-            .field("pending", &self.join.is_some())
+            .field("pending", &self.submission.is_pending())
             .finish_non_exhaustive()
+    }
+}
+
+pub(super) struct InFlightSubmission {
+    work: Mutex<Option<InFlightWork>>,
+    completion: Mutex<Option<Result<Vec<Tensor>>>>,
+    completed: Condvar,
+}
+
+struct AdmittedExecution {
+    prepared: PreparedCompiledGraph,
+    inputs: Vec<Tensor>,
+}
+
+enum InFlightWork {
+    Admitted(AdmittedExecution),
+    #[cfg(test)]
+    Test(Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>),
+}
+
+impl InFlightSubmission {
+    fn new(prepared: PreparedCompiledGraph, inputs: Vec<Tensor>) -> Self {
+        Self {
+            work: Mutex::new(Some(InFlightWork::Admitted(AdmittedExecution {
+                prepared,
+                inputs,
+            }))),
+            completion: Mutex::new(None),
+            completed: Condvar::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(work: impl FnOnce() -> Result<Vec<Tensor>> + Send + 'static) -> Self {
+        Self {
+            work: Mutex::new(Some(InFlightWork::Test(Box::new(work)))),
+            completion: Mutex::new(None),
+            completed: Condvar::new(),
+        }
+    }
+
+    pub(super) fn run(&self) {
+        let work = match self.work.lock() {
+            Ok(mut work) => work.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| match work {
+            Some(InFlightWork::Admitted(admitted)) => {
+                let input_refs = admitted.inputs.iter().collect::<Vec<_>>();
+                execute_admitted(&admitted.prepared, &input_refs)
+            }
+            #[cfg(test)]
+            Some(InFlightWork::Test(work)) => work(),
+            None => Err(Error::runtime_state(
+                "Runtime::submit",
+                ErrorPhase::Execution,
+                "in-flight submission work was already consumed",
+            )),
+        }))
+        .unwrap_or_else(|payload| {
+            Err(Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            ))
+        });
+        match self.completion.lock() {
+            Ok(mut completion) => {
+                *completion = Some(result);
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner() = Some(Err(Error::runtime_state(
+                    "ExecutionHandle::wait",
+                    ErrorPhase::Execution,
+                    "in-flight completion lock poisoned",
+                )));
+            }
+        }
+        self.completed.notify_all();
+    }
+
+    fn wait(&self) -> Result<Vec<Tensor>> {
+        let mut completion = self.completion.lock().map_err(|_| {
+            Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                "in-flight completion lock poisoned",
+            )
+        })?;
+        loop {
+            if let Some(result) = completion.take() {
+                return result;
+            }
+            completion = self.completed.wait(completion).map_err(|_| {
+                Error::runtime_state(
+                    "ExecutionHandle::wait",
+                    ErrorPhase::Execution,
+                    "in-flight completion lock poisoned while waiting",
+                )
+            })?;
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.completion
+            .lock()
+            .map_or(true, |completion| completion.is_none())
+    }
+}
+
+pub(super) trait SubmissionSpawner {
+    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()>;
+}
+
+pub(super) fn spawn_in_flight(
+    submission: Arc<InFlightSubmission>,
+    spawner: &dyn SubmissionSpawner,
+) -> Result<ExecutionHandle> {
+    spawner.spawn(Arc::clone(&submission)).map_err(|source| {
+        Error::runtime_state_source(
+            "Runtime::submit",
+            ErrorPhase::Execution,
+            SubmissionError::WorkerSpawn { source },
+        )
+    })?;
+    Ok(ExecutionHandle { submission })
+}
+
+pub(super) struct OsThreadSpawner;
+
+impl SubmissionSpawner for OsThreadSpawner {
+    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()> {
+        thread::Builder::new()
+            .name("tenferro-runtime-submit".to_string())
+            .spawn(move || submission.run())
+            .map(drop)
     }
 }
 
@@ -156,16 +280,8 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         output_mode: RuntimeOutputMode,
         terminal_slots: &[bool],
     ) -> Result<()>;
-    fn collect_slot_outputs<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<Tensor>>;
-    fn collect_slot_output_values<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<TensorValue>>;
+    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor>;
+    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue>;
 }
 
 pub(super) fn erased_tensor_backend_executor<B>(backend: B) -> Arc<dyn ErasedTensorBackendExecutor>
@@ -555,26 +671,16 @@ where
         Ok(())
     }
 
-    fn collect_slot_outputs<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<Tensor>> {
+    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
         let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| crate::exec::collect_outputs_from(program, slots, exec))
+        backend.with_backend_session(|exec| slot.into_tensor(exec))
     }
 
-    fn collect_slot_output_values<'input>(
-        &self,
-        program: &ExecProgram,
-        slots: &mut [Option<ExecSlot<'input>>],
-    ) -> Result<Vec<TensorValue>> {
+    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
         let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| {
-            crate::exec::collect_output_values_from(program, slots, exec)
-        })
+        backend.with_backend_session(|exec| slot.into_value(exec))
     }
 }
 
@@ -595,8 +701,10 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
 
 #[derive(Debug)]
 struct PreparedExecutionEngines {
+    snapshot: Arc<super::RuntimeConfigSnapshot>,
     root: Arc<dyn ErasedTensorBackendExecutor>,
     root_location: ExecutionLocation,
+    input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
     transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
 }
@@ -648,17 +756,23 @@ pub(super) fn submit(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<ExecutionHandle> {
+    submit_with_spawner(runtime, program, inputs, &OsThreadSpawner)
+}
+
+pub(super) fn submit_with_spawner(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+    spawner: &dyn SubmissionSpawner,
+) -> Result<ExecutionHandle> {
     let inputs = resolve_input_refs(program, inputs)?
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
-    let runtime = runtime.clone();
-    let program = program.clone();
-    let join = thread::spawn(move || {
-        let input_refs = inputs.iter().collect::<Vec<_>>();
-        run_compiled(&runtime, &program, &input_refs)
-    });
-    Ok(ExecutionHandle { join: Some(join) })
+    let input_refs = inputs.iter().collect::<Vec<_>>();
+    let prepared = prepare_compiled(runtime, program, &input_refs)?;
+    let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
+    spawn_in_flight(submission, spawner)
 }
 
 pub(super) fn run_prepared(
@@ -667,6 +781,17 @@ pub(super) fn run_prepared(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
+    let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    execute_scheduled_tensor_refs(
+        &prepared.execution,
+        prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
+        prepared.prepared.operations(),
+        &inputs,
+    )
+}
+
+fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
         &prepared.execution,
@@ -769,6 +894,30 @@ fn execution_engines(
         storage_class.clone(),
     );
     let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let input_locations = root.input_locations();
+    for location in input_locations {
+        let engine = snapshot.engine(location.engine_id()).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared input ingress engine {:?} is no longer registered",
+                    location.engine_id()
+                ),
+            )
+        })?;
+        if !engine.storage_classes().contains(location.storage_class()) {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared input ingress engine {:?} does not support storage {:?}",
+                    location.engine_id(),
+                    location.storage_class()
+                ),
+            ));
+        }
+    }
     let operation_placements = root.operation_placements();
     if operation_placements.len() != prepared.operations().len() {
         return Err(Error::runtime_state(
@@ -810,11 +959,14 @@ fn execution_engines(
             ),
         });
     }
+    let transfers = snapshot.transfers_for_execution();
     Ok(PreparedExecutionEngines {
+        snapshot,
         root: root_executor,
         root_location,
+        input_locations: input_locations.to_vec().into_boxed_slice(),
         operations: operation_executors.into_boxed_slice(),
-        transfers: snapshot.transfers_for_execution(),
+        transfers,
     })
 }
 
@@ -860,7 +1012,12 @@ fn execute_scheduled_tensor_refs(
         inputs,
         RuntimeOutputMode::Tensor,
     )
-    .and_then(|mut slots| execution.root.collect_slot_outputs(program, &mut slots))
+    .and_then(|mut slots| {
+        collect_tensor_outputs_with(program, &mut slots, |location, slot| {
+            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .materialize_slot(slot)
+        })
+    })
 }
 
 fn execute_scheduled_value_refs(
@@ -886,9 +1043,10 @@ fn execute_scheduled_value_refs(
         RuntimeOutputMode::Value,
     )
     .and_then(|mut slots| {
-        execution
-            .root
-            .collect_slot_output_values(program, &mut slots)
+        collect_value_outputs_with(program, &mut slots, |location, slot| {
+            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .materialize_slot_value(slot)
+        })
     })
 }
 
@@ -899,7 +1057,7 @@ fn execute_scheduled_slots<'input>(
     operations: &[PreparedOperationPlan],
     inputs: Vec<ExecSlot<'input>>,
     output_mode: RuntimeOutputMode,
-) -> Result<Vec<Option<ExecSlot<'input>>>> {
+) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
         crate::exec::terminal_output_slots(program)
     } else {
@@ -911,13 +1069,29 @@ fn execute_scheduled_slots<'input>(
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
-        for &slot in &program.input_slots {
+        if execution.input_locations.len() != program.input_slots.len() {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared execution has {} input locations for {} inputs",
+                    execution.input_locations.len(),
+                    program.input_slots.len()
+                ),
+            ));
+        }
+        for (&slot, location) in program
+            .input_slots
+            .iter()
+            .zip(execution.input_locations.iter())
+        {
             let value = staged
                 .get_mut(slot)
                 .and_then(Option::take)
                 .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            validate_runtime_input_ingress(execution, location, &value.as_read(), slot)?;
             located[slot].push(LocatedExecSlot {
-                location: execution.root_location.clone(),
+                location: location.clone(),
                 value,
             });
         }
@@ -962,6 +1136,13 @@ fn execute_scheduled_slots<'input>(
                         &mut staged,
                         output_mode,
                         &terminal_slots,
+                    )?;
+                    validate_instruction_outputs(
+                        execution,
+                        instruction_index,
+                        instruction,
+                        operation.location(),
+                        &staged,
                     )?;
                     retain_instruction_results(
                         instruction,
@@ -1077,6 +1258,50 @@ fn stage_instruction_inputs<'input>(
     Ok(())
 }
 
+fn validate_instruction_outputs(
+    execution: &PreparedExecutionEngines,
+    instruction_index: usize,
+    instruction: &ExecInstruction,
+    location: &ExecutionLocation,
+    staged: &[Option<ExecSlot<'_>>],
+) -> Result<()> {
+    let engine = execution
+        .snapshot
+        .engine(location.engine_id())
+        .ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "scheduled output engine {:?} is no longer registered",
+                    location.engine_id()
+                ),
+            )
+        })?;
+    for &output_slot in &instruction.output_slots {
+        let output = staged
+            .get(output_slot)
+            .and_then(Option::as_ref)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot: output_slot })?;
+        let output = output.as_read();
+        if !engine.owns_resident_tensor(&output, location.storage_class()) {
+            return Err(Error::runtime_state_source(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                super::EngineExecutionContractError::OutputResidencyMismatch {
+                    instruction_index,
+                    output_slot,
+                    engine_id: location.engine_id().clone(),
+                    storage_class: location.storage_class().clone(),
+                    backend_family: output.backend_family(),
+                    allocation_domain: output.allocation_domain(),
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn retain_instruction_results<'input>(
     instruction: &ExecInstruction,
     location: &ExecutionLocation,
@@ -1122,6 +1347,33 @@ pub(crate) fn retain_instruction_results<'input>(
         });
     }
     Ok(())
+}
+
+fn validate_runtime_input_ingress(
+    execution: &PreparedExecutionEngines,
+    location: &ExecutionLocation,
+    input: &TensorRead<'_>,
+    slot: usize,
+) -> Result<()> {
+    let accepted = execution
+        .snapshot
+        .engine(location.engine_id())
+        .is_some_and(|engine| engine.accepts_runtime_input(input, location.storage_class()));
+    if accepted {
+        return Ok(());
+    }
+    Err(Error::runtime_state_source(
+        "Runtime::run_compiled",
+        ErrorPhase::Execution,
+        super::InputIngressContractError::ResidencyMismatch {
+            input_slot: slot,
+            ingress_engine_id: location.engine_id().clone(),
+            ingress_storage_class: location.storage_class().clone(),
+            placement: input.placement().clone(),
+            backend_family: input.backend_family(),
+            allocation_domain: input.allocation_domain(),
+        },
+    ))
 }
 
 fn execute_scheduled_transfer<'input>(
@@ -1174,11 +1426,19 @@ fn execute_scheduled_transfer<'input>(
             .ok_or(tenferro_tensor::Error::MissingValue {
                 slot: transfer.value_slot(),
             })?;
-        provider.transfer(TransferRequest::new(
-            source,
+        let source_read = source_value.value.as_read();
+        let expected_dtype = source_read.dtype();
+        let expected_shape = source_read.shape().to_vec();
+        let transferred =
+            provider.transfer_blocking(TransferRequest::new(source, destination, source_read))?;
+        validate_transfer_output(
+            execution,
             destination,
-            source_value.value.as_read(),
-        ))?
+            expected_dtype,
+            &expected_shape,
+            &transferred,
+        )?;
+        transferred
     };
     values.push(LocatedExecSlot {
         location: destination.clone(),
@@ -1187,10 +1447,126 @@ fn execute_scheduled_transfer<'input>(
     Ok(())
 }
 
+fn validate_transfer_output(
+    execution: &PreparedExecutionEngines,
+    destination: &ExecutionLocation,
+    expected_dtype: tenferro_tensor::DType,
+    expected_shape: &[usize],
+    output: &Tensor,
+) -> Result<()> {
+    let expected_elements = checked_transfer_element_count(expected_shape).map_err(|source| {
+        Error::runtime_state_source(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            TransferError::ProviderContract { source },
+        )
+    })?;
+    let contract_error = if output.dtype() != expected_dtype {
+        Some(TransferProviderContractError::DTypeMismatch {
+            expected: expected_dtype,
+            actual: output.dtype(),
+        })
+    } else if output.shape() != expected_shape {
+        Some(TransferProviderContractError::ShapeMismatch {
+            expected: expected_shape.to_vec(),
+            actual: output.shape().to_vec(),
+        })
+    } else if tensor_buffer_len(output) != expected_elements {
+        Some(TransferProviderContractError::InvalidBufferLength {
+            expected: expected_elements,
+            actual: tensor_buffer_len(output),
+        })
+    } else if !execution
+        .snapshot
+        .engine(destination.engine_id())
+        .is_some_and(|engine| {
+            engine.accepts_input_placement(output.placement(), destination.storage_class())
+        })
+    {
+        Some(
+            TransferProviderContractError::DestinationPlacementMismatch {
+                destination_engine_id: destination.engine_id().clone(),
+                destination_storage_class: destination.storage_class().clone(),
+                actual: output.placement().clone(),
+            },
+        )
+    } else if !execution
+        .snapshot
+        .engine(destination.engine_id())
+        .is_some_and(|engine| {
+            engine.owns_resident_tensor(
+                &TensorRead::from_tensor(output),
+                destination.storage_class(),
+            )
+        })
+    {
+        Some(
+            TransferProviderContractError::DestinationResidencyMismatch {
+                destination_engine_id: destination.engine_id().clone(),
+                destination_storage_class: destination.storage_class().clone(),
+                actual_backend_family: TensorRead::from_tensor(output).backend_family(),
+                actual_allocation_domain: TensorRead::from_tensor(output).allocation_domain(),
+            },
+        )
+    } else {
+        None
+    };
+    match contract_error {
+        None => Ok(()),
+        Some(source) => Err(Error::runtime_state_source(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            TransferError::ProviderContract { source },
+        )),
+    }
+}
+
+fn checked_transfer_element_count(
+    shape: &[usize],
+) -> std::result::Result<usize, TransferProviderContractError> {
+    tenferro_tensor::validate::checked_shape_product(
+        "Runtime::run_compiled",
+        "transfer source shape",
+        shape,
+    )
+    .map_err(|source| TransferProviderContractError::LogicalElementCount { source })
+}
+
+fn tensor_buffer_len(tensor: &Tensor) -> usize {
+    match tensor {
+        Tensor::F32(tensor) => tensor.buffer().len(),
+        Tensor::F64(tensor) => tensor.buffer().len(),
+        Tensor::I32(tensor) => tensor.buffer().len(),
+        Tensor::I64(tensor) => tensor.buffer().len(),
+        Tensor::Bool(tensor) => tensor.buffer().len(),
+        Tensor::C32(tensor) => tensor.buffer().len(),
+        Tensor::C64(tensor) => tensor.buffer().len(),
+    }
+}
+
+#[cfg(test)]
+mod transfer_validation_tests {
+    use std::error::Error as _;
+
+    use super::checked_transfer_element_count;
+    use crate::TransferProviderContractError;
+
+    #[test]
+    fn transfer_element_count_overflow_is_typed_and_preserves_source() {
+        let error = checked_transfer_element_count(&[usize::MAX, 2]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TransferProviderContractError::LogicalElementCount { .. }
+        ));
+        assert!(error.source().is_some());
+    }
+}
+
 fn collect_located_outputs<'input>(
     program: &ExecProgram,
     located: &mut [Vec<LocatedExecSlot<'input>>],
-) -> Result<Vec<Option<ExecSlot<'input>>>> {
+) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let mut outputs = (0..program.n_slots).map(|_| None).collect::<Vec<_>>();
     for &slot in &program.output_slots {
         if outputs[slot].is_some() {
@@ -1203,10 +1579,46 @@ fn collect_located_outputs<'input>(
             .pop()
             .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
         values.clear();
-        outputs[slot] = Some(value.value);
+        outputs[slot] = Some(value);
     }
     located.iter_mut().for_each(Vec::clear);
     Ok(outputs)
+}
+
+pub(super) fn collect_tensor_outputs_with<'input>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'input>>],
+    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<Tensor>,
+) -> Result<Vec<Tensor>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            let located = outputs
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            materialize(&located.location, located.value)
+        })
+        .collect()
+}
+
+fn collect_value_outputs_with<'input>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'input>>],
+    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<TensorValue>,
+) -> Result<Vec<TensorValue>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            let located = outputs
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            materialize(&located.location, located.value)
+        })
+        .collect()
 }
 
 fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {

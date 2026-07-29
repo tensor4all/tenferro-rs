@@ -10,7 +10,7 @@ use super::policy::{ProgramPlacementConstraint, StorageClass};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_ops::ShapeGuardError;
-use tenferro_tensor::Error as TensorError;
+use tenferro_tensor::{AllocationDomainId, Error as TensorError, Placement};
 
 /// Classifies a malformed runtime identifier without retaining its input.
 ///
@@ -256,6 +256,13 @@ pub enum RuntimeConfigError {
         /// Missing default storage class.
         default_storage_class: StorageClass,
     },
+    /// An execution bridge omitted the validators required for explicit input
+    /// ingress and destination-buffer residency.
+    #[error("engine {engine_id:?} execution bridge has no complete input ingress validator")]
+    MissingInputIngressValidator {
+        /// Engine with the incomplete execution contract.
+        engine_id: EngineId,
+    },
     /// A replacement attempted to reuse an engine ID with a different execution
     /// context identity in a context where that is invalid.
     #[error("engine {engine_id:?} context identity mismatch")]
@@ -275,6 +282,118 @@ pub enum RuntimeConfigError {
         /// Typed extension module source.
         #[source]
         source: ExtensionModuleError,
+    },
+}
+
+/// Reports a runtime execution bridge that violated its output contract.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineExecutionContractError, EngineId, StorageClass};
+///
+/// let error = EngineExecutionContractError::OutputResidencyMismatch {
+///     instruction_index: 3,
+///     output_slot: 7,
+///     engine_id: EngineId::new("tenferro.cpu")?,
+///     storage_class: StorageClass::new("tenferro.storage.host")?,
+///     backend_family: Some("foreign-backend"),
+///     allocation_domain: None,
+/// };
+/// assert!(error.to_string().contains("output slot 7"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EngineExecutionContractError {
+    /// An executor returned a tensor not owned by its scheduled engine/storage.
+    #[error(
+        "instruction {instruction_index} output slot {output_slot} is not resident in \
+         engine {engine_id:?} storage {storage_class:?} \
+         (backend family {backend_family:?}, allocation domain {allocation_domain:?})"
+    )]
+    OutputResidencyMismatch {
+        /// Execution-program instruction that produced the invalid tensor.
+        instruction_index: usize,
+        /// Execution slot containing the invalid tensor.
+        output_slot: usize,
+        /// Engine selected by the prepared schedule.
+        engine_id: EngineId,
+        /// Storage class selected by the prepared schedule.
+        storage_class: StorageClass,
+        /// Physical backend family reported by the tensor.
+        backend_family: Option<&'static str>,
+        /// Physical allocation domain reported by the tensor.
+        allocation_domain: Option<AllocationDomainId>,
+    },
+}
+
+/// Reports a runtime input that violates a prepared ingress contract.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineId, InputIngressContractError, StorageClass};
+/// use tenferro_tensor::Placement;
+///
+/// let error = InputIngressContractError::ResidencyMismatch {
+///     input_slot: 0,
+///     ingress_engine_id: EngineId::new("tenferro.cpu")?,
+///     ingress_storage_class: StorageClass::new("tenferro.storage.host")?,
+///     placement: Placement::default(),
+///     backend_family: Some("foreign-backend"),
+///     allocation_domain: None,
+/// };
+/// assert!(error.to_string().contains("input slot 0"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum InputIngressContractError {
+    /// A runtime input's physical residency is incompatible with its prepared ingress.
+    #[error(
+        "input slot {input_slot} at placement {placement:?} with backend family \
+         {backend_family:?} and allocation domain {allocation_domain:?} is not accepted by \
+         ingress engine {ingress_engine_id:?} storage {ingress_storage_class:?}"
+    )]
+    ResidencyMismatch {
+        /// Execution slot containing the rejected runtime input.
+        input_slot: usize,
+        /// Engine selected as the prepared input ingress.
+        ingress_engine_id: EngineId,
+        /// Storage class selected as the prepared input ingress.
+        ingress_storage_class: StorageClass,
+        /// Logical placement reported by the input.
+        placement: Placement,
+        /// Physical backend family reported by the input.
+        backend_family: Option<&'static str>,
+        /// Physical allocation domain reported by the input.
+        allocation_domain: Option<AllocationDomainId>,
+    },
+}
+
+/// Reports failure to admit an asynchronous runtime submission.
+///
+/// # Examples
+///
+/// ```
+/// use std::io;
+/// use tenferro_runtime::SubmissionError;
+///
+/// let error = SubmissionError::WorkerSpawn {
+///     source: io::Error::other("worker unavailable"),
+/// };
+/// assert!(error.to_string().contains("spawn"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SubmissionError {
+    /// The runtime could not create the worker after synchronous preparation.
+    #[error("failed to spawn runtime submission worker")]
+    WorkerSpawn {
+        /// Operating-system thread creation failure.
+        #[source]
+        source: std::io::Error,
     },
 }
 
@@ -728,6 +847,41 @@ pub enum PrepareError {
     NoEligibleEngine {
         /// Placement constraint that could not be satisfied.
         constraint: ProgramPlacementConstraint,
+    },
+    /// No eligible engine declared an ingress compatible with an input placement.
+    #[error("no eligible input ingress for input {input_index} at placement {placement:?}")]
+    NoInputIngress {
+        /// Input position in the compiled-program signature.
+        input_index: usize,
+        /// Placement rejected by every eligible engine ingress.
+        placement: tenferro_tensor::Placement,
+    },
+    /// Placement resolution exceeded its bounded combination-search budget.
+    #[error(
+        "placement resolution exhausted its search budget after {attempts} attempts \
+         (limit {limit})"
+    )]
+    DispatchSearchBudgetExceeded {
+        /// Number of dispatch combinations attempted.
+        attempts: usize,
+        /// Configured hard limit for this search.
+        limit: usize,
+    },
+    /// No available copy of a value has a registered direct transfer provider
+    /// to the storage required by its consumer.
+    #[error(
+        "instruction {instruction_index} has no direct transfer provider for value slot \
+         {value_slot} from {available_storage_classes:?} to {destination_storage_class:?}"
+    )]
+    MissingTransferProvider {
+        /// Staged instruction whose input cannot be reached.
+        instruction_index: usize,
+        /// Value slot required by the instruction.
+        value_slot: usize,
+        /// Storage class required by the instruction.
+        destination_storage_class: StorageClass,
+        /// Storage classes retaining an available copy.
+        available_storage_classes: Vec<StorageClass>,
     },
     /// A resolved placement references an engine absent from its preparation snapshot.
     #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]

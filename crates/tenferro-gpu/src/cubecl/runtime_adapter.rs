@@ -15,6 +15,7 @@ use tenferro_runtime::{
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     UnsupportedReason,
 };
+use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView};
 
 use super::CudaBackend;
 
@@ -74,6 +75,11 @@ pub fn cuda_runtime_engine_registration(
         .layout(layout);
 
     let storage = cuda_runtime_storage_class()?;
+    let placement_storage = storage.clone();
+    let signature_storage = storage.clone();
+    let runtime_storage = storage.clone();
+    let resident_storage = storage.clone();
+    let device_ordinal = backend.runtime().device_ordinal();
     EngineRegistration::new(
         cuda_runtime_engine_id()?,
         ExecutionContextIdentity::of::<CudaBackend>(),
@@ -86,8 +92,90 @@ pub fn cuda_runtime_engine_registration(
         registration
             .with_cache_owner(cache_owner)
             .with_tensor_backend_executor(execution_backend)
+            .with_input_signature_validator(move |placement, family, domain, candidate| {
+                candidate == &signature_storage
+                    && cuda_input_signature(placement, family, domain, device_ordinal)
+            })
+            .with_input_ingress_validator(
+                move |placement, candidate| {
+                    candidate == &placement_storage
+                        && cuda_input_placement(placement, device_ordinal)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &runtime_storage && cuda_input_tensor(input, device_ordinal)
+                },
+                move |input: &TensorRead<'_>, candidate| {
+                    candidate == &resident_storage && cuda_input_tensor(input, device_ordinal)
+                },
+            )
     })
 }
+
+fn cuda_input_signature(
+    placement: &Placement,
+    backend_family: Option<&'static str>,
+    allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
+    device_ordinal: usize,
+) -> bool {
+    cuda_input_placement(placement, device_ordinal)
+        && backend_family == Some("cubecl")
+        && allocation_domain.is_none()
+}
+
+fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
+    placement.memory_kind == MemoryKind::Device
+        && matches!(
+            &placement.device,
+            Some(device)
+                if device.kind == DeviceKind::Gpu(GpuBackendKind::Cuda)
+                    && device.ordinal == device_ordinal
+        )
+}
+
+fn cuda_input_tensor(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+    cuda_input_placement(input.placement(), device_ordinal)
+        && input.backend_family() == Some("cubecl")
+        && input.allocation_domain().is_none()
+        && cuda_input_has_owned_buffer(input, device_ordinal)
+}
+
+fn cuda_input_has_owned_buffer(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+    match input.clone().tensor_view() {
+        TensorView::F32(view) => cubecl_view_has_owner::<f32>(&view, device_ordinal),
+        TensorView::F64(view) => cubecl_view_has_owner::<f64>(&view, device_ordinal),
+        TensorView::I32(view) => cubecl_view_has_owner::<i32>(&view, device_ordinal),
+        TensorView::I64(view) => cubecl_view_has_owner::<i64>(&view, device_ordinal),
+        TensorView::Bool(view) => cubecl_view_has_owner::<bool>(&view, device_ordinal),
+        TensorView::C32(view) => view.backend_buffer().is_some_and(|buffer| {
+            buffer
+                .as_any()
+                .downcast_ref::<crate::CubeclBuffer<num_complex::Complex32>>()
+                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+        }),
+        TensorView::C64(view) => view.backend_buffer().is_some_and(|buffer| {
+            buffer
+                .as_any()
+                .downcast_ref::<crate::CubeclBuffer<num_complex::Complex64>>()
+                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+        }),
+    }
+}
+
+fn cubecl_view_has_owner<T: 'static>(
+    view: &tenferro_tensor::TypedTensorView<'_, T>,
+    device_ordinal: usize,
+) -> bool {
+    view.backend_buffer().is_some_and(|buffer| {
+        buffer
+            .as_any()
+            .downcast_ref::<crate::CubeclBuffer<T>>()
+            .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+    })
+}
+
+#[cfg(test)]
+#[path = "tests/runtime_adapter.rs"]
+mod tests;
 
 fn cuda_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
     StorageClass::new(CUDA_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)
@@ -558,22 +646,5 @@ impl fmt::Display for CudaPreparedKind {
             Self::DotGeneral => "dot_general",
             Self::Layout => "layout",
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sum_squares_routes_through_runtime_reduction_preparation() {
-        assert_eq!(
-            cuda_operation_kind(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
-            Some(CudaPreparedKind::Reduction)
-        );
-        assert_eq!(
-            core_operation_name(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
-            "reduce_sum_squares"
-        );
     }
 }
