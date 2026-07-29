@@ -32,6 +32,30 @@ per-run retired-value owner. They are dropped only after every started domain
 has drained. This separates logical reuse from physical buffer lifetime and
 prevents asynchronous work from observing freed storage.
 
+`EventToken::wait` is the typed host fallback for dependencies that a native
+driver cannot encode directly. Native drivers should downcast same-backend
+tokens and encode stream or queue waits; only foreign token types use the host
+fallback. The immediate CPU driver waits every dependency before launch.
+
+The borrowed launch closure is submission-only: a driver calls it exactly once
+before `enqueue` returns, without holding a driver lock. Fake domains may delay
+their completion token, but they do not retain and execute the Rust closure on
+another thread. `drain` observes work that is already progressing and must not
+depend on another domain's `drain` call to start progress.
+
+## Review Boundary
+
+This work is split into a contract PR and a production-activation stack. The
+contract PR defines drivers/tokens, freezes driver ownership in engine
+snapshots, and attaches schedule dependencies. It does not activate the
+production scheduler.
+
+Production activation is blocked until CUDA and WebGPU registrations install
+explicit drivers. `ImmediateEventDomainDriver` is valid only for synchronous
+engines; silently applying it to an asynchronous GPU engine would publish a
+ready token before device work completes. The activation stack must also drain
+started domains during panic unwinding before retired buffers are released.
+
 ## TDD Order
 
 1. Schedule operations carry deterministic, deduplicated producer
