@@ -506,10 +506,14 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine. Backend execution may also
-    /// return concrete backend variants such as [`crate::Error::Unsupported`],
-    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine. Backend execution may
+    /// also return concrete backend variants such as
+    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
+    /// [`crate::Error::Extension`].
     pub fn run_compiled(
         &self,
         program: &CompiledGraph,
@@ -537,8 +541,11 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine.
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine.
     pub fn prepare_compiled(
         &self,
         program: &CompiledGraph,
@@ -571,8 +578,10 @@ impl Runtime {
     ///
     /// Returns the same [`crate::PrepareError::InputSignature`],
     /// [`crate::PrepareError::Specialization`],
-    /// [`crate::PrepareError::NoEligibleEngine`], and other preparation
-    /// failures as [`Self::run_compiled`] before the worker is submitted.
+    /// [`crate::PrepareError::NoEligibleEngine`],
+    /// [`crate::PrepareError::NoInputIngress`], and
+    /// [`crate::PrepareError::MissingTransferProvider`] failures as
+    /// [`Self::run_compiled`] before the worker is submitted.
     pub fn submit(
         &self,
         program: &CompiledGraph,
@@ -610,10 +619,14 @@ impl Runtime {
     /// inputs do not match the compiled graph metadata.
     /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
     /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including a runtime with no eligible engine or no
-    /// execution bridge for the prepared engine. Backend execution may also
-    /// return concrete backend variants such as [`crate::Error::Unsupported`],
-    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
+    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
+    /// when no engine accepts an input's physical backend/allocation domain,
+    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
+    /// reach its first scheduled consumer, a runtime with no eligible engine,
+    /// or no execution bridge for the prepared engine. Backend execution may
+    /// also return concrete backend variants such as
+    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
+    /// [`crate::Error::Extension`].
     pub fn run_compiled_values(
         &self,
         program: &CompiledGraph,

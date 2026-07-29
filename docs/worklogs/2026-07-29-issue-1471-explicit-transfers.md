@@ -153,6 +153,10 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
 - The three commits applied without conflicts. The #1517 static-indexing and
   buffer-pool changes remain independent of the runtime ingress/residency
   files in this follow-up.
+- Repository-rules review found that the public runtime entrypoint rustdoc did
+  not name the new no-ingress and missing-transfer-route preparation failures.
+  Updated `run_compiled`, `prepare_compiled`, `submit`, and
+  `run_compiled_values` to document those typed causes.
 
 ## Deferred Scope
 
