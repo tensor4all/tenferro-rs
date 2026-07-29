@@ -1914,9 +1914,11 @@ pub trait TensorElementwise: TensorStructural {
     ///
     /// # Errors
     ///
-    /// Returns a typed validation error when `inputs` has the wrong arity or
-    /// the destination overlaps an input. Kernel and fallback errors are
-    /// preserved as typed backend or validation errors.
+    /// Returns [`crate::Error::Validation`] when `inputs` has the wrong arity,
+    /// tensor metadata is invalid, or the destination overlaps an input.
+    /// Returns [`crate::Error::BackendSource`] when the strided kernel rejects
+    /// an eligible host operation. Errors from the allocating backend fallback
+    /// are preserved unchanged.
     fn elementwise_read_into(
         &mut self,
         op: ElementwiseReadOp,
