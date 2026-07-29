@@ -29,8 +29,10 @@ use std::any::Any;
 
 #[cfg(feature = "cuda")]
 mod cubecl;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod native_permutation;
 #[cfg(feature = "webgpu")]
 mod webgpu;
 

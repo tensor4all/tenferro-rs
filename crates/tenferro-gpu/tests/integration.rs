@@ -10,3 +10,5 @@ mod public_surface_contract;
 mod webgpu_backend_contract;
 #[path = "integration/webgpu_matmul_runtime.rs"]
 mod webgpu_matmul_runtime;
+#[path = "integration/webgpu_structural_runtime.rs"]
+mod webgpu_structural_runtime;

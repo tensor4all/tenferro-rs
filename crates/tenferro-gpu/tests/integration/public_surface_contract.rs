@@ -238,15 +238,24 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 #[test]
 fn webgpu_materialization_does_not_inherit_host_defaults() {
     let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
-    for (method, op) in [
-        ("fn to_contiguous_read", "WebGpuBackend::to_contiguous_read"),
-        ("fn copy_read_into", "WebGpuBackend::copy_read_into"),
-    ] {
-        assert!(
-            webgpu_mod.contains(method) && webgpu_mod.contains(op),
-            "WebGPU must explicitly reject {method} instead of inheriting host defaults"
-        );
-    }
+    let structural = repo_file("crates/tenferro-gpu/src/webgpu/structural.rs");
+    assert!(
+        webgpu_mod.contains("fn to_contiguous_read")
+            && webgpu_mod.contains("structural::to_contiguous_read(self, input)"),
+        "WebGPU materialization must delegate to its device-native structural module"
+    );
+    assert!(
+        structural.contains("ensure_placement_resident_on_runtime")
+            && structural.contains("view_array_arg")
+            && !structural.contains("download_to_host")
+            && !structural.contains("upload_host_tensor"),
+        "WebGPU materialization must validate and consume resident device views without hidden transfer"
+    );
+    assert!(
+        webgpu_mod.contains("fn copy_read_into")
+            && webgpu_mod.contains("WebGpuBackend::copy_read_into"),
+        "unsupported WebGPU copy-into must remain an explicit rejection instead of inheriting host defaults"
+    );
 }
 
 #[test]

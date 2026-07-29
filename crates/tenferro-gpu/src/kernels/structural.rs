@@ -51,16 +51,81 @@ pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut Array<C>, factor:
 }
 
 #[cube(launch_unchecked)]
-pub fn view_to_contiguous_kernel<E: CubePrimitive>(
-    out: &mut Tensor<E>,
-    input: &Array<E>,
-    #[comptime] strides: Sequence<i64>,
-    base_offset: i64,
+pub fn materialize_strided_kernel<E: CubePrimitive>(
+    dst: &mut Array<E>,
+    src: &Array<E>,
+    #[comptime] dims: Sequence<usize>,
+    #[comptime] src_strides: Sequence<i64>,
+    src_offset: i64,
+    #[comptime] len: usize,
     #[comptime] rank: usize,
 ) {
-    if ABSOLUTE_POS < out.len() {
-        let src = strided_view_offset_from_tensor(ABSOLUTE_POS, out, strides, base_offset, rank);
-        out[ABSOLUTE_POS] = input[src];
+    if ABSOLUTE_POS < len {
+        let mut flat = ABSOLUTE_POS;
+        let mut src_index = src_offset;
+        #[unroll]
+        for axis in 0..rank {
+            let dim = comptime! { *dims.index(axis) };
+            let coordinate = flat % dim;
+            flat /= dim;
+            let src_stride = comptime! { *src_strides.index(axis) };
+            src_index += (coordinate as i64) * src_stride;
+        }
+        dst[ABSOLUTE_POS] = src[usize::cast_from(src_index)];
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn tiled_transpose_kernel<E: CubePrimitive>(
+    dst: &mut Array<E>,
+    src: &Array<E>,
+    src_offset: usize,
+    #[comptime] batch_stride: usize,
+    #[comptime] dst_fast_extent: usize,
+    #[comptime] src_fast_extent: usize,
+    #[comptime] tile: usize,
+    #[comptime] block_rows: usize,
+    #[comptime] padding: usize,
+    #[comptime] vector_width: usize,
+) {
+    let pitch = tile + padding;
+    let mut shared = SharedMemory::<E>::new(tile * pitch);
+    let unit_x = UNIT_POS_X as usize;
+    let unit_y = UNIT_POS_Y as usize;
+    let tile_src_fast = CUBE_POS_X as usize * tile;
+    let tile_dst_fast = CUBE_POS_Y as usize * tile;
+    let batch_base = CUBE_POS_Z as usize * batch_stride;
+
+    let mut row = unit_y;
+    while row < tile {
+        let dst_fast = tile_dst_fast + row;
+        #[unroll]
+        for lane in 0..vector_width {
+            let local_src_fast = unit_x * vector_width + lane;
+            let src_fast = tile_src_fast + local_src_fast;
+            if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
+                let src_index = src_offset + batch_base + dst_fast * src_fast_extent + src_fast;
+                shared[row * pitch + local_src_fast] = src[src_index];
+            }
+        }
+        row += block_rows;
+    }
+
+    sync_cube();
+
+    row = unit_y;
+    while row < tile {
+        let src_fast = tile_src_fast + row;
+        #[unroll]
+        for lane in 0..vector_width {
+            let local_dst_fast = unit_x * vector_width + lane;
+            let dst_fast = tile_dst_fast + local_dst_fast;
+            if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
+                let dst_index = batch_base + dst_fast + src_fast * dst_fast_extent;
+                dst[dst_index] = shared[local_dst_fast * pitch + row];
+            }
+        }
+        row += block_rows;
     }
 }
 
@@ -76,25 +141,6 @@ pub fn contiguous_to_view_kernel<E: CubePrimitive>(
         let dst_offset =
             strided_view_offset_from_tensor(ABSOLUTE_POS, src, strides, base_offset, rank);
         dst[dst_offset] = src[ABSOLUTE_POS];
-    }
-}
-
-#[cube(launch_unchecked)]
-pub fn transpose_kernel<E: CubePrimitive>(
-    out: &mut Tensor<E>,
-    input: &Tensor<E>,
-    #[comptime] perm: Sequence<usize>,
-) {
-    if ABSOLUTE_POS < out.len() {
-        let rank = perm.len();
-        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
-        let mut input_idx = Array::<usize>::new(rank);
-        #[unroll]
-        for axis in 0..rank {
-            let src_axis = comptime! { *perm.index(axis) };
-            input_idx[src_axis] = out_idx[axis];
-        }
-        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 

@@ -157,12 +157,9 @@ impl WebGpuRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when queue flush or sync fails.
+    /// Returns [`crate::Error::BackendSource`] when CubeCL queue synchronization fails.
     pub fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "webgpu_runtime_synchronize";
-        self.client
-            .flush()
-            .map_err(|err| crate::Error::backend_source(OP, err))?;
         future::block_on(self.client.sync()).map_err(|err| crate::Error::backend_source(OP, err))
     }
 }
