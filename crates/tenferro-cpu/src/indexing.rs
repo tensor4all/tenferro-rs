@@ -1,25 +1,52 @@
 use std::mem::size_of_val;
 
-use num_traits::Zero;
+use smallvec::SmallVec;
 use strided_kernel::{
-    col_major_strides, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan, ErasedGatherPlan,
-    ErasedRawStridedMut, ErasedRawStridedRef, ErasedScatterPlan, ExecContext, GatherSpec,
-    KernelDType, ScatterSpec,
+    col_major_strides, ErasedConcatenatePlan, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan,
+    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedMut, ErasedRawStridedRef, ErasedReversePlan,
+    ErasedScatterPlan, ErasedSlicePlan, ExecContext, GatherSpec, KernelDType, ScatterSpec,
 };
 
 use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
-use super::indexing_alloc::pooled_uninit_tensor;
+use super::indexing_alloc::{pooled_uninit_tensor, pooled_zeroed_tensor};
 use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
-// Indexed gather, additive scatter, and fixed-window dynamic slice/update
-// delegate bulk traversal to strided-kernel erased plans. Pad/concatenate/
-// reverse still own their operation-specific loops here. Backend entrypoints
-// run these kernels inside CpuContext::install, so future parallel
-// implementations can use the same CPU threading policy.
+type InlineStrides = SmallVec<[isize; 8]>;
+
+fn inline_col_major_strides(op: &'static str, dims: &[usize]) -> crate::Result<InlineStrides> {
+    let mut strides = InlineStrides::from_elem(1, dims.len());
+    for axis in 1..dims.len() {
+        if strides[axis - 1] == 0 {
+            strides[axis] = 0;
+            continue;
+        }
+        let prior_dim = isize::try_from(dims[axis - 1]).map_err(|_| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!(
+                    "dimension {} does not fit in isize while computing column-major strides",
+                    dims[axis - 1]
+                ),
+            )
+        })?;
+        strides[axis] = strides[axis - 1].checked_mul(prior_dim).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!("column-major stride overflows isize for shape {dims:?}"),
+            )
+        })?;
+    }
+    Ok(strides)
+}
+
+// Indexing families delegate bulk traversal to strided-kernel erased plans.
+// Backend entrypoints inject the CpuContext-derived execution policy.
 
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
@@ -119,20 +146,6 @@ macro_rules! dispatch_tensor_unary_result {
     };
 }
 
-macro_rules! dispatch_tensor_unary_with_bool_special_result {
-    ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {
-        match $input {
-            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
-            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
-            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
-            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
-            Tensor::Bool($bool_tensor) => Ok(Tensor::Bool($bool_body?)),
-            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
-            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
-        }
-    };
-}
-
 macro_rules! dispatch_same_dtype_result {
     ($op:literal, $lhs:expr, $rhs:expr, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {
         match ($lhs, $rhs) {
@@ -177,35 +190,6 @@ macro_rules! dispatch_same_dtype_without_bool_result {
 fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
-}
-
-fn advance_col_major_index(index: &mut [usize], shape: &[usize]) {
-    debug_assert_eq!(index.len(), shape.len());
-    for axis in 0..index.len() {
-        if shape[axis] == 0 {
-            index[axis] = 0;
-            continue;
-        }
-        index[axis] += 1;
-        if index[axis] < shape[axis] {
-            break;
-        }
-        index[axis] = 0;
-    }
-}
-
-fn pooled_filled_tensor<T>(
-    buffers: &mut BufferPool,
-    shape: Vec<usize>,
-    fill: T,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + PoolScalar,
-{
-    // SAFETY: the following fill writes every pooled output element.
-    let mut out = pooled_uninit_tensor(buffers, shape)?;
-    out.host_data_mut()?.fill(fill);
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -296,10 +280,11 @@ pub(crate) fn scatter_with_pool(
 
 pub(crate) fn try_slice_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &Tensor,
     config: &SliceConfig,
 ) -> crate::Result<Tensor> {
-    dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, t, config))
+    dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, exec_context, t, config))
 }
 
 #[cfg(test)]
@@ -399,23 +384,21 @@ pub(crate) fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
 
 #[cfg(test)]
 fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| try_pad_with_pool(buffers, input, config))
+    with_test_pool(|buffers| try_pad_with_pool(buffers, &ExecContext::serial(), input, config))
 }
 
 pub(crate) fn try_pad_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &Tensor,
     config: &PadConfig,
 ) -> crate::Result<Tensor> {
-    dispatch_tensor_unary_with_bool_special_result!(
-        input,
-        |t| typed_pad(buffers, t, config),
-        bool | t | typed_pad_with_fill(buffers, t, config, false)
-    )
+    dispatch_tensor_unary_result!(input, |t| typed_pad(buffers, exec_context, t, config))
 }
 
 pub(crate) fn try_concatenate_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     inputs: &[&Tensor],
     axis: usize,
 ) -> crate::Result<Tensor> {
@@ -427,20 +410,26 @@ pub(crate) fn try_concatenate_with_pool(
         )
     })?;
     dispatch_tensor_unary_result!(first, |t| typed_concatenate_from_dyn_inputs(
-        buffers, t, inputs, axis
+        buffers,
+        exec_context,
+        t,
+        inputs,
+        axis
     ))
 }
 
 pub(crate) fn reverse_with_pool(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &Tensor,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
-    dispatch_tensor_unary_result!(input, |t| typed_reverse(buffers, t, axes))
+    dispatch_tensor_unary_result!(input, |t| typed_reverse(buffers, exec_context, t, axes))
 }
 
-fn typed_slice<T: Copy + Clone + PoolScalar>(
+fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
@@ -498,30 +487,54 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
-    // SAFETY: the slice loop below assigns every output coordinate exactly once.
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    let mut out_idx = vec![0usize; rank];
-    let mut in_idx = vec![0usize; rank];
+    let dtype = kernel_dtype(T::dtype());
+    let input_strides = inline_col_major_strides("slice", input_shape)?;
+    let out_strides = inline_col_major_strides("slice", &out_shape)?;
+    let plan = ErasedSlicePlan::compile(
+        dtype,
+        input_shape,
+        &input_strides,
+        &out_shape,
+        &out_strides,
+        &config.starts,
+        &config.limits,
+        &config.strides,
+    )
+    .map_err(|err| crate::Error::backend_source("slice", err))?;
 
-    for out_value in out.host_data_mut()?.iter_mut() {
-        for axis in 0..rank {
-            in_idx[axis] = config.starts[axis] + out_idx[axis] * config.strides[axis];
-        }
-        *out_value = *input.get(&in_idx)?;
-        advance_col_major_index(&mut out_idx, &out_shape);
-    }
+    // SAFETY: ErasedSlicePlan overwrites every output element.
+    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let input_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("slice", input)?),
+        input_shape,
+        &input_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("slice", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        &out_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("slice", err))?;
+    plan.execute(exec_context, &mut out_ref, &input_ref)
+        .map_err(|err| crate::Error::backend_source("slice", err))?;
 
     Ok(out)
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     _first: &TypedTensor<T>,
     inputs: &[&Tensor],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar + TensorScalar,
     Tensor: TensorAsTyped<T>,
 {
     let first_dtype = inputs
@@ -535,7 +548,7 @@ where
         })?
         .dtype();
     let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
-    typed_concatenate(buffers, &typed_inputs, axis)
+    typed_concatenate(buffers, exec_context, &typed_inputs, axis)
 }
 
 fn collect_typed_inputs<'a, T>(
@@ -555,8 +568,9 @@ where
         .collect()
 }
 
-fn typed_concatenate<T: Copy + Clone + PoolScalar>(
+fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
@@ -604,82 +618,95 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     }
     out_shape[axis] = axis_extent;
 
-    let mut segment_ends = Vec::with_capacity(inputs.len());
-    let mut segment_end = 0usize;
-    for input in inputs {
-        segment_end = segment_end
-            .checked_add(input.shape()[axis])
-            .ok_or_else(|| {
-                crate::Error::invalid_argument(
-                    "concatenate",
-                    "configuration",
-                    "concatenate segment offset overflows usize".to_string(),
-                )
-            })?;
-        segment_ends.push(segment_end);
-    }
+    let dtype = kernel_dtype(T::dtype());
+    let input_dims: SmallVec<[&[usize]; 4]> = inputs.iter().map(|input| input.shape()).collect();
+    let input_strides: SmallVec<[InlineStrides; 4]> = input_dims
+        .iter()
+        .map(|dims| inline_col_major_strides("concatenate", dims))
+        .collect::<crate::Result<_>>()?;
+    let input_stride_refs: SmallVec<[&[isize]; 4]> =
+        input_strides.iter().map(SmallVec::as_slice).collect();
+    let out_strides = inline_col_major_strides("concatenate", &out_shape)?;
+    let plan = ErasedConcatenatePlan::compile(
+        dtype,
+        &input_dims,
+        &input_stride_refs,
+        &out_shape,
+        &out_strides,
+        axis,
+    )
+    .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
-    // SAFETY: the concatenate loop below assigns every output coordinate exactly once.
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    let mut out_idx = vec![0usize; rank];
-    let mut in_idx = vec![0usize; rank];
-
-    for out_value in out.host_data_mut()?.iter_mut() {
-        let concat_idx = out_idx[axis];
-        let input_pos = segment_ends.partition_point(|&end| concat_idx >= end);
-        if input_pos == segment_ends.len() {
-            return Err(crate::Error::invalid_argument(
-                "concatenate",
-                "configuration",
-                "output index must map to an input".to_string(),
-            ));
-        }
-        let axis_base = if input_pos == 0 {
-            0
-        } else {
-            segment_ends[input_pos - 1]
-        };
-
-        in_idx.copy_from_slice(&out_idx);
-        in_idx[axis] -= axis_base;
-        *out_value = *inputs[input_pos].get(&in_idx)?;
-        advance_col_major_index(&mut out_idx, &out_shape);
-    }
+    // SAFETY: ErasedConcatenatePlan overwrites every output element.
+    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
+        .iter()
+        .zip(input_strides.iter())
+        .map(|(input, strides)| {
+            ErasedRawStridedRef::new(
+                dtype,
+                typed_bytes(typed_host_data("concatenate", input)?),
+                input.shape(),
+                strides,
+                0,
+            )
+            .map_err(|err| crate::Error::backend_source("concatenate", err))
+        })
+        .collect::<crate::Result<_>>()?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        &out_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("concatenate", err))?;
+    plan.execute(exec_context, &mut out_ref, &input_refs)
+        .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
     Ok(out)
 }
 
-fn typed_reverse<T: Copy + Clone + PoolScalar>(
+fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &TypedTensor<T>,
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     let input_shape = input.shape();
     let rank = input_shape.len();
-    let mut reverse_axis = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
             return Err(crate::Error::axis_out_of_bounds("reverse", axis, rank));
         }
-        reverse_axis[axis] = true;
     }
 
-    // SAFETY: the reverse loop below assigns every output coordinate exactly once.
-    let mut out = pooled_uninit_tensor(buffers, input_shape.to_vec())?;
-    let mut out_idx = vec![0usize; rank];
-    let mut in_idx = vec![0usize; rank];
+    let dtype = kernel_dtype(T::dtype());
+    let input_strides = inline_col_major_strides("reverse", input_shape)?;
+    let out_strides = inline_col_major_strides("reverse", input_shape)?;
+    let plan = ErasedReversePlan::compile(dtype, input_shape, &input_strides, &out_strides, axes)
+        .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
-    for out_value in out.host_data_mut()?.iter_mut() {
-        for axis in 0..rank {
-            in_idx[axis] = if reverse_axis[axis] {
-                input_shape[axis] - 1 - out_idx[axis]
-            } else {
-                out_idx[axis]
-            };
-        }
-        *out_value = *input.get(&in_idx)?;
-        advance_col_major_index(&mut out_idx, input_shape);
-    }
+    // SAFETY: ErasedReversePlan overwrites every output element.
+    let mut out = pooled_zeroed_tensor(buffers, input_shape.to_vec())?;
+    let input_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("reverse", input)?),
+        input_shape,
+        &input_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("reverse", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        input_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("reverse", err))?;
+    plan.execute(exec_context, &mut out_ref, &input_ref)
+        .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
     Ok(out)
 }
@@ -1553,19 +1580,11 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     Ok(out)
 }
 
-fn typed_pad<T: Copy + Clone + Zero + PoolScalar>(
+fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
+    exec_context: &ExecContext,
     input: &TypedTensor<T>,
     config: &PadConfig,
-) -> crate::Result<TypedTensor<T>> {
-    typed_pad_with_fill(buffers, input, config, T::zero())
-}
-
-fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    config: &PadConfig,
-    fill: T,
 ) -> crate::Result<TypedTensor<T>> {
     let input_shape = input.shape();
     let rank = input_shape.len();
@@ -1650,26 +1669,46 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
         })?);
     }
 
-    let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill)?;
-    let mut input_idx = vec![0usize; input_shape.len()];
-    let mut out_idx = vec![0usize; input_shape.len()];
-
-    for input_value in input.as_slice()? {
-        let mut in_bounds = true;
-        for axis in 0..input_shape.len() {
-            let out_pos = i128::from(config.edge_padding_low[axis])
-                + input_idx[axis] as i128 * i128::from(config.interior_padding[axis] + 1);
-            if !(0..out_shape[axis] as i128).contains(&out_pos) {
-                in_bounds = false;
-                break;
-            }
-            out_idx[axis] = out_pos as usize;
-        }
-        if in_bounds {
-            *out.get_mut(&out_idx)? = *input_value;
-        }
-        advance_col_major_index(&mut input_idx, input_shape);
-    }
+    let dtype = kernel_dtype(T::dtype());
+    let input_strides = inline_col_major_strides("pad", input_shape)?;
+    let out_strides = inline_col_major_strides("pad", &out_shape)?;
+    let plan = ErasedPadPlan::compile(
+        dtype,
+        input_shape,
+        &input_strides,
+        &out_shape,
+        &out_strides,
+        &config.edge_padding_low,
+        &config.edge_padding_high,
+        &config.interior_padding,
+    )
+    .map_err(|err| crate::Error::backend_source("pad", err))?;
+    let fill = T::pool_zero();
+    // SAFETY: ErasedPadPlan overwrites every output element.
+    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let input_ref = ErasedRawStridedRef::new(
+        dtype,
+        typed_bytes(typed_host_data("pad", input)?),
+        input_shape,
+        &input_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("pad", err))?;
+    let mut out_ref = ErasedRawStridedMut::new(
+        dtype,
+        typed_bytes_mut(out.host_data_mut()?),
+        &out_shape,
+        &out_strides,
+        0,
+    )
+    .map_err(|err| crate::Error::backend_source("pad", err))?;
+    plan.execute(
+        exec_context,
+        &mut out_ref,
+        &input_ref,
+        typed_bytes(std::slice::from_ref(&fill)),
+    )
+    .map_err(|err| crate::Error::backend_source("pad", err))?;
 
     Ok(out)
 }

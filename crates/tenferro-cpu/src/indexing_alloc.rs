@@ -27,9 +27,21 @@ where
     TypedTensor::from_vec_col_major(shape, data)
 }
 
+pub(crate) fn pooled_zeroed_tensor<T>(
+    buffers: &mut BufferPool,
+    shape: Vec<usize>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Clone + PoolScalar,
+{
+    let len = checked_shape_product("cpu_pooled_output", &shape)?;
+    let data = T::pool_acquire_zeroed(buffers, len);
+    TypedTensor::from_vec_col_major(shape, data)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::pooled_uninit_tensor;
+    use super::{pooled_uninit_tensor, pooled_zeroed_tensor};
     use crate::buffer_pool::BufferPool;
     use tenferro_tensor::{ErrorKind, ValidationKind};
 
@@ -52,5 +64,13 @@ mod tests {
             ErrorKind::Validation(ValidationKind::InvalidArgument)
         );
         assert!(error.to_string().contains("shape product overflow"));
+    }
+
+    #[test]
+    fn pooled_zeroed_tensor_is_valid_before_kernel_handoff() {
+        let mut buffers = BufferPool::new();
+        let output = pooled_zeroed_tensor::<bool>(&mut buffers, vec![2, 3]).unwrap();
+
+        assert_eq!(output.as_slice().unwrap(), &[false; 6]);
     }
 }

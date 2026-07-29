@@ -1188,25 +1188,23 @@ where
     let mut out = clone_host_tensor_from_pool(buffers, op, tensor)?;
     let data = out.host_data_mut()?;
 
-    // Intentionally sequential: triangular masks are index-dependent in the
-    // innermost matrix plane and remain a dedicated CPU-kernel exception.
+    // Column-major matrices make each column contiguous. Clone once, then fill
+    // only the masked run instead of repeating per-element index arithmetic.
     for batch_idx in 0..batch_count {
         for col in 0..cols {
             let boundary = col as i128 - k as i128;
-            for row in 0..rows {
-                let row_idx = row;
-                let row = row_idx as i128;
-                let keep = if upper {
-                    row <= boundary
-                } else {
-                    row >= boundary
-                };
-                if !keep {
-                    let offset =
-                        checked_triangular_offset(op, batch_idx, block_size, col, rows, row_idx)?;
-                    data[offset] = fill;
-                }
-            }
+            let (masked_start, masked_end) = if upper {
+                (
+                    boundary.saturating_add(1).clamp(0, rows as i128) as usize,
+                    rows,
+                )
+            } else {
+                (0, boundary.clamp(0, rows as i128) as usize)
+            };
+            let start =
+                checked_triangular_offset(op, batch_idx, block_size, col, rows, masked_start)?;
+            let end = checked_triangular_offset(op, batch_idx, block_size, col, rows, masked_end)?;
+            data[start..end].fill(fill);
         }
     }
 

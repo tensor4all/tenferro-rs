@@ -726,6 +726,25 @@ fn test_triu_3x3() {
 }
 
 #[test]
+fn test_triangular_masks_rectangular_batched_nonzero_diagonal() {
+    let t = Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![2, 3, 2], (1..=12).map(f64::from).collect()).unwrap(),
+    );
+
+    let lower = tril(&t, 1).unwrap();
+    assert_eq!(
+        lower.as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 0.0, 6.0, 7.0, 8.0, 9.0, 10.0, 0.0, 12.0]
+    );
+
+    let upper = triu(&t, 1).unwrap();
+    assert_eq!(
+        upper.as_slice::<f64>().unwrap(),
+        &[0.0, 0.0, 3.0, 0.0, 5.0, 6.0, 0.0, 0.0, 9.0, 0.0, 11.0, 12.0]
+    );
+}
+
+#[test]
 fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
     let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()).unwrap());
 
