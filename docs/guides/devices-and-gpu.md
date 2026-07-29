@@ -345,11 +345,12 @@ rows return explicit errors and do not fall back to CPU.
 | `dot_general`, `dot_general_with_conj` | `F32`, `C32` | CubeK-backed BGEMM planner; `C32` conjugation is handled by the CubeK complex GEMM API. Supports rank-2, batched, and same-device packed operand layouts covered by tests |
 | Binary einsum lowering to `dot_general` | `F32`, `C32` | Eager `F32`/`C32` and traced `F32` paths are covered when inputs are explicitly uploaded to WebGPU |
 | 1D CFFT/IFFT, one-sided RFFT/IRFFT on Apple Metal | `C32` CFFT/IFFT; `F32` RFFT; `C32` IRFFT | CubeK-backed, explicit backend selection, power-of-two length at least 2; see the FFT guide for padding and length constraints |
+| `transpose`, `to_contiguous_read` | `F32`, `I32` | Same-device native CubeCL materialization; transpose and strided-view canonicalization share one validated dimension-fusion plan, and exact compact 2D transpose uses a compile-time-configured shared-memory tile |
 | `dot_general` with zero contracting size | No WebGPU implementation | Returns an error until CubeK behavior is validated |
 | `dot_general` for `F64`, `C64` | No WebGPU implementation | Returns an error; no CPU fallback |
 | Elementwise and analytic ops | No WebGPU implementation | Returns an error |
 | Reductions | No WebGPU implementation | Returns an error |
-| Structural/indexing ops beyond transfer-owned allocation metadata | No WebGPU implementation | Returns an error |
+| Other structural/indexing ops | No WebGPU implementation | Returns an error |
 | Linalg | No WebGPU implementation | Returns an error. The paired CPU backend's rank-2 Cholesky mapping is CPU execution over Apple managed storage, not a WebGPU linalg kernel |
 | ROCm | No supported execution backend | No ROCm quickstart is provided |
 

@@ -344,6 +344,13 @@ and no implicit global shape state.
   `dot_general` pack kernels pass only axis-role lists and rank as compile-time
   launch attributes; shape and stride values are read from `TensorBinding`
   metadata inside the kernel.
+- Native permutation materialization is the narrow exception: its validated,
+  bilaterally fused affine plan is encoded as compile-time metadata because the
+  raw source/destination arrays do not carry logical layouts. Fusion limits the
+  specialization rank. The logical length is also compile-time metadata to
+  avoid ambiguous raw-Array runtime metadata packing on Metal. Tile size,
+  block rows, padding, and vector width are algorithm configuration and must
+  remain compile-time parameters.
 - Permute-like operations should canonicalize their launch attributes where the
   transformation is mathematically identical. In particular, adjacent axes that
   stay contiguous in column-major layout should be fused before choosing the
@@ -477,6 +484,7 @@ The WebGPU backend currently has narrower coverage:
 | Allocation/transfer | WebGPU allocation, upload, and download for `F64`, `F32`, `I32`, `I64`, `Bool`, `C64`, and `C32` tensors |
 | Real contraction | CubeK/CubeCL-backed `F32` `dot_general` through a BGEMM planner, including batched and same-device packed operand layouts covered by tests |
 | Complex contraction | `C32` `dot_general` and `dot_general_with_conj` through a CubeK-owned complex GEMM API. tenferro normalizes `DotGeneralConfig` into CubeK-compatible batched matmul bindings; CubeK owns temporary real buffers, split/compose kernels, conjugation signs, and future native complex-kernel replacement |
+| Structural permutation | `F32` and `I32` transpose plus same-device compact materialization. CUDA-native and WebGPU routes consume the same validated bilateral-fusion plan; exact compact 2D transposes use a shared-memory tile with compile-time tile/block-row/padding/vector-width configuration |
 | Deferred contraction coverage | `F64`, `C64`, zero-contracting-size matmul, and broader planner stress coverage |
 | Other tensor ops | Explicit unsupported `BackendFailure`; no CPU fallback and no hidden provider transfer |
 
