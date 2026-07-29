@@ -195,10 +195,12 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   completion; public integration coverage reconfigures immediately after
   `submit` and still observes the admitted result.
 - Integrated operation placement with ingress and schedule reachability.
-  Preparation enumerates capability-compatible engine placements, validates
-  the complete input use graph, and constructs the physical schedule before
-  accepting a combination. Route-specific failures continue to later engines
-  and storage classes; if every route fails, the last typed
+  Preparation tries each registered engine as the deterministic preferred
+  anchor, falls back only where that engine lacks an operation capability,
+  validates the complete input use graph, and constructs the physical schedule
+  before accepting a placement. This is polynomial in engine and operation
+  count rather than a Cartesian placement search. Route-specific failures
+  continue to later engines and storage classes; if every route fails, the last typed
   `NoInputIngress`/`MissingTransferProvider` is preserved.
 - Kept `ExecutionLocation` attached to terminal slots through output
   collection. Tensor and value materialization now use the executor retained

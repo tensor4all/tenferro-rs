@@ -791,6 +791,9 @@ pub(crate) fn execution_location(
     ))
 }
 
+// INVARIANT: this private preparation boundary carries the already-separated
+// runtime, snapshot, compiler, placement, and policy inputs without bundling
+// them into a second mutable configuration object.
 #[allow(clippy::too_many_arguments)]
 fn build_operation_dispatch(
     runtime: &Runtime,
@@ -843,7 +846,7 @@ fn build_operation_dispatch(
         .map(Some);
     }
 
-    search_dispatch_combinations(&dispatch_candidates, |selected| {
+    search_dispatch_preferences(&dispatch_candidates, candidates, |selected| {
         build_preparation_context(
             runtime,
             snapshot,
@@ -860,6 +863,9 @@ fn build_operation_dispatch(
     .map(Some)
 }
 
+// INVARIANT: context construction consumes one validated dispatch selection
+// plus the immutable preparation inputs; grouping them would duplicate the
+// existing snapshot/options ownership boundaries.
 #[allow(clippy::too_many_arguments)]
 fn build_preparation_context(
     runtime: &Runtime,
@@ -1013,6 +1019,8 @@ fn schedule_prepare_error(source: ScheduleBuildError) -> Arc<PrepareError> {
     }
 }
 
+// INVARIANT: cross-storage dispatch uses the same immutable preparation inputs
+// as same-storage dispatch and differs only in candidate generation.
 #[allow(clippy::too_many_arguments)]
 fn build_cross_storage_operation_dispatch(
     runtime: &Runtime,
@@ -1045,7 +1053,7 @@ fn build_cross_storage_operation_dispatch(
         return Ok(None);
     }
 
-    search_dispatch_combinations(&dispatch_candidates, |selected| {
+    search_dispatch_preferences(&dispatch_candidates, candidates, |selected| {
         build_preparation_context(
             runtime,
             snapshot,
@@ -1062,36 +1070,57 @@ fn build_cross_storage_operation_dispatch(
     .map(Some)
 }
 
-fn search_dispatch_combinations(
-    candidates: &[Vec<SelectedOperationDispatch>],
+fn search_dispatch_preferences(
+    dispatch_candidates: &[Vec<SelectedOperationDispatch>],
+    engine_preferences: &[super::EngineSnapshotView<'_>],
     mut build: impl FnMut(Vec<SelectedOperationDispatch>) -> PreparedProgramResult<PreparationContext>,
 ) -> PreparedProgramResult<PreparationContext> {
-    let mut indices = vec![0usize; candidates.len()];
-    loop {
-        let selected = candidates
+    let mut attempted = Vec::<Vec<(EngineId, StorageClass)>>::new();
+    let mut last_route_error = None;
+    for preference in engine_preferences {
+        let selected = dispatch_candidates
             .iter()
-            .zip(&indices)
-            .map(|(candidates, &index)| candidates[index].clone())
-            .collect();
-        let route_error = match build(selected) {
-            Ok(context) => return Ok(context),
-            Err(error) if is_route_specific_prepare_error(error.as_ref()) => error,
-            Err(error) => return Err(error),
-        };
-
-        let mut cursor = indices.len();
-        while cursor > 0 {
-            cursor -= 1;
-            indices[cursor] += 1;
-            if indices[cursor] < candidates[cursor].len() {
-                break;
-            }
-            indices[cursor] = 0;
+            .map(|candidates| {
+                candidates
+                    .iter()
+                    .find(|candidate| {
+                        candidate.dispatch.binding.engine_id() == preference.engine_id()
+                    })
+                    .unwrap_or(&candidates[0])
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let key = selected
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.dispatch.binding.engine_id().clone(),
+                    candidate
+                        .dispatch
+                        .resolved_placement
+                        .storage_class()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if attempted.iter().any(|existing| existing == &key) {
+            continue;
         }
-        if cursor == 0 && indices[0] == 0 {
-            return Err(route_error);
+        attempted.push(key);
+
+        match build(selected) {
+            Ok(context) => return Ok(context),
+            Err(error) if is_route_specific_prepare_error(error.as_ref()) => {
+                last_route_error = Some(error);
+            }
+            Err(error) => return Err(error),
         }
     }
+    Err(last_route_error.unwrap_or_else(|| {
+        Arc::new(PrepareError::NoEligibleEngine {
+            constraint: ProgramPlacementConstraint::any(),
+        })
+    }))
 }
 
 fn operation_dispatch_candidates(
