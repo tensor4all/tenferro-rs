@@ -218,7 +218,7 @@ fn webgpu_view_has_owner<T: 'static>(
 
 #[cfg(test)]
 #[path = "tests/runtime_adapter.rs"]
-mod ingress_tests;
+mod tests;
 
 fn webgpu_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
     StorageClass::new(WEBGPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)
