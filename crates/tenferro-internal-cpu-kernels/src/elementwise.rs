@@ -5,9 +5,10 @@ use std::sync::Arc;
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
-    batched_outer_product_into, broadcast_mul_into, map_into, mul_into, reduce, zip_map2_into,
-    zip_map3_into, ErasedFusedPlan, ErasedRawStridedMut, ErasedRawStridedRef, ExecContext,
-    FusedInst, FusedOp, FusedPlan, KernelDType, StridedArray, StridedView,
+    batched_outer_product_into, broadcast_mul_into, compare_into, map_into, mul_into, reduce,
+    zip_map2_into, zip_map3_into, CompareOp, ErasedFusedPlan, ErasedRawStridedMut,
+    ErasedRawStridedRef, ExecContext, FusedInst, FusedOp, FusedPlan, KernelDType, StridedArray,
+    StridedView,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -1511,6 +1512,43 @@ where
         f,
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+fn typed_ordered_compare_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+    dir: &CompareDir,
+) -> crate::Result<TypedTensor<bool>>
+where
+    T: Copy + Send + Sync + PartialOrd + 'static,
+    L: TensorRank,
+    R: TensorRank,
+{
+    if lhs.shape() != rhs.shape() {
+        return Err(crate::Error::shape_mismatch(
+            "compare",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
+    }
+    let op = match dir {
+        CompareDir::Eq => CompareOp::Eq,
+        CompareDir::Lt => CompareOp::Lt,
+        CompareDir::Le => CompareOp::Le,
+        CompareDir::Gt => CompareOp::Gt,
+        CompareDir::Ge => CompareOp::Ge,
+    };
+    // SAFETY: compare_into validates the output layout and overwrites every element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+    compare_into(
+        &mut out.view_mut(),
+        &typed_view_from_view("compare", lhs)?,
+        &typed_view_from_view("compare", rhs)?,
+        op,
+    )
+    .map_err(|err| crate::Error::backend_source("compare", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3084,21 +3122,33 @@ pub fn compare_with_pool(
     reject_complex_unsupported_compare_dtypes(dir, &[lhs.dtype(), rhs.dtype()])?;
 
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::F64(a), Tensor::F64(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::I32(a), Tensor::I32(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::I64(a), Tensor::I64(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
-        (Tensor::Bool(a), Tensor::Bool(b)) => {
-            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
-        }
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::Bool(typed_ordered_compare_view_with_pool(
+            buffers,
+            &a.as_view(),
+            &b.as_view(),
+            dir,
+        )?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::Bool(typed_ordered_compare_view_with_pool(
+            buffers,
+            &a.as_view(),
+            &b.as_view(),
+            dir,
+        )?)),
+        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::Bool(typed_ordered_compare_view_with_pool(
+            buffers,
+            &a.as_view(),
+            &b.as_view(),
+            dir,
+        )?)),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::Bool(typed_ordered_compare_view_with_pool(
+            buffers,
+            &a.as_view(),
+            &b.as_view(),
+            dir,
+        )?)),
+        (Tensor::Bool(a), Tensor::Bool(b)) => Ok(Tensor::Bool(
+            typed_ordered_compare_view_with_pool(buffers, &a.as_view(), &b.as_view(), dir)?,
+        )),
         (Tensor::C32(a), Tensor::C32(b)) => {
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
@@ -3126,29 +3176,19 @@ pub fn compare_read_with_pool(
 
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
+            typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
         (CpuReadView::F64(a), CpuReadView::F64(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
+            typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
         (CpuReadView::I32(a), CpuReadView::I32(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
+            typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
         (CpuReadView::I64(a), CpuReadView::I64(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
+            typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
         (CpuReadView::Bool(a), CpuReadView::Bool(b)) => Ok(Tensor::Bool(
-            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
-                x.compare_elem(y, dir)
-            })?,
+            typed_ordered_compare_view_with_pool(buffers, &a, &b, dir)?,
         )),
         (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::Bool(
             typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
