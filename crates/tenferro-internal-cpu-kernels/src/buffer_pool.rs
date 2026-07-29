@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::mem::size_of;
+use std::mem::{size_of, ManuallyDrop, MaybeUninit};
 use std::sync::OnceLock;
 
 use num_complex::{Complex32, Complex64};
@@ -145,6 +145,13 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// assert_eq!(buf, vec![1.0, 2.0]);
     /// ```
     unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self>;
+
+    /// Acquire a buffer whose elements may be uninitialized.
+    ///
+    /// The returned `MaybeUninit` vector remains safe to drop after an error
+    /// or panic. Convert it back to `Vec<Self>` only after every element has
+    /// been initialized.
+    fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>>;
 
     /// Acquire a buffer with length `len` and every element set to zero.
     ///
@@ -300,6 +307,36 @@ macro_rules! impl_pool_scalar {
                         let mut buf = Vec::with_capacity(len);
                         // SAFETY: raw acquire requires caller full-overwrite; len == capacity here.
                         unsafe { buf.set_len(len) };
+                        buf
+                    }
+                }
+            }
+
+            fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>> {
+                match take_best_fit(&mut pool.$field, len) {
+                    Some(buf) => {
+                        pool.retained_capacity_bytes = pool
+                            .retained_capacity_bytes
+                            .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
+                        increment_in_flight(&mut pool.$in_flight, buf.capacity());
+                        let mut buf = ManuallyDrop::new(buf);
+                        // SAFETY: `MaybeUninit<Self>` has the same layout as
+                        // `Self`; best-fit guarantees `len <= capacity`, and
+                        // ManuallyDrop transfers allocation ownership.
+                        unsafe {
+                            Vec::from_raw_parts(
+                                buf.as_mut_ptr().cast::<MaybeUninit<Self>>(),
+                                len,
+                                buf.capacity(),
+                            )
+                        }
+                    }
+                    None => {
+                        let mut buf = Vec::with_capacity(len);
+                        // SAFETY: every bit pattern is valid for MaybeUninit.
+                        unsafe {
+                            buf.set_len(len);
+                        }
                         buf
                     }
                 }

@@ -20,10 +20,9 @@ per-element index classification.
 
 - `CpuBackend` and `CpuExecutionSession` pass their pooled
   `ExecContext` explicitly to every erased static plan replay.
-- Static outputs are acquired zero-initialized from the CPU buffer pool before
-  safe typed slices and erased descriptors are
-  constructed. This avoids exposing the pool's legacy typed-uninitialized
-  acquisition to the new paths.
+- Static outputs are acquired as `Vec<MaybeUninit<T>>` from the CPU buffer
+  pool. The upstream full-overwrite descriptor never constructs `&mut [T]`
+  before replay, and converts the owner to `Vec<T>` only after success.
 - Short-rank column-major strides use inline `SmallVec` storage with checked
   `usize` to `isize` conversion and multiplication. A zero extent keeps all
   subsequent strides at zero without converting unreachable large extents.
@@ -58,24 +57,25 @@ strided-rs PR #171 added contiguous pad runs. The fixed tenferro allocation
 gate then exposed per-call exact injectivity-check allocation during static
 plan compile; strided-rs PR #173 moved the existing disjoint-stride proof
 ahead of exact enumeration and added checked offset/fusion arithmetic. All
-workspace strided dependencies are pinned to merged commit `e18ecb10`. The
-final exact-row comparison used the equivalent #171 kernel state, 15 measured
-runs after three warmups, t1 pinned to CPU 60, and t4 pinned to CPUs 56-59:
+workspace strided dependencies are pinned to merged commit `ed3053a6`, which
+also includes PR #175's safe uninitialized full-overwrite replay. The final
+exact-row comparison used that merged state, 15 measured runs after three
+warmups, t1 pinned to CPU 60, and t4 pinned to CPUs 56-59:
 
 | Operation | Backend | t1 | t4 |
 |---|---|---:|---:|
-| slice | eager | -86.4% | -85.5% |
-| slice | trace | -85.7% | -86.3% |
-| pad | eager | -92.2% | -92.2% |
-| pad | trace | -92.1% | -92.7% |
-| concatenate | eager | -94.9% | -94.6% |
-| concatenate | trace | -94.9% | -94.6% |
-| reverse | eager | -90.4% | -88.9% |
-| reverse | trace | -90.4% | -89.5% |
-| tril | eager | -27.3% | -22.7% |
-| tril | trace | -27.7% | -23.9% |
-| triu | eager | -29.3% | -23.3% |
-| triu | trace | -28.2% | -20.8% |
+| slice | eager | -89.7% | -89.0% |
+| slice | trace | -89.2% | -86.3% |
+| pad | eager | -93.5% | -93.8% |
+| pad | trace | -93.6% | -88.8% |
+| concatenate | eager | -96.6% | -96.3% |
+| concatenate | trace | -96.3% | -95.6% |
+| reverse | eager | -92.7% | -91.4% |
+| reverse | trace | -92.6% | -91.7% |
+| tril | eager | -28.3% | -25.6% |
+| tril | trace | -27.2% | -24.8% |
+| triu | eager | -27.9% | -25.1% |
+| triu | trace | -28.9% | -23.7% |
 
 Every predeclared row improved; no row approached the +20 percent blocking
 threshold. The measurements used the same benchmark binaries and machine
@@ -86,18 +86,20 @@ the complete CPU test suite.
 ## Independent review follow-up
 
 The final review identified that the pre-existing `PoolScalar::pool_acquire`
-API can expose typed uninitialized storage before a kernel completes. The new
-static indexing paths were changed to the safe zero-initialized acquisition
-path before descriptor construction. The repository-wide `MaybeUninit` owner
-and handoff redesign is tracked separately in #1516 so that it can cover every
-legacy caller without hiding a broad safety change inside this performance PR.
+API can expose typed uninitialized storage before a kernel completes. The
+temporary zero-initialized fix violated the full-overwrite materialization
+rule, so strided-rs #174 / PR #175 added a narrow
+`ErasedRawStridedUninitMut` contract. The CPU pool now hands these four paths
+`Vec<MaybeUninit<T>>` directly and remains safely droppable on error or panic.
+Issue #1516 continues to track the remaining legacy typed-uninitialized
+callers outside this static indexing scope.
 
 The same review found unchecked arithmetic in the inline stride helper. The
 helper now returns typed validation errors on conversion or multiplication
 overflow, and tests cover overflow, a zero extent followed by an unreachable
 large extent, and rank nine spilling beyond the inline capacity.
 
-The eight static-indexing rows in the table were remeasured after the safe
-acquisition change with the same 15-run/three-warmup protocol and CPU binding.
-The additional initialization cost reduces part of the gain but every row
-still improves by 85.5 to 94.9 percent relative to `origin/main`.
+All rows in the table were remeasured after the safe acquisition change with
+the same 15-run/three-warmup protocol and CPU binding. Static indexing improves
+by 86.3 to 96.6 percent and triangular masking by 23.7 to 28.9 percent relative
+to the pre-adoption baseline.

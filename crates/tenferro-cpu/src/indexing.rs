@@ -3,12 +3,13 @@ use std::mem::size_of_val;
 use smallvec::SmallVec;
 use strided_kernel::{
     col_major_strides, ErasedConcatenatePlan, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan,
-    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedMut, ErasedRawStridedRef, ErasedReversePlan,
-    ErasedScatterPlan, ErasedSlicePlan, ExecContext, GatherSpec, KernelDType, ScatterSpec,
+    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedMut, ErasedRawStridedPtr, ErasedRawStridedRef,
+    ErasedRawStridedUninitMut, ErasedReversePlan, ErasedScatterPlan, ErasedSlicePlan, ExecContext,
+    GatherSpec, KernelDType, ScatterSpec,
 };
 
 use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
-use super::indexing_alloc::{pooled_uninit_tensor, pooled_zeroed_tensor};
+use super::indexing_alloc::{pooled_uninit_tensor, PooledUninitOutput};
 use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::TensorScalar;
@@ -502,8 +503,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("slice", err))?;
 
-    // SAFETY: ErasedSlicePlan overwrites every output element.
-    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
     let input_ref = ErasedRawStridedRef::new(
         dtype,
         typed_bytes(typed_host_data("slice", input)?),
@@ -512,18 +512,20 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("slice", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
+    let mut out_ref = ErasedRawStridedUninitMut::new(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         &out_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("slice", err))?;
-    plan.execute(exec_context, &mut out_ref, &input_ref)
+    plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("slice", err))?;
 
-    Ok(out)
+    // SAFETY: successful static-slice replay initializes every logical output.
+    unsafe { out.assume_init() }
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
@@ -637,8 +639,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
-    // SAFETY: ErasedConcatenatePlan overwrites every output element.
-    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
     let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
         .iter()
         .zip(input_strides.iter())
@@ -653,18 +654,23 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
             .map_err(|err| crate::Error::backend_source("concatenate", err))
         })
         .collect::<crate::Result<_>>()?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let input_ptrs: SmallVec<[ErasedRawStridedPtr<'_>; 4]> = input_refs
+        .iter()
+        .map(ErasedRawStridedPtr::from_ref)
+        .collect();
+    let mut out_ref = ErasedRawStridedUninitMut::new(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         &out_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
-    plan.execute(exec_context, &mut out_ref, &input_refs)
+    plan.execute_uninit(exec_context, &mut out_ref, &input_ptrs)
         .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
-    Ok(out)
+    // SAFETY: successful concatenate replay initializes every logical output.
+    unsafe { out.assume_init() }
 }
 
 fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -687,8 +693,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     let plan = ErasedReversePlan::compile(dtype, input_shape, &input_strides, &out_strides, axes)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
-    // SAFETY: ErasedReversePlan overwrites every output element.
-    let mut out = pooled_zeroed_tensor(buffers, input_shape.to_vec())?;
+    let mut out = PooledUninitOutput::new(buffers, input_shape.to_vec())?;
     let input_ref = ErasedRawStridedRef::new(
         dtype,
         typed_bytes(typed_host_data("reverse", input)?),
@@ -697,18 +702,20 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
+    let mut out_ref = ErasedRawStridedUninitMut::new(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         input_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
-    plan.execute(exec_context, &mut out_ref, &input_ref)
+    plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
-    Ok(out)
+    // SAFETY: successful reverse replay initializes every logical output.
+    unsafe { out.assume_init() }
 }
 
 struct IndexTensor {
@@ -1684,8 +1691,7 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let fill = T::pool_zero();
-    // SAFETY: ErasedPadPlan overwrites every output element.
-    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone())?;
+    let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
     let input_ref = ErasedRawStridedRef::new(
         dtype,
         typed_bytes(typed_host_data("pad", input)?),
@@ -1694,23 +1700,25 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
+    let mut out_ref = ErasedRawStridedUninitMut::new(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         &out_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
-    plan.execute(
+    plan.execute_uninit(
         exec_context,
         &mut out_ref,
-        &input_ref,
+        &input_ptr,
         typed_bytes(std::slice::from_ref(&fill)),
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
 
-    Ok(out)
+    // SAFETY: successful pad replay initializes every logical output.
+    unsafe { out.assume_init() }
 }
 
 #[cfg(test)]

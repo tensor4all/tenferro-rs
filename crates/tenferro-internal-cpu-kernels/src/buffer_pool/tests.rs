@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::mem::{size_of, ManuallyDrop};
 
 use super::{
     parse_default_max_retained_capacity_bytes, BufferPool, PoolScalar,
@@ -107,6 +107,31 @@ fn raw_acquire_does_not_zero_initialized_reused_buffers() {
     let reused = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
 
     assert_eq!(reused, vec![7.0, 8.0, 9.0, 10.0]);
+}
+
+#[test]
+fn uninit_acquire_reuses_storage_and_can_be_initialized_before_release() {
+    let mut pool = BufferPool::new();
+    let original = vec![true; 4];
+    let ptr = original.as_ptr();
+    <bool as PoolScalar>::pool_release(&mut pool, original);
+
+    let mut reused = <bool as PoolScalar>::pool_acquire_uninit(&mut pool, 4);
+    assert_eq!(reused.as_ptr().cast::<bool>(), ptr);
+    reused.iter_mut().for_each(|value| {
+        value.write(false);
+    });
+    let mut reused = ManuallyDrop::new(reused);
+    let initialized = unsafe {
+        Vec::from_raw_parts(
+            reused.as_mut_ptr().cast::<bool>(),
+            reused.len(),
+            reused.capacity(),
+        )
+    };
+    assert_eq!(initialized, vec![false; 4]);
+    <bool as PoolScalar>::pool_release(&mut pool, initialized);
+    assert_eq!(pool.len(), 1);
 }
 
 #[test]

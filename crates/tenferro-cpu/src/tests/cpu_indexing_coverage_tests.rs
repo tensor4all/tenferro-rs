@@ -322,7 +322,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
 #[test]
 fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
-    let input = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).unwrap();
+    let mut input = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).unwrap();
     let sliced = backend
         .slice(
             &input,
@@ -344,6 +344,20 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
     assert_eq!(
         concatenated.as_slice::<bool>().unwrap(),
         &[false, false, false, true, false, true]
+    );
+    let Tensor::Bool(input) = &mut input else {
+        panic!("test input must remain Bool");
+    };
+    input.host_data_mut().unwrap().fill(true);
+    assert_eq!(
+        sliced.as_slice::<bool>().unwrap(),
+        &[false, false],
+        "mutating the input after handoff must not change the copied output"
+    );
+    assert_eq!(
+        reversed.as_slice::<bool>().unwrap(),
+        &[false, true, false, true],
+        "static replay outputs must own their destination storage"
     );
 
     let empty = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new()).unwrap();
