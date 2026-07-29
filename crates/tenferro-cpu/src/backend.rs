@@ -32,9 +32,9 @@ use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    DotGeneralAccumulation, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
-    TensorViewCanonicalization,
+    DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -61,6 +61,41 @@ pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
         Tensor::C32(tensor) => tag!(tensor),
         Tensor::C64(tensor) => tag!(tensor),
     }
+}
+
+pub(crate) fn elementwise_read_into_fallback_with_pool(
+    buffers: &mut BufferPool,
+    op: ElementwiseReadOp,
+    inputs: &[TensorRead<'_>],
+    out: TensorWrite<'_>,
+) -> crate::Result<()> {
+    let result = match op {
+        ElementwiseReadOp::Add => {
+            elementwise::add_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+        }
+        ElementwiseReadOp::Subtract => {
+            elementwise::sub_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+        }
+        ElementwiseReadOp::Multiply => {
+            elementwise::mul_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+        }
+        ElementwiseReadOp::Negate => elementwise::neg_read_with_pool(buffers, inputs[0].clone())?,
+        ElementwiseReadOp::Conj => elementwise::conj_read_with_pool(buffers, inputs[0].clone())?,
+        ElementwiseReadOp::Divide => {
+            elementwise::div_read_with_pool(buffers, inputs[0].clone(), inputs[1].clone())?
+        }
+        _ => {
+            return Err(crate::Error::unsupported(
+                "CpuBackend::elementwise_read_into",
+                format!("CPU backend does not implement {op:?}"),
+            ))
+        }
+    };
+    copy_tensor_read_into(
+        "CpuBackend::elementwise_read_into",
+        TensorRead::from_tensor(&result),
+        out,
+    )
 }
 
 pub(crate) trait FreshCpuOutput {
@@ -2389,6 +2424,24 @@ impl BackendRuntimeCache for CpuBackend {
 }
 
 impl TensorElementwise for CpuBackend {
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        self.install_with_pool_context_unmarked(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            tenferro_tensor::backend::elementwise_read_into_with_context(
+                op,
+                inputs,
+                out,
+                &exec_context,
+                |inputs, out| elementwise_read_into_fallback_with_pool(buffers, op, inputs, out),
+            )
+        })
+    }
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
     }

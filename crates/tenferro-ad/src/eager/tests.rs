@@ -1105,6 +1105,31 @@ fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
 }
 
 #[test]
+fn eager_backend_delegates_elementwise_into_hook_to_cpu_variants() {
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let backends = [
+        EagerBackend::cpu(CpuBackend::new()),
+        EagerBackend::recording_cpu(Arc::clone(&materializations)),
+    ];
+
+    for mut backend in backends {
+        let lhs = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 5.0]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![3], vec![7.0_f64, 11.0, 13.0]).unwrap();
+        let mut out = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+
+        backend
+            .add_read_into(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                TensorWrite::from_tensor(&mut out),
+            )
+            .unwrap();
+
+        assert_eq!(out.as_slice::<f64>().unwrap(), &[9.0, 14.0, 18.0]);
+    }
+}
+
+#[test]
 fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::from_tensor_in(
