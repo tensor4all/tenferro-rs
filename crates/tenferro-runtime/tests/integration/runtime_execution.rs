@@ -1325,6 +1325,66 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
 }
 
 #[test]
+fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), Box<dyn StdError>> {
+    let first_domain = AllocationDomainId::fresh();
+    let second_domain = AllocationDomainId::fresh();
+    let first_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)));
+    let second_allocation_domain = Arc::new(TestAllocationDomain(second_domain));
+    let second_backend = CpuBackend::new().with_allocation_domain(second_allocation_domain.clone());
+    let first_counters = Arc::new(ExtensionCounters::default());
+    let second_counters = Arc::new(ExtensionCounters::default());
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &first_backend,
+        "tenferro-test.a-first-storage-capable.v1",
+        "tenferro-test.storage.first-unreachable.v1",
+        false,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &second_backend,
+        "tenferro-test.b-second-storage-reachable.v1",
+        CPU_STORAGE_CLASS_ID,
+        false,
+        true,
+    )?)?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.storage-retry.first-module")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.a-first-storage-capable.v1")?,
+        counters: Arc::clone(&first_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.storage-retry.second-module")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new("tenferro-test.b-second-storage-reachable.v1")?,
+        counters: Arc::clone(&second_counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = second_allocation_domain.allocate(DType::F64, &[2])?;
+
+    let output = runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
+    assert_eq!(first_counters.execute.load(Ordering::SeqCst), 0);
+    assert_eq!(second_counters.execute.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[test]
 fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail(
 ) -> Result<(), Box<dyn StdError>> {
     let first_backend = CpuBackend::new()

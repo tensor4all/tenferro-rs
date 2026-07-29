@@ -572,9 +572,10 @@ fn resolve_preparation_context(
     );
 
     let mut missing_extension_family = None;
+    let mut last_route_error = None;
     let storage_candidates = candidate_storage_classes(&candidates, &constraint);
     for storage_class in storage_candidates.iter().cloned() {
-        if let Some(context) = build_operation_dispatch(
+        match build_operation_dispatch(
             runtime,
             snapshot,
             frozen,
@@ -585,12 +586,17 @@ fn resolve_preparation_context(
             signature,
             options,
             &mut missing_extension_family,
-        )? {
-            return Ok(context);
+        ) {
+            Ok(Some(context)) => return Ok(context),
+            Ok(None) => {}
+            Err(error) if is_route_specific_prepare_error(error.as_ref()) => {
+                last_route_error = Some(error);
+            }
+            Err(error) => return Err(error),
         }
     }
     if constraint.storage_class().is_none() {
-        if let Some(context) = build_cross_storage_operation_dispatch(
+        match build_cross_storage_operation_dispatch(
             runtime,
             snapshot,
             frozen,
@@ -600,11 +606,19 @@ fn resolve_preparation_context(
             signature,
             options,
             &mut missing_extension_family,
-        )? {
-            return Ok(context);
+        ) {
+            Ok(Some(context)) => return Ok(context),
+            Ok(None) => {}
+            Err(error) if is_route_specific_prepare_error(error.as_ref()) => {
+                last_route_error = Some(error);
+            }
+            Err(error) => return Err(error),
         }
     }
 
+    if let Some(error) = last_route_error {
+        return Err(error);
+    }
     if let Some(operation) = missing_extension_family {
         return Err(Arc::new(PrepareError::Unsupported {
             reason: UnsupportedReason::Operation { operation },
