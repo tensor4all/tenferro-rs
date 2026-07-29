@@ -926,8 +926,8 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
         data: &'a [T],
     ) -> crate::Result<Self> {
         Self::from_buffer_ref(
-            shape.as_ref().to_vec(),
-            strides.as_ref().to_vec(),
+            shape_vec(shape.as_ref()),
+            stride_vec(strides.as_ref()),
             offset,
             TensorBufferRef::Host(data),
             default_placement(),
@@ -1557,8 +1557,8 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
         data: &'a mut [T],
     ) -> crate::Result<Self> {
         Self::from_buffer_ref_mut(
-            shape.as_ref().to_vec(),
-            strides.as_ref().to_vec(),
+            shape_vec(shape.as_ref()),
+            stride_vec(strides.as_ref()),
             offset,
             TensorBufferRefMut::Host(data),
             default_placement(),
