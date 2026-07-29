@@ -1639,8 +1639,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 }
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    let squared = abs.mul(abs)?;
-    squared.reduce_sum(Some(axes))?.sqrt()
+    abs.reduce_sum_squares(axes)?.sqrt()
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {

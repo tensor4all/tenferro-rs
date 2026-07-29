@@ -1502,10 +1502,9 @@ fn frobenius_norm<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let squared = backend.with_backend_session(|exec| {
-        exec.mul_read(TensorRead::from_tensor(abs), TensorRead::from_tensor(abs))
+    let sum = backend.with_backend_session(|exec| {
+        exec.reduce_sum_squares_read(TensorRead::from_tensor(abs), axes)
     })?;
-    let sum = reduce_sum(&squared, axes, backend)?;
     backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
 }
 
@@ -1514,9 +1513,7 @@ fn frobenius_norm_read<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let rhs = input.clone();
-    let squared = backend.with_backend_session(|exec| exec.mul_read(input, rhs))?;
-    let sum = reduce_sum(&squared, axes, backend)?;
+    let sum = backend.with_backend_session(|exec| exec.reduce_sum_squares_read(input, axes))?;
     backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
 }
 

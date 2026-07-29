@@ -90,7 +90,7 @@ fn matrix_norm_uses_singular_values_only_path() {
 }
 
 #[test]
-fn norm_fro_and_p2_norm_square_with_mul_not_generic_pow() {
+fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
     let eager_source = crate_source("src/eager_composites.rs");
     let eager_frobenius = source_section(
         &eager_source,
@@ -103,8 +103,8 @@ fn norm_fro_and_p2_norm_square_with_mul_not_generic_pow() {
         "fn default_pinv_rtol",
     );
     assert!(
-        !eager_frobenius.contains(".pow("),
-        "eager Frobenius norm should square with mul, not generic pow"
+        eager_frobenius.contains(".reduce_sum_squares(") && !eager_frobenius.contains(".pow("),
+        "eager Frobenius norm should use the fused backend hook, not generic pow"
     );
     assert!(
         eager_p_norm.contains("p == 2.0") && eager_p_norm.contains("frobenius_norm(abs, axes)"),
@@ -123,8 +123,9 @@ fn norm_fro_and_p2_norm_square_with_mul_not_generic_pow() {
         "fn count_nonzero<B: LinalgBackend>",
     );
     assert!(
-        !concrete_frobenius.contains("exec.pow_read"),
-        "concrete Frobenius norm should square with mul_read, not generic pow_read"
+        concrete_frobenius.contains("exec.reduce_sum_squares_read")
+            && !concrete_frobenius.contains("exec.pow_read"),
+        "concrete Frobenius norm should use the fused backend hook, not generic pow_read"
     );
     assert!(
         concrete_p_norm.contains("p == 2.0")
@@ -144,8 +145,8 @@ fn norm_fro_and_p2_norm_square_with_mul_not_generic_pow() {
         "fn reduced_axes_have_zero_extent",
     );
     assert!(
-        !traced_frobenius.contains(".pow("),
-        "traced Frobenius norm should square with mul, not generic pow"
+        traced_frobenius.contains("reduce_sum_squares") && !traced_frobenius.contains(".pow("),
+        "traced Frobenius norm should emit the fused core reduction primitive"
     );
     assert!(
         traced_p_norm.contains("p == 2.0") && traced_p_norm.contains("frobenius_norm(abs, axes)"),

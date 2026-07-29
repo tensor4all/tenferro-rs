@@ -231,6 +231,7 @@ impl TensorStructural for RecordingBackend {
 impl TensorReduction for RecordingBackend {
     delegate_recording_backend_methods! {
         fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+        fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
@@ -384,6 +385,7 @@ impl TensorStructural for EagerBackend {
 impl TensorReduction for EagerBackend {
     delegate_tensor_backend_methods! {
         fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+        fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;

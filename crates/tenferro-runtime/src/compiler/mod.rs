@@ -1001,6 +1001,7 @@ fn conj_commuting_input_indices(
         }
         ExecOp::Negate
         | ExecOp::ReduceSum { .. }
+        | ExecOp::ReduceSumSquares { .. }
         | ExecOp::ReduceProd { .. }
         | ExecOp::Transpose { .. }
         | ExecOp::Reshape { .. }

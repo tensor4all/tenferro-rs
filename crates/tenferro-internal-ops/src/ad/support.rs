@@ -106,6 +106,7 @@ pub static PRIMITIVE_AD_SUPPORT: [PrimitiveAdSupport; PrimitiveOpKind::COUNT] = 
     direct_support!(Log1p),
     direct_support!(DotGeneral),
     direct_support!(ReduceSum),
+    direct_support!(ReduceSumSquares),
     direct_support!(ReduceProd),
     direct_support!(ReduceMax),
     direct_support!(ReduceMin),

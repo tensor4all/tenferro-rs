@@ -443,6 +443,9 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         StdTensorOp::ReduceSum { axes, .. } => {
             vec![exec.reduce_sum_read(inputs[0].clone(), axes)?]
         }
+        StdTensorOp::ReduceSumSquares { axes, .. } => {
+            vec![exec.reduce_sum_squares_read(inputs[0].clone(), axes)?]
+        }
         StdTensorOp::DotGeneral { config, .. } => {
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
             vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
@@ -703,6 +706,12 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
             StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
+            StdTensorOp::ReduceSumSquares { axes, .. } => {
+                vec![exec.reduce_sum_squares_read(
+                    tenferro_tensor::TensorRead::from_tensor(inputs[0]),
+                    axes,
+                )?]
+            }
             StdTensorOp::DotGeneral { config, .. } => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.dot_general(a.tensor(), b.tensor(), config)?]

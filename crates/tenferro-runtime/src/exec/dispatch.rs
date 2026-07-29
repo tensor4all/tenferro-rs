@@ -154,6 +154,7 @@ define_backend_dispatch! {
     PrimitiveOpKind::BroadcastInDim => execute_broadcast_in_dim,
     PrimitiveOpKind::Convert => execute_convert,
     PrimitiveOpKind::ReduceSum => execute_reduce_sum,
+    PrimitiveOpKind::ReduceSumSquares => execute_reduce_sum_squares,
     PrimitiveOpKind::ExtractDiag => execute_extract_diag,
     PrimitiveOpKind::EmbedDiag => execute_embed_diag,
     PrimitiveOpKind::Tril => execute_tril,
@@ -552,6 +553,20 @@ fn execute_reduce_sum(
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceSum, &inst.op));
     };
     Ok(exec.reduce_sum_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+}
+
+fn execute_reduce_sum_squares(
+    exec: &mut dyn BackendSession,
+    slots: &[Option<ExecSlot<'_>>],
+    inst: &ExecInstruction,
+) -> Result<Tensor> {
+    let ExecOp::ReduceSumSquares { axes } = &inst.op else {
+        return Err(dispatch_mismatch(
+            PrimitiveOpKind::ReduceSumSquares,
+            &inst.op,
+        ));
+    };
+    Ok(exec.reduce_sum_squares_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
 }
 
 fn execute_extract_diag(

@@ -450,6 +450,52 @@ fn semantic_core_reshape_and_reduce_sum_transpose_restore_input_shapes() {
 }
 
 #[test]
+fn semantic_core_reduce_sum_squares_jvp_and_vjp_apply_twice_the_input() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::ReduceSumSquares { axes: vec![0] },
+    );
+    let ad = ad_context();
+
+    let jvp = ad.jvp_program(&source, &[true]).unwrap();
+    let jvp_operations: Vec<_> = jvp.frozen().program.operations().collect();
+    let jvp_suffix = &jvp_operations[jvp_operations.len() - 3..];
+    assert!(matches!(
+        jvp_suffix[0].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Mul)
+    ));
+    assert!(matches!(
+        jvp_suffix[1].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
+    assert!(matches!(
+        jvp_suffix[2].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(
+            CoreSemanticOp::ReduceSum { axes }
+        ) if axes.as_slice() == [0]
+    ));
+
+    let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+    let vjp_operations: Vec<_> = vjp.frozen().program.operations().collect();
+    let vjp_suffix = &vjp_operations[vjp_operations.len() - 3..];
+    assert!(matches!(
+        vjp_suffix[0].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(
+            CoreSemanticOp::BroadcastInDim { shape, dims }
+        ) if shape.as_slice() == [DimExpr::Const(2), DimExpr::Const(3)]
+            && dims.as_slice() == [1]
+    ));
+    assert!(matches!(
+        vjp_suffix[1].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Mul)
+    ));
+    assert!(matches!(
+        vjp_suffix[2].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
+}
+
+#[test]
 fn semantic_core_broadcast_vjp_reduces_inserted_and_singleton_axes() {
     let source = unary_core_program(
         [DimExpr::Const(2), DimExpr::Const(1)],

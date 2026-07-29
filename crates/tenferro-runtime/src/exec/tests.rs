@@ -341,6 +341,10 @@ fn backend_dispatch_cases() -> Vec<(ExecOp, PrimitiveOpKind)> {
             PrimitiveOpKind::ReduceSum,
         ),
         (
+            ExecOp::ReduceSumSquares { axes: vec![0] },
+            PrimitiveOpKind::ReduceSumSquares,
+        ),
+        (
             ExecOp::ExtractDiag {
                 axis_a: 0,
                 axis_b: 1,

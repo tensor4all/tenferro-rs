@@ -487,6 +487,10 @@ fn encode_core_op(encoder: &mut CanonicalEncoder, op: &CoreSemanticOp) {
             encoder.u8(49);
             encoder.usize_slice(axes);
         }
+        CoreSemanticOp::ReduceSumSquares { axes } => {
+            encoder.u8(50);
+            encoder.usize_slice(axes);
+        }
     }
 }
 

@@ -181,6 +181,7 @@ impl PartialEq for StdTensorOp {
                 },
             ) => da == db && ba == bb,
             (Self::ReduceSum { axes: a }, Self::ReduceSum { axes: b })
+            | (Self::ReduceSumSquares { axes: a }, Self::ReduceSumSquares { axes: b })
             | (Self::ReduceProd { axes: a }, Self::ReduceProd { axes: b })
             | (Self::ReduceMax { axes: a }, Self::ReduceMax { axes: b })
             | (Self::ReduceMin { axes: a }, Self::ReduceMin { axes: b })
@@ -298,7 +299,7 @@ impl Hash for StdTensorOp {
                 dtype.hash(state);
                 bytes.hash(state);
             }
-            Self::ReduceSum { axes } => {
+            Self::ReduceSum { axes } | Self::ReduceSumSquares { axes } => {
                 axes.hash(state);
             }
             Self::Compare(dir) => dir.hash(state),
@@ -379,6 +380,7 @@ impl GraphOperation for StdTensorOp {
             Self::Reshape { to_shape } => n_inputs_from_dim_exprs(1, &[to_shape]),
             Self::BroadcastInDim { shape, .. } => n_inputs_from_dim_exprs(1, &[shape]),
             Self::ReduceSum { .. }
+            | Self::ReduceSumSquares { .. }
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
@@ -421,6 +423,7 @@ impl GraphOperation for StdTensorOp {
             | Self::BroadcastInDim { .. }
             | Self::Convert { .. }
             | Self::ReduceSum { .. }
+            | Self::ReduceSumSquares { .. }
             | Self::Div
             | Self::Rem
             | Self::Abs

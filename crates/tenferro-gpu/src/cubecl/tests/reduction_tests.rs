@@ -1,5 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use tenferro_tensor::{DType, TensorReduction};
+use tenferro_tensor::{DType, TensorRead, TensorReduction};
 
 use super::{
     assert_cuda_unsupported_dtype, assert_tensor_close, cpu_backend, download, gpu_backend,
@@ -102,6 +102,62 @@ fn test_cubecl_float_reductions_match_cpu() {
     let gpu_out = gpu.reduce_min(&gpu_input, &[1]).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
+    let inputs = [
+        tensor_f32(vec![2, 3], vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0]),
+        tensor_f64(vec![2, 3], vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0]),
+    ];
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+
+    for input in &inputs {
+        let gpu_input = upload(&gpu, input);
+        for axes in [&[0, 1][..], &[][..]] {
+            let expected = cpu
+                .reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+                .unwrap();
+            let gpu_output = gpu
+                .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes)
+                .unwrap();
+            assert_tensor_close(&download(&gpu, &gpu_output), &expected, 1e-5);
+        }
+    }
+
+    let integer = upload(&gpu, &tensor_i32(vec![2], vec![1, 2]));
+    let error = gpu
+        .reduce_sum_squares_read(TensorRead::from_tensor(&integer), &[0])
+        .unwrap_err();
+    assert_cuda_unsupported_dtype(&error, "reduce_sum_squares", DType::I32);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_sum_squares_does_not_contract_multiply_and_add() {
+    // These values distinguish same-dtype multiply-then-add from FMA.
+    let first = 0.000_442_517_25_f32;
+    let second = 0.684_452_06_f32;
+    let input = tensor_f32(vec![2], vec![first, second]);
+    let expected = first * first + second * second;
+    let contracted = second.mul_add(second, first * first);
+    assert_ne!(expected.to_bits(), contracted.to_bits());
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let gpu_output = gpu
+        .reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0])
+        .unwrap();
+    let actual = download(&gpu, &gpu_output);
+    let crate::Tensor::F32(actual) = actual else {
+        panic!("sum-of-squares output must remain f32");
+    };
+    let actual = actual.as_slice().unwrap()[0];
+
+    assert_eq!(actual.to_bits(), expected.to_bits());
+    assert_ne!(actual.to_bits(), contracted.to_bits());
 }
 
 #[test]

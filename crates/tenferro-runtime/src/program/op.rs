@@ -46,6 +46,9 @@ pub enum CoreSemanticOp {
     ReduceSum {
         axes: Vec<usize>,
     },
+    ReduceSumSquares {
+        axes: Vec<usize>,
+    },
     Div,
     Rem,
     Abs,
@@ -173,6 +176,7 @@ impl TryFrom<&StdTensorOp> for CoreSemanticOp {
                 bytes: bytes.clone(),
             },
             StdTensorOp::ReduceSum { axes } => Self::ReduceSum { axes: axes.clone() },
+            StdTensorOp::ReduceSumSquares { axes } => Self::ReduceSumSquares { axes: axes.clone() },
             StdTensorOp::Div => Self::Div,
             StdTensorOp::Rem => Self::Rem,
             StdTensorOp::Abs => Self::Abs,
@@ -269,6 +273,9 @@ impl From<&CoreSemanticOp> for StdTensorOp {
                 bytes: bytes.clone(),
             },
             CoreSemanticOp::ReduceSum { axes } => Self::ReduceSum { axes: axes.clone() },
+            CoreSemanticOp::ReduceSumSquares { axes } => {
+                Self::ReduceSumSquares { axes: axes.clone() }
+            }
             CoreSemanticOp::Div => Self::Div,
             CoreSemanticOp::Rem => Self::Rem,
             CoreSemanticOp::Abs => Self::Abs,

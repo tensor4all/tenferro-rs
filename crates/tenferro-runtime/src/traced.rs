@@ -1883,6 +1883,39 @@ impl TracedTensor {
         )
     }
 
+    /// Sum elementwise squares over the requested axes.
+    ///
+    /// Each value is squared in its input dtype before reduction. The initial
+    /// supported dtypes are `f32` and `f64`; other dtypes return a typed
+    /// unsupported error during execution. Passing an empty axis slice returns
+    /// the elementwise square without reducing rank.
+    ///
+    /// This operation is useful when the squared sum is needed directly. Use
+    /// the linalg norm APIs when a square root or complex magnitude semantics
+    /// are required.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for invalid axes or a typed
+    /// runtime-state error while registering output metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Unsupported dtypes and backend execution failures are reported when the
+    /// compiled graph is executed.
+    pub fn reduce_sum_squares(&self, axes: &[usize]) -> Result<TracedTensor> {
+        let (out_rank, out_shape_hint) =
+            reduction_output_meta(self, axes, "TracedTensor::reduce_sum_squares")?;
+        apply_unary(
+            StdTensorOp::ReduceSumSquares {
+                axes: axes.to_vec(),
+            },
+            self,
+            out_rank,
+            out_shape_hint,
+        )
+    }
+
     /// Reduce by taking the maximum along the given axes.
     ///
     /// Used by tropical (max-plus) compositions: a max-plus reduction over

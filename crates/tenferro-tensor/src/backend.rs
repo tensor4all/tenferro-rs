@@ -2978,8 +2978,9 @@ pub trait TensorStructural {
 /// Reduction operations.
 ///
 /// Reducing over an axis whose extent is zero returns an error for every
-/// reduction operation. Passing an empty `axes` slice is a no-op and returns the
-/// input values unchanged.
+/// reduction operation. Passing an empty `axes` slice is a no-op for the public
+/// reductions and returns the input values unchanged. Internal mapped
+/// reductions document their own empty-axis semantics.
 ///
 /// # Examples
 ///
@@ -3025,6 +3026,28 @@ pub trait TensorReduction {
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
         }
+    }
+
+    /// Sum elementwise squares across axes.
+    ///
+    /// This execution hook is used by composite operations that avoid a
+    /// materialized square. Empty axes produce an elementwise square. Backends
+    /// that support this optimized path must override the hook directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed validation, unsupported, runtime-state, or backend
+    /// error produced by multiplication or reduction.
+    #[doc(hidden)]
+    fn reduce_sum_squares_read(
+        &mut self,
+        _input: TensorRead<'_>,
+        _axes: &[usize],
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "reduce_sum_squares",
+            "backend does not implement fused sum-of-squares reduction",
+        ))
     }
 
     /// # Errors

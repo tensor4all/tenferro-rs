@@ -237,7 +237,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 }
 
 fn frobenius_norm(abs: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
-    abs.mul(abs)?.reduce_sum(Some(axes))?.sqrt()
+    abs.reduce_sum_squares(axes)?.sqrt()
 }
 
 fn p_norm(abs: &EagerTensor, axes: &[usize], p: f64) -> Result<EagerTensor> {

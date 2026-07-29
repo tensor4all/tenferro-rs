@@ -107,6 +107,7 @@ macro_rules! primitive_ops {
             Log1p, "log1p", Analytic, SameFloatOrComplex, 1, 1, false;
             DotGeneral, "dot_general", Contraction, SameFloatOrComplex, 2, 2, false;
             ReduceSum, "reduce_sum", Reduction, SameNumeric, 1, 1, false;
+            ReduceSumSquares, "reduce_sum_squares", Reduction, SameFloat, 1, 1, false;
             ReduceProd, "reduce_prod", Reduction, SameNumeric, 1, 1, false;
             ReduceMax, "reduce_max", Reduction, SameNumeric, 1, 1, false;
             ReduceMin, "reduce_min", Reduction, SameNumeric, 1, 1, false;
@@ -269,6 +270,9 @@ macro_rules! define_std_tensor_op {
             ReduceSum {
                 axes: Vec<usize>,
             },
+            ReduceSumSquares {
+                axes: Vec<usize>,
+            },
 
             // Elementwise (non-semiring)
             Div,
@@ -389,6 +393,7 @@ macro_rules! define_std_tensor_op {
                     Self::Convert { .. } => $crate::PrimitiveOpKind::Convert,
                     Self::Constant { .. } => $crate::PrimitiveOpKind::Constant,
                     Self::ReduceSum { .. } => $crate::PrimitiveOpKind::ReduceSum,
+                    Self::ReduceSumSquares { .. } => $crate::PrimitiveOpKind::ReduceSumSquares,
                     Self::Div => $crate::PrimitiveOpKind::Div,
                     Self::Rem => $crate::PrimitiveOpKind::Rem,
                     Self::Abs => $crate::PrimitiveOpKind::Abs,
@@ -467,6 +472,9 @@ macro_rules! define_std_tensor_op {
                         bytes: 0.0_f64.to_le_bytes().to_vec(),
                     },
                     $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceSumSquares => {
+                        Self::ReduceSumSquares { axes: vec![0] }
+                    }
                     $crate::PrimitiveOpKind::Div => Self::Div,
                     $crate::PrimitiveOpKind::Rem => Self::Rem,
                     $crate::PrimitiveOpKind::Abs => Self::Abs,
@@ -693,6 +701,9 @@ macro_rules! define_exec_op {
             ReduceSum {
                 axes: Vec<usize>,
             },
+            ReduceSumSquares {
+                axes: Vec<usize>,
+            },
             ExtractDiag {
                 axis_a: usize,
                 axis_b: usize,
@@ -791,6 +802,7 @@ macro_rules! define_exec_op {
                         $crate::PrimitiveOpKind::DotGeneral
                     }
                     Self::ReduceSum { .. } => $crate::PrimitiveOpKind::ReduceSum,
+                    Self::ReduceSumSquares { .. } => $crate::PrimitiveOpKind::ReduceSumSquares,
                     Self::ExtractDiag { .. } => $crate::PrimitiveOpKind::ExtractDiag,
                     Self::EmbedDiag { .. } => $crate::PrimitiveOpKind::EmbedDiag,
                     Self::Tril { .. } => $crate::PrimitiveOpKind::Tril,
@@ -899,6 +911,9 @@ macro_rules! define_exec_op {
                     }
                     tenferro_ops::std_tensor_op::StdTensorOp::ReduceSum { axes } => {
                         Self::ReduceSum { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ReduceSumSquares { axes } => {
+                        Self::ReduceSumSquares { axes: axes.clone() }
                     }
                     tenferro_ops::std_tensor_op::StdTensorOp::ReduceProd { axes } => {
                         Self::ReduceProd { axes: axes.clone() }
@@ -1033,6 +1048,9 @@ macro_rules! define_exec_op {
                         rhs_batch_dims: vec![],
                     }),
                     $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceSumSquares => {
+                        Self::ReduceSumSquares { axes: vec![0] }
+                    }
                     $crate::PrimitiveOpKind::ExtractDiag => Self::ExtractDiag {
                         axis_a: 0,
                         axis_b: 1,

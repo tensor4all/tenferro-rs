@@ -182,7 +182,7 @@ test_elementwise_wrapper!(sub(lhs: &Tensor, rhs: &Tensor) => sub_with_pool);
 #[cfg(test)]
 pub(crate) use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
 #[cfg(test)]
-pub(crate) use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
+pub(crate) use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum, reduce_sum_squares};
 #[cfg(test)]
 pub(crate) use structural::{
     broadcast_in_dim, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,

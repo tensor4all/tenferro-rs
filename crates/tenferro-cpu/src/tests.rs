@@ -13,8 +13,8 @@ use crate::CpuBackendKind;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, pow, reduce_max,
-    reduce_min, reduce_prod, reduce_sum, rem, reshape, scatter, select, sign, transpose, tril,
-    triu, typed_array_uninit_from_pool, CpuBackend, CpuContext, Error,
+    reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
+    transpose, tril, triu, typed_array_uninit_from_pool, CpuBackend, CpuContext, Error,
 };
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 #[cfg(feature = "cpu-blas")]

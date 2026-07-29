@@ -289,6 +289,7 @@ fn cpu_operation_kind(op: &CoreSemanticOp) -> Option<CpuPreparedKind> {
         | CoreSemanticOp::Expm1
         | CoreSemanticOp::Log1p => CpuPreparedKind::Elementwise,
         CoreSemanticOp::ReduceSum { .. }
+        | CoreSemanticOp::ReduceSumSquares { .. }
         | CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }
         | CoreSemanticOp::ReduceMin { .. } => CpuPreparedKind::Reduction,
@@ -440,6 +441,7 @@ fn core_operation_name(op: &CoreSemanticOp) -> &'static str {
         CoreSemanticOp::Convert { .. } => "convert",
         CoreSemanticOp::Constant { .. } => "constant",
         CoreSemanticOp::ReduceSum { .. } => "reduce_sum",
+        CoreSemanticOp::ReduceSumSquares { .. } => "reduce_sum_squares",
         CoreSemanticOp::Div => "div",
         CoreSemanticOp::Rem => "rem",
         CoreSemanticOp::Abs => "abs",

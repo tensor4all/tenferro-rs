@@ -24,6 +24,23 @@ fn lowers_elementwise_reduce_and_static_shapes() {
 }
 
 #[test]
+fn lowers_sum_squares_to_multiply_then_reduce() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let y = x.reduce_sum_squares(&[0]).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])
+        .unwrap();
+
+    let module = lower_to_stablehlo(program.program()).unwrap();
+    let text = module.as_str();
+
+    assert!(text.contains("stablehlo.multiply %arg0, %arg0 : tensor<2x3xf64>"));
+    assert!(text.contains("applies stablehlo.add across dimensions = [0]"));
+    assert!(text.contains("-> tensor<3xf64>"));
+}
+
+#[test]
 fn lowers_phase_one_real_elementwise_ops() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let unary = x

@@ -1,4 +1,4 @@
-use crate::ad::ADRuleKind;
+use crate::ad::{ADRuleKind, PrimitiveTransposeInput};
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
 use tenferro_tensor::{DType, DotGeneralConfig};
@@ -99,6 +99,41 @@ fn reduction_transposes_accept_upper_bound_input_metadata() {
             "{op:?} transpose should restore the runtime input extent instead of requiring an exact shape"
         );
     }
+}
+
+#[test]
+fn reduce_sum_squares_transpose_uses_retained_primal_not_linear_input() {
+    let linear = super::input_key(300);
+    let primal = super::input_key(301);
+    let mut ctx = ShapeGuardContext::default();
+    ctx.insert_metadata(linear.clone(), super::meta(DType::F64, &[2, 3]));
+    ctx.insert_metadata(primal.clone(), super::meta(DType::F64, &[2, 3]));
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let cotangent = builder.add_input(tensor_input(302));
+    crate::ad::transpose_rule(
+        &StdTensorOp::ReduceSumSquares { axes: vec![0] },
+        &mut builder,
+        &[Some(cotangent)],
+        &[PrimitiveTransposeInput::Linear {
+            key: linear.clone(),
+            primal: Some(primal.clone()),
+        }],
+        &OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+        &mut ctx,
+    )
+    .unwrap();
+
+    let graph = builder.build();
+    let product = graph
+        .operations()
+        .iter()
+        .find(|operation| operation.operation == StdTensorOp::Mul)
+        .expect("transpose should multiply the cotangent by the retained primal");
+    assert!(product.inputs.contains(&ValueRef::External(primal)));
+    assert!(!product.inputs.contains(&ValueRef::External(linear)));
 }
 
 #[test]

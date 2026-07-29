@@ -396,6 +396,25 @@ impl TensorReduction for DefaultReadBackend {
     }
 }
 
+#[test]
+fn reduce_sum_squares_default_requires_an_explicit_backend_override() {
+    let input = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+    let mut backend = DefaultReadBackend::default();
+
+    let error = backend
+        .reduce_sum_squares_read(TensorRead::from_tensor(&input), &[0])
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::Unsupported {
+            op: "reduce_sum_squares",
+            ..
+        }
+    ));
+    assert!(backend.calls.is_empty());
+}
+
 impl TensorIndexing for DefaultReadBackend {
     fn gather(
         &mut self,

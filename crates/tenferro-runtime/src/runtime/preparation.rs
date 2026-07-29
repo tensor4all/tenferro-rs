@@ -987,6 +987,7 @@ fn required_core_capability(op: &CoreSemanticOp) -> CoreCapabilityKind {
         | CoreSemanticOp::Tril { .. }
         | CoreSemanticOp::Triu { .. } => CoreCapabilityKind::Layout,
         CoreSemanticOp::ReduceSum { .. }
+        | CoreSemanticOp::ReduceSumSquares { .. }
         | CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }
         | CoreSemanticOp::ReduceMin { .. } => CoreCapabilityKind::Reduction,
@@ -1590,6 +1591,7 @@ fn exec_op_retained_bytes(op: &ExecOp) -> Option<usize> {
             dot_general_config_retained_bytes(config)
         }
         ExecOp::ReduceSum { axes }
+        | ExecOp::ReduceSumSquares { axes }
         | ExecOp::Reverse { axes }
         | ExecOp::ReduceProd { axes }
         | ExecOp::ReduceMax { axes }
