@@ -1711,6 +1711,10 @@ fn execute_one_shot_map<T: 'static>(
     mut out: TypedTensorViewMut<'_, T>,
 ) -> crate::Result<()> {
     let input_data = input.host_storage()?;
+    // INVARIANT: dtype and layout come from the same validated typed view, and
+    // its host storage remains borrowed until replay returns.
+    // SAFETY: input_data supplies the pointer and exact byte length; the view
+    // owns the matching shape, signed strides, and in-bounds offset.
     let input_descriptor = unsafe {
         ErasedRawStridedPtr::new(
             dtype,
@@ -1727,6 +1731,8 @@ fn execute_one_shot_map<T: 'static>(
     let out_strides = SmallVec::<[isize; 8]>::from_slice(out.strides());
     let out_offset = out.offset();
     let out_data = out.host_storage_mut()?;
+    // INVARIANT: the copied output layout describes this uniquely borrowed
+    // host storage, already validated as disjoint from every input.
     let mut out_descriptor = ErasedRawStridedMut::new(
         dtype,
         typed_bytes_mut(out_data),
@@ -1748,6 +1754,10 @@ fn execute_one_shot_zip<T: 'static>(
     mut out: TypedTensorViewMut<'_, T>,
 ) -> crate::Result<()> {
     let lhs_data = lhs.host_storage()?;
+    // INVARIANT: dtype and layout come from the same validated typed view, and
+    // its host storage remains borrowed until replay returns.
+    // SAFETY: lhs_data supplies the pointer and exact byte length; the view
+    // owns the matching shape, signed strides, and in-bounds offset.
     let lhs_descriptor = unsafe {
         ErasedRawStridedPtr::new(
             dtype,
@@ -1760,6 +1770,10 @@ fn execute_one_shot_zip<T: 'static>(
     }
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
     let rhs_data = rhs.host_storage()?;
+    // INVARIANT: dtype and layout come from the same validated typed view, and
+    // its host storage remains borrowed until replay returns.
+    // SAFETY: rhs_data supplies the pointer and exact byte length; the view
+    // owns the matching shape, signed strides, and in-bounds offset.
     let rhs_descriptor = unsafe {
         ErasedRawStridedPtr::new(
             dtype,
@@ -1776,6 +1790,8 @@ fn execute_one_shot_zip<T: 'static>(
     let out_strides = SmallVec::<[isize; 8]>::from_slice(out.strides());
     let out_offset = out.offset();
     let out_data = out.host_storage_mut()?;
+    // INVARIANT: the copied output layout describes this uniquely borrowed
+    // host storage, already validated as disjoint from every input.
     let mut out_descriptor = ErasedRawStridedMut::new(
         dtype,
         typed_bytes_mut(out_data),
