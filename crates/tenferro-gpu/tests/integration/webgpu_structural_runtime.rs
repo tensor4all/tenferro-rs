@@ -29,6 +29,36 @@ fn webgpu_transpose_f32_stays_on_device_and_matches_column_major_reference() {
 }
 
 #[test]
+fn webgpu_batched_partial_tile_transpose_matches_column_major_reference() {
+    if !webgpu_available() {
+        return;
+    }
+
+    let shape = [17usize, 19, 3];
+    let data: Vec<f32> = (0..shape.iter().product())
+        .map(|index| index as f32)
+        .collect();
+    let expected: Vec<f32> = (0..shape[2])
+        .flat_map(|batch| {
+            (0..shape[0]).flat_map(move |input_fast| {
+                (0..shape[1]).map(move |input_slow| {
+                    (input_fast + shape[0] * input_slow + shape[0] * shape[1] * batch) as f32
+                })
+            })
+        })
+        .collect();
+    let host = Tensor::from_vec_col_major(shape.to_vec(), data).unwrap();
+    let mut backend = WebGpuBackend::new_default().unwrap();
+    let input = backend.upload_host_tensor(&host).unwrap();
+
+    let transposed = backend.transpose(&input, &[1, 0, 2]).unwrap();
+
+    let actual = backend.download_to_host(&transposed).unwrap();
+    assert_eq!(actual.shape(), &[19, 17, 3]);
+    assert_eq!(actual.as_slice::<f32>().unwrap(), expected);
+}
+
+#[test]
 fn webgpu_to_contiguous_f32_materializes_a_noncompact_resident_view() {
     if !webgpu_available() {
         return;

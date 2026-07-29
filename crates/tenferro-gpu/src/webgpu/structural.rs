@@ -118,7 +118,10 @@ where
                     "tiled transpose requires a non-negative source offset",
                 )
             })?;
-            if let Some((cubes_x, cubes_y)) = config.dispatch_grid(op, &plan.dims, 65_535)? {
+            if let Some((cubes_x, cubes_y, cubes_z)) =
+                config.dispatch_grid(op, &plan.dims, 65_535)?
+            {
+                let batch_stride = plan.tiled_matrix_len(op)?;
                 let cube_dim =
                     CubeDim::new_2d(config.tile / config.vector_width, config.block_rows);
                 unsafe {
@@ -130,11 +133,12 @@ where
                         WgpuRuntime,
                     >(
                         backend.runtime().client(),
-                        CubeCount::Static(cubes_x, cubes_y, 1),
+                        CubeCount::Static(cubes_x, cubes_y, cubes_z),
                         cube_dim,
                         output_arg,
                         input,
                         src_offset,
+                        batch_stride,
                         plan.dims[0],
                         plan.dims[1],
                         config.tile as usize,

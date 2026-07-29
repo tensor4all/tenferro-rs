@@ -63,17 +63,20 @@ impl NativeTransposeTile {
         op: &'static str,
         dims: &[usize],
         max_dimension: u32,
-    ) -> crate::Result<Option<(u32, u32)>> {
+    ) -> crate::Result<Option<(u32, u32, u32)>> {
         let x = u32::try_from(dims[1].div_ceil(self.tile as usize)).map_err(|_| {
             crate::Error::invalid_argument(op, "shape", "tiled transpose x grid exceeds u32::MAX")
         })?;
         let y = u32::try_from(dims[0].div_ceil(self.tile as usize)).map_err(|_| {
             crate::Error::invalid_argument(op, "shape", "tiled transpose y grid exceeds u32::MAX")
         })?;
-        if x > max_dimension || y > max_dimension {
+        let z = u32::try_from(dims.get(2).copied().unwrap_or(1)).map_err(|_| {
+            crate::Error::invalid_argument(op, "shape", "tiled transpose z grid exceeds u32::MAX")
+        })?;
+        if x > max_dimension || y > max_dimension || z > max_dimension {
             return Ok(None);
         }
-        Ok(Some((x.max(1), y.max(1))))
+        Ok(Some((x.max(1), y.max(1), z.max(1))))
     }
 }
 
@@ -213,6 +216,20 @@ impl NativePermutationPlan {
             allocations_overlap,
         )
     }
+
+    pub(crate) fn tiled_matrix_len(&self, op: &'static str) -> crate::Result<usize> {
+        self.dims
+            .first()
+            .zip(self.dims.get(1))
+            .and_then(|(&rows, &columns)| rows.checked_mul(columns))
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    op,
+                    "shape",
+                    "tiled transpose matrix extent overflows usize",
+                )
+            })
+    }
 }
 
 fn compact_col_major_strides(op: &'static str, dims: &[usize]) -> crate::Result<Vec<isize>> {
@@ -259,7 +276,7 @@ fn classify(
 }
 
 fn tiled_transpose_eligible(dims: &[usize], src_strides: &[isize], dst_strides: &[isize]) -> bool {
-    if dims.len() != 2 || dims.contains(&0) {
+    if !(dims.len() == 2 || dims.len() == 3) || dims.contains(&0) {
         return false;
     }
     let Some(src_axis) = src_strides.iter().position(|&stride| stride == 1) else {
@@ -268,13 +285,24 @@ fn tiled_transpose_eligible(dims: &[usize], src_strides: &[isize], dst_strides: 
     let Some(dst_axis) = dst_strides.iter().position(|&stride| stride == 1) else {
         return false;
     };
-    if src_axis == dst_axis {
+    if src_axis >= 2 || dst_axis >= 2 || src_axis == dst_axis {
         return false;
     }
     let src_other = 1 - src_axis;
     let dst_other = 1 - dst_axis;
-    isize::try_from(dims[src_axis]).is_ok_and(|extent| src_strides[src_other] == extent)
-        && isize::try_from(dims[dst_axis]).is_ok_and(|extent| dst_strides[dst_other] == extent)
+    let matrix_is_transpose = isize::try_from(dims[src_axis])
+        .is_ok_and(|extent| src_strides[src_other] == extent)
+        && isize::try_from(dims[dst_axis]).is_ok_and(|extent| dst_strides[dst_other] == extent);
+    if !matrix_is_transpose || dims.len() == 2 {
+        return matrix_is_transpose;
+    }
+
+    dims[0]
+        .checked_mul(dims[1])
+        .and_then(|matrix_len| isize::try_from(matrix_len).ok())
+        .is_some_and(|matrix_stride| {
+            src_strides[2] == matrix_stride && dst_strides[2] == matrix_stride
+        })
 }
 
 #[cfg(test)]
@@ -328,6 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn batched_compact_transpose_is_tiled_eligible() {
+        let plan = NativePermutationPlan::for_transpose(
+            OP,
+            &[256, 256, 240],
+            &[1, 256, 65_536],
+            &[1, 0, 2],
+            0,
+            15_728_640,
+            15_728_640,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plan.kind, NativePermutationKind::TiledTranspose);
+
+        let tile = NativeTransposeTile::new(16, 8, 1, 1);
+        assert_eq!(
+            tile.dispatch_grid(OP, &plan.dims, 65_535).unwrap(),
+            Some((16, 16, 240))
+        );
+        assert_eq!(tile.dispatch_grid(OP, &plan.dims, 128).unwrap(), None);
+    }
+
+    #[test]
+    fn batched_noncompact_transpose_remains_generic() {
+        let plan = plan(&[3, 2, 4], &[2, 1, 7], &[1, 3, 6]);
+        assert_eq!(plan.kind, NativePermutationKind::GenericStrided);
+    }
+
+    #[test]
     fn transpose_and_equivalent_view_share_one_plan() {
         let transpose =
             NativePermutationPlan::for_transpose(OP, &[2, 3], &[1, 2], &[1, 0], 0, 6, 6, false)
@@ -371,7 +428,7 @@ mod tests {
         let tile = NativeTransposeTile::new(16, 8, 1, 1);
         assert_eq!(
             tile.dispatch_grid(OP, &[1024, 2048], 65_535).unwrap(),
-            Some((128, 64))
+            Some((128, 64, 1))
         );
         assert_eq!(
             tile.dispatch_grid(OP, &[4_782_976, 16], 65_535).unwrap(),
