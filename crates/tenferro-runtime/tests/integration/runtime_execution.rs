@@ -1884,6 +1884,50 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
+    let submit_error = runtime.submit(&program, &[&input]).unwrap_err();
+    let submit_prepare_error = submit_error
+        .source()
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<PrepareError>())
+        .expect("submit preserves the typed preparation error synchronously");
+    assert!(matches!(
+        submit_prepare_error,
+        PrepareError::MissingTransferProvider {
+            destination_storage_class,
+            available_storage_classes,
+            ..
+        } if available_storage_classes == std::slice::from_ref(&source_storage)
+            && destination_storage_class == &destination_storage
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<dyn StdError>> {
+    let backend = CpuBackend::new();
+    let runtime = runtime_with_cpu(&backend)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let foreign_domain = AllocationDomainId::fresh();
+    let input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
+
+    let error = runtime.submit(&program, &[&input]).unwrap_err();
+
+    let prepare_error = error
+        .source()
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<PrepareError>())
+        .expect("submit preserves the typed preparation error synchronously");
+    assert!(matches!(
+        prepare_error,
+        PrepareError::NoInputIngress {
+            input_index: 0,
+            placement,
+        } if placement == input.placement()
+    ));
     Ok(())
 }
 

@@ -654,11 +654,12 @@ pub(super) fn submit(
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
+    let input_refs = inputs.iter().collect::<Vec<_>>();
+    let prepared = prepare_compiled(runtime, program, &input_refs)?;
     let runtime = runtime.clone();
-    let program = program.clone();
     let join = thread::spawn(move || {
         let input_refs = inputs.iter().collect::<Vec<_>>();
-        run_compiled(&runtime, &program, &input_refs)
+        run_prepared(&runtime, &prepared, &input_refs)
     });
     Ok(ExecutionHandle { join: Some(join) })
 }
