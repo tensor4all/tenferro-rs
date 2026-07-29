@@ -648,20 +648,3 @@ impl fmt::Display for CudaPreparedKind {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sum_squares_routes_through_runtime_reduction_preparation() {
-        assert_eq!(
-            cuda_operation_kind(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
-            Some(CudaPreparedKind::Reduction)
-        );
-        assert_eq!(
-            core_operation_name(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
-            "reduce_sum_squares"
-        );
-    }
-}

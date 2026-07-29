@@ -96,3 +96,15 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     .into();
     assert!(!cuda_input_tensor(&TensorRead::from_tensor(&relabeled), 1));
 }
+
+#[test]
+fn sum_squares_routes_through_runtime_reduction_preparation() {
+    assert_eq!(
+        cuda_operation_kind(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
+        Some(CudaPreparedKind::Reduction)
+    );
+    assert_eq!(
+        core_operation_name(&CoreSemanticOp::ReduceSumSquares { axes: vec![0] }),
+        "reduce_sum_squares"
+    );
+}
