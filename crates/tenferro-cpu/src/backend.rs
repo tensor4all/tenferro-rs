@@ -14,6 +14,9 @@ use crate::arbiter::{
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::dot_runtime::{CpuProviderBundle, CpuProviderBundleInstallError};
 use crate::engine::{CpuEngine, EngineResources};
+use crate::indexed_plan_cache::{
+    IndexedPlanCache, IndexedPlanCacheLimits, DEFAULT_INDEXED_PLAN_CACHE_LIMITS,
+};
 use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
@@ -798,6 +801,7 @@ struct CpuBackendState {
     arbiter: ResourceArbiter,
     kind: CpuBackendKind,
     buffer_limit: AtomicUsize,
+    indexed_plan_cache_limits: Mutex<IndexedPlanCacheLimits>,
 }
 
 impl CpuBackendState {
@@ -806,6 +810,17 @@ impl CpuBackendState {
         placement: &ResolvedCpuPlacement,
         requested: CpuPlacement,
     ) -> Result<Arc<CpuEngine>, CpuPlacementError> {
+        // INVARIANT: cache configuration is the outermost lock for lazy engine
+        // creation and limit updates. The shared order is configuration,
+        // registry, then engine resources.
+        let cache_configuration = self.indexed_plan_cache_limits.lock().map_err(|_| {
+            CpuPlacementError::InternalState {
+                requested,
+                backend: self.kind,
+                message: "CPU indexed-plan cache configuration lock is poisoned",
+            }
+        })?;
+        let cache_limits = *cache_configuration;
         let CpuEngineRegistry::ManagedLazy(registry) = &self.engines else {
             return Err(CpuPlacementError::InternalState {
                 requested,
@@ -844,6 +859,7 @@ impl CpuBackendState {
                         }
                     })?,
                 );
+                self.configure_new_indexed_plan_cache(&engine, requested, cache_limits)?;
                 engines.insert(*id, Arc::clone(&engine));
                 Ok(engine)
             }
@@ -873,10 +889,30 @@ impl CpuBackendState {
                         }
                     })?,
                 );
+                self.configure_new_indexed_plan_cache(&engine, requested, cache_limits)?;
                 let _ = registry.all_allowed.set(Arc::clone(&engine));
                 Ok(engine)
             }
         }
+    }
+
+    fn configure_new_indexed_plan_cache(
+        &self,
+        engine: &CpuEngine,
+        requested: CpuPlacement,
+        limits: IndexedPlanCacheLimits,
+    ) -> Result<(), CpuPlacementError> {
+        let mut resources =
+            engine
+                .resources
+                .lock()
+                .map_err(|_| CpuPlacementError::InternalState {
+                    requested,
+                    backend: self.kind,
+                    message: "new CPU engine indexed-plan cache lock is poisoned",
+                })?;
+        resources.indexed_plan_cache.set_limits(limits);
+        Ok(())
     }
 
     fn managed_base_engine(
@@ -959,6 +995,15 @@ fn lock_engine_resources<'a>(
         .resources
         .lock()
         .map_err(|_| poisoned_cpu_lock(op, "CPU engine resources"))
+}
+
+fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) {
+    total.entries = total.entries.saturating_add(value.entries);
+    total.retained_bytes = total.retained_bytes.saturating_add(value.retained_bytes);
+    total.hits = total.hits.saturating_add(value.hits);
+    total.misses = total.misses.saturating_add(value.misses);
+    total.evictions = total.evictions.saturating_add(value.evictions);
+    total.clears = total.clears.saturating_add(value.clears);
 }
 
 /// A cheap cloneable handle to shared CPU execution coordination.
@@ -1085,6 +1130,7 @@ impl CpuBackend {
                     arbiter: ResourceArbiter::global(),
                     kind,
                     buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
+                    indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
                 }),
                 requested: CpuPlacement::Auto,
                 resolved,
@@ -1151,6 +1197,7 @@ impl CpuBackend {
                 arbiter: ResourceArbiter::global(),
                 kind,
                 buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
+                indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
             }),
             requested: CpuPlacement::Auto,
             resolved,
@@ -1437,6 +1484,7 @@ impl CpuBackend {
                 arbiter,
                 kind,
                 buffer_limit: AtomicUsize::new(buffer_limit),
+                indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
             }),
             requested: CpuPlacement::Auto,
             resolved,
@@ -2058,6 +2106,144 @@ impl CpuBackend {
         })
     }
 
+    /// Return the limits applied to each CPU engine's indexed-plan cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// assert!(backend.indexed_plan_cache_limits()?.max_entries() > 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the shared cache
+    /// configuration lock is poisoned.
+    pub fn indexed_plan_cache_limits(&self) -> crate::Result<IndexedPlanCacheLimits> {
+        self.shared
+            .indexed_plan_cache_limits
+            .lock()
+            .map(|limits| *limits)
+            .map_err(|_| {
+                poisoned_cpu_lock(
+                    "CpuBackend::indexed_plan_cache_limits",
+                    "CPU indexed-plan cache configuration",
+                )
+            })
+    }
+
+    /// Update indexed-plan cache limits for current and future CPU engines.
+    ///
+    /// Shrinking either bound evicts least-recently-used plans immediately. A
+    /// zero entry or byte bound disables retention.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, IndexedPlanCacheLimits};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.set_indexed_plan_cache_limits(IndexedPlanCacheLimits::new(8, 4096))?;
+    /// assert_eq!(backend.indexed_plan_cache_limits()?.max_entries(), 8);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] without changing the configured
+    /// limits when an engine registry or resource lock is poisoned.
+    pub fn set_indexed_plan_cache_limits(
+        &mut self,
+        limits: IndexedPlanCacheLimits,
+    ) -> crate::Result<()> {
+        // INVARIANT: keep the configuration guard while snapshotting the
+        // registry and updating every initialized engine. Lazy creation takes
+        // the same guard before any registry or resource lock.
+        let mut configured_limits = self.shared.indexed_plan_cache_limits.lock().map_err(|_| {
+            poisoned_cpu_lock(
+                "CpuBackend::set_indexed_plan_cache_limits",
+                "CPU indexed-plan cache configuration",
+            )
+        })?;
+        let engines = self
+            .shared
+            .initialized_engines("CpuBackend::set_indexed_plan_cache_limits")?;
+        let mut resources = engines
+            .iter()
+            .map(|engine| {
+                lock_engine_resources(engine, "CpuBackend::set_indexed_plan_cache_limits")
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        *configured_limits = limits;
+        for resource in &mut resources {
+            resource.indexed_plan_cache.set_limits(limits);
+        }
+        Ok(())
+    }
+
+    /// Snapshot aggregate indexed-plan cache statistics across initialized CPU engines.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// assert_eq!(backend.indexed_plan_cache_stats()?.entries, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when an engine registry or
+    /// resource lock is poisoned.
+    pub fn indexed_plan_cache_stats(&self) -> crate::Result<CacheStats> {
+        self.shared
+            .initialized_engines("CpuBackend::indexed_plan_cache_stats")?
+            .iter()
+            .try_fold(CacheStats::default(), |mut total, engine| {
+                let stats = lock_engine_resources(engine, "CpuBackend::indexed_plan_cache_stats")?
+                    .indexed_plan_cache
+                    .stats();
+                saturating_add_tensor_cache_stats(&mut total, stats);
+                Ok(total)
+            })
+    }
+
+    /// Clear indexed traversal plans retained by all initialized CPU engines.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.clear_indexed_plan_cache()?;
+    /// assert_eq!(backend.indexed_plan_cache_stats()?.entries, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] without clearing any engine when
+    /// an engine registry or resource lock is poisoned.
+    pub fn clear_indexed_plan_cache(&mut self) -> crate::Result<()> {
+        let engines = self
+            .shared
+            .initialized_engines("CpuBackend::clear_indexed_plan_cache")?;
+        let mut resources = engines
+            .iter()
+            .map(|engine| lock_engine_resources(engine, "CpuBackend::clear_indexed_plan_cache"))
+            .collect::<crate::Result<Vec<_>>>()?;
+        for resource in &mut resources {
+            resource.indexed_plan_cache.clear();
+        }
+        Ok(())
+    }
+
     /// Current CPU buffer-pool retention limit in bytes.
     ///
     /// # Examples
@@ -2162,13 +2348,20 @@ impl CpuBackend {
         let resources = lock_engine_resources(&self.engine, "CpuBackend::runtime_cache_stats")?;
         let buffers = resources.buffers.cache_stats();
         let gemm = tenferro_tensor::RuntimeCacheControl::stats(&resources.gemm_analysis_cache);
+        let indexed = resources.indexed_plan_cache.stats();
         Ok(tenferro_runtime::runtime::CacheStats {
-            entries: buffers.entries.saturating_add(gemm.entries),
-            retained_bytes: buffers.retained_bytes.saturating_add(gemm.retained_bytes),
-            hits: 0,
-            misses: 0,
-            evictions: 0,
-            clears: 0,
+            entries: buffers
+                .entries
+                .saturating_add(gemm.entries)
+                .saturating_add(indexed.entries),
+            retained_bytes: buffers
+                .retained_bytes
+                .saturating_add(gemm.retained_bytes)
+                .saturating_add(indexed.retained_bytes),
+            hits: indexed.hits,
+            misses: indexed.misses,
+            evictions: indexed.evictions,
+            clears: indexed.clears,
         })
     }
 
@@ -2177,6 +2370,7 @@ impl CpuBackend {
             lock_engine_resources(&self.engine, "CpuBackend::clear_runtime_caches")?;
         resources.buffers.clear();
         tenferro_tensor::RuntimeCacheControl::clear(&mut resources.gemm_analysis_cache);
+        resources.indexed_plan_cache.clear();
         Ok(())
     }
 
@@ -2298,6 +2492,36 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
+    fn install_with_indexed_pool_context_unmarked<R: Send>(
+        &mut self,
+        op: impl FnOnce(
+                &CpuExecutionContext<'_>,
+                &mut BufferPool,
+                &mut IndexedPlanCache,
+            ) -> crate::Result<R>
+            + Send,
+    ) -> crate::Result<R> {
+        let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let EngineResources {
+                            buffers,
+                            indexed_plan_cache,
+                            ..
+                        } = resources;
+                        let mut buffers = BufferPoolLoan::new(buffers);
+                        op(context, buffers.get_mut(), indexed_plan_cache)
+                    })
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
     fn install_with_pool<R: FreshCpuOutput + Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
@@ -2314,6 +2538,21 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let domain = self.engine.domain().id();
         let mut output = self.install_with_pool_context_unmarked(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    fn install_with_indexed_pool_context<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(
+                &CpuExecutionContext<'_>,
+                &mut BufferPool,
+                &mut IndexedPlanCache,
+            ) -> crate::Result<R>
+            + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.install_with_indexed_pool_context_unmarked(op)?;
         output.tag_fresh(domain);
         Ok(output)
     }
@@ -2937,9 +3176,16 @@ impl TensorIndexing for CpuBackend {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
+        self.install_with_indexed_pool_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
-            indexing::gather_with_pool(buffers, &exec_context, operand, start_indices, config)
+            indexing::gather_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                start_indices,
+                config,
+            )
         })
     }
 
@@ -2950,10 +3196,11 @@ impl TensorIndexing for CpuBackend {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
+        self.install_with_indexed_pool_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::scatter_with_pool(
                 buffers,
+                cache,
                 &exec_context,
                 operand,
                 scatter_indices,
@@ -2973,9 +3220,16 @@ impl TensorIndexing for CpuBackend {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
+        self.install_with_indexed_pool_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
-            indexing::dynamic_slice_with_pool(buffers, &exec_context, input, starts, slice_sizes)
+            indexing::dynamic_slice_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                input,
+                starts,
+                slice_sizes,
+            )
         })
     }
 
@@ -2985,10 +3239,11 @@ impl TensorIndexing for CpuBackend {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
+        self.install_with_indexed_pool_context(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::dynamic_update_slice_with_pool(
                 buffers,
+                cache,
                 &exec_context,
                 operand,
                 update,
@@ -3090,6 +3345,7 @@ impl CpuBackend {
                     entered,
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
+                    indexed_plan_cache: &mut resources.indexed_plan_cache,
                     providers: &providers,
                 };
                 record_cpu_session_profile(

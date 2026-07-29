@@ -68,6 +68,7 @@ pub(crate) use tenferro_internal_cpu_kernels::elementwise;
 mod engine;
 mod exec_session;
 mod gemm;
+mod indexed_plan_cache;
 mod indexing;
 mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
@@ -120,6 +121,7 @@ pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
     CpuProviderBundleInstallError, CpuProviderSlot, GeneralContractionPolicy,
 };
+pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
     ResolvedCpuPlacement,

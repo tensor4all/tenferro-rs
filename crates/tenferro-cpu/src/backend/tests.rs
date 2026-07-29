@@ -42,6 +42,24 @@ fn cpu_tensor_kernel_parallel_features_are_wired() {
 }
 
 #[test]
+fn indexed_plan_cache_configuration_poison_is_typed() {
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let shared = Arc::clone(&backend.shared);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _guard = shared.indexed_plan_cache_limits.lock().unwrap();
+        panic!("poison indexed-plan cache configuration");
+    }));
+    assert!(panic.is_err());
+
+    let error = backend.indexed_plan_cache_limits().unwrap_err();
+    assert_eq!(error.kind(), crate::ErrorKind::RuntimeState);
+    let error = backend
+        .set_indexed_plan_cache_limits(IndexedPlanCacheLimits::new(1, 1))
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::ErrorKind::RuntimeState);
+}
+
+#[test]
 fn provider_context_source_cannot_reenter_or_bypass_the_executor_boundary() {
     let provider = include_str!("../provider.rs");
     let dot_runtime = include_str!("../dot_runtime.rs");

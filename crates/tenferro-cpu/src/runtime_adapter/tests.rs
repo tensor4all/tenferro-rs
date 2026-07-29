@@ -10,7 +10,8 @@ use tenferro_runtime::{
     SpecializationRequirements,
 };
 use tenferro_tensor::{
-    GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig, StrideVec,
+    GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig, StrideVec, Tensor,
+    TensorIndexing,
 };
 
 use super::{
@@ -150,7 +151,7 @@ fn cpu_runtime_adapter_has_only_the_six_runtime_trait_impls_on_cpu_backend() {
 
 #[test]
 fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
-    let backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_threads(1).expect("backend");
 
     let stats = RuntimeCacheOwner::cache_stats(&backend).expect("cache stats");
     assert_eq!(stats.entries, 0);
@@ -159,7 +160,33 @@ fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
     assert_eq!(stats.misses, 0);
     assert_eq!(stats.evictions, 0);
     assert_eq!(stats.clears, 0);
+
+    let operand = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).expect("operand");
+    let indices = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 2]).expect("indices");
+    let config = GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+    backend
+        .gather(&operand, &indices, &config)
+        .expect("compile gather plan");
+    backend
+        .gather(&operand, &indices, &config)
+        .expect("reuse gather plan");
+    let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
+    assert_eq!(populated.entries, 1);
+    assert!(populated.retained_bytes > 0);
+    assert_eq!(populated.hits, 1);
+    assert_eq!(populated.misses, 1);
+
     RuntimeCacheOwner::clear_caches(&backend).expect("clear caches");
+    let cleared = RuntimeCacheOwner::cache_stats(&backend).expect("cleared cache stats");
+    assert_eq!(cleared.entries, 0);
+    assert_eq!(cleared.retained_bytes, 0);
+    assert_eq!(cleared.clears, 1);
 }
 
 #[test]
