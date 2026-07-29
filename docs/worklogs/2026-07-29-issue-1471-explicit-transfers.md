@@ -95,9 +95,10 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   available through the full `Error::source` chain.
 - Added faulty-provider coverage for each contract dimension and confirmed the
   downstream operation does not execute for rejected output.
-- Confirmed commit `06147e4e` is in branch history and its adjacent
-  `// INVARIANT` markers remain at both deferred `schedule.rs` dead-code
-  allowances.
+- Confirmed the `// INVARIANT` markers introduced by historical commit
+  `06147e4e` remain at both deferred `schedule.rs` dead-code allowances. The
+  commit itself is represented through the squash-merged #1514 tree rather
+  than direct ancestry.
 
 ## W7 Ingress And Reachability Follow-up
 
@@ -141,6 +142,17 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
 - Added regression coverage for a faulty executor, alternating same-placement
   inputs from two allocation domains across cache reuse, and choosing a
   route-capable ingress over an earlier registered dead end.
+
+## Merged-Main Integration
+
+- Reconstructed the follow-up on merged main `1cbee7a7` after #1514 and #1517
+  by cherry-picking only historical commits `6e8ee624`, `1eef5ce2`, and
+  `9f99bb3e`.
+- `git range-diff` reports each reconstructed commit as patch-identical to its
+  historical source. The squash-merged #1514 commits were not replayed.
+- The three commits applied without conflicts. The #1517 static-indexing and
+  buffer-pool changes remain independent of the runtime ingress/residency
+  files in this follow-up.
 
 ## Deferred Scope
 
@@ -186,10 +198,9 @@ limited to the additive `TransferRequest` endpoint accessors and
 - `cargo test -p tenferro-gpu --features cuda,webgpu registration_ingress -j
   48` passed the CUDA and WebGPU ingress tests, and `cargo check -p
   tenferro-gpu --features cuda,webgpu -j 48` passed.
-- The fast PR check passed against the branch base `035c02b0`, including
-  workspace and extension clippy with warnings denied and 17 focused runtime
-  execution integration tests. The ordinary `origin/main` freshness check
-  remains pending because this existing review branch has not yet been rebased.
-- Deterministic repository-rules review of the uncommitted delta against
-  `1eef5ce2` passed; external LLM review was intentionally skipped before PR
-  creation.
+- On merged main `1cbee7a7`, `cargo test -p tenferro-runtime -j 48` passed 336
+  unit tests, 93 integration tests, and 369 doctests.
+- On the same integrated tree, `cargo test -p tenferro-cpu runtime_adapter -j
+  48` passed 10 focused tests, `cargo check -p tenferro-gpu --features
+  cuda,webgpu -j 48` passed, and the CUDA/WebGPU ingress test filter passed two
+  tests.
