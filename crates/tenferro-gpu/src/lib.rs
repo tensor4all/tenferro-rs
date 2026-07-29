@@ -31,6 +31,8 @@ use std::any::Any;
 mod cubecl;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod native_permutation;
 #[cfg(feature = "webgpu")]
 mod webgpu;
 
