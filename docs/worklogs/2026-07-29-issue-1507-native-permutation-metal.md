@@ -47,6 +47,21 @@ All values are within 0.02 ms because the profile includes fresh output
 allocation and explicit synchronization. `16x8-p1-v1` is the development
 default; it is not a substitute for the final M4 sweep.
 
+## Rejected batched-tile experiment
+
+The remaining `mac_transpose_3d_102` framework gap motivated an experiment
+that classified `[1,0,2]` as a batch of compact 2D transposes and mapped the
+batch index to the CubeCL dispatch Z dimension. A partial-edge, multi-batch
+Metal correctness test passed, and CUDA plus WebGPU compiled from the same
+kernel.
+
+With 20 warmups and 101 measured iterations, however, the selected tiled path
+measured 1.726 ms for transpose and 1.731 ms for view materialization. The
+generic path measured 1.729 ms and 1.733 ms, respectively. This is not a
+material improvement under the profile's public-API allocation and
+synchronization contract, so commit `585c28dd` was reverted by `5586394f`.
+The two-dimensional tiled specialization remains unchanged.
+
 ## Framework-gap inspection
 
 The PyTorch comparison exceeded the 2x inspection threshold for the baseline
