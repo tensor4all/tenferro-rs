@@ -182,10 +182,36 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   omitted by semantic-only selection, and message-only prepared-input
   rejection. Each focused test passed after its owning fix.
 
+## Independent Review Changes Requested
+
+- Replaced the raw join-handle submission with a runtime-owned in-flight state.
+  The state owns the admitted prepared graph and retained snapshot/providers,
+  owned inputs, and completion output/error. The worker captures only this
+  state, so reconfiguration after successful admission cannot invalidate the
+  run. Handle drop remains nonblocking and does not cancel execution.
+- Added typed `SubmissionError::WorkerSpawn` handling around
+  `thread::Builder::spawn`. Deterministic worker tests cover delayed start,
+  spawn failure, blocked-worker handle drop, execution error, and panic
+  completion; public integration coverage reconfigures immediately after
+  `submit` and still observes the admitted result.
+- Integrated operation placement with ingress and schedule reachability.
+  Preparation enumerates capability-compatible engine placements, validates
+  the complete input use graph, and constructs the physical schedule before
+  accepting a combination. Route-specific failures continue to later engines
+  and storage classes; if every route fails, the last typed
+  `NoInputIngress`/`MissingTransferProvider` is preserved.
+- Kept `ExecutionLocation` attached to terminal slots through output
+  collection. Tensor and value materialization now use the executor retained
+  for the output's physical engine rather than the semantic root executor.
+  A foreign allocation-domain, non-contiguous lazy-read test verifies that the
+  nonroot location and physical residency reach the materializer.
+- TDD first reproduced the same-storage first-capable/dead-ingress failure, the
+  later-storage variant, and location loss at the terminal lazy-read boundary.
+  The focused tests passed after their owning changes.
+
 ## Deferred Scope
 
-- Runtime-owned in-flight submission state beyond synchronous preparation,
-  event schedulers, and asynchronous completion.
+- Event-domain schedulers and device-native asynchronous completion.
 - CUDA and WebGPU transfer adapters.
 - Collectives, distributed tensors, and real multi-GPU execution.
 - Any change to transfer-provider registry keying.
@@ -234,3 +260,7 @@ the additive `TransferRequest` endpoint accessors, `TransferError`,
   48` passed 10 focused tests, `cargo check -p tenferro-gpu --features
   cuda,webgpu -j 48` passed, and the CUDA/WebGPU ingress test filter passed two
   tests.
+- After the in-flight/placement/output review changes, `cargo test -p
+  tenferro-runtime -j 48` passed 341 unit tests, 101 integration tests, and 371
+  doctests. CPU adapter tests passed 10/10; the combined CUDA/WebGPU feature
+  check and two ingress tests also passed.
