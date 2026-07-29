@@ -1324,6 +1324,77 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 }
 
 #[test]
+fn ordered_compare_fixed_dispatch_preserves_owned_and_view_semantics() {
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, f64::NAN]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 3.0, 4.0]).unwrap();
+    let Tensor::F64(lhs_typed) = &lhs else {
+        unreachable!("f64 fixture");
+    };
+    let Tensor::F64(rhs_typed) = &rhs else {
+        unreachable!("f64 fixture");
+    };
+    let cases = [
+        (CompareDir::Eq, [true, false, false]),
+        (CompareDir::Lt, [false, true, false]),
+        (CompareDir::Le, [true, true, false]),
+        (CompareDir::Gt, [false, false, false]),
+        (CompareDir::Ge, [true, false, false]),
+    ];
+    let mut buffers = BufferPool::new();
+
+    for (dir, expected) in cases {
+        let owned = compare_with_pool(&mut buffers, &lhs, &rhs, &dir).unwrap();
+        let borrowed = compare_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::F64(lhs_typed.as_view())),
+            TensorRead::from_view(TensorView::F64(rhs_typed.as_view())),
+            &dir,
+        )
+        .unwrap();
+
+        assert_eq!(owned.as_slice::<bool>().unwrap(), &expected);
+        assert_eq!(borrowed.as_slice::<bool>().unwrap(), &expected);
+    }
+}
+
+#[test]
+fn ordered_compare_owned_and_read_routes_use_fixed_dispatch() {
+    let source = include_str!("../elementwise.rs");
+    let helper = source
+        .split_once("fn typed_ordered_compare_view_with_pool")
+        .and_then(|(_, suffix)| suffix.split_once("fn typed_select_view_with_pool"))
+        .map(|(body, _)| body)
+        .expect("fixed comparison helper must remain defined");
+    assert!(
+        helper.contains("compare_into("),
+        "fixed comparison helper must dispatch through strided compare_into"
+    );
+
+    for (start, end, route) in [
+        (
+            "pub fn compare_with_pool(",
+            "pub fn compare_read_with_pool(",
+            "owned",
+        ),
+        (
+            "pub fn compare_read_with_pool(",
+            "/// Select values",
+            "borrowed",
+        ),
+    ] {
+        let body = source
+            .split_once(start)
+            .and_then(|(_, suffix)| suffix.split_once(end))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("{route} comparison route must remain defined"));
+        assert!(
+            body.matches("typed_ordered_compare_view_with_pool").count() >= 5,
+            "{route} real, integer, and Bool comparisons must use fixed dispatch"
+        );
+    }
+}
+
+#[test]
 fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let mut buffers = BufferPool::default();
     let lhs_shape = [2, 3, 4];
