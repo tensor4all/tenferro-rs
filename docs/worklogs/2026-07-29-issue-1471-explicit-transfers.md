@@ -158,18 +158,41 @@ The initial specification review returned `NOT_APPROVED`. The follow-up:
   Updated `run_compiled`, `prepare_compiled`, `submit`, and
   `run_compiled_values` to document those typed causes.
 
+## Independent Review Follow-Up
+
+- Moved compiled-graph preparation ahead of `thread::spawn` in
+  `Runtime::submit`. Invalid physical ingress and missing transfer routes now
+  return synchronously, while the worker receives the prepared artifact and
+  retained owned inputs.
+- Replaced first-semantic-consumer ingress selection with staged physical-use
+  analysis. Preparation stages the semantic program once, records every direct
+  input-slot consumer in instruction order, and selects an ingress whose
+  retained copies can reach the complete use sequence.
+- Physical-use analysis assigns compiler-synthesized instructions with no
+  semantic operation index to the root execution location, matching schedule
+  construction instead of silently omitting those consumers.
+- Added `InputIngressContractError::ResidencyMismatch` as the typed source for
+  `run_prepared` inputs whose logical metadata still matches but whose backend
+  family or allocation domain is incompatible with the prepared ingress.
+- TDD regressions first reproduced both synchronous-submit failures, a split
+  input whose second consumer was unreachable, a synthesized root instruction
+  omitted by semantic-only selection, and message-only prepared-input
+  rejection. Each focused test passed after its owning fix.
+
 ## Deferred Scope
 
-- Submit/event schedulers and asynchronous completion.
+- Runtime-owned in-flight submission state beyond synchronous preparation,
+  event schedulers, and asynchronous completion.
 - CUDA and WebGPU transfer adapters.
 - Collectives, distributed tensors, and real multi-GPU execution.
 - Any change to transfer-provider registry keying.
 
 ## Documentation Impact
 
-The scheduling model remains crate-private. Public documentation changes are
-limited to the additive `TransferRequest` endpoint accessors and
-`TransferError`; no user guide or migration guide change is required.
+The scheduling model remains crate-private. Public documentation changes cover
+the additive `TransferRequest` endpoint accessors, `TransferError`,
+`InputIngressContractError`, and the synchronous preparation guarantee on
+`Runtime::submit`; no user guide or migration guide change is required.
 
 ## Verification
 
