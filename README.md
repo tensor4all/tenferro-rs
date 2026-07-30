@@ -5,6 +5,7 @@
 [![CI](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/tenferro-runtime.svg)](https://crates.io/crates/tenferro-runtime)
 [![docs](https://img.shields.io/badge/docs-tensor4all.org-blue)](https://tensor4all.org/tenferro-rs/)
+[![benchmarks](https://img.shields.io/badge/benchmarks-vs%20PyTorch%20%2F%20JAX-orange)](https://github.com/tensor4all/tenferro-benchmark)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 
 tenferro-rs provides typed and dynamic dense tensors, explicit backend
@@ -22,6 +23,12 @@ deep-learning frameworks for Rust scientific code that needs column-major
 storage, LAPACK/Fortran/Julia-friendly layouts, dynamic-shape traced programs,
 explicit device control, and operation families whose AD rules can live outside
 the core tensor type.
+
+Performance is tracked openly: the
+[tenferro-benchmark](https://github.com/tensor4all/tenferro-benchmark) suite
+publishes reproducible CPU and GPU comparisons against PyTorch and JAX,
+including the published result tables, for every workload class tenferro
+targets.
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
