@@ -54,7 +54,7 @@ impl EventDomainRun for WebGpuEventDomainRun {
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
         self.stream_id
-            .executes(|| submit_and_wait(&self.runtime, self.stream_id))
+            .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
     }
 }
 
@@ -94,7 +94,7 @@ impl Drop for WebGpuEventDomainRun {
     fn drop(&mut self) {
         if let Err(error) = self
             .stream_id
-            .executes(|| submit_and_wait(&self.runtime, self.stream_id))
+            .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
         {
             eprintln!("tenferro-gpu: failed to drain WebGPU event-domain run during Drop: {error}");
         }
@@ -117,7 +117,7 @@ impl<'a> SubmissionCleanupGuard<'a> {
     }
 
     fn finish_with_error(&mut self, primary: RuntimeError) -> RuntimeError {
-        let cleanup = submit_and_wait(self.runtime, self.stream_id);
+        let cleanup = retire_webgpu_run(self.runtime, self.stream_id);
         self.armed = false;
         match cleanup {
             Ok(()) => primary,
@@ -136,7 +136,7 @@ impl<'a> SubmissionCleanupGuard<'a> {
 impl Drop for SubmissionCleanupGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            if let Err(error) = submit_and_wait(self.runtime, self.stream_id) {
+            if let Err(error) = retire_webgpu_run(self.runtime, self.stream_id) {
                 eprintln!(
                     "tenferro-gpu: failed to retire WebGPU work during submission unwind: {error}"
                 );
@@ -177,10 +177,24 @@ fn submit_completion(
         .map_err(webgpu_backend_error)
 }
 
-fn submit_and_wait(runtime: &WebGpuRuntime, stream_id: StreamId) -> tenferro_runtime::Result<()> {
-    submit_completion(runtime, stream_id)?
-        .wait()
-        .map_err(webgpu_backend_error)
+fn retire_webgpu_run(runtime: &WebGpuRuntime, stream_id: StreamId) -> tenferro_runtime::Result<()> {
+    let submission = match submit_completion(runtime, stream_id) {
+        Ok(submission) => submission,
+        Err(primary) => {
+            // If the exact stream completion cannot be submitted, synchronize
+            // the whole CubeCL client before allowing scheduler storage to drop.
+            return match runtime.synchronize() {
+                Ok(()) => Err(primary),
+                Err(fallback) => Err(RuntimeError::from(crate::Error::backend_source(
+                    EVENT_OP,
+                    WebGpuRetirementFallbackError { primary, fallback },
+                ))),
+            };
+        }
+    };
+    // `wait` is itself the retirement barrier even when it reports a queued
+    // execution failure.
+    submission.wait().map_err(webgpu_backend_error)
 }
 
 fn webgpu_backend_error(source: impl std::error::Error + Send + Sync + 'static) -> RuntimeError {
@@ -190,6 +204,16 @@ fn webgpu_backend_error(source: impl std::error::Error + Send + Sync + 'static) 
 #[derive(Debug, thiserror::Error)]
 #[error("the CubeCL WebGPU server is unavailable")]
 struct WebGpuServerUnavailable;
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "WebGPU completion submission failed ({primary}); client retirement also reported {fallback}"
+)]
+struct WebGpuRetirementFallbackError {
+    primary: RuntimeError,
+    #[source]
+    fallback: crate::Error,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("submission failed ({primary}); WebGPU queue cleanup also failed ({cleanup})")]

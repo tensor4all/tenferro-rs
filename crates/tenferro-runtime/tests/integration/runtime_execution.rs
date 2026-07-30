@@ -1,13 +1,17 @@
 use std::any::Any;
 use std::error::Error as StdError;
 use std::hash::Hasher;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{
     ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp},
     ExtensionShapeContext, SymDim,
+};
+use tenferro_runtime::runtime::{
+    EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver,
 };
 use tenferro_runtime::{
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
@@ -32,6 +36,122 @@ const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.counting-extension.v1";
 const DOWNSTREAM_COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.downstream-counting-extension.v1";
+
+#[derive(Debug)]
+struct RecordingEventToken {
+    label: &'static str,
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+impl EventToken for RecordingEventToken {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn wait(&self) -> tenferro_runtime::Result<()> {
+        self.events
+            .lock()
+            .expect("event log lock")
+            .push(format!("{}:wait", self.label));
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct RecordingEventDomainRun {
+    label: &'static str,
+    events: Arc<Mutex<Vec<String>>>,
+    fail_drain: bool,
+}
+
+impl EventDomainRun for RecordingEventDomainRun {
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
+    ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
+        self.events.lock().expect("event log lock").push(format!(
+            "{}:enqueue:{}",
+            self.label,
+            dependencies.len()
+        ));
+        for dependency in dependencies {
+            dependency.wait()?;
+        }
+        launch()?;
+        Ok(Arc::new(RecordingEventToken {
+            label: self.label,
+            events: Arc::clone(&self.events),
+        }))
+    }
+
+    fn drain(&mut self) -> tenferro_runtime::Result<()> {
+        self.events
+            .lock()
+            .expect("event log lock")
+            .push(format!("{}:drain", self.label));
+        if self.fail_drain {
+            Err(Error::Internal(format!(
+                "{} event-domain drain failure",
+                self.label
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for RecordingEventDomainRun {
+    fn drop(&mut self) {
+        self.events
+            .lock()
+            .expect("event log lock")
+            .push(format!("{}:drop", self.label));
+    }
+}
+
+#[derive(Debug)]
+struct RecordingEventDomainDriver {
+    label: &'static str,
+    events: Arc<Mutex<Vec<String>>>,
+    fail_drain: bool,
+}
+
+impl EventDomainDriver for RecordingEventDomainDriver {
+    fn begin_run(&self) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
+        self.events
+            .lock()
+            .expect("event log lock")
+            .push(format!("{}:begin", self.label));
+        Ok(Box::new(RecordingEventDomainRun {
+            label: self.label,
+            events: Arc::clone(&self.events),
+            fail_drain: self.fail_drain,
+        }))
+    }
+}
+
+fn recording_event_domain(
+    label: &'static str,
+    events: &Arc<Mutex<Vec<String>>>,
+) -> Arc<dyn EventDomainDriver> {
+    Arc::new(RecordingEventDomainDriver {
+        label,
+        events: Arc::clone(events),
+        fail_drain: false,
+    })
+}
+
+fn failing_drain_event_domain(
+    label: &'static str,
+    events: &Arc<Mutex<Vec<String>>>,
+) -> Arc<dyn EventDomainDriver> {
+    Arc::new(RecordingEventDomainDriver {
+        label,
+        events: Arc::clone(events),
+        fail_drain: true,
+    })
+}
 
 fn cpu_registration(
     backend: &CpuBackend,
@@ -65,6 +185,7 @@ fn cpu_registration(
     .map(|registration| {
         let registration = registration
             .with_cache_owner(cache_owner)
+            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
             .with_input_signature_validator({
                 let storage = storage.clone();
                 let allocation_domain = backend.allocation_domain();
@@ -163,8 +284,10 @@ fn tensor_f64_values(tensor: &Tensor) -> tenferro_tensor::Result<Vec<f64>> {
 struct ExtensionCounters {
     prepare: AtomicUsize,
     execute: AtomicUsize,
+    panic_execute: AtomicBool,
     last_execute_domain: Mutex<Option<AllocationDomainId>>,
     tracked_output_drops: Mutex<Option<Arc<AtomicUsize>>>,
+    tracked_output_drop_events: Mutex<Option<Arc<Mutex<Vec<String>>>>>,
     foreign_output_domain: Mutex<Option<AllocationDomainId>>,
 }
 
@@ -498,11 +621,18 @@ struct DropTrackedBuffer {
     len: usize,
     drops: Arc<AtomicUsize>,
     domain: AllocationDomainId,
+    events: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl Drop for DropTrackedBuffer {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
+        if let Some(events) = &self.events {
+            events
+                .lock()
+                .expect("drop event log lock")
+                .push("tensor:drop".to_owned());
+        }
     }
 }
 
@@ -674,6 +804,10 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
         self.counters.execute.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            !self.counters.panic_execute.load(Ordering::SeqCst),
+            "intentional prepared-operation panic"
+        );
         let backend = context
             .downcast_mut::<CpuBackend>(self.binding.context_identity())
             .map_err(|source| {
@@ -719,7 +853,18 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             let domain = backend.allocation_domain().ok_or_else(|| {
                 Error::Internal("drop-tracked output requires an allocation domain".into())
             })?;
-            let buffer = Buffer::Backend(Arc::new(DropTrackedBuffer { len, drops, domain }));
+            let events = self
+                .counters
+                .tracked_output_drop_events
+                .lock()
+                .expect("tracked output drop event lock")
+                .clone();
+            let buffer = Buffer::Backend(Arc::new(DropTrackedBuffer {
+                len,
+                drops,
+                domain,
+                events,
+            }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
                 shape,
                 buffer,
@@ -797,6 +942,22 @@ fn cpu_registration_with_id(
     include_core_capabilities: bool,
     include_execution_bridge: bool,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    cpu_registration_with_id_and_driver(
+        backend,
+        engine_id,
+        include_core_capabilities,
+        include_execution_bridge,
+        true,
+    )
+}
+
+fn cpu_registration_with_id_and_driver(
+    backend: &CpuBackend,
+    engine_id: &str,
+    include_core_capabilities: bool,
+    include_execution_bridge: bool,
+    include_event_domain_driver: bool,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let mut capabilities = CoreCapabilityBundle::builder();
     if include_core_capabilities {
@@ -854,6 +1015,11 @@ fn cpu_registration_with_id(
                     }
                 },
             );
+        let registration = if include_event_domain_driver {
+            registration.with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
+        } else {
+            registration
+        };
         if include_execution_bridge {
             registration.with_tensor_backend_executor(backend.as_ref().clone())
         } else {
@@ -896,6 +1062,7 @@ fn cpu_registration_with_storage_id(
     )
     .map(|registration| {
         let registration = registration
+            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
             .with_input_signature_validator({
                 let storage = storage.clone();
                 let allocation_domain = backend.allocation_domain();
@@ -983,6 +1150,7 @@ fn cpu_registration_with_storage_classes(
                     }
                 },
             )
+            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
             .with_tensor_backend_executor(backend.as_ref().clone())
     })
 }
@@ -1984,6 +2152,179 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 }
 
 #[test]
+fn runtime_run_compiled_preflights_all_event_domain_drivers_before_launch(
+) -> Result<(), Box<dyn StdError>> {
+    let core_backend = CpuBackend::new();
+    let extension_backend = CpuBackend::new();
+    let counters = Arc::new(ExtensionCounters::default());
+    let core_engine_id = "tenferro-test.driver-preflight-core.v1";
+    let extension_engine_id = "tenferro-test.driver-preflight-extension.v1";
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let transfer = Arc::new(RecordingTransferProvider::new(
+        storage.clone(),
+        storage.clone(),
+    ));
+    let event_log = Arc::new(Mutex::new(Vec::new()));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(
+        cpu_registration_with_id(&core_backend, core_engine_id, true, true)?
+            .with_event_domain_driver(recording_event_domain("source", &event_log)),
+    )?;
+    builder.register_engine(cpu_registration_with_id_and_driver(
+        &extension_backend,
+        extension_engine_id,
+        false,
+        true,
+        false,
+    )?)?;
+    builder.register_transfer_provider(storage.clone(), storage, transfer.clone())?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.driver-preflight-module")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(extension_engine_id)?,
+        counters: Arc::clone(&counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let sum = (&x + &x)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&sum],
+    )?
+    .pop()
+    .expect("extension has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let error = runtime
+        .run_compiled(&program, &[&input])
+        .expect_err("missing event-domain driver must fail preflight");
+
+    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
+    assert!(error.to_string().contains("has no registered driver"));
+    assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
+    assert_eq!(transfer.calls(), 0);
+    assert!(
+        event_log.lock().expect("event log lock").is_empty(),
+        "preflight failure must occur before any domain begins"
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_run_compiled_returns_drain_failure_without_outputs() -> Result<(), Box<dyn StdError>> {
+    let backend = CpuBackend::new();
+    let event_log = Arc::new(Mutex::new(Vec::new()));
+    let mut builder = Runtime::builder();
+    builder.register_engine(
+        cpu_registration(&backend, true)?
+            .with_event_domain_driver(failing_drain_event_domain("cpu", &event_log)),
+    )?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = (&x + &x)?;
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let error = runtime
+        .run_compiled(&program, &[&input])
+        .expect_err("drain failure must suppress outputs");
+
+    assert!(error.to_string().contains("cpu event-domain drain failure"));
+    assert_eq!(
+        event_log.lock().expect("event log lock").as_slice(),
+        ["cpu:begin", "cpu:enqueue:0", "cpu:drain", "cpu:drop"]
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_run_compiled_unwind_drops_event_run_before_tensor_storage(
+) -> Result<(), Box<dyn StdError>> {
+    let domain = AllocationDomainId::fresh();
+    let backend = CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(domain)));
+    let event_log = Arc::new(Mutex::new(Vec::new()));
+    let output_drops = Arc::new(AtomicUsize::new(0));
+    let producer_counters = Arc::new(ExtensionCounters::default());
+    *producer_counters
+        .tracked_output_drops
+        .lock()
+        .expect("tracked output lock") = Some(Arc::clone(&output_drops));
+    *producer_counters
+        .tracked_output_drop_events
+        .lock()
+        .expect("tracked output drop event lock") = Some(Arc::clone(&event_log));
+    let panic_counters = Arc::new(ExtensionCounters::default());
+    panic_counters.panic_execute.store(true, Ordering::SeqCst);
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(
+        cpu_registration(&backend, true)?
+            .with_event_domain_driver(recording_event_domain("cpu", &event_log)),
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.panic-producer-module")?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(CPU_ENGINE_ID)?,
+        counters: producer_counters,
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.panic-consumer-module")?,
+        family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        engine_id: EngineId::new(CPU_ENGINE_ID)?,
+        counters: Arc::clone(&panic_counters),
+    }))?;
+    let runtime = builder.build()?;
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let produced = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("producer has one output");
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&produced],
+    )?
+    .pop()
+    .expect("consumer has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        let _ = runtime.run_compiled(&program, &[&input]);
+    }));
+
+    assert!(panic.is_err(), "prepared-operation panic must unwind");
+    assert_eq!(panic_counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(output_drops.load(Ordering::SeqCst), 1);
+    let events = event_log.lock().expect("event log lock").clone();
+    let run_drop = events
+        .iter()
+        .position(|event| event == "cpu:drop")
+        .expect("event-domain run must drop during unwind");
+    let tensor_drop = events
+        .iter()
+        .position(|event| event == "tensor:drop")
+        .expect("intermediate tensor storage must drop during unwind");
+    assert!(
+        run_drop < tensor_drop,
+        "event-domain cleanup must precede tensor storage release: {events:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
 ) -> Result<(), Box<dyn StdError>> {
     let core_domain = AllocationDomainId::fresh();
@@ -2002,22 +2343,29 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         destination_storage.clone(),
         extension_backend.clone(),
     ));
+    let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_storage_id(
-        &core_backend,
-        core_engine_id,
-        source_storage.as_str(),
-        true,
-        true,
-    )?)?;
-    builder.register_engine(cpu_registration_with_storage_id(
-        &extension_backend,
-        extension_engine_id,
-        destination_storage.as_str(),
-        false,
-        true,
-    )?)?;
+    builder.register_engine(
+        cpu_registration_with_storage_id(
+            &core_backend,
+            core_engine_id,
+            source_storage.as_str(),
+            true,
+            true,
+        )?
+        .with_event_domain_driver(recording_event_domain("source", &event_log)),
+    )?;
+    builder.register_engine(
+        cpu_registration_with_storage_id(
+            &extension_backend,
+            extension_engine_id,
+            destination_storage.as_str(),
+            false,
+            true,
+        )?
+        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
+    )?;
     builder.register_transfer_provider(
         source_storage.clone(),
         destination_storage.clone(),
@@ -2079,6 +2427,30 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     assert_eq!(
         *counters.last_execute_domain.lock().expect("domain lock"),
         Some(extension_domain)
+    );
+    let events = event_log.lock().expect("event log lock").clone();
+    assert!(events.contains(&"source:begin".to_owned()), "{events:?}");
+    assert!(
+        events.contains(&"destination:begin".to_owned()),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&"source:enqueue:0".to_owned()),
+        "{events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "destination:enqueue:1")
+            .count(),
+        2,
+        "transfer and destination operation must both consume dependencies: {events:?}"
+    );
+    assert!(events.contains(&"source:wait".to_owned()), "{events:?}");
+    assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
+    assert!(
+        events.contains(&"destination:drain".to_owned()),
+        "{events:?}"
     );
 
     Ok(())
@@ -2372,7 +2744,7 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
 }
 
 #[test]
-fn transfer_failure_skips_downstream_execution_and_releases_located_values(
+fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
 ) -> Result<(), Box<dyn StdError>> {
     let core_backend = CpuBackend::new();
     let extension_domain = AllocationDomainId::fresh();
@@ -2397,22 +2769,29 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
     let failing = Arc::new(FailingTransferProvider {
         calls: AtomicUsize::new(0),
     });
+    let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_storage_id(
-        &core_backend,
-        core_engine_id,
-        source_storage.as_str(),
-        true,
-        true,
-    )?)?;
-    builder.register_engine(cpu_registration_with_storage_id(
-        &extension_backend,
-        extension_engine_id,
-        destination_storage.as_str(),
-        false,
-        true,
-    )?)?;
+    builder.register_engine(
+        cpu_registration_with_storage_id(
+            &core_backend,
+            core_engine_id,
+            source_storage.as_str(),
+            true,
+            true,
+        )?
+        .with_event_domain_driver(failing_drain_event_domain("source", &event_log)),
+    )?;
+    builder.register_engine(
+        cpu_registration_with_storage_id(
+            &extension_backend,
+            extension_engine_id,
+            destination_storage.as_str(),
+            false,
+            true,
+        )?
+        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
+    )?;
     builder.register_transfer_provider(
         source_storage.clone(),
         destination_storage.clone(),
@@ -2464,6 +2843,12 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
     assert!(error.to_string().contains("intentional transfer failure"));
+    assert!(
+        error
+            .to_string()
+            .contains("source event-domain drain failure"),
+        "combined execution and cleanup diagnostics must preserve both failures: {error}"
+    );
     assert_eq!(forward.calls(), 1);
     assert_eq!(failing.calls.load(Ordering::SeqCst), 1);
     assert_eq!(upstream_counters.execute.load(Ordering::SeqCst), 1);
@@ -2476,6 +2861,20 @@ fn transfer_failure_skips_downstream_execution_and_releases_located_values(
         drops.load(Ordering::SeqCst),
         1,
         "the extension output retained at its source location must be released on failure"
+    );
+    let events = event_log.lock().expect("event log lock").clone();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "source:enqueue:1")
+            .count(),
+        1,
+        "the failing reverse transfer is admitted, but the downstream operation is not: {events:?}"
+    );
+    assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
+    assert!(
+        events.contains(&"destination:drain".to_owned()),
+        "{events:?}"
     );
     Ok(())
 }

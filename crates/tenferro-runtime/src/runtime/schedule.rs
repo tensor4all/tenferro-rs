@@ -101,7 +101,7 @@ impl EventDependency {
         self.domain
     }
 
-    fn from_completion(completion: EventCompletion) -> Self {
+    pub(crate) fn from_completion(completion: EventCompletion) -> Self {
         Self::new(completion.domain, completion.slot, completion.generation)
     }
 }
@@ -349,11 +349,11 @@ pub(crate) enum ScheduledNode {
         reason = "collective scheduling remains representation-only in this scoped change"
     )]
     Collective(ScheduledCollective),
-    // INVARIANT: barrier nodes remain representation-only until the explicitly
-    // deferred asynchronous event scheduler work lands.
+    // INVARIANT: execution supports explicit barriers, but schedule construction
+    // does not emit them until a later scheduling-policy change requires one.
     #[allow(
         dead_code,
-        reason = "barrier scheduling remains representation-only in this scoped change"
+        reason = "barrier construction is deferred until scheduling policy emits explicit barriers"
     )]
     Barrier(ScheduledBarrier),
 }

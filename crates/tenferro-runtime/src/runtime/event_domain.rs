@@ -145,8 +145,17 @@ pub trait EventDomainRun: fmt::Debug + Send {
     /// [`crate::Error::Internal`], when a queued completion reports failure or
     /// the native queue cannot be synchronized.
     ///
+    /// Success and error are both retirement boundaries: before returning, the
+    /// run must ensure that no previously enqueued work can access tensors,
+    /// tokens, or native resources retained by the caller. An error reports the
+    /// completion failure; it must not mean that work is still using those
+    /// resources. Implementations must not unwind from this method.
+    ///
     /// Draining observes already-progressing work. It must not require another
     /// event domain's `drain` call to start that work.
+    ///
+    /// Dropping a run must perform equivalent best-effort retirement when
+    /// explicit draining is skipped by panic unwinding.
     ///
     /// # Examples
     ///

@@ -1132,8 +1132,6 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot.event_domain_id
     }
 
-    // Scheduler activation will make this production-visible inside the runtime.
-    #[cfg(test)]
     pub(crate) fn event_domain_driver(&self) -> Option<&'a Arc<dyn super::EventDomainDriver>> {
         self.slot.registration.event_domain_driver()
     }

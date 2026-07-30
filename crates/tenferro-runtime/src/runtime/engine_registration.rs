@@ -472,8 +472,7 @@ impl EngineRegistration {
         self.execution_engine.is_some()
     }
 
-    #[cfg(test)]
-    pub(crate) fn event_domain_driver(&self) -> Option<&Arc<dyn EventDomainDriver>> {
+    pub(super) fn event_domain_driver(&self) -> Option<&Arc<dyn EventDomainDriver>> {
         self.event_domain_driver.as_ref()
     }
 
