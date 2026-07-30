@@ -3,7 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error as StdError;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -21,12 +21,13 @@ use crate::exec::{
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
-    ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
+    EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
 };
 use crate::runtime::{
-    CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass, SubmissionError,
-    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+    CacheOwnerError, CacheStats, EventDomainRun, EventToken, InputSignature, PrepareError,
+    PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass,
+    SubmissionError, TransferError, TransferProvider, TransferProviderContractError,
+    TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -1067,6 +1068,10 @@ fn execute_scheduled_slots<'input>(
     let mut located = (0..program.n_slots)
         .map(|_| Vec::new())
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
+    // INVARIANT: runs are declared after the value stores so unwinding drops
+    // and drains native domain work before any tensor storage is released.
+    // Driver preflight completes before input ingress or any operation launch.
+    let mut event_domains = ScheduledEventDomains::new(&execution.snapshot, schedule)?;
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
         if execution.input_locations.len() != program.input_slots.len() {
@@ -1098,61 +1103,66 @@ fn execute_scheduled_slots<'input>(
         for node in schedule.nodes() {
             match node {
                 ScheduledNode::Operation(operation_node) => {
-                    let instruction_index = operation_node.instruction_index();
-                    let instruction =
-                        program.instructions.get(instruction_index).ok_or_else(|| {
-                            Error::runtime_state(
+                    let mut launch = || {
+                        let instruction_index = operation_node.instruction_index();
+                        let instruction =
+                            program.instructions.get(instruction_index).ok_or_else(|| {
+                                Error::runtime_state(
+                                    "Runtime::run_compiled",
+                                    ErrorPhase::Execution,
+                                    format!(
+                                        "scheduled operation references instruction \
+                                         {instruction_index}, but the execution program has {} \
+                                         instructions",
+                                        program.instructions.len()
+                                    ),
+                                )
+                            })?;
+                        let operation = instruction_execution(execution, instruction)?;
+                        if operation.location() != operation_node.location() {
+                            return Err(Error::runtime_state(
                                 "Runtime::run_compiled",
                                 ErrorPhase::Execution,
                                 format!(
-                                    "scheduled operation references instruction \
-                                     {instruction_index}, but the execution program has {} \
-                                     instructions",
-                                    program.instructions.len()
+                                    "scheduled instruction {instruction_index} location does not \
+                                     match its prepared executor"
                                 ),
-                            )
-                        })?;
-                    let operation = instruction_execution(execution, instruction)?;
-                    if operation.location() != operation_node.location() {
-                        return Err(Error::runtime_state(
-                            "Runtime::run_compiled",
-                            ErrorPhase::Execution,
-                            format!(
-                                "scheduled instruction {instruction_index} location does not \
-                                 match its prepared executor"
-                            ),
-                        ));
-                    }
-                    stage_instruction_inputs(
-                        instruction,
-                        operation.location(),
-                        &mut located,
-                        &mut staged,
-                    )?;
-                    operation.executor().execute_slot_instruction(
-                        instruction_index,
-                        instruction,
-                        operations,
-                        &mut staged,
-                        output_mode,
-                        &terminal_slots,
-                    )?;
-                    validate_instruction_outputs(
-                        execution,
-                        instruction_index,
-                        instruction,
-                        operation.location(),
-                        &staged,
-                    )?;
-                    retain_instruction_results(
-                        instruction,
-                        operation.location(),
-                        &mut located,
-                        &mut staged,
-                    )?;
+                            ));
+                        }
+                        stage_instruction_inputs(
+                            instruction,
+                            operation.location(),
+                            &mut located,
+                            &mut staged,
+                        )?;
+                        operation.executor().execute_slot_instruction(
+                            instruction_index,
+                            instruction,
+                            operations,
+                            &mut staged,
+                            output_mode,
+                            &terminal_slots,
+                        )?;
+                        validate_instruction_outputs(
+                            execution,
+                            instruction_index,
+                            instruction,
+                            operation.location(),
+                            &staged,
+                        )?;
+                        retain_instruction_results(
+                            instruction,
+                            operation.location(),
+                            &mut located,
+                            &mut staged,
+                        )
+                    };
+                    event_domains.enqueue(node, &mut launch)?;
                 }
                 ScheduledNode::Transfer(transfer) => {
-                    execute_scheduled_transfer(execution, transfer, &mut located)?;
+                    let mut launch =
+                        || execute_scheduled_transfer(execution, transfer, &mut located);
+                    event_domains.enqueue(node, &mut launch)?;
                 }
                 ScheduledNode::Collective(_) => {
                     return Err(Error::runtime_state(
@@ -1161,19 +1171,128 @@ fn execute_scheduled_slots<'input>(
                         "collective node execution is not implemented",
                     ));
                 }
-                ScheduledNode::Barrier(_) => {}
+                ScheduledNode::Barrier(_) => {
+                    let mut launch = || Ok(());
+                    event_domains.enqueue(node, &mut launch)?;
+                }
             }
         }
-        collect_located_outputs(program, &mut located)
+        Ok(())
     })();
-    match result {
-        Ok(slots) => Ok(slots),
-        Err(error) => {
+    let drain = event_domains.drain();
+    match (result, drain) {
+        (Ok(()), Ok(())) => collect_located_outputs(program, &mut located),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => {
             staged.clear();
             located.clear();
             Err(error)
         }
+        (Err(primary), Err(cleanup)) => {
+            staged.clear();
+            located.clear();
+            Err(Error::runtime_state_source(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                ScheduledExecutionCleanupError { primary, cleanup },
+            ))
+        }
     }
+}
+
+struct ScheduledEventDomains {
+    runs: Vec<(super::EventDomainId, Box<dyn EventDomainRun>)>,
+    completions: HashMap<EventDependency, Arc<dyn EventToken>>,
+}
+
+impl ScheduledEventDomains {
+    fn new(snapshot: &super::RuntimeConfigSnapshot, schedule: &ScheduledGraph) -> Result<Self> {
+        let mut drivers = Vec::new();
+        for node in schedule.nodes() {
+            let domain = node.completion().domain();
+            if drivers.iter().any(|(candidate, _)| *candidate == domain) {
+                continue;
+            }
+            let driver = snapshot
+                .engine_views_for_preparation()
+                .find(|engine| engine.event_domain_id() == domain)
+                .and_then(|engine| engine.event_domain_driver().cloned())
+                .ok_or_else(|| missing_event_domain_driver(domain))?;
+            drivers.push((domain, driver));
+        }
+        let mut runs = Vec::with_capacity(drivers.len());
+        for (domain, driver) in drivers {
+            runs.push((domain, driver.begin_run()?));
+        }
+        Ok(Self {
+            runs,
+            completions: HashMap::new(),
+        })
+    }
+
+    fn enqueue(
+        &mut self,
+        node: &ScheduledNode,
+        launch: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let dependencies = node
+            .dependencies()
+            .iter()
+            .map(|dependency| {
+                self.completions.get(dependency).cloned().ok_or_else(|| {
+                    Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        format!("scheduled dependency {dependency:?} has no completion token"),
+                    )
+                })
+            })
+            .collect::<Result<SmallVec<[Arc<dyn EventToken>; 4]>>>()?;
+        let completion = node.completion();
+        let run_index = self.run_index(completion.domain())?;
+        let completion_event = self.runs[run_index].1.enqueue(&dependencies, launch)?;
+        self.completions.insert(
+            EventDependency::from_completion(completion),
+            completion_event,
+        );
+        Ok(())
+    }
+
+    fn run_index(&mut self, domain: super::EventDomainId) -> Result<usize> {
+        if let Some(index) = self
+            .runs
+            .iter()
+            .position(|(candidate, _)| *candidate == domain)
+        {
+            return Ok(index);
+        }
+        Err(missing_event_domain_driver(domain))
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        let mut first_error = None;
+        for (_, run) in &mut self.runs {
+            if let Err(error) = run.drain() {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+fn missing_event_domain_driver(domain: super::EventDomainId) -> Error {
+    Error::runtime_state(
+        "Runtime::run_compiled",
+        ErrorPhase::Execution,
+        format!("event domain {domain:?} has no registered driver"),
+    )
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("scheduled execution failed ({primary}); event-domain cleanup also failed ({cleanup})")]
+struct ScheduledExecutionCleanupError {
+    #[source]
+    primary: Error,
+    cleanup: Error,
 }
 
 fn instruction_execution<'a>(

@@ -36,10 +36,13 @@ crate-private `ScheduledGraph`, synchronous `Runtime::run_compiled*` walks that
 schedule, and each semantic operation runs on its selected same-storage engine
 bridge. #1471 extends that production path with `Runtime::submit`,
 `ExecutionHandle`, runtime-allocated engine event domains, and a storage-class
-keyed transfer provider registry. Full asynchronous admission, device-native
-stream/queue integration, collectives, and real GPU transfer scheduling remain
-reserved follow-up work; they must extend this production dispatch path rather
-than building a second metadata-only layer.
+keyed transfer provider registry. Scheduled operations, transfers, and explicit
+barriers now execute through per-run event-domain drivers. CUDA and WebGPU
+registrations provide native stream/event and queue/submission-completion
+adapters respectively. Collectives, cancellation, admission control, real
+two-card CI, and non-blocking public submission remain reserved follow-up work;
+they must extend this production dispatch path rather than building a second
+metadata-only layer.
 
 Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
 subgraphs, and PJRT executable caching remain separate follow-up work.
@@ -1745,13 +1748,51 @@ encapsulates runtime resources without that contract.
 
 ## Asynchronous Execution and Events
 
-The runtime owns event storage rather than allocating an
-`Arc<dyn CompletionEvent>` for every node or defining a closed backend-event
-enum. One illustrative implementation preplans slots identified by
-`EventDomainId`, `EventSlotId`, and a generation, with the actual CUDA, WebGPU,
-PJRT, or CPU completion token stored in engine-owned per-run workspace. Exact
-slot identity, recycling, and generation management are reserved for the event
-child design.
+Before input ingress or the first launch, the runtime scheduler preflights and
+starts one `EventDomainRun` for each event domain used by an execution. This
+prevents a missing driver or run-allocation failure from appearing after an
+earlier effect has executed. The scheduler resolves each dependency to the
+opaque `EventToken` returned by the dependency's run, then asks the completion
+domain's run to enqueue the node. The first scheduled use of an event domain
+fixes its position in the canonical per-execution drain order. A missing driver
+is a typed runtime execution error; there is no implicit synchronous fallback.
+
+The CPU immediate driver waits every dependency before launching work. CUDA
+and WebGPU drivers preserve same-backend ordering with native stream/event or
+queue/submission primitives and use host waits only for foreign tokens. The
+scheduler holds no runtime, driver, backend, or provider lock while invoking
+`enqueue`, launching work, or draining runs.
+
+Native retirement has a wider exceptional fallback. If CUDA cannot recover the
+scheduled stream, it attempts a context-wide barrier; both stream and context
+barriers are attempted even when context activation reports an error. If
+WebGPU cannot submit an exact stream-completion marker, it synchronizes the
+whole CubeCL client. These fallbacks preserve the primary operational error and
+any cleanup error. A synchronization call that reports queued execution failure
+is still a retirement boundary; an invalid or lost native domain is
+non-reusable.
+
+After the first enqueue or launch failure, the scheduler admits no later node
+and drains every run that was started. It also drains after successful output
+execution and collects outputs only after draining. Input, intermediate,
+transfer, and output storage remains retained until this drain completes.
+`EventDomainRun::drain` is a retirement boundary on both success and error; a
+driver may report completion failure only after work can no longer access
+retained resources. During panic unwinding, domain runs are dropped before
+value stores, so driver `Drop` cleanup drains outstanding work before tensor
+storage can be released. If execution and explicit cleanup both fail, the
+execution error remains the typed source and the cleanup failure is included in
+the diagnostic.
+
+Scheduled operation, transfer, and barrier nodes use this path in production.
+The current schedule builder does not yet emit explicit barriers, and
+collective execution remains a typed unsupported operation.
+
+The longer-term design may replace one token allocation per node with
+preplanned slots identified by `EventDomainId`, `EventSlotId`, and a
+generation, with concrete CUDA, WebGPU, PJRT, or CPU completion state stored in
+engine-owned per-run workspace. Exact slot recycling and generation management
+remain reserved for that optimization and must preserve the contract above.
 
 The engine attaches dependencies to subsequent work and providers never call a
 global synchronize after each operation. Cross-event-domain dependencies

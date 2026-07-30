@@ -49,10 +49,8 @@ impl EventDomainRun for CudaEventDomainRun {
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
-        self.stream_id.executes(|| {
-            let stream = raw_stream(&self.runtime).map_err(RuntimeError::from)?;
-            synchronize_stream(&self.runtime, stream).map_err(RuntimeError::from)
-        })
+        self.stream_id
+            .executes(|| retire_cuda_run(&self.runtime).map_err(RuntimeError::from))
     }
 }
 
@@ -100,10 +98,7 @@ impl CudaEventDomainRun {
 
 impl Drop for CudaEventDomainRun {
     fn drop(&mut self) {
-        let result = self.stream_id.executes(|| {
-            let stream = raw_stream(&self.runtime)?;
-            synchronize_stream(&self.runtime, stream)
-        });
+        let result = self.stream_id.executes(|| retire_cuda_run(&self.runtime));
         if let Err(error) = result {
             eprintln!("tenferro-gpu: failed to drain CUDA event-domain run during Drop: {error}");
         }
@@ -244,18 +239,112 @@ fn raw_stream(runtime: &CudaRuntime) -> crate::Result<CUstream> {
 }
 
 fn synchronize_stream(runtime: &CudaRuntime, stream: CUstream) -> crate::Result<()> {
-    runtime.set_current_cuda_context(EVENT_OP)?;
+    let activation = runtime.set_current_cuda_context(EVENT_OP);
     // `cuStreamSynchronize` is the retirement barrier even when it reports an
     // asynchronous launch failure discovered while waiting. Invalid
-    // context/handle errors instead mean the retained runtime domain is
-    // unusable; callers preserve that fatal backend error and must not reuse
-    // the domain.
-    unsafe { cuda_result::stream::synchronize(stream) }
-        .map_err(|source| crate::Error::backend_source(EVENT_OP, source))
+    // context/handle errors mean the retained runtime domain is unusable. The
+    // barrier is still attempted when context selection reports an error so
+    // cleanup never returns before trying either retirement path.
+    let barrier = unsafe { cuda_result::stream::synchronize(stream) };
+    match (activation, barrier) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(activation), Ok(())) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaStreamActivationError { activation },
+        )),
+        (Ok(()), Err(barrier)) => Err(crate::Error::backend_source(EVENT_OP, barrier)),
+        (Err(activation), Err(barrier)) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaStreamRetirementError {
+                activation,
+                barrier,
+            },
+        )),
+    }
+}
+
+fn retire_cuda_run(runtime: &CudaRuntime) -> crate::Result<()> {
+    let stream = match raw_stream(runtime) {
+        Ok(stream) => return synchronize_stream(runtime, stream),
+        Err(primary) => primary,
+    };
+    // Stream lookup can fail after work was admitted. A context-wide barrier is
+    // the retirement fallback; returning the lookup error after it succeeds
+    // preserves the operational failure without releasing live storage.
+    let activation = runtime.set_current_cuda_context(EVENT_OP);
+    let fallback = cuda_result::ctx::synchronize();
+    match (activation, fallback) {
+        (Ok(()), Ok(())) => Err(stream),
+        (Err(activation), Ok(())) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaContextActivationFallbackError {
+                primary: stream,
+                activation,
+            },
+        )),
+        (Ok(()), Err(fallback)) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaRetirementFallbackError {
+                primary: stream,
+                fallback,
+            },
+        )),
+        (Err(activation), Err(fallback)) => Err(crate::Error::backend_source(
+            EVENT_OP,
+            CudaRetirementFallbackCombinedError {
+                primary: stream,
+                activation,
+                fallback,
+            },
+        )),
+    }
 }
 
 fn cuda_backend_error(source: impl std::error::Error + Send + Sync + 'static) -> RuntimeError {
     RuntimeError::from(crate::Error::backend_source(EVENT_OP, source))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA stream lookup failed ({primary}); context retirement also reported {fallback}")]
+struct CudaRetirementFallbackError {
+    primary: crate::Error,
+    #[source]
+    fallback: cudarc::driver::DriverError,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA context selection reported {activation} before stream retirement completed")]
+struct CudaStreamActivationError {
+    #[source]
+    activation: crate::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA context selection failed ({activation}); stream retirement also reported {barrier}")]
+struct CudaStreamRetirementError {
+    activation: crate::Error,
+    #[source]
+    barrier: cudarc::driver::DriverError,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CUDA stream lookup failed ({primary}); context selection also reported {activation}")]
+struct CudaContextActivationFallbackError {
+    primary: crate::Error,
+    #[source]
+    activation: crate::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "CUDA stream lookup failed ({primary}); context selection failed ({activation}); \
+     context retirement also reported {fallback}"
+)]
+struct CudaRetirementFallbackCombinedError {
+    primary: crate::Error,
+    activation: crate::Error,
+    #[source]
+    fallback: cudarc::driver::DriverError,
 }
 
 #[derive(Debug, thiserror::Error)]
