@@ -23,6 +23,15 @@ use num_complex::{Complex32, Complex64};
 
 use crate::CacheStats;
 
+/// Non-Copy proof of a tracked pool checkout.
+#[derive(Debug)]
+pub(crate) enum UninitCheckoutToken {
+    /// The allocation was freshly allocated.
+    Fresh { actual_capacity: usize },
+    /// Retained storage was removed, with its actual capacity.
+    Reused { actual_capacity: usize },
+}
+
 /// Environment variable overriding the CPU buffer-pool retention cap in bytes.
 ///
 /// The value is parsed as an unsigned integer. Invalid values fall back to
@@ -199,16 +208,31 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     fn pool_release(pool: &mut BufferPool, buf: Vec<Self>);
 }
 
-mod private {
-    pub trait Sealed {}
+pub(crate) mod private {
+    use std::mem::MaybeUninit;
 
-    impl Sealed for f64 {}
-    impl Sealed for f32 {}
-    impl Sealed for i32 {}
-    impl Sealed for i64 {}
-    impl Sealed for bool {}
-    impl Sealed for num_complex::Complex64 {}
-    impl Sealed for num_complex::Complex32 {}
+    // INVARIANT: this sealed crate-private trait is the only implementation
+    // boundary for tracked guard tokens; it is not part of the public API.
+    #[allow(private_interfaces)]
+    pub trait Sealed {
+        /// Checks out uninitialized storage with an exact cleanup token.
+        ///
+        /// # Errors
+        /// Returns `Error::Validation` if retained-capacity byte accounting
+        /// overflows, or `Error::BackendSource` if fresh allocation fails.
+        fn pool_acquire_uninit_tracked(
+            pool: &mut super::BufferPool,
+            len: usize,
+        ) -> crate::Result<(Vec<MaybeUninit<Self>>, super::UninitCheckoutToken)>
+        where
+            Self: Sized;
+        fn pool_discard_uninit(
+            pool: &mut super::BufferPool,
+            data: Vec<MaybeUninit<Self>>,
+            checkout: super::UninitCheckoutToken,
+        ) where
+            Self: Sized;
+    }
 }
 
 fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Option<Vec<T>> {
@@ -298,6 +322,61 @@ fn replenish_in_flight_for<T>(
 
 macro_rules! impl_pool_scalar {
     ($ty:ty, $field:ident, $in_flight:ident, $zero:expr) => {
+        // INVARIANT: this implementation is reachable only through the sealed
+        // crate-private helper and cannot be named by sibling crates.
+        #[allow(private_interfaces)]
+        impl private::Sealed for $ty {
+            fn pool_acquire_uninit_tracked(
+                pool: &mut BufferPool,
+                len: usize,
+            ) -> crate::Result<(Vec<MaybeUninit<Self>>, UninitCheckoutToken)> {
+                match take_best_fit(&mut pool.$field, len) {
+                    Some(buf) => {
+                        let cap = buf.capacity();
+                        let bytes = cap.checked_mul(size_of::<Self>()).ok_or_else(|| {
+                            crate::Error::invalid_argument(
+                                "pooled_uninit_output",
+                                "length",
+                                "pool capacity byte length overflow",
+                            )
+                        })?;
+                        pool.retained_capacity_bytes -= bytes;
+                        increment_in_flight(&mut pool.$in_flight, cap);
+                        let mut buf = ManuallyDrop::new(buf);
+                        // SAFETY: MaybeUninit<Self> has the same layout as Self and len <= cap.
+                        let buf = unsafe { Vec::from_raw_parts(buf.as_mut_ptr().cast(), len, cap) };
+                        Ok((
+                            buf,
+                            UninitCheckoutToken::Reused {
+                                actual_capacity: cap,
+                            },
+                        ))
+                    }
+                    None => {
+                        let mut buf = Vec::new();
+                        buf.try_reserve_exact(len).map_err(|err| {
+                            crate::Error::backend_source("pooled_uninit_output", err)
+                        })?;
+                        // SAFETY: every bit pattern is valid for MaybeUninit.
+                        unsafe { buf.set_len(len) };
+                        let actual_capacity = buf.capacity();
+                        Ok((buf, UninitCheckoutToken::Fresh { actual_capacity }))
+                    }
+                }
+            }
+
+            fn pool_discard_uninit(
+                pool: &mut BufferPool,
+                data: Vec<MaybeUninit<Self>>,
+                checkout: UninitCheckoutToken,
+            ) {
+                drop(data);
+                if let UninitCheckoutToken::Reused { actual_capacity } = checkout {
+                    decrement_in_flight(&mut pool.$in_flight, actual_capacity);
+                }
+            }
+        }
+
         impl PoolScalar for $ty {
             fn pool_zero() -> Self {
                 $zero
@@ -395,6 +474,16 @@ impl_pool_scalar!(Complex64, c64_pool, c64_in_flight, Complex64::new(0.0, 0.0));
 impl_pool_scalar!(Complex32, c32_pool, c32_in_flight, Complex32::new(0.0, 0.0));
 
 impl BufferPool {
+    #[cfg(test)]
+    pub(crate) fn in_flight_is_empty(&self) -> bool {
+        self.f64_in_flight.is_empty()
+            && self.f32_in_flight.is_empty()
+            && self.i32_in_flight.is_empty()
+            && self.i64_in_flight.is_empty()
+            && self.bool_in_flight.is_empty()
+            && self.c64_in_flight.is_empty()
+            && self.c32_in_flight.is_empty()
+    }
     /// Create an empty typed buffer pool.
     ///
     /// # Examples

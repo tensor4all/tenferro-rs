@@ -943,7 +943,7 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
 }
 
 #[test]
-fn uninit_output_partial_write_then_panic_replenishes_only_capacity() {
+fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend
         .with_linalg_pool(|_, pool| {
@@ -963,8 +963,8 @@ fn uninit_output_partial_write_then_panic_replenishes_only_capacity() {
 
     assert!(result.is_err());
     let resources = backend.engine.resources.lock().unwrap_err().into_inner();
-    assert_eq!(resources.buffers.len(), 1);
-    assert_eq!(resources.buffers.stats().capacity_bytes, 1024);
+    assert_eq!(resources.buffers.len(), 0);
+    assert_eq!(resources.buffers.stats().capacity_bytes, 0);
 }
 
 #[test]

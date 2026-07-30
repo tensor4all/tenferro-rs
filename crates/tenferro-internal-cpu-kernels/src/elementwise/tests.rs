@@ -69,6 +69,132 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
 }
 
 #[test]
+fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
+    let mut buffers = BufferPool::new();
+    macro_rules! check {
+        ($ty:ty, $variant:ident) => {{
+            let max: $ty = <$ty>::MAX;
+            let expected: $ty = -2;
+            let scalar = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![max]).unwrap();
+            let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
+            let owned = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(other.clone())),
+            )
+            .unwrap();
+            assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
+            let view = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(scalar.as_view())),
+                TensorRead::from_view(TensorView::$variant(other.as_view())),
+            )
+            .unwrap();
+            assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
+            let broadcast = broadcast_multiply_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                &[],
+                &[],
+                TensorRead::from_tensor(&Tensor::$variant(other)),
+                &[],
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(broadcast.as_slice::<$ty>().unwrap(), &[expected]);
+
+            let vector = TypedTensor::<$ty>::from_vec_col_major(vec![3], vec![2, 3, 4]).unwrap();
+            let expected_vector = [
+                max.wrapping_mul(2),
+                max.wrapping_mul(3),
+                max.wrapping_mul(4),
+            ];
+            let owned_scalar_vector = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+            )
+            .unwrap();
+            assert_eq!(owned_scalar_vector.shape(), &[3]);
+            assert_eq!(
+                owned_scalar_vector.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+            let owned_vector_scalar = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+            )
+            .unwrap();
+            assert_eq!(owned_vector_scalar.shape(), &[3]);
+            assert_eq!(
+                owned_vector_scalar.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+
+            let view_scalar_vector = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(scalar.as_view())),
+                TensorRead::from_view(TensorView::$variant(vector.as_view())),
+            )
+            .unwrap();
+            assert_eq!(view_scalar_vector.shape(), &[3]);
+            assert_eq!(
+                view_scalar_vector.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+            let view_vector_scalar = mul_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(vector.as_view())),
+                TensorRead::from_view(TensorView::$variant(scalar.as_view())),
+            )
+            .unwrap();
+            assert_eq!(view_vector_scalar.shape(), &[3]);
+            assert_eq!(
+                view_vector_scalar.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+
+            let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                &[3],
+                &[],
+                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                &[3],
+                &[0],
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(broadcast_scalar_vector.shape(), &[3]);
+            assert_eq!(
+                broadcast_scalar_vector.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+            let broadcast_vector_scalar = broadcast_multiply_read_with_pool(
+                &mut buffers,
+                TensorRead::from_tensor(&Tensor::$variant(vector)),
+                &[3],
+                &[0],
+                TensorRead::from_tensor(&Tensor::$variant(scalar)),
+                &[3],
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(broadcast_vector_scalar.shape(), &[3]);
+            assert_eq!(
+                broadcast_vector_scalar.as_slice::<$ty>().unwrap(),
+                &expected_vector
+            );
+        }};
+    }
+    check!(i32, I32);
+    check!(i64, I64);
+}
+
+#[test]
 fn elementwise_fusion_executes_i32_add_multiply_plan() {
     use tenferro_tensor::backend::ElementwiseFusionInst;
 
@@ -1366,8 +1492,8 @@ fn ordered_compare_owned_and_read_routes_use_fixed_dispatch() {
         .map(|(body, _)| body)
         .expect("fixed comparison helper must remain defined");
     assert!(
-        helper.contains("compare_into("),
-        "fixed comparison helper must dispatch through strided compare_into"
+        helper.contains("compare_into_uninit("),
+        "fixed comparison helper must dispatch through strided compare_into_uninit"
     );
 
     for (start, end, route) in [
@@ -1555,6 +1681,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
             &lhs_f32,
             &[2, 3, 5],
             &[0, 1],
+            |x, y| x * y,
         ),
         "broadcast_multiply",
     );

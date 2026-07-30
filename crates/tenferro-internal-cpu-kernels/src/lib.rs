@@ -2,22 +2,31 @@
 
 //! Internal CPU kernel and scratch-pool implementation crate.
 
+#[cfg(test)]
+use std::mem::MaybeUninit;
+
 pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_tensor::{CacheStats, Error, ErrorKind};
 
 pub mod buffer_pool;
+mod pooled_uninit_output;
+/// Canonical pooled full-overwrite owner shared with the sibling `tenferro-cpu`
+/// crate. This is the minimum cross-crate surface required for one ownership
+/// contract; `pub(crate)` cannot cross that crate boundary. Construction only
+/// exposes `MaybeUninit` storage, with initialization completed by an explicit
+/// unsafe handoff.
+pub use pooled_uninit_output::PooledUninitOutput;
 pub mod elementwise;
 
 use num_complex::{Complex32, Complex64};
-use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedArray, StridedView};
+use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView};
 #[cfg(test)]
-use strided_kernel::{copy_into, Identity};
-use tenferro_tensor::{
-    validate::checked_shape_product, Buffer, DType, TensorRank, TypedTensor, TypedTensorView,
-};
+use strided_kernel::{map_into, Identity};
+use tenferro_tensor::{Buffer, DType, TensorRank, TypedTensor, TypedTensorView};
 #[cfg(test)]
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
+#[cfg(test)]
 use crate::buffer_pool::{BufferPool, PoolScalar};
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> Error {
@@ -111,34 +120,6 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
     .map_err(|err| Error::backend_source(op, err))
 }
 
-/// Create an output array from the CPU buffer pool WITHOUT initializing values.
-///
-/// # Safety
-/// Caller must write every element before reading. The returned array contains
-/// uninitialized or stale data acquired from `buffers`.
-pub(crate) unsafe fn typed_array_uninit_from_pool<T>(
-    buffers: &mut BufferPool,
-    shape: &[usize],
-) -> Result<StridedArray<T>>
-where
-    T: PoolScalar,
-{
-    let total = checked_shape_product("typed_array_uninit_from_pool", "shape", shape)?;
-    let strides = kernel_col_major_strides(shape);
-    // SAFETY: callers use this only for operation outputs that fully overwrite every element.
-    let data = unsafe { T::pool_acquire(buffers, total) };
-    // Invariant: callers pass validated tensor-derived or prechecked output
-    // shapes, and `strides` is their compact column-major layout.
-    StridedArray::from_parts(data, shape, &strides, 0)
-        .map_err(|err| Error::backend_source("typed_array_uninit_from_pool", err))
-}
-
-pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
-    // Invariant: `StridedArray` owns data whose length matches its validated dimensions.
-    TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())
-        .expect("strided array dimensions match owned data length")
-}
-
 #[cfg(test)]
 pub(crate) fn materialize_tensor_read(
     buffers: &mut BufferPool,
@@ -216,14 +197,18 @@ where
         view.offset(),
     )
     .map_err(|err| Error::backend_source(op, err))?;
-    // SAFETY: copy_into overwrites every logical output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, view.shape()) }?;
-    copy_into(&mut out.view_mut(), &src).map_err(|err| Error::backend_source(op, err))?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape().to_vec())?;
+    map_into(&mut out.as_uninit_view_mut()?, &src, |x| {
+        MaybeUninit::new(x)
+    })
+    .map_err(|err| Error::backend_source(op, err))?;
+    // SAFETY: the successful materialize map replay writes every logical destination element and retains no destination view.
+    let out = unsafe { out.assume_init_as::<R>()? };
     let shape = R::shape_from_vec(view.shape().to_vec().into())
         .map_err(|err| Error::backend_source(op, err))?;
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Host(out.into_data()),
+        Buffer::Host(out.into_vec_col_major()?.1),
         view.placement().clone(),
     )
 }
