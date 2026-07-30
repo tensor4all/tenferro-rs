@@ -104,6 +104,9 @@ Thumbs.db
 # Git worktrees
 .worktrees/
 
+# CodeGraph index
+/.codegraph/
+
 # External / vendored source
 external/
 
