@@ -431,6 +431,7 @@ fn grouped_gemm_rejects_overlapping_output_ranges() {
     )
     .unwrap_err();
     assert!(format!("{err}").contains("overlaps"));
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0; 8]);
 }
 
 #[test]
