@@ -15,6 +15,8 @@ use tenferro_tensor::{
     AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView,
 };
 
+#[cfg(not(target_family = "wasm"))]
+use super::event_domain::WebGpuEventDomainDriver;
 use super::{WebGpuBackend, WebGpuBuffer};
 
 const WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
@@ -117,7 +119,7 @@ pub fn webgpu_runtime_engine_registration(
         capabilities.build(),
     )
     .map(|registration| {
-        registration
+        let registration = registration
             .with_tensor_backend_executor(execution_backend)
             .with_input_signature_validator(move |placement, family, domain, candidate| {
                 candidate == &signature_storage
@@ -142,7 +144,12 @@ pub fn webgpu_runtime_engine_registration(
                     candidate == &resident_storage
                         && webgpu_input_tensor(input, device_ordinal, allocation_domain)
                 },
-            )
+            );
+        #[cfg(not(target_family = "wasm"))]
+        let registration = registration.with_event_domain_driver(Arc::new(
+            WebGpuEventDomainDriver::new(backend.runtime().clone()),
+        ));
+        registration
     })
 }
 

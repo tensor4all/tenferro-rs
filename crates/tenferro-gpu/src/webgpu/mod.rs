@@ -19,6 +19,8 @@ const DEFAULT_CUBE_DIM_X: u32 = 256;
 
 mod apple;
 mod error;
+#[cfg(not(target_family = "wasm"))]
+mod event_domain;
 mod gemm;
 pub(crate) mod interop;
 mod kernels;
