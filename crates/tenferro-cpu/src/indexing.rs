@@ -9,8 +9,9 @@ use strided_kernel::{
 };
 
 use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
-use super::indexing_alloc::{pooled_uninit_tensor, PooledUninitOutput};
+use super::indexing_alloc::pooled_uninit_tensor;
 use super::typed_host_data;
+use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};

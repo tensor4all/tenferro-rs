@@ -65,6 +65,7 @@ mod domain_executor;
 #[allow(dead_code)]
 mod dot_runtime;
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
+pub(crate) use tenferro_internal_cpu_kernels::PooledUninitOutput;
 mod engine;
 mod exec_session;
 mod gemm;

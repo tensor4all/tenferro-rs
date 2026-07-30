@@ -1,18 +1,19 @@
-use std::mem::size_of_val;
+use std::mem::{size_of_val, MaybeUninit};
 use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
 use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
 use strided_kernel::{
-    batched_outer_product_into, broadcast_mul_into, compare_into, map_into, mul_into, reduce,
-    zip_map2_into, zip_map3_into, CompareOp, ErasedFusedPlan, ErasedRawStridedMut,
-    ErasedRawStridedRef, ExecContext, FusedInst, FusedOp, FusedPlan, KernelDType, StridedArray,
-    StridedView,
+    batched_outer_product_into_uninit, broadcast_mul_into_uninit, compare_into_uninit, map_into,
+    mul_into_uninit, reduce, zip_map2_into, zip_map3_into, CompareOp, ErasedFusedPlan,
+    ErasedRawStridedPtr, ErasedRawStridedRef, ErasedRawStridedUninitMut, ExecContext, FusedInst,
+    FusedOp, FusedPlan, KernelDType, StridedView,
 };
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::ConjElem;
+use crate::PooledUninitOutput;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionOp, ElementwiseFusionPlan,
 };
@@ -21,10 +22,7 @@ use tenferro_tensor::{
     TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
-use super::{
-    tensor_from_array, typed_array_uninit_from_pool, typed_host_data, typed_view,
-    typed_view_from_view,
-};
+use super::{typed_host_data, typed_view, typed_view_from_view};
 
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -224,13 +222,6 @@ fn typed_bytes<T>(data: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
 }
 
-fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
-    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
-    // the same lifetime and exact byte length; erased kernels restore the
-    // dtype-specific byte validity invariant before typed reads resume.
-    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
-}
-
 struct ErasedFusionInput<'a> {
     data: &'a [u8],
     dims: Vec<usize>,
@@ -321,24 +312,6 @@ fn erased_fusion_input<'a>(
     })
 }
 
-fn typed_array_zeroed_from_pool<T>(
-    buffers: &mut BufferPool,
-    shape: &[usize],
-) -> crate::Result<StridedArray<T>>
-where
-    T: PoolScalar,
-{
-    let total = tenferro_tensor::validate::checked_shape_product(
-        "typed_array_zeroed_from_pool",
-        "shape",
-        shape,
-    )?;
-    let strides = col_major_strides(shape)?;
-    let data = T::pool_acquire_zeroed(buffers, total);
-    StridedArray::from_parts(data, shape, &strides, 0)
-        .map_err(|err| crate::Error::backend_source("typed_array_zeroed_from_pool", err))
-}
-
 #[doc(hidden)]
 pub trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
     fn abs_elem(self) -> Self;
@@ -359,7 +332,16 @@ pub trait CompareElem: Copy + Send + Sync {
 }
 
 trait WrappingIntegerElem:
-    Copy + PoolScalar + TensorScalar + Zero + PartialEq + Eq + Send + Sync + 'static
+    Copy
+    + PoolScalar
+    + TensorScalar
+    + Zero
+    + PartialEq
+    + Eq
+    + Send
+    + Sync
+    + Mul<Output = Self>
+    + 'static
 {
     fn wrapping_add_elem(self, other: Self) -> Self;
     fn wrapping_sub_elem(self, other: Self) -> Self;
@@ -1250,6 +1232,10 @@ fn execute_erased_fused_outputs(
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<Vec<Tensor>> {
+    let input_ptrs: Vec<_> = input_refs
+        .iter()
+        .map(ErasedRawStridedPtr::from_ref)
+        .collect();
     match dtype {
         KernelDType::F32 => plan
             .outputs()
@@ -1259,11 +1245,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::F32,
                 )
             })
@@ -1276,11 +1261,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::F64,
                 )
             })
@@ -1293,11 +1277,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::I32,
                 )
             })
@@ -1310,11 +1293,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::I64,
                 )
             })
@@ -1327,11 +1309,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    true,
                     Tensor::Bool,
                 )
             })
@@ -1344,11 +1325,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::C32,
                 )
             })
@@ -1361,11 +1341,10 @@ fn execute_erased_fused_outputs(
                     buffers,
                     exec_context,
                     dtype,
-                    input_refs,
+                    &input_ptrs,
                     shape,
                     plan,
                     output,
-                    false,
                     Tensor::C64,
                 )
             })
@@ -1382,11 +1361,10 @@ fn execute_erased_fused_output<T>(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
     dtype: KernelDType,
-    input_refs: &[ErasedRawStridedRef<'_>],
+    input_ptrs: &[ErasedRawStridedPtr<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
     output: usize,
-    zeroed_output: bool,
     wrap: fn(TypedTensor<T>) -> Tensor,
 ) -> crate::Result<Tensor>
 where
@@ -1395,25 +1373,16 @@ where
     let fused_plan = single_output_strided_fused_plan(plan, output);
     let erased_plan = ErasedFusedPlan::compile(dtype, fused_plan)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    let mut out = if zeroed_output {
-        typed_array_zeroed_from_pool(buffers, shape)?
-    } else {
-        // SAFETY: ErasedFusedPlan overwrites every destination element before typed reads resume.
-        unsafe { typed_array_uninit_from_pool(buffers, shape) }?
-    };
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
     let output_strides = col_major_strides(shape)?;
-    let mut dest = ErasedRawStridedMut::new(
-        dtype,
-        typed_bytes_mut(out.data_mut()),
-        shape,
-        &output_strides,
-        0,
-    )
-    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    let mut dest =
+        ErasedRawStridedUninitMut::new(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     erased_plan
-        .execute(exec_context, &mut dest, input_refs)
+        .execute_uninit(exec_context, &mut dest, input_ptrs)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-    Ok(wrap(tensor_from_array(out)))
+    // SAFETY: the fused replay writes every logical destination element and retains no destination view.
+    Ok(wrap(unsafe { out.assume_init()? }))
 }
 
 fn typed_binary_view_with_pool<T, L, R>(
@@ -1429,34 +1398,40 @@ where
     R: TensorRank,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
             &typed_view_from_view(op, rhs)?,
-            f,
+            |a, b| MaybeUninit::new(f(a, b)),
         )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.
+        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
-        // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
-            f(scalar, x)
-        })
+        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view_from_view(op, rhs)?,
+            |x| MaybeUninit::new(f(scalar, x)),
+        )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.
+        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
-        // SAFETY: the following kernel overwrites every output element before any read.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
-            f(x, scalar)
-        })
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view_from_view(op, lhs)?,
+            |x| MaybeUninit::new(f(x, scalar)),
+        )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
         Err(crate::Error::shape_mismatch(
             op,
@@ -1476,11 +1451,15 @@ where
     T: Copy + PoolScalar + 'static,
     R: TensorRank,
 {
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(tensor_from_array(out))
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &typed_view_from_view(op, input)?,
+        |x| MaybeUninit::new(f(x)),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    // SAFETY: the successful map replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 fn typed_same_shape_binary_view_with_pool<T, O, L, R>(
@@ -1503,16 +1482,16 @@ where
             rhs.shape().to_vec(),
         ));
     }
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+    let mut out = PooledUninitOutput::<O>::new(buffers, lhs.shape().to_vec())?;
     zip_map2_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view_from_view(op, lhs)?,
         &typed_view_from_view(op, rhs)?,
-        f,
+        |a, b| MaybeUninit::new(f(a, b)),
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful zip replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 fn typed_ordered_compare_view_with_pool<T, L, R>(
@@ -1540,16 +1519,16 @@ where
         CompareDir::Gt => CompareOp::Gt,
         CompareDir::Ge => CompareOp::Ge,
     };
-    // SAFETY: compare_into validates the output layout and overwrites every element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-    compare_into(
-        &mut out.view_mut(),
+    let mut out = PooledUninitOutput::<bool>::new(buffers, lhs.shape().to_vec())?;
+    compare_into_uninit(
+        &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("compare", lhs)?,
         &typed_view_from_view("compare", rhs)?,
         op,
     )
     .map_err(|err| crate::Error::backend_source("compare", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful compare replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 fn typed_select_view_with_pool<T, P, A, B>(
@@ -1578,17 +1557,17 @@ where
             on_false.shape().to_vec(),
         ));
     }
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, pred.shape().to_vec())?;
     zip_map3_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("select", pred)?,
         &typed_view_from_view("select", on_true)?,
         &typed_view_from_view("select", on_false)?,
-        |p, t, f| if p { t } else { f },
+        |p, t, f| MaybeUninit::new(if p { t } else { f }),
     )
     .map_err(|err| crate::Error::backend_source("select", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful select replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 fn typed_clamp_view_with_pool<T, I, L, U>(
@@ -1617,17 +1596,17 @@ where
             upper.shape().to_vec(),
         ));
     }
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
     zip_map3_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("clamp", input)?,
         &typed_view_from_view("clamp", lower)?,
         &typed_view_from_view("clamp", upper)?,
-        |x, lo, hi| hi.min_elem(lo.max_elem(x)),
+        |x, lo, hi| MaybeUninit::new(hi.min_elem(lo.max_elem(x))),
     )
     .map_err(|err| crate::Error::backend_source("clamp", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful clamp replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[derive(Clone, Copy)]
@@ -1848,8 +1827,7 @@ where
         return Ok(None);
     };
 
-    // SAFETY: every element in the column-major output is assigned below.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, lhs_shape.to_vec())?;
     let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
     let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
     match plan.layout {
@@ -1872,8 +1850,8 @@ where
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
                 .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
-            batched_outer_product_into(
-                &mut out.view_mut(),
+            batched_outer_product_into_uninit(
+                &mut out.as_uninit_view_mut()?,
                 &lhs_outer,
                 &rhs_outer,
                 plan.lhs_free_axes.len(),
@@ -1900,8 +1878,8 @@ where
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
                 .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
-            batched_outer_product_into(
-                &mut out.view_mut(),
+            batched_outer_product_into_uninit(
+                &mut out.as_uninit_view_mut()?,
                 &rhs_outer,
                 &lhs_outer,
                 plan.rhs_free_axes.len(),
@@ -1910,7 +1888,8 @@ where
             .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
         }
     }
-    Ok(Some(tensor_from_array(out)))
+    // SAFETY: the successful outer-product replay writes every logical destination element and retains no destination view.
+    Ok(Some(unsafe { out.assume_init()? }))
 }
 
 struct LazyOuterProduct<T> {
@@ -2096,10 +2075,9 @@ where
                 rhs_dims,
             })?;
 
-            // SAFETY: every element in the physical base output is assigned below.
-            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) }?;
-            batched_outer_product_into(
-                &mut base.view_mut(),
+            let mut base = PooledUninitOutput::<T>::new(buffers, base_shape.clone())?;
+            batched_outer_product_into_uninit(
+                &mut base.as_uninit_view_mut()?,
                 &lhs_outer,
                 &rhs_outer,
                 lhs_free_axes.len(),
@@ -2107,7 +2085,8 @@ where
             )
             .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             Ok(Some(LazyOuterProduct {
-                base: tensor_from_array(base),
+                // SAFETY: the successful outer-product replay writes every logical base element and retains no destination view.
+                base: unsafe { base.assume_init()? },
                 shape: lhs_shape.to_vec(),
                 strides,
             }))
@@ -2147,10 +2126,9 @@ where
                 rhs_dims,
             })?;
 
-            // SAFETY: every element in the physical base output is assigned below.
-            let mut base = unsafe { typed_array_uninit_from_pool(buffers, &base_shape) }?;
-            batched_outer_product_into(
-                &mut base.view_mut(),
+            let mut base = PooledUninitOutput::<T>::new(buffers, base_shape.clone())?;
+            batched_outer_product_into_uninit(
+                &mut base.as_uninit_view_mut()?,
                 &rhs_outer,
                 &lhs_outer,
                 rhs_free_axes.len(),
@@ -2158,7 +2136,8 @@ where
             )
             .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             Ok(Some(LazyOuterProduct {
-                base: tensor_from_array(base),
+                // SAFETY: the successful outer-product replay writes every logical base element and retains no destination view.
+                base: unsafe { base.assume_init()? },
                 shape: lhs_shape.to_vec(),
                 strides,
             }))
@@ -2175,6 +2154,7 @@ fn typed_broadcast_mul_view_with_pool<T, L, R>(
     rhs: &TypedTensorView<'_, T, R>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
+    mul: impl Fn(T, T) -> T + Copy + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
@@ -2198,46 +2178,46 @@ where
     if lhs_is_scalar && rhs_is_scalar {
         let lhs_scalar = typed_view_from_view("broadcast_multiply", lhs)?.get(&[]);
         let rhs_scalar = typed_view_from_view("broadcast_multiply", rhs)?.get(&[]);
-        return filled_broadcast_multiply_tensor(buffers, lhs_shape, lhs_scalar * rhs_scalar);
+        return filled_broadcast_multiply_tensor(buffers, lhs_shape, mul(lhs_scalar, rhs_scalar));
     }
     if lhs_is_scalar && rhs_is_full_output {
         let scalar = typed_view_from_view("broadcast_multiply", lhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs_shape.to_vec())?;
         map_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("broadcast_multiply", rhs)?,
-            |x| scalar * x,
+            |x| MaybeUninit::new(mul(scalar, x)),
         )
         .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
-        return Ok(tensor_from_array(out));
+        // SAFETY: the successful broadcast map replay writes every logical destination element and retains no destination view.
+        return Ok(unsafe { out.assume_init()? });
     }
     if rhs_is_scalar && lhs_is_full_output {
         let scalar = typed_view_from_view("broadcast_multiply", rhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs_shape.to_vec())?;
         map_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("broadcast_multiply", lhs)?,
-            |x| x * scalar,
+            |x| MaybeUninit::new(mul(x, scalar)),
         )
         .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
-        return Ok(tensor_from_array(out));
+        // SAFETY: the successful broadcast map replay writes every logical destination element and retains no destination view.
+        return Ok(unsafe { out.assume_init()? });
     }
 
-    // SAFETY: broadcast_mul_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs_shape) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, lhs_shape.to_vec())?;
     let lhs_view = typed_view_from_view("broadcast_multiply", lhs)?;
     let rhs_view = typed_view_from_view("broadcast_multiply", rhs)?;
-    broadcast_mul_into(
-        &mut out.view_mut(),
+    broadcast_mul_into_uninit(
+        &mut out.as_uninit_view_mut()?,
         &lhs_view,
         lhs_dims,
         &rhs_view,
         rhs_dims,
     )
     .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful broadcast replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 fn filled_broadcast_multiply_tensor<T>(
@@ -2248,19 +2228,12 @@ fn filled_broadcast_multiply_tensor<T>(
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
-    let len = shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                "broadcast_multiply",
-                "shape",
-                "output shape size overflows usize",
-            )
-        })
-    })?;
-    // SAFETY: every pooled element is initialized with `fill` before tensor construction.
-    let mut data = unsafe { T::pool_acquire(buffers, len) };
-    data.fill(fill);
-    TypedTensor::from_vec_col_major(shape.to_vec(), data)
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
+    for item in out.as_uninit_slice_mut().iter_mut() {
+        item.write(fill);
+    }
+    // SAFETY: the fill replay writes every logical destination element and retains no destination view.
+    unsafe { out.assume_init() }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2278,25 +2251,29 @@ pub fn broadcast_multiply_read_with_pool(
     let rhs = read_as_cpu_view(rhs);
 
     macro_rules! dispatch {
-        ($variant:ident, $lhs:expr, $rhs:expr) => {{
+        ($variant:ident, $lhs:expr, $rhs:expr, $mul:expr) => {{
             if let Some(out) = try_outer_product_with_pool(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
                 return Ok(Some(Tensor::$variant(out)));
             }
             Ok(Some(Tensor::$variant(typed_broadcast_mul_view_with_pool(
-                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
+                buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims, $mul,
             )?)))
         }};
     }
 
     match (lhs, rhs) {
-        (CpuReadView::F32(lhs), CpuReadView::F32(rhs)) => dispatch!(F32, lhs, rhs),
-        (CpuReadView::F64(lhs), CpuReadView::F64(rhs)) => dispatch!(F64, lhs, rhs),
-        (CpuReadView::I32(lhs), CpuReadView::I32(rhs)) => dispatch!(I32, lhs, rhs),
-        (CpuReadView::I64(lhs), CpuReadView::I64(rhs)) => dispatch!(I64, lhs, rhs),
-        (CpuReadView::C32(lhs), CpuReadView::C32(rhs)) => dispatch!(C32, lhs, rhs),
-        (CpuReadView::C64(lhs), CpuReadView::C64(rhs)) => dispatch!(C64, lhs, rhs),
+        (CpuReadView::F32(lhs), CpuReadView::F32(rhs)) => dispatch!(F32, lhs, rhs, |x, y| x * y),
+        (CpuReadView::F64(lhs), CpuReadView::F64(rhs)) => dispatch!(F64, lhs, rhs, |x, y| x * y),
+        (CpuReadView::I32(lhs), CpuReadView::I32(rhs)) => {
+            dispatch!(I32, lhs, rhs, |x, y| x.wrapping_mul(y))
+        }
+        (CpuReadView::I64(lhs), CpuReadView::I64(rhs)) => {
+            dispatch!(I64, lhs, rhs, |x, y| x.wrapping_mul(y))
+        }
+        (CpuReadView::C32(lhs), CpuReadView::C32(rhs)) => dispatch!(C32, lhs, rhs, |x, y| x * y),
+        (CpuReadView::C64(lhs), CpuReadView::C64(rhs)) => dispatch!(C64, lhs, rhs, |x, y| x * y),
         _ => Ok(None),
     }
 }
@@ -3394,34 +3371,38 @@ where
     T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view("add", lhs)?,
             &typed_view("add", rhs)?,
-            |x, y| x + y,
+            |x, y| MaybeUninit::new(x + y),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("add", lhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
-            scalar + x
-        })
+        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view("add", rhs)?,
+            |x| MaybeUninit::new(scalar + x),
+        )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful add scalar map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("add", rhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
-            x + scalar
-        })
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view("add", lhs)?,
+            |x| MaybeUninit::new(x + scalar),
+        )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful add scalar map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
         Err(crate::Error::shape_mismatch(
             "add",
@@ -3442,30 +3423,34 @@ where
     T: Copy + PoolScalar + 'static,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view(op, lhs)?,
             &typed_view(op, rhs)?,
-            f,
+            |x, y| MaybeUninit::new(f(x, y)),
         )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful binary zip/map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data(op, lhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view(op, rhs)?, |x| f(scalar, x))
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
+        map_into(&mut out.as_uninit_view_mut()?, &typed_view(op, rhs)?, |x| {
+            MaybeUninit::new(f(scalar, x))
+        })
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+        // SAFETY: the successful binary scalar map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data(op, rhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view(op, lhs)?, |x| f(x, scalar))
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(tensor_from_array(out))
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        map_into(&mut out.as_uninit_view_mut()?, &typed_view(op, lhs)?, |x| {
+            MaybeUninit::new(f(x, scalar))
+        })
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+        // SAFETY: the successful binary scalar map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
         Err(crate::Error::shape_mismatch(
             op,
@@ -3481,7 +3466,7 @@ fn typed_wrapping_add_with_pool<T>(
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingIntegerElem,
+    T: WrappingIntegerElem + Mul<Output = T>,
 {
     typed_binary_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
 }
@@ -3492,7 +3477,7 @@ fn typed_wrapping_add_view_with_pool<T, L, R>(
     rhs: &TypedTensorView<'_, T, R>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingIntegerElem,
+    T: WrappingIntegerElem + Mul<Output = T>,
     L: TensorRank,
     R: TensorRank,
 {
@@ -3511,38 +3496,38 @@ where
     R: TensorRank,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("add", lhs)?,
             &typed_view_from_view("add", rhs)?,
-            |x, y| x + y,
+            |x, y| MaybeUninit::new(x + y),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", lhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, rhs.shape().to_vec())?;
         map_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("add", rhs)?,
-            |x| scalar + x,
+            |x| MaybeUninit::new(scalar + x),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", rhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
         map_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("add", lhs)?,
-            |x| x + scalar,
+            |x| MaybeUninit::new(x + scalar),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
         Err(crate::Error::shape_mismatch(
             "add",
@@ -3612,39 +3597,17 @@ where
     T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar + 'static,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: mul_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        mul_into(
-            &mut out.view_mut(),
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        mul_into_uninit(
+            &mut out.as_uninit_view_mut()?,
             &typed_view("mul", lhs)?,
             &typed_view("mul", rhs)?,
         )
         .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
-    } else if lhs.shape().is_empty() {
-        let scalar = typed_host_data("mul", lhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("mul", rhs)?, |x| {
-            scalar * x
-        })
-        .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
-    } else if rhs.shape().is_empty() {
-        let scalar = typed_host_data("mul", rhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("mul", lhs)?, |x| {
-            x * scalar
-        })
-        .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
-        Err(crate::Error::shape_mismatch(
-            "mul",
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-        ))
+        typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x * y)
     }
 }
 
@@ -3656,7 +3619,19 @@ fn typed_wrapping_mul_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+    if lhs.shape() == rhs.shape() {
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        mul_into_uninit(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view("mul", lhs)?,
+            &typed_view("mul", rhs)?,
+        )
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
+        // SAFETY: the successful wrapping multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
+    } else {
+        typed_binary_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+    }
 }
 
 fn typed_wrapping_mul_view_with_pool<T, L, R>(
@@ -3669,7 +3644,19 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+    if lhs.shape() == rhs.shape() {
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        mul_into_uninit(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view_from_view("mul", lhs)?,
+            &typed_view_from_view("mul", rhs)?,
+        )
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
+        // SAFETY: the successful wrapping multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
+    } else {
+        typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
+    }
 }
 
 #[doc(hidden)]
@@ -3684,43 +3671,17 @@ where
     R: TensorRank,
 {
     if lhs.shape() == rhs.shape() {
-        // SAFETY: mul_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        mul_into(
-            &mut out.view_mut(),
+        let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
+        mul_into_uninit(
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view("mul", lhs)?,
             &typed_view_from_view("mul", rhs)?,
         )
         .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
-    } else if lhs.shape().is_empty() {
-        let scalar = typed_view_from_view("mul", lhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(
-            &mut out.view_mut(),
-            &typed_view_from_view("mul", rhs)?,
-            |x| scalar * x,
-        )
-        .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
-    } else if rhs.shape().is_empty() {
-        let scalar = typed_view_from_view("mul", rhs)?.get(&[]);
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(
-            &mut out.view_mut(),
-            &typed_view_from_view("mul", lhs)?,
-            |x| x * scalar,
-        )
-        .map_err(|err| crate::Error::backend_source("mul", err))?;
-        Ok(tensor_from_array(out))
+        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        Ok(unsafe { out.assume_init()? })
     } else {
-        Err(crate::Error::shape_mismatch(
-            "mul",
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-        ))
+        typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x * y)
     }
 }
 
@@ -3731,44 +3692,9 @@ pub fn typed_div_with_pool<T>(
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
+    T: Copy + Clone + Zero + Div<Output = T> + PoolScalar + 'static,
 {
-    if lhs.shape() == rhs.shape() {
-        // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        zip_map2_into(
-            &mut out.view_mut(),
-            &typed_view("div", lhs)?,
-            &typed_view("div", rhs)?,
-            |x, y| x / y,
-        )
-        .map_err(|err| crate::Error::backend_source("div", err))?;
-        Ok(tensor_from_array(out))
-    } else if lhs.shape().is_empty() {
-        let scalar = typed_host_data("div", lhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("div", rhs)?, |x| {
-            scalar / x
-        })
-        .map_err(|err| crate::Error::backend_source("div", err))?;
-        Ok(tensor_from_array(out))
-    } else if rhs.shape().is_empty() {
-        let scalar = typed_host_data("div", rhs)?[0];
-        // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-        map_into(&mut out.view_mut(), &typed_view("div", lhs)?, |x| {
-            x / scalar
-        })
-        .map_err(|err| crate::Error::backend_source("div", err))?;
-        Ok(tensor_from_array(out))
-    } else {
-        Err(crate::Error::shape_mismatch(
-            "div",
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-        ))
-    }
+    typed_binary_with_pool("div", buffers, lhs, rhs, |x, y| x / y)
 }
 
 fn typed_integer_div_with_pool<T>(
@@ -3839,18 +3765,36 @@ where
 }
 
 #[doc(hidden)]
+fn typed_map_with_pool<T, O>(
+    op: &'static str,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    f: impl Fn(T) -> O + Copy + Sync,
+) -> crate::Result<TypedTensor<O>>
+where
+    T: Copy + Send + Sync + 'static,
+    O: Clone + PoolScalar,
+{
+    let mut out = PooledUninitOutput::<O>::new(buffers, input.shape().to_vec())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &typed_view(op, input)?,
+        |x| MaybeUninit::new(f(x)),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    // SAFETY: the successful same-shape replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
+}
+
+#[doc(hidden)]
 pub fn typed_neg_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
+    T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar + 'static,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
-        .map_err(|err| crate::Error::backend_source("neg", err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool("neg", buffers, input, |x| -x)
 }
 
 fn typed_wrapping_unary_with_pool<T>(
@@ -3862,11 +3806,7 @@ fn typed_wrapping_unary_with_pool<T>(
 where
     T: WrappingIntegerElem,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool(op, buffers, input, f)
 }
 
 fn typed_wrapping_neg_with_pool<T>(
@@ -3895,15 +3835,9 @@ pub fn typed_conj_with_pool<T>(
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + ConjElem + PoolScalar,
+    T: Copy + Clone + Zero + ConjElem + PoolScalar + 'static,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("conj", input)?, |x| {
-        x.conj_elem()
-    })
-    .map_err(|err| crate::Error::backend_source("conj", err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool("conj", buffers, input, |x| x.conj_elem())
 }
 
 #[doc(hidden)]
@@ -3912,15 +3846,9 @@ pub fn typed_abs_with_pool<T>(
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: Tier2Elem + PoolScalar + 'static,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
-        x.abs_elem()
-    })
-    .map_err(|err| crate::Error::backend_source("abs", err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool("abs", buffers, input, |x| x.abs_elem())
 }
 
 fn typed_complex_abs_with_pool<T>(
@@ -3928,15 +3856,9 @@ fn typed_complex_abs_with_pool<T>(
     input: &TypedTensor<Complex<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: num_traits::Float + PoolScalar,
+    T: num_traits::Float + PoolScalar + 'static,
 {
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
-        x.norm()
-    })
-    .map_err(|err| crate::Error::backend_source("abs", err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool("abs", buffers, input, |x| x.norm())
 }
 
 fn typed_complex_abs_view_with_pool<T, R>(
@@ -3947,15 +3869,15 @@ where
     T: num_traits::Float + PoolScalar + 'static,
     R: TensorRank,
 {
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
     map_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view_from_view("abs", input)?,
-        |x| x.norm(),
+        |x| MaybeUninit::new(x.norm()),
     )
     .map_err(|err| crate::Error::backend_source("abs", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful unary map replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[doc(hidden)]
@@ -3964,15 +3886,9 @@ pub fn typed_sign_with_pool<T>(
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: Tier2Elem + PoolScalar + 'static,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("sign", input)?, |x| {
-        x.sign_elem()
-    })
-    .map_err(|err| crate::Error::backend_source("sign", err))?;
-    Ok(tensor_from_array(out))
+    typed_map_with_pool("sign", buffers, input, |x| x.sign_elem())
 }
 
 fn typed_integer_sign_with_pool<T>(
@@ -4001,16 +3917,16 @@ where
             rhs.shape().to_vec(),
         ));
     }
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
     zip_map2_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view("maximum", lhs)?,
         &typed_view("maximum", rhs)?,
-        |x, y| x.max_elem(y),
+        |x, y| MaybeUninit::new(x.max_elem(y)),
     )
     .map_err(|err| crate::Error::backend_source("maximum", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful binary zip replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[doc(hidden)]
@@ -4029,16 +3945,16 @@ where
             rhs.shape().to_vec(),
         ));
     }
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, lhs.shape().to_vec())?;
     zip_map2_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view("minimum", lhs)?,
         &typed_view("minimum", rhs)?,
-        |x, y| x.min_elem(y),
+        |x, y| MaybeUninit::new(x.min_elem(y)),
     )
     .map_err(|err| crate::Error::backend_source("minimum", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful binary zip replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[doc(hidden)]
@@ -4058,16 +3974,16 @@ where
             rhs.shape().to_vec(),
         ));
     }
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
+    let mut out = PooledUninitOutput::<bool>::new(buffers, lhs.shape().to_vec())?;
     zip_map2_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view("compare", lhs)?,
         &typed_view("compare", rhs)?,
-        |x, y| x.compare_elem(y, dir),
+        |x, y| MaybeUninit::new(x.compare_elem(y, dir)),
     )
     .map_err(|err| crate::Error::backend_source("compare", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful compare replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[doc(hidden)]
@@ -4094,17 +4010,17 @@ where
             on_false.shape().to_vec(),
         ));
     }
-    // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, pred.shape().to_vec())?;
     zip_map3_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view("select", pred)?,
         &typed_view("select", on_true)?,
         &typed_view("select", on_false)?,
-        |p, t, f| if p { t } else { f },
+        |p, t, f| MaybeUninit::new(if p { t } else { f }),
     )
     .map_err(|err| crate::Error::backend_source("select", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful select replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[doc(hidden)]
@@ -4131,17 +4047,17 @@ where
             upper.shape().to_vec(),
         ));
     }
-    // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
     zip_map3_into(
-        &mut out.view_mut(),
+        &mut out.as_uninit_view_mut()?,
         &typed_view("clamp", input)?,
         &typed_view("clamp", lower)?,
         &typed_view("clamp", upper)?,
-        |x, lo, hi| hi.min_elem(lo.max_elem(x)),
+        |x, lo, hi| MaybeUninit::new(hi.min_elem(lo.max_elem(x))),
     )
     .map_err(|err| crate::Error::backend_source("clamp", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful clamp replay writes every logical destination element and retains no destination view.
+    Ok(unsafe { out.assume_init()? })
 }
 
 #[cfg(test)]
