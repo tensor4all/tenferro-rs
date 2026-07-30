@@ -3,18 +3,22 @@
 ## Summary
 
 Advanced every workspace `strided-*` dependency from `4c19952f` to merged
-strided-rs PR #183, commit `4be1c8a82c0eaf78ee5a9f42ce4b7ac72416e86a`.
+tensor4all/strided-rs#183, commit
+`4be1c8a82c0eaf78ee5a9f42ce4b7ac72416e86a`.
 The upstream fix rejects non-injective map, zip, and multiply destinations
 before any write, including identity fast paths and erased replay.
 
 ## Context And Decision
 
-- Upstream issue #181 and PR #183 were reviewed for destination aliasing,
+- tensor4all/strided-rs#181 and tensor4all/strided-rs#183 were reviewed for
+  destination aliasing,
   erased one-shot validation, allocation behavior, and bounded-layout policy.
 - This PR only adopts the merged dependency and updates the existing source
   contract to keep all five workspace strided packages on one revision.
-- No tenferro source, behavior, public API, or execution policy changes are
-  intended. The safety semantics are supplied by the merged upstream package.
+- No tenferro Rust implementation or public API changes are included. The pin
+  intentionally adopts the observable upstream safety behavior change: the
+  merged package rejects non-injective destinations before writes. The safety
+  semantics are supplied by the merged upstream package.
 
 ## Verification
 
