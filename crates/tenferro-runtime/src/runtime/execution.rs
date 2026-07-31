@@ -2387,6 +2387,15 @@ mod tests {
         assert_eq!(output[0].shape(), &[2]);
         assert!(observed_unlocked_state.load(Ordering::SeqCst));
         assert!(observed_session.load(Ordering::SeqCst));
+
+        let values = ErasedTensorBackendExecutor::execute_values(
+            executor.as_ref(),
+            &partial_session_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect("mixed session regions execute in value mode");
+        assert_eq!(values[0].shape(), &[2]);
     }
 
     #[test]

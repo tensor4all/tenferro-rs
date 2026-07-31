@@ -29,6 +29,48 @@ fn test_solve_with_1d_vector_rhs() {
 }
 
 #[test]
+fn test_prepared_lu_solve_reuses_an_entered_cpu_session() {
+    let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![4.0_f64, 9.0]).unwrap();
+    let mut backend = CpuBackend::new();
+    let factors = backend.lu_factor(&a).unwrap();
+
+    let (direct, transposed) = backend
+        .with_backend_session(|exec| {
+            let Some(result) = with_cpu_exec_session(exec, |session| {
+                let direct = crate::cpu::backend::lu_solve_prepared_in_session(
+                    session,
+                    &a,
+                    &factors[0],
+                    &factors[1],
+                    &b,
+                    false,
+                    false,
+                )?;
+                let transposed = crate::cpu::backend::lu_solve_prepared_in_session(
+                    session,
+                    &a,
+                    &factors[0],
+                    &factors[1],
+                    &b,
+                    true,
+                    false,
+                )?;
+                Ok::<_, tenferro_tensor::Error>((direct, transposed))
+            }) else {
+                panic!("CpuBackend must expose CpuExecSession");
+            };
+            result
+        })
+        .unwrap();
+
+    assert_f64_close(get_f64(&direct, &[0, 0]), 2.0);
+    assert_f64_close(get_f64(&direct, &[1, 0]), 7.0 / 3.0);
+    assert_f64_close(get_f64(&transposed, &[0, 0]), 0.5);
+    assert_f64_close(get_f64(&transposed, &[1, 0]), 3.0);
+}
+
+#[test]
 fn test_solve_with_batched_vector_rhs() {
     let a = Tensor::F64(
         TypedTensor::from_vec_col_major(
