@@ -1634,8 +1634,9 @@ fn validate_elementwise_output_disjoint(
 ///
 /// # Errors
 ///
-/// Returns an invalid-argument error when the destination storage overlaps an
-/// input, or when storage identity cannot be established safely.
+/// Returns `tenferro_tensor_core::ValidationError::InvalidArgument` when the
+/// destination storage overlaps an input, or `Error::RuntimeState` when
+/// storage identity cannot be established safely.
 ///
 /// # Examples
 ///

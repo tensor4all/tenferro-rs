@@ -695,8 +695,11 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// # Errors
     ///
-    /// Returns destination metadata, aliasing, validation, backend, or
-    /// numerical errors from the selected backend.
+    /// Returns `tenferro_tensor_core::ShapeMismatch` or
+    /// `tenferro_tensor_core::ValidationError::DTypeMismatch` for incompatible
+    /// destination metadata, `tenferro_tensor_core::ValidationError::InvalidArgument`
+    /// for aliasing or placement violations, `Error::Unsupported` when the
+    /// provider is unavailable, and `Error::Singular` for a singular system.
     ///
     /// # Examples
     ///

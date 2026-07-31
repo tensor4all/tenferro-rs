@@ -338,8 +338,12 @@ pub trait TensorReadLinalgExt {
     /// the trait default preserves the ordinary solve-read plus copy behavior.
     ///
     /// # Errors
-    /// Returns destination metadata, aliasing, validation, backend, or
-    /// numerical errors from [`LinalgBackend::solve_read_into`].
+    /// Returns `tenferro_tensor_core::ShapeMismatch` or
+    /// `tenferro_tensor_core::ValidationError::DTypeMismatch` for incompatible
+    /// destination metadata, `tenferro_tensor_core::ValidationError::InvalidArgument`
+    /// for aliasing or placement violations, `Error::Unsupported` when the
+    /// extension implementation or provider is unavailable, and `Error::Singular`
+    /// for a singular system.
     fn solve_read_into<B: LinalgBackend>(
         self,
         b: TensorRead<'_>,
