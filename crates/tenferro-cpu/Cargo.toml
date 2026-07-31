@@ -16,33 +16,24 @@ name = "tenferro_cpu"
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["dep:faer", "dep:strided-einsum2", "strided-einsum2/faer", "strided-einsum2/parallel"]
+cpu-faer = ["dep:faer"]
 cpu-blas = ["dep:cblas-sys", "dep:lapack"]
 provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
 provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
 blas-openblas = [
     "provider-src",
-    "dep:strided-einsum2",
     "blas-src/openblas",
     "lapack-src/openblas",
-    "strided-einsum2/blas-openblas",
-    "strided-einsum2/parallel",
 ]
 blas-accelerate = [
     "provider-src",
-    "dep:strided-einsum2",
     "blas-src/accelerate",
     "lapack-src/accelerate",
-    "strided-einsum2/blas-accelerate",
-    "strided-einsum2/parallel",
 ]
 blas-mkl = [
     "provider-src",
-    "dep:strided-einsum2",
     "blas-src/intel-mkl-dynamic-parallel",
     "lapack-src/intel-mkl-dynamic-parallel",
-    "strided-einsum2/blas-mkl",
-    "strided-einsum2/parallel",
 ]
 
 [dependencies]
@@ -55,7 +46,6 @@ num-traits.workspace = true
 rayon.workspace = true
 smallvec.workspace = true
 strided-kernel.workspace = true
-strided-einsum2 = { workspace = true, optional = true }
 thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }

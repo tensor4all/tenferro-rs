@@ -240,8 +240,8 @@ contiguous block for the underlying tensor backend.
 For a whole-expression binary GEMM-compatible contraction such as
 `ij,jk->ik`, `einsum_into` and `ConcreteEinsumPlan::execute_into` dispatch to
 the backend `dot_general_read_into` hook before the owned-output fallback. The
-CPU faer path writes directly into caller-provided output storage through
-`strided_einsum2` and does not allocate the final output tensor. General
+CPU faer provider writes directly into caller-provided output storage through
+its validated `FaerGemm` path and does not allocate the final output tensor. General
 multi-step einsums may still allocate intermediates; their `*_into` contract is
 that the final result is copied into the preallocated destination after output
 validation.

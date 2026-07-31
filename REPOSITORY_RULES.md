@@ -760,9 +760,10 @@ Tests follow implementation ownership.
   different compiled provider when needed.
 - Tensor-sized CPU kernels must run through the repository CPU threading
   policy. `strided-kernel` must be compiled with its `parallel` feature for
-  elementwise, reduction, and structural materialization kernels; CPU
-  contraction features that use `strided-einsum2` must propagate
-  `strided-einsum2/parallel`.
+  elementwise, reduction, and structural materialization kernels. CPU
+  contraction providers must receive their policy from the owning
+  `CpuExecutionContext`; Faer uses `Par::Seq` for one-thread contexts and
+  explicit `Par::rayon(n)` for bounded multi-thread contexts.
 - If a tensor-sized CPU operation remains a dedicated sequential loop because
   no strided-kernel/backend-native parallel primitive fits the indexing pattern
   yet, keep a nearby source comment naming that rationale. Do not let
