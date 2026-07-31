@@ -835,8 +835,17 @@ fn cuda_runtime_copy_into_cutensor_rejects_aliased_destination() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12.8+ GPU and approximately 8 GiB of device storage"]
+#[ignore = "requires CUDA 12.8+ GPU with a max single allocation above 4 GiB"]
 fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
+    const MIN_MAX_PAGE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+    let mut gpu = gpu_backend();
+    let max_page_size = gpu.runtime().client().properties().memory.max_page_size;
+    if max_page_size <= MIN_MAX_PAGE_SIZE {
+        eprintln!("skipping #1522 A100 benchmark: max single allocation is {max_page_size} bytes");
+        return;
+    }
+
     fn measure(
         gpu: &mut CudaBackend,
         source: &Tensor,
@@ -866,7 +875,6 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
         samples
     }
 
-    let mut gpu = gpu_backend();
     let source_2d = upload(
         &gpu,
         &tensor_f64(vec![32_768, 16_384], vec![0.0; 32_768 * 16_384]),
