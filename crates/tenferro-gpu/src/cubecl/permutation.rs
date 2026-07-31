@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use num_complex::{Complex32, Complex64};
 use num_traits::One;
-use tenferro_tensor::{CacheStats, DType, TensorRank, TypedTensorView};
+use tenferro_tensor::{CacheStats, DType, TensorRank, TypedTensorView, TypedTensorViewMut};
 
 use super::dispatch::{
-    cubecl_buffer, cubecl_view_buffer, ensure_resident_on_runtime, ensure_view_resident_on_runtime,
+    cubecl_buffer, cubecl_view_buffer, cubecl_view_mut_buffer, ensure_resident_on_runtime,
+    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime,
 };
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
@@ -395,6 +396,157 @@ where
     Ok(output)
 }
 
+/// Copy a compact source view into a caller-owned CUDA destination view using
+/// the same cached cuTENSOR permutation plan as allocating materialization.
+///
+/// The caller selects this path only for layouts supported by cuTENSOR. This
+/// function deliberately does not fall back when cuTENSOR loading or plan
+/// creation fails: supported CUDA permutation paths require the NVIDIA
+/// library stack.
+pub(super) fn copy_view_into<T, R>(
+    backend: &CudaBackend,
+    src: &TypedTensorView<'_, T, R>,
+    dst: &mut TypedTensorViewMut<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<()>
+where
+    T: CutensorPermutationScalar,
+    R: TensorRank,
+{
+    ensure_view_resident_on_runtime(backend.runtime(), src, op)?;
+    ensure_view_mut_resident_on_runtime(backend.runtime(), dst, op)?;
+    if src.shape() != dst.shape() {
+        return Err(crate::Error::shape_mismatch(
+            op,
+            src.shape().to_vec(),
+            dst.shape().to_vec(),
+        ));
+    }
+    let source_storage = src
+        .backend_buffer()
+        .ok_or_else(|| Error::runtime_state(op, "expected a CUDA source view"))?;
+    let destination_storage = dst
+        .backend_buffer()
+        .ok_or_else(|| Error::runtime_state(op, "expected a CUDA destination view"))?;
+    if std::sync::Arc::ptr_eq(source_storage, destination_storage) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "source/destination",
+            "CUDA copy_into source and destination allocations must not alias",
+        ));
+    }
+    let source_buffer = cubecl_view_buffer(src, op)?;
+    let destination_buffer = cubecl_view_mut_buffer(dst, op)?;
+    if !src.is_col_major_contiguous()?
+        || src.offset() != 0
+        || source_buffer.element_len() != src.n_elements()
+    {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "source",
+            "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
+        ));
+    }
+    if dst.n_elements() == 0 {
+        return Ok(());
+    }
+
+    backend.runtime().set_current_cuda_context(op)?;
+    let input_extents = dims_to_i64(op, src.shape())?;
+    let input_strides = compact_strides_i64(op, src.shape())?;
+    let modes = identity_modes(op, src.shape().len())?;
+    // Describe the destination in physical stride order. This is equivalent
+    // to the logical-order view descriptor, but lets cuTENSOR see the same
+    // permutation layout as the direct destination-reuse control. In
+    // particular, a transposed 2D view becomes extents/strides `[n, m]` /
+    // `[1, n]` with modes `[1, 0]`, instead of an identity-mode descriptor
+    // with swapped strides that may select a slower plan.
+    let (output_extents, output_strides, output_modes) =
+        physical_output_descriptor(op, dst.shape(), dst.strides())?;
+    let input_res = resolve_device_region(
+        backend.runtime(),
+        source_buffer,
+        src.shape(),
+        src.strides(),
+        src.offset(),
+        op,
+    )?;
+    let output_res = resolve_device_region(
+        backend.runtime(),
+        destination_buffer,
+        dst.shape(),
+        dst.strides(),
+        dst.offset(),
+        op,
+    )?;
+    let input_alignment_requirement = input_res.alignment;
+    let output_alignment_requirement = output_res.alignment;
+    execute_permutation::<T>(
+        backend,
+        input_res,
+        output_res,
+        CutensorPermutationSpec {
+            input_extents: &input_extents,
+            input_strides: &input_strides,
+            input_modes: &modes,
+            output_extents: &output_extents,
+            output_strides: &output_strides,
+            output_modes: &output_modes,
+            // Use the resolved pointer alignment rather than the scalar size.
+            // The destination-reuse benchmark passes whole allocations with
+            // 256-byte alignment, and cuTENSOR may choose a materially
+            // different kernel when the descriptor advertises only 8-byte
+            // alignment for f64. The resolved values are also the alignment
+            // that the actual pointers can satisfy.
+            input_alignment_requirement,
+            output_alignment_requirement,
+            input_op: CutensorOperator::Identity,
+        },
+        op,
+    )
+}
+
+fn physical_output_descriptor(
+    op: &'static str,
+    shape: &[usize],
+    strides: &[isize],
+) -> crate::Result<(Vec<i64>, Vec<i64>, Vec<i32>)> {
+    if shape.len() != strides.len() {
+        return Err(Error::invalid_argument(
+            op,
+            "layout",
+            "destination shape and stride ranks must match",
+        ));
+    }
+    if strides.iter().any(|&stride| stride < 0) {
+        return Err(Error::invalid_argument(
+            op,
+            "layout",
+            "cuTENSOR destination descriptors do not support negative strides",
+        ));
+    }
+    let mut axes: Vec<usize> = (0..shape.len()).collect();
+    axes.sort_by_key(|&axis| (strides[axis], axis));
+    let extents = axes
+        .iter()
+        .map(|&axis| i64::try_from(shape[axis]))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| Error::invalid_argument(op, "shape", "dimension exceeds i64 extent limit"))?;
+    let sorted_strides = axes
+        .iter()
+        .map(|&axis| i64::try_from(strides[axis]))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| Error::invalid_argument(op, "layout", "stride exceeds i64 limit"))?;
+    let modes = axes
+        .iter()
+        .map(|&axis| {
+            i32::try_from(axis)
+                .map_err(|_| Error::invalid_argument(op, "rank", "rank exceeds i32 mode limit"))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    Ok((extents, sorted_strides, modes))
+}
+
 fn execute_permutation<T>(
     backend: &CudaBackend,
     input_res: ResolvedPermutationOperand,
@@ -753,4 +905,33 @@ fn address_alignment(addr: u64) -> u32 {
         return CUDA_ALLOCATION_ALIGNMENT;
     }
     1u32 << addr.trailing_zeros().min(8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::physical_output_descriptor;
+
+    #[test]
+    fn physical_output_descriptor_matches_transposed_destination() {
+        let (extents, strides, modes) =
+            physical_output_descriptor("test", &[4, 3], &[3, 1]).unwrap();
+        assert_eq!(extents, [3, 4]);
+        assert_eq!(strides, [1, 3]);
+        assert_eq!(modes, [1, 0]);
+    }
+
+    #[test]
+    fn physical_output_descriptor_preserves_identity_layout() {
+        let (extents, strides, modes) =
+            physical_output_descriptor("test", &[4, 3], &[1, 4]).unwrap();
+        assert_eq!(extents, [4, 3]);
+        assert_eq!(strides, [1, 4]);
+        assert_eq!(modes, [0, 1]);
+    }
+
+    #[test]
+    fn physical_output_descriptor_rejects_negative_strides() {
+        let err = physical_output_descriptor("test", &[4], &[-1]).unwrap_err();
+        assert!(err.to_string().contains("negative strides"));
+    }
 }

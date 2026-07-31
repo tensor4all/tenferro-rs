@@ -73,7 +73,7 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
 use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorElementwise};
+use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !tenferro_gpu::gpu_available() {
@@ -90,6 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
     assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+
+    let mut gpu_reuse = upload_tensor(backend.runtime(), &cpu_c)?;
+    backend.copy_read_into(
+        TensorRead::from_tensor(&gpu_c),
+        TensorWrite::from_tensor(&mut gpu_reuse),
+    )?;
+    let copied = download_tensor(backend.runtime(), &gpu_reuse)?;
+    assert_eq!(copied.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())
 }
 ```
@@ -110,6 +118,12 @@ LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+`TensorStructural::copy_read_into` can reuse an already allocated CUDA
+destination; for supported floating and complex permutation layouts it uses
+the backend-owned cuTENSOR permutation plan cache. The source and destination
+must be distinct allocations. CUDA does not silently fall back when the
+required NVIDIA library stack is unavailable; the operation returns a typed
+library/provider error instead.
 CUDA 12.4 is the minimum supported driver/NVRTC runtime. CUDA 12.8 or newer
 enables all CubeCL features supported by the GPU, including the 12.8 tensor-map
 extensions. tenferro compiles against CUDA 12.8 cudarc bindings, but resolves

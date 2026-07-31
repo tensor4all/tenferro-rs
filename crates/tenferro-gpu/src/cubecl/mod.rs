@@ -1250,6 +1250,22 @@ impl CudaBackend {
         Ok(())
     }
 
+    fn copy_view_to_view_cutensor_or_cubecl<T, R>(
+        &self,
+        src: &TypedTensorView<'_, T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<()>
+    where
+        T: permutation::CutensorPermutationScalar,
+        R: TensorRank,
+    {
+        if dst.strides().iter().any(|&stride| stride < 0) {
+            return self.copy_view_to_view_typed(src, dst, op);
+        }
+        permutation::copy_view_into(self, src, dst, op)
+    }
+
     fn convert_float_to_float<In, Out>(
         &self,
         input: &TypedTensor<In>,
@@ -4510,7 +4526,7 @@ impl TensorStructural for CudaBackend {
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
         let src_dtype = src.dtype();
         let dst_dtype = dst.dtype();
-        macro_rules! copy_source {
+        macro_rules! copy_source_typed {
             ($variant:ident, $src:expr) => {{
                 let src = $src;
                 match dst {
@@ -4521,6 +4537,32 @@ impl TensorStructural for CudaBackend {
                     TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
                         self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
                     }
+                    _ => Err(crate::Error::dtype_mismatch(
+                        "CudaBackend::copy_read_into",
+                        src_dtype,
+                        dst_dtype,
+                    )),
+                }
+            }};
+        }
+        macro_rules! copy_source_cutensor {
+            ($variant:ident, $src:expr) => {{
+                let src = $src;
+                match dst {
+                    TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                        let mut dst = dst.as_view_mut();
+                        self.copy_view_to_view_cutensor_or_cubecl(
+                            &src,
+                            &mut dst,
+                            "CudaBackend::copy_read_into",
+                        )
+                    }
+                    TensorWrite::View(TensorViewMut::$variant(mut dst)) => self
+                        .copy_view_to_view_cutensor_or_cubecl(
+                            &src,
+                            &mut dst,
+                            "CudaBackend::copy_read_into",
+                        ),
                     _ => Err(crate::Error::dtype_mismatch(
                         "CudaBackend::copy_read_into",
                         src_dtype,
@@ -4547,20 +4589,20 @@ impl TensorStructural for CudaBackend {
         }
 
         match src {
-            TensorRead::Tensor(Tensor::F32(src)) => copy_source!(F32, src.as_view()),
-            TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
-            TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
-            TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
+            TensorRead::Tensor(Tensor::F32(src)) => copy_source_cutensor!(F32, src.as_view()),
+            TensorRead::Tensor(Tensor::F64(src)) => copy_source_cutensor!(F64, src.as_view()),
+            TensorRead::Tensor(Tensor::I32(src)) => copy_source_typed!(I32, src.as_view()),
+            TensorRead::Tensor(Tensor::I64(src)) => copy_source_typed!(I64, src.as_view()),
             TensorRead::Tensor(Tensor::Bool(_)) => reject_bool_source!(),
-            TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
-            TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
-            TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
-            TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
-            TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
-            TensorRead::View(TensorView::I64(src)) => copy_source!(I64, src),
+            TensorRead::Tensor(Tensor::C32(src)) => copy_source_cutensor!(C32, src.as_view()),
+            TensorRead::Tensor(Tensor::C64(src)) => copy_source_cutensor!(C64, src.as_view()),
+            TensorRead::View(TensorView::F32(src)) => copy_source_cutensor!(F32, src),
+            TensorRead::View(TensorView::F64(src)) => copy_source_cutensor!(F64, src),
+            TensorRead::View(TensorView::I32(src)) => copy_source_typed!(I32, src),
+            TensorRead::View(TensorView::I64(src)) => copy_source_typed!(I64, src),
             TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
-            TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
-            TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
+            TensorRead::View(TensorView::C32(src)) => copy_source_cutensor!(C32, src),
+            TensorRead::View(TensorView::C64(src)) => copy_source_cutensor!(C64, src),
         }
     }
 

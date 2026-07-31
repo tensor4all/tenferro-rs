@@ -1,4 +1,7 @@
 // Run with: cargo test --features cuda -- --ignored
+use std::hint::black_box;
+use std::time::Instant;
+
 use crate::{DType, DeviceId, DeviceKind, Error, MemoryKind, Placement, Tensor, TypedTensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
@@ -6,6 +9,7 @@ use tenferro_tensor::{
     TensorView, TensorViewCanonicalization, TensorViewMut, TensorWrite,
 };
 
+use super::super::CudaBackend;
 use super::{
     assert_cuda_unsupported_dtype, assert_error_parity, assert_runtime_state,
     assert_shape_mismatch, assert_tensor_close, assert_validation_kind, cpu_backend, download,
@@ -703,6 +707,196 @@ fn cuda_runtime_copy_is_object_safe_and_updates_strided_destination() {
 
     let actual = download(&gpu, &gpu_dst);
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_into_cutensor_matches_destination_reuse_and_survives_source_mutation() {
+    let mut gpu = gpu_backend();
+    let mut gpu_src = upload(
+        &gpu,
+        &tensor_f64(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    );
+    let mut gpu_dst = upload(&gpu, &tensor_f64(vec![2, 3], vec![0.0; 6]));
+    let replacement = upload(&gpu, &tensor_f64(vec![3, 2], vec![9.0; 6]));
+
+    let Tensor::F64(dst) = &mut gpu_dst else {
+        panic!("expected f64 destination");
+    };
+    let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+    gpu.copy_read_into(
+        TensorRead::from_tensor(&gpu_src),
+        TensorWrite::from_view(TensorViewMut::F64(dst_view)),
+    )
+    .unwrap();
+
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+    );
+
+    let Tensor::F64(replacement) = &replacement else {
+        panic!("expected f64 replacement");
+    };
+    let Tensor::F64(src_mut) = &mut gpu_src else {
+        panic!("expected mutable f64 source");
+    };
+    gpu.copy_into(&replacement.as_view(), &mut src_mut.as_view_mut())
+        .unwrap();
+
+    let after_source_mutation = download(&gpu, &gpu_dst);
+    assert_eq!(
+        after_source_mutation.as_slice::<f64>().unwrap(),
+        &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_into_cutensor_matches_complex_destination_reuse() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(
+        &gpu,
+        &tensor_c32(
+            vec![2, 2, 2],
+            vec![
+                Complex32::new(1.0, 2.0),
+                Complex32::new(3.0, 4.0),
+                Complex32::new(5.0, 6.0),
+                Complex32::new(7.0, 8.0),
+                Complex32::new(9.0, 10.0),
+                Complex32::new(11.0, 12.0),
+                Complex32::new(13.0, 14.0),
+                Complex32::new(15.0, 16.0),
+            ],
+        ),
+    );
+    let mut gpu_dst = upload(
+        &gpu,
+        &tensor_c32(vec![2, 2, 2], vec![Complex32::new(0.0, 0.0); 8]),
+    );
+    let Tensor::C32(dst) = &mut gpu_dst else {
+        panic!("expected complex destination");
+    };
+    let dst_view = dst.as_view_mut().transpose_view([1, 0, 2]).unwrap();
+    gpu.copy_read_into(
+        TensorRead::from_tensor(&gpu_src),
+        TensorWrite::from_view(TensorViewMut::C32(dst_view)),
+    )
+    .unwrap();
+
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(
+        actual.as_slice::<Complex32>().unwrap(),
+        &[
+            Complex32::new(1.0, 2.0),
+            Complex32::new(5.0, 6.0),
+            Complex32::new(3.0, 4.0),
+            Complex32::new(7.0, 8.0),
+            Complex32::new(9.0, 10.0),
+            Complex32::new(13.0, 14.0),
+            Complex32::new(11.0, 12.0),
+            Complex32::new(15.0, 16.0),
+        ]
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_into_cutensor_rejects_aliased_destination() {
+    let mut gpu = gpu_backend();
+    let gpu_tensor = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let Tensor::F64(src) = &gpu_tensor else {
+        panic!("expected f64 source");
+    };
+    let mut dst = src.clone();
+    let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+
+    let err = gpu
+        .copy_read_into(
+            TensorRead::from_tensor(&gpu_tensor),
+            TensorWrite::from_view(TensorViewMut::F64(dst_view)),
+        )
+        .unwrap_err();
+
+    assert_validation_kind(
+        &err,
+        "CudaBackend::copy_read_into",
+        ValidationKind::InvalidArgument,
+    );
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::InvalidArgument { argument: "source/destination", message },
+            ..
+        } if message.contains("alias")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU with a max single allocation above 4 GiB"]
+fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
+    const MIN_MAX_PAGE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+    let mut gpu = gpu_backend();
+    let max_page_size = gpu.runtime().client().properties().memory.max_page_size;
+    if max_page_size <= MIN_MAX_PAGE_SIZE {
+        eprintln!("skipping #1522 A100 benchmark: max single allocation is {max_page_size} bytes");
+        return;
+    }
+
+    fn measure(
+        gpu: &mut CudaBackend,
+        source: &Tensor,
+        destination: &mut Tensor,
+        permutation: &[usize],
+    ) -> Vec<f64> {
+        let mut run = || {
+            let Tensor::F64(dst) = destination else {
+                panic!("expected f64 destination");
+            };
+            let view = dst.as_view_mut().transpose_view(permutation).unwrap();
+            let start = Instant::now();
+            let result = gpu.copy_read_into(
+                TensorRead::from_tensor(black_box(source)),
+                TensorWrite::from_view(TensorViewMut::F64(view)),
+            );
+            black_box(result).unwrap();
+            gpu.runtime().synchronize().unwrap();
+            start.elapsed().as_secs_f64() * 1e3
+        };
+
+        for _ in 0..3 {
+            black_box(run());
+        }
+        let mut samples: Vec<f64> = (0..7).map(|_| run()).collect();
+        samples.sort_by(f64::total_cmp);
+        samples
+    }
+
+    let source_2d = upload(
+        &gpu,
+        &tensor_f64(vec![32_768, 16_384], vec![0.0; 32_768 * 16_384]),
+    );
+    let mut destination_2d = upload(
+        &gpu,
+        &tensor_f64(vec![16_384, 32_768], vec![0.0; 32_768 * 16_384]),
+    );
+    let samples_2d = measure(&mut gpu, &source_2d, &mut destination_2d, &[1, 0]);
+
+    let source_3d = upload(
+        &gpu,
+        &tensor_f64(vec![1024, 1024, 512], vec![0.0; 1024 * 1024 * 512]),
+    );
+    let mut destination_3d = upload(
+        &gpu,
+        &tensor_f64(vec![512, 1024, 1024], vec![0.0; 1024 * 1024 * 512]),
+    );
+    let samples_3d = measure(&mut gpu, &source_3d, &mut destination_3d, &[1, 2, 0]);
+
+    println!("#1522 A100 2D sorted samples (ms): {samples_2d:?}");
+    println!("#1522 A100 3D sorted samples (ms): {samples_3d:?}");
 }
 
 #[test]
