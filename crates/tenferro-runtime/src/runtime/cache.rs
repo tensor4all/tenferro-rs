@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use lru::LruCache;
 
@@ -846,7 +846,26 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
     }
 
     fn recover_state(&self) -> MutexGuard<'_, CacheState<K, V>> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(error) => {
+                // INVARIANT: Guard Drop cannot return Result, so it must finish guard-owned
+                // accounting and notify waiters; the poison bit remains set, making later
+                // Result-returning cache APIs report `prepared-cache.state`.
+                error.into_inner()
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_state_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => panic!("cache state should not already be poisoned in test setup"),
+            };
+            panic!("poison prepared cache state for test");
+        }));
     }
 }
 

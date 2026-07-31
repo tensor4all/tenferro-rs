@@ -868,6 +868,116 @@ fn clear_during_active_attempt_advances_generation_and_prevents_reinsert() {
 }
 
 #[test]
+fn poisoned_state_stays_visible_after_producer_and_waiter_cleanup() {
+    let cache = Arc::new(PreparedPlanCache::<TestKey, TestValue>::new(limits(
+        8, 4096, 1, 4,
+    )));
+    let producer_entered = Arc::new(Barrier::new(2));
+    let producer_release = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let producer = {
+            let cache = Arc::clone(&cache);
+            let producer_entered = Arc::clone(&producer_entered);
+            let producer_release = Arc::clone(&producer_release);
+            scope.spawn(move || {
+                let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    cache.get_or_prepare(TestKey(41), CacheInFlightBehavior::Wait, 0, || {
+                        producer_entered.wait();
+                        producer_release.wait();
+                        panic!("abort producer for poisoned-cache cleanup test");
+                    })
+                }));
+                assert!(result.is_err());
+            })
+        };
+        producer_entered.wait();
+
+        let waiter = {
+            let cache = Arc::clone(&cache);
+            scope.spawn(move || {
+                cache.get_or_prepare(TestKey(41), CacheInFlightBehavior::Wait, 0, || {
+                    panic!("waiter must not become the producer");
+                })
+            })
+        };
+        eventually(|| {
+            cache
+                .stats()
+                .is_ok_and(|stats| stats.waits >= 1 && stats.in_flight == 1)
+        });
+
+        cache.poison_state_for_test();
+        producer_release.wait();
+
+        producer.join().unwrap();
+        assert!(waiter.join().unwrap().is_err());
+    });
+
+    assert!(matches!(
+        cache.stats(),
+        Err(RuntimeStateError::Poisoned {
+            lock: "prepared-cache.state"
+        })
+    ));
+}
+
+#[test]
+fn poisoned_state_stays_visible_after_queue_ticket_cleanup() {
+    let cache = Arc::new(PreparedPlanCache::<TestKey, TestValue>::new(limits(
+        8, 4096, 1, 4,
+    )));
+    let producer_entered = Arc::new(Barrier::new(2));
+    let producer_release = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let producer = {
+            let cache = Arc::clone(&cache);
+            let producer_entered = Arc::clone(&producer_entered);
+            let producer_release = Arc::clone(&producer_release);
+            scope.spawn(move || {
+                cache.get_or_prepare(TestKey(42), CacheInFlightBehavior::Wait, 0, || {
+                    producer_entered.wait();
+                    producer_release.wait();
+                    CacheProduced::Ready {
+                        value: TestValue::new(8),
+                        shared: None,
+                    }
+                })
+            })
+        };
+        producer_entered.wait();
+
+        let queued = {
+            let cache = Arc::clone(&cache);
+            scope.spawn(move || {
+                cache.get_or_prepare(TestKey(43), CacheInFlightBehavior::Wait, 0, || {
+                    panic!("queued request must not become the producer");
+                })
+            })
+        };
+        eventually(|| {
+            cache
+                .stats()
+                .is_ok_and(|stats| stats.queued_distinct_keys == 1 && stats.in_flight == 1)
+        });
+
+        cache.poison_state_for_test();
+        producer_release.wait();
+
+        assert!(producer.join().unwrap().is_err());
+        assert!(queued.join().unwrap().is_err());
+    });
+
+    assert!(matches!(
+        cache.stats(),
+        Err(RuntimeStateError::Poisoned {
+            lock: "prepared-cache.state"
+        })
+    ));
+}
+
+#[test]
 fn shared_roots_are_charged_once_and_drop_with_cache() {
     let key_sentinel = Arc::new(());
     let value_sentinel = Arc::new(());
