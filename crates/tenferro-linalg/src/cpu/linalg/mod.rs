@@ -31,11 +31,11 @@ pub(crate) fn output_from_rhs_view<T: Copy + Clone + PoolScalar + 'static>(
     // overflow: `row + col * rows < rows * cols`.
     if rank == 1 {
         let rows = rhs.shape()[0];
-        for row in 0..rows {
+        for (row, slot) in data.iter_mut().enumerate().take(rows) {
             let value = rhs.get(&[row]).ok_or_else(|| {
                 tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
             })?;
-            data[row].write(*value);
+            slot.write(*value);
         }
     } else {
         let rows = rhs.shape()[0];
