@@ -8,6 +8,8 @@ This worklog records the documentation and runtime-registration changes for
 - Added `docs/guides/choosing-a-backend.md` as the owner for execution-backend
   and CPU-provider selection, capability ownership, nested parallelism,
   placement, and unsupported-operation policy.
+- Added executable `tenferro-cpu` examples as the source of truth for the
+  provider-selection and multi-engine snippets in the guide.
 - Added the required SVD/QR batch-versus-inner parallelism section and PJRT
   threading/synchronization section to the existing guides.
 - Replaced the duplicated provider-selection block in

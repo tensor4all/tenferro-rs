@@ -49,15 +49,19 @@ giving up tenferro's strict worker-placement and per-operation control.
 The CPU provider kind is selected per backend when both base provider kinds are
 compiled:
 
+<!-- snippet-source: crates/tenferro-cpu/examples/choosing_cpu_provider.rs -->
 ```rust
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 
-let faer = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)?;
-let blas = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Blas)?;
-assert_eq!(faer.kind(), CpuBackendKind::Faer);
-assert_eq!(blas.kind(), CpuBackendKind::Blas);
-# Ok::<(), Box<dyn std::error::Error>>(())
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let faer = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)?;
+    let blas = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Blas)?;
+    assert_eq!(faer.kind(), CpuBackendKind::Faer);
+    assert_eq!(blas.kind(), CpuBackendKind::Blas);
+    Ok(())
+}
 ```
+<!-- end-snippet-source -->
 
 This requires both `cpu-faer` and `cpu-blas` in the resolved Cargo feature
 set. It does not make OpenBLAS and MKL independently selectable at runtime:
@@ -142,28 +146,30 @@ When one process needs two CPU engine registrations, use distinct engine IDs.
 The canonical helper keeps `tenferro-cpu.default.v1` for the usual single
 backend case; the caller-selected helper avoids an ID collision:
 
+<!-- snippet-source: crates/tenferro-cpu/examples/multiple_cpu_engines.rs -->
 ```rust
-use tenferro_cpu::{
-    runtime_engine_registration_with_id, CpuBackend, CpuBackendKind,
-};
+use tenferro_cpu::{runtime_engine_registration_with_id, CpuBackend, CpuBackendKind};
 use tenferro_runtime::{EngineId, Runtime};
 
-let primary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer)?;
-let secondary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Blas)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let primary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer)?;
+    let secondary = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Blas)?;
 
-let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration_with_id(
-    &primary,
-    EngineId::new("example.cpu.faer.v1")?,
-)?)?;
-builder.register_engine(runtime_engine_registration_with_id(
-    &secondary,
-    EngineId::new("example.cpu.blas.v1")?,
-)?)?;
-let runtime = builder.build()?;
-assert_eq!(runtime.snapshot()?.engine_count(), 2);
-# Ok::<(), Box<dyn std::error::Error>>(())
+    let mut builder = Runtime::builder();
+    builder.register_engine(runtime_engine_registration_with_id(
+        &primary,
+        EngineId::new("example.cpu.faer.v1")?,
+    )?)?;
+    builder.register_engine(runtime_engine_registration_with_id(
+        &secondary,
+        EngineId::new("example.cpu.blas.v1")?,
+    )?)?;
+    let runtime = builder.build()?;
+    assert_eq!(runtime.snapshot()?.engine_count(), 2);
+    Ok(())
+}
 ```
+<!-- end-snippet-source -->
 
 Compile this example with both `cpu-faer` and `cpu-blas`. If the second
 backend uses OpenBLAS, MKL, or Accelerate, its library and thread settings are
