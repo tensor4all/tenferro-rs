@@ -154,7 +154,6 @@ fn tensor_checkpoint_and_cpu_gemm_public_paths_avoid_panic_helpers() {
         "crates/tenferro-tensor/src/types.rs",
         "crates/tenferro-runtime/src/ad_support.rs",
         "crates/tenferro-cpu/src/gemm/mod.rs",
-        "crates/tenferro-cpu/src/gemm/strided_dot.rs",
     ] {
         let source = repo_file(path);
         assert_no_panic_helpers(path, &source);

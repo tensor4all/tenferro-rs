@@ -7,14 +7,13 @@ use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
-use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-blas")]
 use crate::CpuBackendKind;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, pow, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
-    transpose, tril, triu, typed_array_uninit_from_pool, CpuBackend, CpuContext, Error,
+    transpose, tril, triu, CpuBackend, CpuContext, Error,
 };
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 #[cfg(feature = "cpu-blas")]
@@ -479,26 +478,6 @@ fn grouped_gemm_zero_jobs_is_noop_and_empty_contract_scales_output() {
     )
     .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0, 9.0, 12.0, 15.0]);
-}
-
-#[test]
-fn typed_array_uninit_from_pool_rejects_shape_product_overflow_without_panicking() {
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| unsafe {
-        let mut buffers = BufferPool::new();
-        typed_array_uninit_from_pool::<f64>(&mut buffers, &[usize::MAX, 2])
-    }));
-
-    assert!(
-        result.is_ok(),
-        "typed_array_uninit_from_pool must return a typed error, not panic"
-    );
-    assert!(matches!(
-        result.unwrap(),
-        Err(tenferro_tensor::Error::Validation {
-            op: "typed_array_uninit_from_pool",
-            ..
-        })
-    ));
 }
 
 fn matmul_f64(lhs: &[f64], rhs: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {

@@ -1,9 +1,10 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
+use std::mem::MaybeUninit;
 use strided_kernel::{map_into, reduce, zip_map2_into, StridedView};
 use tenferro_core_ops::PrimitiveOpKind;
 
-use super::{tensor_from_array, typed_array_uninit_from_pool, typed_view, typed_view_from_view};
+use super::{typed_view, typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
     BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
@@ -211,11 +212,15 @@ fn typed_unary_with_pool<T>(
 where
     T: Copy + PoolScalar + 'static,
 {
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(tensor_from_array(out))
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &typed_view(op, input)?,
+        |x| MaybeUninit::new(f(x)),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    // SAFETY: the successful map replay writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 fn typed_unary_view_with_pool<T, R>(
@@ -228,11 +233,15 @@ where
     T: Copy + PoolScalar + 'static,
     R: TensorRank,
 {
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(tensor_from_array(out))
+    let mut out = PooledUninitOutput::<T>::new(buffers, input.shape().to_vec())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &typed_view_from_view(op, input)?,
+        |x| MaybeUninit::new(f(x)),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    // SAFETY: the successful map replay writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 fn typed_unary_tensor_with_pool<T>(
@@ -333,30 +342,34 @@ where
             rhs.shape().to_vec(),
         ));
     };
-    // SAFETY: the selected map kernel overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape.to_vec())?;
     if lhs.shape() == rhs.shape() {
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
             &typed_view_from_view(op, rhs)?,
-            |x, y| x.pow_elem(y),
+            |x, y| MaybeUninit::new(x.pow_elem(y)),
         )
         .map_err(|err| crate::Error::backend_source(op, err))?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
-        map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
-            scalar.pow_elem(x)
-        })
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view_from_view(op, rhs)?,
+            |x| MaybeUninit::new(scalar.pow_elem(x)),
+        )
         .map_err(|err| crate::Error::backend_source(op, err))?;
     } else {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
-        map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
-            x.pow_elem(scalar)
-        })
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view_from_view(op, lhs)?,
+            |x| MaybeUninit::new(x.pow_elem(scalar)),
+        )
         .map_err(|err| crate::Error::backend_source(op, err))?;
     }
-    Ok(tensor_from_array(out))
+    // SAFETY: the selected map kernel writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 macro_rules! define_unary_analytic_dispatch {
@@ -526,30 +539,34 @@ where
             rhs.shape().to_vec(),
         ));
     };
-    // SAFETY: the selected map kernel overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, output_shape.to_vec())?;
     if lhs.shape() == rhs.shape() {
         zip_map2_into(
-            &mut out.view_mut(),
+            &mut out.as_uninit_view_mut()?,
             &typed_view("pow", lhs)?,
             &typed_view("pow", rhs)?,
-            |x, y| x.pow_elem(y),
+            |x, y| MaybeUninit::new(x.pow_elem(y)),
         )
         .map_err(|err| crate::Error::backend_source("pow", err))?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view("pow", lhs)?.get(&[]);
-        map_into(&mut out.view_mut(), &typed_view("pow", rhs)?, |x| {
-            scalar.pow_elem(x)
-        })
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view("pow", rhs)?,
+            |x| MaybeUninit::new(scalar.pow_elem(x)),
+        )
         .map_err(|err| crate::Error::backend_source("pow", err))?;
     } else {
         let scalar = typed_view("pow", rhs)?.get(&[]);
-        map_into(&mut out.view_mut(), &typed_view("pow", lhs)?, |x| {
-            x.pow_elem(scalar)
-        })
+        map_into(
+            &mut out.as_uninit_view_mut()?,
+            &typed_view("pow", lhs)?,
+            |x| MaybeUninit::new(x.pow_elem(scalar)),
+        )
         .map_err(|err| crate::Error::backend_source("pow", err))?;
     }
-    Ok(tensor_from_array(out))
+    // SAFETY: the selected map kernel writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 fn typed_integer_pow_with_pool<T>(

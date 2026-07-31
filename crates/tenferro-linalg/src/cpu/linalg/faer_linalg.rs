@@ -531,10 +531,8 @@ macro_rules! impl_real_eig_to_complex_outputs {
         ) -> tenferro_tensor::Result<(Vec<$complex>, Vec<$complex>)> {
             let n = u_real.nrows();
             let matrix_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
-            // SAFETY: the loop below writes every element of `u` and `s` before any read.
-            let mut u = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, matrix_len) };
-            // SAFETY: the loop below writes every element of `u` and `s` before any read.
-            let mut s = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, n) };
+            let mut u = buffers.acquire_with_capacity::<$complex>(matrix_len);
+            let mut s = buffers.acquire_with_capacity::<$complex>(n);
             let mut j = 0;
             while j < n {
                 if j + 1 >= n
@@ -544,17 +542,17 @@ macro_rules! impl_real_eig_to_complex_outputs {
                         <$real>::EPSILON as f64,
                     )
                 {
-                    s[j] = <$complex>::new(s_re[j], 0.0);
+                    s.push(<$complex>::new(s_re[j], 0.0));
                     for i in 0..n {
-                        u[i + j * n] = <$complex>::new(u_real[(i, j)], 0.0);
+                        u.push(<$complex>::new(u_real[(i, j)], 0.0));
                     }
                     j += 1;
                 } else {
-                    s[j] = <$complex>::new(s_re[j], s_im[j]);
-                    s[j + 1] = <$complex>::new(s_re[j], -s_im[j]);
+                    s.push(<$complex>::new(s_re[j], s_im[j]));
+                    s.push(<$complex>::new(s_re[j], -s_im[j]));
                     for i in 0..n {
-                        u[i + j * n] = <$complex>::new(u_real[(i, j)], u_real[(i, j + 1)]);
-                        u[i + (j + 1) * n] = <$complex>::new(u_real[(i, j)], -u_real[(i, j + 1)]);
+                        u.push(<$complex>::new(u_real[(i, j)], u_real[(i, j + 1)]));
+                        u.push(<$complex>::new(u_real[(i, j)], -u_real[(i, j + 1)]));
                     }
                     j += 2;
                 }
