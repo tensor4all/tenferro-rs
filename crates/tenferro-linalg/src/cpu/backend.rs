@@ -8,7 +8,7 @@ use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuExecSession, CpuExecutionConte
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, Buffer, DType, Error, HostAccessError,
     MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead,
-    TensorStructural, TensorView, TypedTensor,
+    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 trait FreshLinalgOutput {
@@ -693,14 +693,86 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("solve", &b)?;
         ensure_supported_linalg_dtypes("solve", a.dtype(), b.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "solve")?;
+        let direct = !has_zero_dim(a.shape())
+            && !has_zero_dim(b.shape())
+            && solve_shape_direct_eligible(a.shape(), b.shape());
         self.with_linalg_pool_fresh(move |context, buffers| {
-            context.with_materialized_tensor_read(buffers, "solve", a, |a, buffers| {
-                context.with_materialized_tensor_read(buffers, "solve", b, |b, buffers| {
-                    solve_entered(provider, context, buffers, a, b)
+            if direct {
+                solve_from_views_entered(
+                    provider,
+                    context,
+                    buffers,
+                    a.tensor_view(),
+                    b.tensor_view(),
+                )
+            } else {
+                context.with_materialized_tensor_read(buffers, "solve", a, |a, buffers| {
+                    context.with_materialized_tensor_read(buffers, "solve", b, |b, buffers| {
+                        solve_entered(provider, context, buffers, a, b)
+                    })
                 })
-            })
+            }
         })
     }
+
+    fn solve_read_into(
+        &mut self,
+        a: TensorRead<'_>,
+        b: TensorRead<'_>,
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        crate::backend::validate_solve_read_into(&a, &b, &out)?;
+        ensure_host_tensor_read("solve_read_into", &a)?;
+        ensure_host_tensor_read("solve_read_into", &b)?;
+        ensure_host_tensor_read("solve_read_into", &out.as_read())?;
+        ensure_supported_linalg_dtypes("solve_read_into", a.dtype(), b.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "solve_read_into")?;
+
+        if has_zero_dim(a.shape())
+            || has_zero_dim(b.shape())
+            || !solve_read_into_direct_eligible(&a, &b, &out)
+        {
+            return crate::backend::solve_read_into_default(self, a, b, out);
+        }
+
+        let a = a.tensor_view();
+        let b = b.tensor_view();
+        self.with_linalg_pool(move |context, buffers| {
+            solve_read_into_entered(provider, context, buffers, a, b, out)
+        })
+    }
+}
+
+fn solve_read_into_direct_eligible(
+    a: &TensorRead<'_>,
+    b: &TensorRead<'_>,
+    out: &TensorWrite<'_>,
+) -> bool {
+    if !solve_shape_direct_eligible(a.shape(), b.shape()) {
+        return false;
+    }
+    let out = out.as_read();
+    if out.backend_family().is_some() || out.shape() != b.shape() {
+        return false;
+    }
+    let Ok(strides) = out.strides() else {
+        return false;
+    };
+    match out.shape() {
+        [_] => strides == [1],
+        [rows, cols] => {
+            strides.first().copied() == Some(1)
+                && strides.get(1).copied().is_some_and(|stride| {
+                    stride >= isize::try_from(*rows).unwrap_or(isize::MAX)
+                        && (*cols <= 1 || stride > 0)
+                })
+        }
+        _ => false,
+    }
+}
+
+fn solve_shape_direct_eligible(a_shape: &[usize], b_shape: &[usize]) -> bool {
+    a_shape.len() == 2 && matches!(b_shape.len(), 1 | 2)
 }
 
 /// Execute the prepared LU solve on an already-entered CPU session.
@@ -1330,6 +1402,173 @@ fn solve_entered(
         context.reshape_tensor(&result, &shape)
     } else {
         Ok(result)
+    }
+}
+
+fn solve_from_views_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TensorView<'_>,
+    b: TensorView<'_>,
+) -> tenferro_tensor::Result<Tensor> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match (a, b) {
+                    (TensorView::F32(a), TensorView::F32(b)) => {
+                        linalg::faer::solve_from_views(context, buffers, a, b, false)
+                            .map(Tensor::F32)
+                    }
+                    (TensorView::F64(a), TensorView::F64(b)) => {
+                        linalg::faer::solve_from_views(context, buffers, a, b, false)
+                            .map(Tensor::F64)
+                    }
+                    (TensorView::C32(a), TensorView::C32(b)) => {
+                        linalg::faer::solve_from_views(context, buffers, a, b, false)
+                            .map(Tensor::C32)
+                    }
+                    (TensorView::C64(a), TensorView::C64(b)) => {
+                        linalg::faer::solve_from_views(context, buffers, a, b, false)
+                            .map(Tensor::C64)
+                    }
+                    _ => Err(Error::invalid_argument(
+                        "solve",
+                        "inputs",
+                        "solve inputs must have the same dtype",
+                    )),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, a, b);
+                Err(unsupported_provider("solve", CpuBackendKind::Faer))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match (a, b) {
+                    (TensorView::F32(a), TensorView::F32(b)) => {
+                        linalg::blas::solve_from_views(buffers, a, b, false).map(Tensor::F32)
+                    }
+                    (TensorView::F64(a), TensorView::F64(b)) => {
+                        linalg::blas::solve_from_views(buffers, a, b, false).map(Tensor::F64)
+                    }
+                    (TensorView::C32(a), TensorView::C32(b)) => {
+                        linalg::blas::solve_from_views(buffers, a, b, false).map(Tensor::C32)
+                    }
+                    (TensorView::C64(a), TensorView::C64(b)) => {
+                        linalg::blas::solve_from_views(buffers, a, b, false).map(Tensor::C64)
+                    }
+                    _ => Err(Error::invalid_argument(
+                        "solve",
+                        "inputs",
+                        "solve inputs must have the same dtype",
+                    )),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, a, b);
+                Err(unsupported_provider("solve", CpuBackendKind::Blas))
+            }
+        }
+    }
+}
+
+fn solve_read_into_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TensorView<'_>,
+    b: TensorView<'_>,
+    out: TensorWrite<'_>,
+) -> tenferro_tensor::Result<()> {
+    let out = tensor_write_view(out);
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match (a, b, out) {
+                    (TensorView::F32(a), TensorView::F32(b), TensorViewMut::F32(mut out)) => {
+                        linalg::faer::solve_into(context, buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::F64(a), TensorView::F64(b), TensorViewMut::F64(mut out)) => {
+                        linalg::faer::solve_into(context, buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::C32(a), TensorView::C32(b), TensorViewMut::C32(mut out)) => {
+                        linalg::faer::solve_into(context, buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::C64(a), TensorView::C64(b), TensorViewMut::C64(mut out)) => {
+                        linalg::faer::solve_into(context, buffers, a, b, &mut out, false)
+                    }
+                    _ => Err(Error::invalid_argument(
+                        "solve_read_into",
+                        "out",
+                        "destination dtype does not match the solve inputs",
+                    )),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, a, b, out);
+                Err(unsupported_provider(
+                    "solve_read_into",
+                    CpuBackendKind::Faer,
+                ))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match (a, b, out) {
+                    (TensorView::F32(a), TensorView::F32(b), TensorViewMut::F32(mut out)) => {
+                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::F64(a), TensorView::F64(b), TensorViewMut::F64(mut out)) => {
+                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::C32(a), TensorView::C32(b), TensorViewMut::C32(mut out)) => {
+                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
+                    }
+                    (TensorView::C64(a), TensorView::C64(b), TensorViewMut::C64(mut out)) => {
+                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
+                    }
+                    _ => Err(Error::invalid_argument(
+                        "solve_read_into",
+                        "out",
+                        "destination dtype does not match the solve inputs",
+                    )),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, a, b, out);
+                Err(unsupported_provider(
+                    "solve_read_into",
+                    CpuBackendKind::Blas,
+                ))
+            }
+        }
+    }
+}
+
+fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
+    match out {
+        TensorWrite::Tensor(tensor) => match tensor {
+            Tensor::F32(tensor) => TensorViewMut::F32(tensor.as_view_mut()),
+            Tensor::F64(tensor) => TensorViewMut::F64(tensor.as_view_mut()),
+            Tensor::I32(tensor) => TensorViewMut::I32(tensor.as_view_mut()),
+            Tensor::I64(tensor) => TensorViewMut::I64(tensor.as_view_mut()),
+            Tensor::Bool(tensor) => TensorViewMut::Bool(tensor.as_view_mut()),
+            Tensor::C32(tensor) => TensorViewMut::C32(tensor.as_view_mut()),
+            Tensor::C64(tensor) => TensorViewMut::C64(tensor.as_view_mut()),
+        },
+        TensorWrite::View(view) => view,
     }
 }
 

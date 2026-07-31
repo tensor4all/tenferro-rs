@@ -384,6 +384,25 @@ fn linalg_rustdoc_reuses_backend_in_read_examples() {
 }
 
 #[test]
+fn cpu_backend_overrides_solve_read_into_hook() {
+    let backend = cpu_backend_source();
+    let override_section = rust_function_section(&backend, "solve_read_into");
+    assert!(
+        override_section.contains("validate_solve_read_into")
+            && override_section.contains("with_linalg_pool")
+            && override_section.contains("solve_read_into_entered"),
+        "CpuBackend must override solve_read_into and inject its entered pool/context"
+    );
+
+    let trait_source = linalg_backend_trait_source();
+    let default_section = rust_function_section(&trait_source, "solve_read_into");
+    assert!(
+        default_section.contains("solve_read_into_default(self, a, b, out)"),
+        "LinalgBackend must retain the portable solve_read_into fallback"
+    );
+}
+
+#[test]
 fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     let source = cpu_backend_source();
     let methods = [

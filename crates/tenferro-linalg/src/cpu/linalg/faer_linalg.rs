@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
-use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView};
+use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     type Real: Copy + Clone + PoolScalar;
@@ -48,6 +48,39 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
+    fn solve_2d_into_view(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        a: TypedTensorView<'_, Self>,
+        b: TypedTensorView<'_, Self>,
+        out: &mut TypedTensorViewMut<'_, Self>,
+        transpose_a: bool,
+    ) -> tenferro_tensor::Result<()> {
+        Self::solve_2d_in_place_view(
+            ctx,
+            buffers,
+            a,
+            b,
+            out,
+            transpose_a,
+            true,
+            "solve_read_into",
+        )
+    }
+    // INVARIANT: these parameters keep the provider kernel's context, pooled
+    // scratch, typed views, destination, and solve contract explicit at the
+    // single provider boundary; the method is private to this trait.
+    #[allow(clippy::too_many_arguments)]
+    fn solve_2d_in_place_view(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        a: TypedTensorView<'_, Self>,
+        b: TypedTensorView<'_, Self>,
+        out: &mut TypedTensorViewMut<'_, Self>,
+        transpose_a: bool,
+        copy_rhs: bool,
+        op: &'static str,
+    ) -> tenferro_tensor::Result<()>;
     // Mirrors triangular-solve math flags directly at the scalar backend boundary.
     #[allow(clippy::too_many_arguments)]
     fn triangular_solve_2d(
@@ -315,18 +348,6 @@ fn complex_pivot_is_effectively_singular(
     eps: f64,
 ) -> bool {
     real.hypot(imag) <= eps * max_diagonal.max(1.0)
-}
-
-fn real_pivot_is_singular(pivot: f64) -> bool {
-    // Why not reuse the full-pivot tolerance: ordinary solve follows partial-
-    // pivot LU's exact-zero contract; conditioning belongs to an explicit API.
-    pivot == 0.0
-}
-
-fn complex_pivot_is_singular(real: f64, imag: f64) -> bool {
-    // Why not use a magnitude: a squared magnitude can underflow for a
-    // representable nonzero component, while component checks cannot.
-    real == 0.0 && imag == 0.0
 }
 
 fn checked_product(
@@ -1007,6 +1028,147 @@ where
     tensor_from_vec_with_template(out_shape, out_data, b.placement())
 }
 
+macro_rules! impl_solve_into_view {
+    ($scalar:ty, $faer_scalar:ty, $to_faer_slice:ident, $to_faer_slice_mut:ident) => {
+        // INVARIANT: this implementation mirrors the explicit provider
+        // boundary declared above so the macro cannot silently drop context,
+        // destination, or validation parameters.
+        #[allow(clippy::too_many_arguments)]
+        fn solve_2d_in_place_view(
+            ctx: &CpuExecutionContext<'_>,
+            _buffers: &mut BufferPool,
+            a: TypedTensorView<'_, Self>,
+            b: TypedTensorView<'_, Self>,
+            out: &mut TypedTensorViewMut<'_, Self>,
+            transpose_a: bool,
+            copy_rhs: bool,
+            op: &'static str,
+        ) -> tenferro_tensor::Result<()> {
+            let n = square_matrix_dim_view(&a, op)?;
+            let (b_rows, b_cols) = rhs_matrix_dims_view(&b, op)?;
+            if b_rows != n {
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op,
+                    vec![n],
+                    vec![b_rows],
+                ));
+            }
+
+            let mut lu = Mat::<$faer_scalar>::zeros(n, n);
+            for col in 0..n {
+                for row in 0..n {
+                    let value = a.get(&[row, col]).ok_or_else(|| {
+                        tenferro_tensor::Error::runtime_state(
+                            op,
+                            "CPU Faer solve input view is not host-addressable",
+                        )
+                    })?;
+                    lu[(row, col)] = $to_faer_slice(std::slice::from_ref(value))[0];
+                }
+            }
+
+            let mut row_perm = vec![0usize; n];
+            let mut row_perm_inv = vec![0usize; n];
+            let mut mem = MemBuffer::new(
+                faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<
+                    usize,
+                    $faer_scalar,
+                >(n, n, ctx.faer_parallelism(), Default::default()),
+            );
+            let stack = MemStack::new(&mut mem);
+            let (_, row_perm_ref) = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+                lu.as_mut(),
+                &mut row_perm,
+                &mut row_perm_inv,
+                ctx.faer_parallelism(),
+                stack,
+                Default::default(),
+            );
+            for i in 0..n {
+                if lu[(i, i)] == <$faer_scalar as Default>::default() {
+                    return Err(singular_matrix(op));
+                }
+            }
+
+            if copy_rhs {
+                copy_rhs_view_into(&b, out, n, b_cols, op)?;
+            }
+            let out_col_stride = if out.shape().len() == 1 {
+                isize::try_from(n).map_err(|_| {
+                    tenferro_tensor::Error::invalid_argument(
+                        op,
+                        "out",
+                        "output row count does not fit a Faer stride",
+                    )
+                })?
+            } else {
+                out.strides()[1]
+            };
+            let out_storage = output_storage_slice_mut(out, n, b_cols, out_col_stride, op)?;
+            let out_storage = $to_faer_slice_mut(out_storage);
+            // SAFETY: the CPU boundary verifies host storage and a positive
+            // column-major destination. The aliasing contract rejects
+            // input/output overlap before this function is called.
+            let rhs = unsafe {
+                MatMut::<$faer_scalar>::from_raw_parts_mut(
+                    out_storage.as_mut_ptr(),
+                    n,
+                    b_cols,
+                    1,
+                    out_col_stride,
+                )
+            };
+            let mut mem = MemBuffer::new(if transpose_a {
+                faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
+                    usize,
+                    $faer_scalar,
+                >(n, b_cols, ctx.faer_parallelism())
+            } else {
+                faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<
+                    usize,
+                    $faer_scalar,
+                >(n, b_cols, ctx.faer_parallelism())
+            });
+            let stack = MemStack::new(&mut mem);
+            if transpose_a {
+                faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place(
+                    lu.as_ref(),
+                    lu.as_ref(),
+                    row_perm_ref,
+                    rhs,
+                    ctx.faer_parallelism(),
+                    stack,
+                );
+            } else {
+                faer::linalg::lu::partial_pivoting::solve::solve_in_place(
+                    lu.as_ref(),
+                    lu.as_ref(),
+                    row_perm_ref,
+                    rhs,
+                    ctx.faer_parallelism(),
+                    stack,
+                );
+            }
+            Ok(())
+        }
+    };
+}
+
+pub(crate) fn solve_from_views<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut output = super::output_from_rhs_view(buffers, &b, "solve")?;
+    let a = a;
+    let b = b;
+    let mut out = output.as_view_mut();
+    T::solve_2d_in_place_view(ctx, buffers, a, b, &mut out, transpose_a, false, "solve")?;
+    Ok(output)
+}
+
 macro_rules! impl_faer_linalg_for_real {
     ($scalar:ty) => {
         impl FaerLinalg for $scalar {
@@ -1324,76 +1486,10 @@ macro_rules! impl_faer_linalg_for_real {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(a, "solve")?;
-        let (b_rows, b_cols) = matrix_dims(b, "solve")?;
-        if b_rows != n {
-            return Err(tenferro_tensor::Error::shape_mismatch("solve", vec![n], vec![b_rows]));
-        }
-
-        let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(a.host_data()?, n, n));
-        let mut row_perm = vec![0usize; n];
-        let mut row_perm_inv = vec![0usize; n];
-        let mut mem = MemBuffer::new(
-            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
-                n,
-                n,
-                ctx.faer_parallelism(),
-                Default::default(),
-            ),
-        );
-        let stack = MemStack::new(&mut mem);
-        let (_, row_perm_ref) = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
-            lu.as_mut(),
-            &mut row_perm,
-            &mut row_perm_inv,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        );
-        for i in 0..n {
-            if real_pivot_is_singular(lu[(i, i)] as f64) {
-                return Err(singular_matrix("solve"));
-            }
-        }
-
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
-        rhs_data.extend_from_slice(b.host_data()?);
-        let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
-        let mut mem = MemBuffer::new(if transpose_a {
-            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
-                usize,
-                Self,
-            >(n, b_cols, ctx.faer_parallelism())
-        } else {
-            faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<usize, Self>(
-                n,
-                b_cols,
-                ctx.faer_parallelism(),
-            )
-        });
-        let stack = MemStack::new(&mut mem);
-        if transpose_a {
-            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place(
-                lu.as_ref(),
-                lu.as_ref(),
-                row_perm_ref,
-                rhs,
-                ctx.faer_parallelism(),
-                stack,
-            );
-        } else {
-            faer::linalg::lu::partial_pivoting::solve::solve_in_place(
-                lu.as_ref(),
-                lu.as_ref(),
-                row_perm_ref,
-                rhs,
-                ctx.faer_parallelism(),
-                stack,
-            );
-        }
-        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
+        solve_from_views(ctx, buffers, a.as_view(), b.as_view(), transpose_a)
     }
+
+    impl_solve_into_view!($scalar, $scalar, same_slice, same_slice_mut);
 
     fn triangular_solve_2d(
         ctx: &CpuExecutionContext<'_>,
@@ -2197,81 +2293,15 @@ macro_rules! impl_faer_linalg_for_complex {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(a, "solve")?;
-        let (b_rows, b_cols) = matrix_dims(b, "solve")?;
-        if b_rows != n {
-            return Err(tenferro_tensor::Error::shape_mismatch("solve", vec![n], vec![b_rows]));
-        }
-
-        let mut lu = Mat::zeros(n, n);
-        lu.copy_from(MatRef::from_column_major_slice(
-            $to_faer_slice(a.host_data()?),
-            n,
-            n,
-        ));
-        let mut row_perm = vec![0usize; n];
-        let mut row_perm_inv = vec![0usize; n];
-        let mut mem = MemBuffer::new(
-            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
-                n,
-                n,
-                ctx.faer_parallelism(),
-                Default::default(),
-            ),
-        );
-        let stack = MemStack::new(&mut mem);
-        let (_, row_perm_ref) = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
-            lu.as_mut(),
-            &mut row_perm,
-            &mut row_perm_inv,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        );
-        for i in 0..n {
-            let value = lu[(i, i)];
-            if complex_pivot_is_singular(value.re as f64, value.im as f64) {
-                return Err(singular_matrix("solve"));
-            }
-        }
-
-        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
-        rhs_data.extend_from_slice(b.host_data()?);
-        let rhs =
-            MatMut::from_column_major_slice_mut($to_faer_slice_mut(&mut rhs_data), n, b_cols);
-        let mut mem = MemBuffer::new(if transpose_a {
-            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
-                usize,
-                $faer_complex,
-            >(n, b_cols, ctx.faer_parallelism())
-        } else {
-            faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<
-                usize,
-                $faer_complex,
-            >(n, b_cols, ctx.faer_parallelism())
-        });
-        let stack = MemStack::new(&mut mem);
-        if transpose_a {
-            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place(
-                lu.as_ref(),
-                lu.as_ref(),
-                row_perm_ref,
-                rhs,
-                ctx.faer_parallelism(),
-                stack,
-            );
-        } else {
-            faer::linalg::lu::partial_pivoting::solve::solve_in_place(
-                lu.as_ref(),
-                lu.as_ref(),
-                row_perm_ref,
-                rhs,
-                ctx.faer_parallelism(),
-                stack,
-            );
-        }
-        tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())
+        solve_from_views(ctx, buffers, a.as_view(), b.as_view(), transpose_a)
     }
+
+    impl_solve_into_view!(
+        $complex,
+        $faer_complex,
+        $to_faer_slice,
+        $to_faer_slice_mut
+    );
 
     fn triangular_solve_2d(
         ctx: &CpuExecutionContext<'_>,
@@ -3026,6 +3056,29 @@ pub(crate) fn solve<T: FaerLinalg>(
     })
 }
 
+/// Solve a single matrix system directly into a positive column-major output
+/// view. The destination is populated only after factorization and singularity
+/// checks have completed, so validation/provider failures before execution do
+/// not partially modify the caller-owned buffer.
+pub(crate) fn solve_into<T: FaerLinalg>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    out: &mut TypedTensorViewMut<'_, T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<()> {
+    T::solve_2d_into_view(ctx, buffers, a, b, out, transpose_a)
+}
+
+fn same_slice<T>(data: &[T]) -> &[T] {
+    data
+}
+
+fn same_slice_mut<T>(data: &mut [T]) -> &mut [T] {
+    data
+}
+
 // Keeps triangular-solve operands and flags explicit at the CPU backend boundary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn triangular_solve<T: FaerLinalg>(
@@ -3252,6 +3305,104 @@ fn host_base_ptr<T: 'static>(view: &TypedTensorView<'_, T>) -> tenferro_tensor::
     }
     // SAFETY: offset is validated above.
     Ok(unsafe { storage.as_ptr().offset(offset) })
+}
+
+fn output_storage_slice_mut<'view, T: 'static>(
+    view: &'view mut TypedTensorViewMut<'_, T>,
+    rows: usize,
+    cols: usize,
+    col_stride: isize,
+    op: &'static str,
+) -> tenferro_tensor::Result<&'view mut [T]> {
+    let col_stride = usize::try_from(col_stride).map_err(|_| {
+        tenferro_tensor::Error::invalid_argument(
+            op,
+            "out",
+            "output column stride must be non-negative",
+        )
+    })?;
+    let span = cols
+        .checked_sub(1)
+        .and_then(|last_col| last_col.checked_mul(col_stride))
+        .and_then(|last_offset| last_offset.checked_add(rows))
+        .ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(op, "out", "output view span overflows usize")
+        })?;
+    let offset = usize::try_from(view.offset())
+        .map_err(|_| tenferro_tensor::Error::runtime_state(op, "output view offset is negative"))?;
+    let end = offset.checked_add(span).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
+            op,
+            "out",
+            "output view end offset overflows usize",
+        )
+    })?;
+    view.host_storage_mut()?
+        .get_mut(offset..end)
+        .ok_or_else(|| {
+            tenferro_tensor::Error::runtime_state(
+                op,
+                "output view does not contain the requested Faer span",
+            )
+        })
+}
+
+fn square_matrix_dim_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<usize> {
+    let (rows, cols) = matrix_dims_view(view, op)?;
+    if rows != cols {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![rows],
+            vec![cols],
+        ));
+    }
+    Ok(rows)
+}
+
+fn rhs_matrix_dims_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, usize)> {
+    match view.shape() {
+        [rows] => Ok((*rows, 1)),
+        _ => matrix_dims_view(view, op),
+    }
+}
+
+fn copy_rhs_view_into<T: Copy + 'static>(
+    src: &TypedTensorView<'_, T>,
+    dst: &mut TypedTensorViewMut<'_, T>,
+    rows: usize,
+    cols: usize,
+    op: &'static str,
+) -> tenferro_tensor::Result<()> {
+    if dst.shape().len() == 1 {
+        for row in 0..rows {
+            let value = src.get(&[row]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
+            })?;
+            let target = dst.get_mut(&[row]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(op, "output view is not host-addressable")
+            })?;
+            *target = *value;
+        }
+    } else {
+        for col in 0..cols {
+            for row in 0..rows {
+                let value = src.get(&[row, col]).ok_or_else(|| {
+                    tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
+                })?;
+                let target = dst.get_mut(&[row, col]).ok_or_else(|| {
+                    tenferro_tensor::Error::runtime_state(op, "output view is not host-addressable")
+                })?;
+                *target = *value;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn matrix_dims_view<T: 'static>(

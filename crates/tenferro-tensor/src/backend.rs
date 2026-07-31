@@ -1621,11 +1621,48 @@ fn validate_elementwise_output_disjoint(
     inputs: &[TensorRead<'_>],
     out: &TensorWrite<'_>,
 ) -> crate::Result<()> {
+    validate_read_into_destination(op.label(), inputs, out)
+}
+
+/// Validate that a caller-owned destination does not overlap any read input.
+///
+/// The check is intentionally conservative for host views: two views backed by
+/// the same host allocation are treated as overlapping because the allocation
+/// identity is the only stable boundary contract available to erased backend
+/// code. Backend allocations use their domain/allocation identity when the
+/// provider exposes it.
+///
+/// # Errors
+///
+/// Returns `tenferro_tensor_core::ValidationError::InvalidArgument` when the
+/// destination storage overlaps an input, or `Error::RuntimeState` when
+/// storage identity cannot be established safely.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
+/// use tenferro_tensor::backend::validate_read_into_destination;
+///
+/// let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// let mut output = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+/// validate_read_into_destination(
+///     "example",
+///     &[TensorRead::from_tensor(&input)],
+///     &TensorWrite::from_tensor(&mut output),
+/// )?;
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn validate_read_into_destination(
+    op: &'static str,
+    inputs: &[TensorRead<'_>],
+    out: &TensorWrite<'_>,
+) -> crate::Result<()> {
     let output_identity = tensor_read_storage_identity(&out.as_read())?;
     for (index, input) in inputs.iter().enumerate() {
         if storage_overlaps(tensor_read_storage_identity(input)?, output_identity) {
             return Err(Error::invalid_argument(
-                op.label(),
+                op,
                 "out",
                 format!("destination storage overlaps input {index}"),
             ));

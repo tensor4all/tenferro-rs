@@ -10,7 +10,8 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorView, TypedTensor, ValidationError,
+    TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView,
+    ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -161,6 +162,21 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             tril(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
             triu(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
         }
+
+        fn copy_read_into(
+            &mut self,
+            src: TensorRead<'_>,
+            dst: TensorWrite<'_>,
+        ) -> tenferro_tensor::Result<()> {
+            let Some(Tensor::F64(src)) = src.as_tensor() else {
+                panic!("the default solve_read_into test uses an owned f64 source")
+            };
+            let TensorWrite::Tensor(Tensor::F64(dst)) = dst else {
+                panic!("the default solve_read_into test uses an owned f64 destination")
+            };
+            dst.host_data_mut()?.copy_from_slice(src.host_data()?);
+            Ok(())
+        }
     }
 
     impl TensorReduction for DefaultOnlyLinalgBackend {
@@ -212,6 +228,16 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             solve(a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor>;
         }
 
+        fn solve_read(
+            &mut self,
+            _a: TensorRead<'_>,
+            b: TensorRead<'_>,
+        ) -> tenferro_tensor::Result<Tensor> {
+            Ok(Tensor::F64(
+                TypedTensor::from_vec_col_major(b.shape().to_vec(), vec![2.0, 3.0]).unwrap(),
+            ))
+        }
+
         fn eig_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
             self.eig_values_calls += 1;
             Ok(self
@@ -261,6 +287,53 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let owned_input = Tensor::F64(input.clone());
+
+    let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f64, 11.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64; 2]).unwrap();
+    backend
+        .solve_read_into(
+            TensorRead::from_tensor(&owned_input),
+            TensorRead::from_tensor(&rhs),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+
+    let mut bad_dtype = Tensor::from_vec_col_major(vec![2, 1], vec![0_i32; 2]).unwrap();
+    let err = backend
+        .solve_read_into(
+            TensorRead::from_tensor(&owned_input),
+            TensorRead::from_tensor(&rhs),
+            TensorWrite::from_tensor(&mut bad_dtype),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Validation {
+            op: "solve_read_into",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let mut wrong_placement = backend_f64_tensor(vec![2, 1], 180);
+    let err = backend
+        .solve_read_into(
+            TensorRead::from_tensor(&owned_input),
+            TensorRead::from_tensor(&rhs),
+            TensorWrite::from_tensor(&mut wrong_placement),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Validation {
+            op: "solve_read_into",
+            source: ValidationError::InvalidArgument {
+                argument: "out",
+                ..
+            },
+        }
+    ));
+
     let err = backend
         .svd_read(tenferro_tensor::TensorRead::from_tensor(&owned_input))
         .unwrap_err();
@@ -373,19 +446,13 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     let rhs =
         Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
-    let err = backend
+    let solved = backend
         .solve_read(
             TensorRead::from_tensor(&owned_input),
             TensorRead::from_tensor(&rhs),
         )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Unsupported {
-            op: "solve",
-            ref message,
-        } if message.contains("tensor reads")
-    ));
+        .unwrap();
+    assert_eq!(solved.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
     let err = backend
         .triangular_solve_read(
@@ -871,4 +938,33 @@ fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
             source: ValidationError::ShapeMismatch(_),
         }
     ));
+}
+
+#[test]
+fn cpu_solve_read_covers_direct_vector_and_matrix_rhs_views() {
+    let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
+    let vector = f64_tensor(vec![2], vec![4.0, 6.0]);
+    let mut backend = CpuBackend::new();
+
+    let vector_output = backend
+        .solve_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&vector),
+        )
+        .unwrap();
+    assert_eq!(f64_values(&vector_output), vec![2.0, 2.0]);
+
+    let mut storage = vec![-1.0_f64; 8];
+    storage[1] = 4.0;
+    storage[2] = 6.0;
+    storage[5] = 8.0;
+    storage[6] = 9.0;
+    let matrix_view = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &storage).unwrap();
+    let matrix_output = backend
+        .solve_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_view(TensorView::F64(matrix_view)),
+        )
+        .unwrap();
+    assert_eq!(f64_values(&matrix_output), vec![2.0, 2.0, 4.0, 3.0]);
 }
