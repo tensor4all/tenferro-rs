@@ -17,6 +17,6 @@ pub(crate) use eigh::{eigh, eigh_values};
 pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
 pub(crate) use lu::{lu, lu_factor};
 pub(crate) use qr::qr;
-pub(crate) use solve::solve;
+pub(crate) use solve::{solve, solve_from_views, solve_into};
 pub(crate) use svd::{svd, svd_values};
 pub(crate) use triangular_solve::triangular_solve;

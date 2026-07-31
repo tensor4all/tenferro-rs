@@ -6,7 +6,7 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TypedTensor,
+    CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite, TypedTensor,
 };
 
 use crate::extension::{
@@ -331,6 +331,30 @@ pub trait TensorReadLinalgExt {
         b: TensorRead<'_>,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Solve into a caller-owned destination without allocating the result at
+    /// the public API boundary.
+    ///
+    /// Backends with a native path may write directly into a compatible target;
+    /// the trait default preserves the ordinary solve-read plus copy behavior.
+    ///
+    /// # Errors
+    /// Returns destination metadata, aliasing, validation, backend, or
+    /// numerical errors from [`LinalgBackend::solve_read_into`].
+    fn solve_read_into<B: LinalgBackend>(
+        self,
+        b: TensorRead<'_>,
+        out: TensorWrite<'_>,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<()>
+    where
+        Self: Sized,
+    {
+        let _ = (self, b, out, backend);
+        Err(tenferro_tensor::Error::unsupported(
+            "solve_read_into",
+            "this tensor-read extension implementation does not accept borrowed solve targets",
+        ))
+    }
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns matrix validation, read/materialization, backend, or positive-definiteness errors.
@@ -797,6 +821,14 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
         backend.solve_read(self, b)
+    }
+    fn solve_read_into<B: LinalgBackend>(
+        self,
+        b: TensorRead<'_>,
+        out: TensorWrite<'_>,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<()> {
+        backend.solve_read_into(self, b, out)
     }
     fn cholesky_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
         backend.cholesky_read(self)

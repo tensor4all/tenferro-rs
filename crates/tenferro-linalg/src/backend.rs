@@ -1,4 +1,4 @@
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorWrite};
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
@@ -686,6 +686,46 @@ pub trait LinalgBackend: TensorBackend {
         ))
     }
 
+    /// Solve into a caller-owned destination.
+    ///
+    /// The default preserves the ordinary read path and copies its result into
+    /// `out`. Backends with a native destination path may override this method,
+    /// but must validate the destination before the first write and preserve
+    /// the same shape, dtype, placement, aliasing, and error contracts.
+    ///
+    /// # Errors
+    ///
+    /// Returns destination metadata, aliasing, validation, backend, or
+    /// numerical errors from the selected backend.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    /// let mut backend = CpuBackend::new();
+    /// backend.solve_read_into(
+    ///     TensorRead::from_tensor(&a),
+    ///     TensorRead::from_tensor(&b),
+    ///     TensorWrite::from_tensor(&mut out),
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn solve_read_into(
+        &mut self,
+        a: TensorRead<'_>,
+        b: TensorRead<'_>,
+        out: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        solve_read_into_default(self, a, b, out)
+    }
+
     #[doc(hidden)]
     fn lu_solve_prepared(
         &mut self,
@@ -704,4 +744,49 @@ pub trait LinalgBackend: TensorBackend {
             ),
         ))
     }
+}
+
+pub(crate) fn solve_read_into_default<B: LinalgBackend + ?Sized>(
+    backend: &mut B,
+    a: TensorRead<'_>,
+    b: TensorRead<'_>,
+    out: TensorWrite<'_>,
+) -> tenferro_tensor::Result<()> {
+    validate_solve_read_into(&a, &b, &out)?;
+    let result = backend.solve_read(a, b)?;
+    backend.copy_read_into(TensorRead::from_tensor(&result), out)
+}
+
+pub(crate) fn validate_solve_read_into(
+    _a: &TensorRead<'_>,
+    b: &TensorRead<'_>,
+    out: &TensorWrite<'_>,
+) -> tenferro_tensor::Result<()> {
+    if b.shape() != out.shape() {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "solve_read_into",
+            b.shape().to_vec(),
+            out.shape().to_vec(),
+        ));
+    }
+    if b.dtype() != out.dtype() {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
+            "solve_read_into",
+            b.dtype(),
+            out.dtype(),
+        ));
+    }
+    if b.placement() != out.as_read().placement() {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "solve_read_into",
+            "out",
+            format!(
+                "destination placement {:?} does not match rhs placement {:?}",
+                out.as_read().placement(),
+                b.placement()
+            ),
+        ));
+    }
+    let inputs = [_a.clone(), b.clone()];
+    tenferro_tensor::backend::validate_read_into_destination("solve_read_into", &inputs, out)
 }

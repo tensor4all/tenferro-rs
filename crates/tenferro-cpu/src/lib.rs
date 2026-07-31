@@ -291,6 +291,7 @@ pub(crate) use structural::{
 #[doc(hidden)]
 pub mod linalg_interop {
     pub use crate::buffer_pool::{BufferPool, PoolScalar};
+    pub use tenferro_internal_cpu_kernels::PooledUninitOutput;
 }
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {

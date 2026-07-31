@@ -1,11 +1,11 @@
 use num_complex::{Complex32, Complex64};
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 use super::helpers::{
     batched_binary_result, check_lapack_info, dim_i32, has_zero_dim, matrix_core_and_batch_result,
-    matrix_dims, square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    square_core_and_batch_result, tensor_from_vec_with_template,
 };
 
 pub(crate) trait LapackSolve: Clone + Copy + PoolScalar {
@@ -141,55 +141,16 @@ impl LapackSolve for Complex64 {
     }
 }
 
-fn solve_2d<T: LapackSolve>(
-    _buffers: &mut BufferPool,
+fn solve_2d<T: LapackSolve + 'static>(
+    buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "solve")?;
-    let (b_rows, b_cols) = matrix_dims(b, "solve")?;
-    if b_rows != n {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            "solve",
-            vec![n],
-            vec![b_rows],
-        ));
-    }
-
-    let n_i32 = dim_i32(n, "solve")?;
-    let b_cols_i32 = dim_i32(b_cols, "solve")?;
-    let mut lu = a.host_data()?.to_vec();
-    let mut ipiv = vec![0_i32; n];
-    let mut info = 0;
-    T::getrf(n_i32, n_i32, &mut lu, n_i32, &mut ipiv, &mut info);
-    check_lapack_info("solve", "getrf", info.min(0))?;
-    if info > 0 {
-        return Err(crate::error::into_tensor_error(
-            "solve",
-            crate::Error::Singular { op: "solve" },
-        ));
-    }
-
-    let mut rhs = b.host_data()?.to_vec();
-    let mut info = 0;
-    T::getrs(GetrsArgs {
-        trans: if transpose_a { b'T' } else { b'N' },
-        n: n_i32,
-        nrhs: b_cols_i32,
-        a: &lu,
-        lda: n_i32,
-        ipiv: &ipiv,
-        b: &mut rhs,
-        ldb: n_i32,
-        info: &mut info,
-    });
-    check_lapack_info("solve", "getrs", info)?;
-
-    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
+    solve_from_views(buffers, a.as_view(), b.as_view(), transpose_a)
 }
 
-pub(crate) fn solve<T: LapackSolve>(
+pub(crate) fn solve<T: LapackSolve + 'static>(
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -217,5 +178,228 @@ pub(crate) fn solve<T: LapackSolve>(
 
     batched_binary_result("solve", buffers, a, b, |buffers, a, b| {
         solve_2d(buffers, a, b, transpose_a)
+    })
+}
+
+/// Solve a single matrix system directly into a positive column-major output
+/// view. The destination is copied from the RHS only after factorization has
+/// succeeded, preserving the caller's buffer on validation and singularity
+/// failures.
+pub(crate) fn solve_into<T: LapackSolve + 'static>(
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    out: &mut TypedTensorViewMut<'_, T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<()> {
+    solve_in_place(buffers, a, b, out, transpose_a, true, "solve_read_into")
+}
+
+pub(crate) fn solve_from_views<T: LapackSolve + 'static>(
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut output = super::super::output_from_rhs_view(buffers, &b, "solve")?;
+    let mut out = output.as_view_mut();
+    solve_in_place(buffers, a, b, &mut out, transpose_a, false, "solve")?;
+    Ok(output)
+}
+
+fn solve_in_place<T: LapackSolve + 'static>(
+    buffers: &mut BufferPool,
+    a: TypedTensorView<'_, T>,
+    b: TypedTensorView<'_, T>,
+    out: &mut TypedTensorViewMut<'_, T>,
+    transpose_a: bool,
+    copy_rhs: bool,
+    op: &'static str,
+) -> tenferro_tensor::Result<()> {
+    let n = square_matrix_dim_view(&a, op)?;
+    let (b_rows, b_cols) = rhs_matrix_dims_view(&b, op)?;
+    if b_rows != n {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![n],
+            vec![b_rows],
+        ));
+    }
+    if out.strides().first().copied() != Some(1) {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op,
+            "out",
+            "direct LAPACK solve requires unit row stride",
+        ));
+    }
+
+    let lu_len = n.checked_mul(n).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(op, "a", "matrix size overflows usize")
+    })?;
+    let mut lu = buffers.acquire_with_capacity::<T>(lu_len);
+    for col in 0..n {
+        for row in 0..n {
+            let value = a.get(&[row, col]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(
+                    op,
+                    "CPU LAPACK solve input view is not host-addressable",
+                )
+            })?;
+            lu.push(*value);
+        }
+    }
+
+    let n_i32 = dim_i32(n, op)?;
+    let b_cols_i32 = dim_i32(b_cols, op)?;
+    let mut ipiv = vec![0_i32; n];
+    let mut info = 0;
+    T::getrf(n_i32, n_i32, &mut lu, n_i32, &mut ipiv, &mut info);
+    check_lapack_info(op, "getrf", info.min(0))?;
+    if info > 0 {
+        return Err(crate::error::into_tensor_error(
+            op,
+            crate::Error::Singular { op },
+        ));
+    }
+
+    let ldb = if out.shape().len() == 1 {
+        n
+    } else {
+        out.strides()[1].try_into().map_err(|_| {
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "out",
+                "output leading dimension does not fit LAPACK",
+            )
+        })?
+    };
+    let ldb_i32 = dim_i32(ldb, op)?;
+    if copy_rhs {
+        copy_rhs_view_into(&b, out, n, b_cols, op)?;
+    }
+    let rhs = output_slice_mut(out, n, b_cols, ldb, op)?;
+    let mut info = 0;
+    T::getrs(GetrsArgs {
+        trans: if transpose_a { b'T' } else { b'N' },
+        n: n_i32,
+        nrhs: b_cols_i32,
+        a: &lu,
+        lda: n_i32,
+        ipiv: &ipiv,
+        b: rhs,
+        ldb: ldb_i32,
+        info: &mut info,
+    });
+    check_lapack_info(op, "getrs", info)
+}
+
+fn square_matrix_dim_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<usize> {
+    let (rows, cols) = matrix_dims_view(view, op)?;
+    if rows != cols {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![rows],
+            vec![cols],
+        ));
+    }
+    Ok(rows)
+}
+
+fn rhs_matrix_dims_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, usize)> {
+    match view.shape() {
+        [rows] => Ok((*rows, 1)),
+        _ => matrix_dims_view(view, op),
+    }
+}
+
+fn matrix_dims_view<T: 'static>(
+    view: &TypedTensorView<'_, T>,
+    op: &'static str,
+) -> tenferro_tensor::Result<(usize, usize)> {
+    if view.shape().len() != 2 {
+        return Err(tenferro_tensor::Error::rank_mismatch(
+            op,
+            2,
+            view.shape().len(),
+        ));
+    }
+    Ok((view.shape()[0], view.shape()[1]))
+}
+
+fn copy_rhs_view_into<T: Copy + 'static>(
+    src: &TypedTensorView<'_, T>,
+    dst: &mut TypedTensorViewMut<'_, T>,
+    rows: usize,
+    cols: usize,
+    op: &'static str,
+) -> tenferro_tensor::Result<()> {
+    if dst.shape().len() == 1 {
+        for row in 0..rows {
+            let value = src.get(&[row]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
+            })?;
+            let target = dst.get_mut(&[row]).ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(op, "output view is not host-addressable")
+            })?;
+            *target = *value;
+        }
+    } else {
+        for col in 0..cols {
+            for row in 0..rows {
+                let value = src.get(&[row, col]).ok_or_else(|| {
+                    tenferro_tensor::Error::runtime_state(op, "RHS view is not host-addressable")
+                })?;
+                let target = dst.get_mut(&[row, col]).ok_or_else(|| {
+                    tenferro_tensor::Error::runtime_state(op, "output view is not host-addressable")
+                })?;
+                *target = *value;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn output_slice_mut<'out, 'view, T: 'static>(
+    out: &'out mut TypedTensorViewMut<'view, T>,
+    rows: usize,
+    cols: usize,
+    ldb: usize,
+    op: &'static str,
+) -> tenferro_tensor::Result<&'out mut [T]> {
+    let offset = out.offset();
+    if offset < 0 {
+        return Err(tenferro_tensor::Error::runtime_state(
+            op,
+            "output view offset is negative",
+        ));
+    }
+    let span = cols
+        .checked_sub(1)
+        .and_then(|last_col| last_col.checked_mul(ldb))
+        .and_then(|last_offset| last_offset.checked_add(rows))
+        .ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(op, "out", "output view span overflows usize")
+        })?;
+    let offset = usize::try_from(offset)
+        .map_err(|_| tenferro_tensor::Error::runtime_state(op, "output view offset is negative"))?;
+    let end = offset.checked_add(span).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
+            op,
+            "out",
+            "output view end offset overflows usize",
+        )
+    })?;
+    let storage = out.host_storage_mut()?;
+    storage.get_mut(offset..end).ok_or_else(|| {
+        tenferro_tensor::Error::runtime_state(
+            op,
+            "output view does not contain the requested LAPACK span",
+        )
     })
 }
