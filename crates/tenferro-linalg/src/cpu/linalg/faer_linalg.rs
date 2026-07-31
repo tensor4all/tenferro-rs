@@ -552,6 +552,8 @@ macro_rules! impl_real_eig_to_complex_outputs {
                     s.push(<$complex>::new(s_re[j], -s_im[j]));
                     for i in 0..n {
                         u.push(<$complex>::new(u_real[(i, j)], u_real[(i, j + 1)]));
+                    }
+                    for i in 0..n {
                         u.push(<$complex>::new(u_real[(i, j)], -u_real[(i, j + 1)]));
                     }
                     j += 2;
