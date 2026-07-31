@@ -78,6 +78,24 @@ With the `pjrt` feature enabled, `XlaExecutor::from_env()` reads
 unset, empty, points to a missing file, or the library does not export
 `GetPjrtApi`, tenferro returns an explicit error.
 
+## Threading And Synchronization
+
+PJRT owns the plugin client, device streams, and intra-op thread pool. A
+`CpuBackend::with_threads(n)` setting does not change the number of workers
+used inside a PJRT CPU plugin, and tenferro does not infer a PJRT affinity or
+NUMA guarantee from that setting. Configure intra-op parallelism through the
+selected PJRT/XLA deployment, such as the plugin's documented environment or
+XLA flags, and treat those controls as plugin-owned and generally
+process-scoped.
+
+The tenferro runtime controls graph lowering, engine selection, and the
+explicit call into PJRT. It does not insert a hidden CPU fallback or a second
+inner pool. PJRT execution and device-to-host transfer establish the
+host-visible synchronization boundary; use the executor's documented
+synchronization behavior when a host-side barrier is required. Unsupported
+shapes, dtypes, operations, and plugin capabilities are rejected before or by
+the PJRT call with an error.
+
 ```bash
 TENFERRO_PJRT_PLUGIN=/path/to/pjrt_c_api_cpu_plugin.so \
   cargo test -p tenferro-xla --features pjrt --test integration pjrt_env

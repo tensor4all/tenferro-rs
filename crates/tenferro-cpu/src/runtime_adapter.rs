@@ -56,6 +56,39 @@ pub fn runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {
 pub fn runtime_engine_registration(
     backend: &CpuBackend,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    runtime_engine_registration_with_id(backend, runtime_engine_id()?)
+}
+
+/// Build a runtime engine registration for a [`CpuBackend`] with a
+/// caller-selected engine identifier.
+///
+/// Use this when one process registers more than one CPU backend, for example
+/// when separate CPU resource domains or provider bundles need distinct
+/// placement identities. The hardware and storage classes remain the
+/// canonical host CPU classes; only the engine identity is caller-selected.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the supplied engine identifier or one of
+/// the built-in CPU runtime identifiers fails runtime validation, or if the
+/// registration is internally invalid.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{runtime_engine_registration_with_id, CpuBackend};
+/// use tenferro_runtime::EngineId;
+///
+/// let backend = CpuBackend::new();
+/// let engine_id = EngineId::new("example.cpu.primary.v1")?;
+/// let registration = runtime_engine_registration_with_id(&backend, engine_id)?;
+/// assert_eq!(registration.engine_id().as_str(), "example.cpu.primary.v1");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn runtime_engine_registration_with_id(
+    backend: &CpuBackend,
+    engine_id: EngineId,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
     let reduction: Arc<dyn ReductionRuntime> = backend.clone();
@@ -80,7 +113,7 @@ pub fn runtime_engine_registration(
     let resident_storage = storage.clone();
     let allocation_domain = backend.allocation_domain();
     EngineRegistration::new(
-        runtime_engine_id()?,
+        engine_id,
         ExecutionContextIdentity::of::<CpuBackend>(),
         runtime_hardware_class()?,
         Arc::from(vec![storage.clone()]),

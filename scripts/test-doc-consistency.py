@@ -15,6 +15,60 @@ import xml.etree.ElementTree as ET
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+DOCUMENTATION_REQUIREMENT_HOMES = (
+    (
+        "whether parallelism is outer, inner, or both;",
+        "docs/guides/choosing-a-backend.md",
+        "## Backend Capability Catalog",
+    ),
+    (
+        "which object owns the thread pool, stream, or queue;",
+        "docs/guides/choosing-a-backend.md",
+        "## Backend Capability Catalog",
+    ),
+    (
+        "whether thread counts are per-runtime, per-domain, per-provider, or global;",
+        "docs/guides/choosing-a-backend.md",
+        "## CPU Provider Choice",
+    ),
+    (
+        "what `Managed` and `ExternalManaged` guarantee;",
+        "docs/guides/choosing-a-backend.md",
+        "## Ownership Contracts",
+    ),
+    (
+        "how faer differs from general BLAS/LAPACK;",
+        "docs/guides/choosing-a-backend.md",
+        "## CPU Provider Choice",
+    ),
+    (
+        "when synchronization occurs;",
+        "docs/guides/choosing-a-backend.md",
+        "## Backend Capability Catalog",
+    ),
+    (
+        "what single-device and multi-device placement mean;",
+        "docs/guides/choosing-a-backend.md",
+        "## Placement",
+    ),
+    (
+        "which behavior is unsupported rather than silently degraded.",
+        "docs/guides/choosing-a-backend.md",
+        "## Backend Capability Catalog",
+    ),
+    (
+        "SVD, QR, and other batched linalg documentation must explicitly describe outer",
+        "docs/guides/linear-algebra.md",
+        "## Batch And Inner Parallelism",
+    ),
+    (
+        "different policy select or implement providers;",
+        "docs/guides/choosing-a-backend.md",
+        "## CPU Provider Choice",
+    ),
+)
+
+
 def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
@@ -160,6 +214,21 @@ def test_docs_ci_runs_docs_script_tests() -> None:
         "python3 \"$ROOT_DIR/scripts/check-operation-categories.py\" --fail-on-findings --include-rendered"
         in build_docs_site
     )
+
+
+def test_design_documentation_requirements_have_named_rendered_homes() -> None:
+    design = read("docs/design/execution-engine-provider-architecture.md")
+    start = design.index("## Documentation Requirements")
+    next_section = re.search(r"(?m)^##[ \t]+", design[start + 1 :])
+    end = start + 1 + next_section.start() if next_section else len(design)
+    requirements = design[start:end]
+
+    for requirement, guide_path, heading in DOCUMENTATION_REQUIREMENT_HOMES:
+        assert requirement in requirements, requirement
+        guide = read(guide_path)
+        assert heading in guide, (guide_path, heading)
+
+    assert "guides/choosing-a-backend.md" in read("docs/_quarto.yml")
 
 
 def test_ci_enforces_public_error_docs_and_extension_clippy() -> None:
@@ -529,6 +598,7 @@ def main() -> int:
         test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
         test_agents_layer_diagram_lists_cpu_crate,
         test_docs_ci_runs_docs_script_tests,
+        test_design_documentation_requirements_have_named_rendered_homes,
         test_ci_enforces_public_error_docs_and_extension_clippy,
         test_review_bot_workflow_exists,
         test_review_bot_uses_current_deepseek_model_fallback,

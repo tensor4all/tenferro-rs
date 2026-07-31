@@ -14,55 +14,10 @@ parallelism contract.
 
 ## CPU Backend Provider
 
-At least one CPU provider feature must be compiled. `cpu-faer` is the default.
-`cpu-blas` can be compiled by itself or together with `cpu-faer`. External CPU
-providers can replace optional provider bundle slots, such as the complete
-general `dot_general` contraction path, but still require at least one of
-`cpu-faer` or `cpu-blas` for fallback and linalg coverage.
-`blas-openblas`, `blas-accelerate`, and `blas-mkl` are explicit BLAS/LAPACK
-source-provider features that also enable `cpu-blas`; enable at most one of
-them in a single resolved Cargo feature graph.
-
-`CpuBackend::new()` chooses a provider from the features compiled into the
-current binary:
-
-| Compiled CPU provider features | `CpuBackend::new()` provider |
-| --- | --- |
-| `cpu-faer` only | faer |
-| `cpu-blas` only | BLAS/LAPACK |
-| `cpu-faer` and `cpu-blas` | BLAS/LAPACK |
-
-This is the default provider for that backend instance. If multiple complete
-CPU providers are compiled, select `CpuBackendKind::Faer` or
-`CpuBackendKind::Blas` explicitly when a specific call path should use one of
-them. TBLIS is not a complete backend kind; the unpublished
-`ext/tenferro-cpu-tblis` crate demonstrates installing it as an external
-general-contraction provider through `CpuProviderBundleBuilder`. Explicit
-base-provider selection returns a
-configuration error if the requested provider was not compiled into the binary:
-
-```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_cpu::CpuBackendKind;
-
-let backend = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer).unwrap();
-assert_eq!(backend.num_threads(), 4);
-assert_eq!(backend.kind(), CpuBackendKind::Faer);
-```
-
-An external provider installs through the provider bundle, not through a
-`tenferro-cpu` feature. The TBLIS example under `ext/tenferro-cpu-tblis` is not
-published from this repository; its `source-build` feature uses the local
-`third_party/t4a-tblis-src` path unless that source package is separately
-released in a later maintainer-approved release.
-
-The compiled source of truth is the crate-level doctest in
-`ext/tenferro-cpu-tblis/src/lib.rs` plus the provider behavior tests in
-`ext/tenferro-cpu-tblis/tests/provider.rs`:
-
-```bash
-cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml -- --nocapture
-```
+Provider choice, feature combinations, thread ownership, and the external
+TBLIS example are maintained in [Choosing A Backend](choosing-a-backend.md).
+Use that guide for the decision and capability matrix; this page keeps the
+runtime mechanics below for users who have already selected a provider.
 
 ## CPU Thread Count
 

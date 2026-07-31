@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use tenferro_runtime::program::CoreSemanticOp;
 use tenferro_runtime::{
-    CompareDir, DType, DotGeneralConfig, DotGeneralPreparation, ElementwiseRuntime,
+    CompareDir, DType, DotGeneralConfig, DotGeneralPreparation, ElementwiseRuntime, EngineId,
     IndexingRuntime, InputSignature, InputSignatureEntry, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutClass, LayoutRuntime, LayoutSpecialization,
-    PlacementSpecialization, ReductionRuntime, RuntimeCacheOwner, SpecializationError,
+    PlacementSpecialization, ReductionRuntime, Runtime, RuntimeCacheOwner, SpecializationError,
     SpecializationRequirements,
 };
 use tenferro_tensor::{
@@ -40,6 +40,74 @@ fn public_cpu_runtime_registration_includes_execution_bridge() {
 
     assert_eq!(registration.engine_id().as_str(), "tenferro-cpu.default.v1");
     assert!(registration.has_execution_engine());
+}
+
+#[test]
+fn public_cpu_runtime_registration_allows_two_engine_ids_in_one_runtime() {
+    let first_backend = CpuBackend::with_threads(1).expect("first CPU backend");
+    let second_backend = CpuBackend::with_threads(1).expect("second CPU backend");
+    let first_id = EngineId::new("tenferro-cpu.first.v1").expect("first engine ID");
+    let second_id = EngineId::new("tenferro-cpu.second.v1").expect("second engine ID");
+
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::runtime_engine_registration_with_id(&first_backend, first_id.clone())
+                .expect("first CPU registration"),
+        )
+        .expect("register first CPU engine");
+    builder
+        .register_engine(
+            crate::runtime_engine_registration_with_id(&second_backend, second_id.clone())
+                .expect("second CPU registration"),
+        )
+        .expect("register second CPU engine");
+    let runtime = builder.build().expect("runtime with two CPU engines");
+    let snapshot = runtime.snapshot().expect("runtime snapshot");
+
+    assert_eq!(snapshot.engine_count(), 2);
+    assert_eq!(snapshot.engine(&first_id).unwrap().engine_id(), &first_id);
+    assert_eq!(snapshot.engine(&second_id).unwrap().engine_id(), &second_id);
+}
+
+#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
+#[test]
+fn public_cpu_runtime_registration_supports_distinct_compiled_provider_kinds() {
+    let faer = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer)
+        .expect("faer CPU backend");
+    let blas = CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas)
+        .expect("BLAS CPU backend");
+
+    assert_ne!(faer.kind(), blas.kind());
+
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(
+            crate::runtime_engine_registration_with_id(
+                &faer,
+                EngineId::new("tenferro-cpu.faer.v1").expect("faer engine ID"),
+            )
+            .expect("faer CPU registration"),
+        )
+        .expect("register faer CPU engine");
+    builder
+        .register_engine(
+            crate::runtime_engine_registration_with_id(
+                &blas,
+                EngineId::new("tenferro-cpu.blas.v1").expect("BLAS engine ID"),
+            )
+            .expect("BLAS CPU registration"),
+        )
+        .expect("register BLAS CPU engine");
+    assert_eq!(
+        builder
+            .build()
+            .expect("runtime")
+            .snapshot()
+            .unwrap()
+            .engine_count(),
+        2
+    );
 }
 
 #[test]

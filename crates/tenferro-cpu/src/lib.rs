@@ -204,7 +204,10 @@ pub use provider_capability::{
     CpuThreadCountControl,
 };
 pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
-pub use runtime_adapter::{runtime_engine_id, runtime_engine_registration, runtime_hardware_class};
+pub use runtime_adapter::{
+    runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
+    runtime_hardware_class,
+};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,

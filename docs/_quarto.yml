@@ -48,6 +48,7 @@ website:
         contents:
           - text: "Choosing a Tensor API"
             href: guides/choosing-an-api.md
+          - guides/choosing-a-backend.md
           - guides/execution-models.md
           - guides/eager-operations.md
           - guides/tensor-operations.md

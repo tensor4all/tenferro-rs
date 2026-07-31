@@ -76,6 +76,26 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 Concrete, read, typed, eager, and traced tensor APIs are crate-root extension
 traits. `LinalgBackend` remains the provider contract passed to concrete methods.
 
+## Batch And Inner Parallelism
+
+Batched decompositions have two independent kinds of parallel work:
+
+- **Outer batch parallelism** runs independent matrices from the batch on the
+  selected CPU domain or device execution context. The engine owns this
+  scheduling and its resource budget.
+- **Inner decomposition parallelism** partitions the factorization of one
+  matrix. The selected provider owns this algorithmic decomposition, subject
+  to the execution context passed by the engine.
+
+For SVD, QR, Hermitian eigenvalue, and other batched linalg calls, the engine
+must choose the outer fan-out and the provider must respect the selected inner
+policy. A faer-backed CPU context can pass `Par::Seq` or `Par::rayon(n)` while
+preserving one domain budget. A BLAS/LAPACK provider may use its own worker
+pool, so its environment-controlled inner threads can oversubscribe an outer
+batch; see [Choosing A Backend](choosing-a-backend.md) before combining the
+two. Providers must report unsupported decomposition or dtype requests rather
+than silently changing the algorithm or execution backend.
+
 ## Concrete Solve
 
 ```rust
