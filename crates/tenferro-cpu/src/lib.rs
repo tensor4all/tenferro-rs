@@ -71,7 +71,6 @@ mod exec_session;
 mod gemm;
 mod indexed_plan_cache;
 mod indexing;
-mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 mod placement;
@@ -83,10 +82,80 @@ mod runtime_adapter;
 mod structural;
 mod topology;
 
-use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedArray, StridedView};
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
+#[cfg(test)]
+use strided_kernel::StridedArray;
+use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView};
 
-use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
+
+pub(crate) fn erased_raw_strided_ref<'a>(
+    dtype: strided_kernel::KernelDType,
+    data: &'a [u8],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<strided_kernel::ErasedRawStridedRef<'a>> {
+    let data_ptr = NonNull::new(data.as_ptr().cast_mut()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: callers derive `data` from initialized typed host storage and
+    // keep that storage alive for the returned descriptor lifetime.
+    unsafe {
+        strided_kernel::ErasedRawStridedRef::from_raw_parts(
+            dtype,
+            data_ptr,
+            data.len(),
+            dims,
+            strides,
+            offset,
+        )
+    }
+}
+
+pub(crate) fn erased_raw_strided_mut<'a>(
+    dtype: strided_kernel::KernelDType,
+    data: &'a mut [u8],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<strided_kernel::ErasedRawStridedMut<'a>> {
+    let data_ptr = NonNull::new(data.as_mut_ptr()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: callers derive `data` from a uniquely borrowed initialized host
+    // destination and retain that borrow for the returned descriptor lifetime.
+    unsafe {
+        strided_kernel::ErasedRawStridedMut::from_raw_parts(
+            dtype,
+            data_ptr,
+            data.len(),
+            dims,
+            strides,
+            offset,
+        )
+    }
+}
+
+pub(crate) fn erased_raw_strided_uninit_mut<'a>(
+    dtype: strided_kernel::KernelDType,
+    data: &'a mut [MaybeUninit<u8>],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<strided_kernel::ErasedRawStridedUninitMut<'a>> {
+    let data_ptr = NonNull::new(data.as_mut_ptr().cast::<u8>()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: the guard owns the allocation, and the caller proves that every
+    // reachable destination element is overwritten before typed exposure.
+    unsafe {
+        strided_kernel::ErasedRawStridedUninitMut::from_raw_parts(
+            dtype,
+            data_ptr,
+            data.len(),
+            dims,
+            strides,
+            offset,
+        )
+    }
+}
 
 #[cfg(feature = "provider-src")]
 extern crate blas_src as _;
@@ -197,6 +266,7 @@ pub(crate) use structural::{
 #[doc(hidden)]
 pub mod linalg_interop {
     pub use crate::buffer_pool::{BufferPool, PoolScalar};
+    pub use tenferro_internal_cpu_kernels::PooledUninitOutput;
 }
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
@@ -403,32 +473,7 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
     StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }
 
-/// Create an output array from the CPU buffer pool WITHOUT initializing values.
-///
-/// # Safety
-/// Caller must write every element before reading. The returned array contains
-/// uninitialized or stale data acquired from `buffers`.
-pub(crate) unsafe fn typed_array_uninit_from_pool<T>(
-    buffers: &mut BufferPool,
-    shape: &[usize],
-) -> crate::Result<StridedArray<T>>
-where
-    T: PoolScalar,
-{
-    let total = tenferro_tensor::validate::checked_shape_product(
-        "typed_array_uninit_from_pool",
-        "shape",
-        shape,
-    )?;
-    let strides = kernel_col_major_strides(shape);
-    // SAFETY: callers use this only for operation outputs that fully overwrite every element.
-    let data = unsafe { T::pool_acquire(buffers, total) };
-    // Invariant: callers pass validated tensor-derived or prechecked output
-    // shapes, and `strides` is their compact column-major layout.
-    StridedArray::from_parts(data, shape, &strides, 0)
-        .map_err(|err| crate::Error::backend_source("typed_array_uninit_from_pool", err))
-}
-
+#[cfg(test)]
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
     // Invariant: `StridedArray` owns data whose length matches its validated dimensions.
     TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())

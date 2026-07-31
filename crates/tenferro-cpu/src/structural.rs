@@ -1,5 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 use strided_kernel::{
     col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
@@ -15,10 +16,11 @@ use tenferro_tensor::{
 };
 
 #[cfg(test)]
+use super::tensor_from_array;
+#[cfg(test)]
 use super::typed_array_uninit;
 use super::{
-    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit_from_pool, typed_host_data,
-    typed_view, typed_view_from_view,
+    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput,
 };
 
 #[cfg(test)]
@@ -133,6 +135,7 @@ fn host_view<'a, T: Copy>(
     }
 }
 
+#[cfg(test)]
 fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
     op: &'static str,
     mut out: strided_kernel::StridedArray<T>,
@@ -143,6 +146,7 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
     tensor_from_array_with_placement(op, out, placement)
 }
 
+#[cfg(test)]
 fn tensor_from_array_with_placement<T: 'static>(
     op: &'static str,
     out: strided_kernel::StridedArray<T>,
@@ -177,17 +181,13 @@ where
         view.offset(),
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    // INVARIANT: validated equal-shaped copy_into overwrites every logical output element.
-    // SAFETY: copy_into overwrites every logical output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, view.shape()) }?;
-    copy_into(&mut out.view_mut(), &src).map_err(|err| crate::Error::backend_source(op, err))?;
-    let shape = R::shape_from_vec(view.shape().to_vec().into())
+    let mut out = PooledUninitOutput::<T>::new(buffers, view.shape().to_vec())?;
+    map_into(&mut out.as_uninit_view_mut()?, &src, MaybeUninit::new)
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    TypedTensor::from_buffer_col_major(
-        shape,
-        crate::Buffer::Host(out.into_data()),
-        view.placement().clone(),
-    )
+    // SAFETY: the successful copy replay writes every logical destination element.
+    let mut out = unsafe { out.assume_init_as::<R>()? };
+    out.set_placement(view.placement().clone());
+    Ok(out)
 }
 
 pub(crate) fn typed_copy_view_into<T, R>(
@@ -334,8 +334,7 @@ where
     T: Copy + Clone + PoolScalar + 'static,
 {
     let len = checked_shape_product(op, "output shape", &shape)?;
-    // SAFETY: every pooled element is initialized with `fill` before returning.
-    let mut data = unsafe { T::pool_acquire(buffers, len) };
+    let mut data = buffers.acquire_zeroed::<T>(len);
     data.fill(fill);
     TypedTensor::from_vec_col_major(shape, data)
 }
@@ -352,9 +351,8 @@ where
         crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
-    // SAFETY: copy_from_slice initializes every pooled element before returning.
-    let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
-    data.copy_from_slice(input);
+    let mut data = buffers.acquire_empty_with_capacity::<T>(input.len());
+    data.extend_from_slice(input);
     TypedTensor::from_buffer_col_major(
         tensor.shape().to_vec(),
         crate::Buffer::Host(data),
@@ -734,26 +732,6 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + 'static>(
     copy_view_to_array("transpose", out, &permuted, tensor.placement())
 }
 
-fn typed_transpose_view_impl<T, R>(
-    view: &TypedTensorView<'_, T, R>,
-    perm: &[usize],
-    make_out: impl FnOnce(&[usize]) -> crate::Result<strided_kernel::StridedArray<T>>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Copy + Clone + Send + Sync + 'static,
-    R: TensorRank,
-{
-    validate_permutation("transpose", perm, view.shape().len())?;
-    let src = typed_view_from_view("transpose", view)?;
-    let permuted = src
-        .permute(perm)
-        .map_err(|err| crate::Error::backend_source("transpose", err))?;
-    checked_shape_product("transpose", "output shape", permuted.dims())?;
-    // SAFETY: copy_into overwrites every output element.
-    let out = make_out(permuted.dims())?;
-    copy_view_to_array("transpose", out, &permuted, view.placement())
-}
-
 pub(crate) fn typed_transpose_with_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
@@ -774,11 +752,19 @@ where
     T: Copy + Clone + PoolScalar + 'static,
     R: TensorRank,
 {
-    typed_transpose_view_impl(view, perm, |shape| unsafe {
-        // INVARIANT: validated transpose copy overwrites every pooled output element.
-        // SAFETY: transpose materialization copies every output element before returning.
-        typed_array_uninit_from_pool(buffers, shape)
-    })
+    validate_permutation("transpose", perm, view.shape().len())?;
+    let src = typed_view_from_view("transpose", view)?;
+    let permuted = src
+        .permute(perm)
+        .map_err(|err| crate::Error::backend_source("transpose", err))?;
+    checked_shape_product("transpose", "output shape", permuted.dims())?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, permuted.dims().to_vec())?;
+    map_into(&mut out.as_uninit_view_mut()?, &permuted, MaybeUninit::new)
+        .map_err(|err| crate::Error::backend_source("transpose", err))?;
+    // SAFETY: the successful transpose copy writes every logical destination element.
+    let mut out = unsafe { out.assume_init()? };
+    out.set_placement(view.placement().clone());
+    Ok(out)
 }
 
 /// # Errors
@@ -826,20 +812,21 @@ where
     }
 
     let src = typed_view_from_view("reshape", view)?;
-    // INVARIANT: equal element counts let the source-shaped copy target fully overwrite the
-    // pooled compact output before the same storage is attached to `shape`.
-    // SAFETY: copy_into overwrites every pooled output element before returning.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
     let copy_strides = col_major_strides(view.shape());
-    let mut copy_target = StridedViewMut::new(out.data_mut(), view.shape(), &copy_strides, 0)
-        .map_err(|err| crate::Error::backend_source("reshape", err))?;
-    copy_into(&mut copy_target, &src)
-        .map_err(|err| crate::Error::backend_source("reshape", err))?;
-    TypedTensor::from_buffer_col_major(
-        shape.to_vec(),
-        crate::Buffer::Host(out.into_data()),
-        view.placement().clone(),
+    let mut copy_target = strided_kernel::StridedViewMut::new(
+        out.as_uninit_slice_mut(),
+        view.shape(),
+        &copy_strides,
+        0,
     )
+    .map_err(|err| crate::Error::backend_source("reshape", err))?;
+    map_into(&mut copy_target, &src, MaybeUninit::new)
+        .map_err(|err| crate::Error::backend_source("reshape", err))?;
+    // SAFETY: the successful reshape copy writes every logical destination element.
+    let mut out = unsafe { out.assume_init()? };
+    out.set_placement(view.placement().clone());
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -876,13 +863,56 @@ where
     T: Copy + Clone + PoolScalar + 'static,
     R: TensorRank,
 {
-    typed_broadcast_in_dim_view_impl(view, shape, dims, |shape| unsafe {
-        // INVARIANT: validated broadcast copy overwrites every pooled output element.
-        // SAFETY: broadcast materialization writes every output element before returning.
-        typed_array_uninit_from_pool(buffers, shape)
-    })
+    validate_rank("broadcast_in_dim", view.shape().len(), dims.len())?;
+    let mut seen = vec![false; shape.len()];
+    let mut base_dims = vec![1usize; shape.len()];
+    let mut base_strides = vec![0isize; shape.len()];
+    for (src_axis, &dst_axis) in dims.iter().enumerate() {
+        validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
+        if seen[dst_axis] {
+            return Err(crate::Error::duplicate_axis(
+                "broadcast_in_dim",
+                dst_axis,
+                "dims",
+            ));
+        }
+        seen[dst_axis] = true;
+        let source_dim = view.shape()[src_axis];
+        let target_dim = shape[dst_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return Err(crate::Error::shape_mismatch(
+                "broadcast_in_dim",
+                view.shape().to_vec(),
+                shape.to_vec(),
+            ));
+        }
+        base_dims[dst_axis] = source_dim;
+        base_strides[dst_axis] = view.strides()[src_axis];
+    }
+    if view.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error("broadcast_in_dim"));
+    }
+    let base: StridedView<'_, T, Identity> = StridedView::new(
+        view.host_storage()?,
+        &base_dims,
+        &base_strides,
+        view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
+    let broadcast = base
+        .broadcast(shape)
+        .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
+    checked_shape_product("broadcast_in_dim", "output shape", shape)?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
+    map_into(&mut out.as_uninit_view_mut()?, &broadcast, MaybeUninit::new)
+        .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
+    // SAFETY: the successful broadcast copy writes every logical destination element.
+    let mut out = unsafe { out.assume_init()? };
+    out.set_placement(view.placement().clone());
+    Ok(out)
 }
 
+#[cfg(test)]
 fn typed_broadcast_in_dim_view_impl<T, R>(
     view: &TypedTensorView<'_, T, R>,
     shape: &[usize],
@@ -933,7 +963,6 @@ where
         .broadcast(shape)
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
-    // SAFETY: copy_into overwrites every output element.
     let mut out = make_out(shape)?;
     copy_into(&mut out.view_mut(), &broadcast)
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
@@ -949,11 +978,15 @@ where
     S: Copy + Send + Sync,
     T: Copy + Clone + PoolScalar,
 {
-    // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, tensor.shape()) }?;
-    map_into(&mut out.view_mut(), &typed_view("convert", tensor)?, f)
-        .map_err(|err| crate::Error::backend_source("convert", err))?;
-    Ok(tensor_from_array(out))
+    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape().to_vec())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &typed_view("convert", tensor)?,
+        |x| MaybeUninit::new(f(x)),
+    )
+    .map_err(|err| crate::Error::backend_source("convert", err))?;
+    // SAFETY: the successful conversion map writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 #[cfg(test)]
@@ -992,11 +1025,11 @@ where
     let diag = host_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
-    // SAFETY: copy_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) }?;
-    copy_into(&mut out.view_mut(), &diag)
+    let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims().to_vec())?;
+    map_into(&mut out.as_uninit_view_mut()?, &diag, MaybeUninit::new)
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
-    Ok(tensor_from_array(out))
+    // SAFETY: the successful diagonal copy writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 #[cfg(test)]

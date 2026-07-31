@@ -1,5 +1,6 @@
 use std::mem::{size_of_val, MaybeUninit};
 use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use num_complex::Complex;
@@ -23,6 +24,43 @@ use tenferro_tensor::{
 };
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
+
+fn erased_raw_strided_ref<'a>(
+    dtype: KernelDType,
+    data: &'a [u8],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<ErasedRawStridedRef<'a>> {
+    let data_ptr = NonNull::new(data.as_ptr().cast_mut()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: elementwise fusion receives initialized typed host storage and
+    // retains the backing borrows for the descriptor lifetime.
+    unsafe {
+        ErasedRawStridedRef::from_raw_parts(dtype, data_ptr, data.len(), dims, strides, offset)
+    }
+}
+
+fn erased_raw_strided_uninit_mut<'a>(
+    dtype: KernelDType,
+    data: &'a mut [MaybeUninit<u8>],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<ErasedRawStridedUninitMut<'a>> {
+    let data_ptr = NonNull::new(data.as_mut_ptr().cast::<u8>()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: the pooled output guard owns this storage and the fused replay
+    // proves that every reachable element is overwritten before exposure.
+    unsafe {
+        ErasedRawStridedUninitMut::from_raw_parts(
+            dtype,
+            data_ptr,
+            data.len(),
+            dims,
+            strides,
+            offset,
+        )
+    }
+}
 
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -1192,7 +1230,7 @@ pub fn elementwise_fusion_with_pool(
     let input_refs = input_layouts
         .iter()
         .map(|input| {
-            ErasedRawStridedRef::new(dtype, input.data, &input.dims, &input.strides, 0)
+            erased_raw_strided_ref(dtype, input.data, &input.dims, &input.strides, 0)
                 .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
         })
         .collect::<crate::Result<Vec<_>>>()?;
@@ -1376,7 +1414,7 @@ where
     let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
     let output_strides = col_major_strides(shape)?;
     let mut dest =
-        ErasedRawStridedUninitMut::new(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
+        erased_raw_strided_uninit_mut(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
             .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     erased_plan
         .execute_uninit(exec_context, &mut dest, input_ptrs)

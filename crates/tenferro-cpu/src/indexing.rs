@@ -3,13 +3,11 @@ use std::mem::size_of_val;
 use smallvec::SmallVec;
 use strided_kernel::{
     col_major_strides, ErasedConcatenatePlan, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan,
-    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedMut, ErasedRawStridedPtr, ErasedRawStridedRef,
-    ErasedRawStridedUninitMut, ErasedReversePlan, ErasedScatterPlan, ErasedSlicePlan, ExecContext,
-    GatherSpec, KernelDType, ScatterSpec,
+    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedPtr, ErasedRawStridedRef, ErasedReversePlan,
+    ErasedScatterPlan, ErasedSlicePlan, ExecContext, GatherSpec, KernelDType, ScatterSpec,
 };
 
 use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
-use super::indexing_alloc::pooled_uninit_tensor;
 use super::typed_host_data;
 use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -95,13 +93,6 @@ fn typed_bytes<T>(data: &[T]) -> &[u8] {
     // SAFETY: `data` is an aligned typed slice. The returned byte slice has
     // the same lifetime and exact byte length, and is read-only.
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
-}
-
-fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
-    // SAFETY: `data` is an aligned typed slice. The returned byte slice has
-    // the same lifetime and exact byte length; callers must preserve the
-    // dtype's byte validity invariants before typed reads resume.
-    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
 }
 
 fn gather_spec(config: &GatherConfig) -> GatherSpec {
@@ -505,7 +496,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("slice", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
-    let input_ref = ErasedRawStridedRef::new(
+    let input_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("slice", input)?),
         input_shape,
@@ -514,7 +505,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("slice", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = ErasedRawStridedUninitMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
         out.as_uninit_bytes_mut(),
         &out_shape,
@@ -647,7 +638,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         .iter()
         .zip(input_strides.iter())
         .map(|(input, strides)| {
-            ErasedRawStridedRef::new(
+            crate::erased_raw_strided_ref(
                 dtype,
                 typed_bytes(typed_host_data("concatenate", input)?),
                 input.shape(),
@@ -661,7 +652,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         .iter()
         .map(ErasedRawStridedPtr::from_ref)
         .collect();
-    let mut out_ref = ErasedRawStridedUninitMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
         out.as_uninit_bytes_mut(),
         &out_shape,
@@ -699,7 +690,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, input_shape.to_vec())?;
-    let input_ref = ErasedRawStridedRef::new(
+    let input_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("reverse", input)?),
         input_shape,
@@ -708,7 +699,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = ErasedRawStridedUninitMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
         out.as_uninit_bytes_mut(),
         input_shape,
@@ -1021,10 +1012,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         let _ = clamp_window_start("gather", 0, dim_size, config.slice_sizes[operand_dim])?;
     }
 
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    if T::dtype() == DType::Bool {
-        out.host_data_mut()?.fill(T::pool_zero());
-    }
+    let mut out = PooledUninitOutput::<T>::new(buffers, out_shape.clone())?;
 
     let dtype = kernel_dtype(T::dtype());
     let operand_strides = col_major_strides(operand_shape);
@@ -1061,7 +1049,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         })
         .map_err(|err| crate::Error::backend_source("gather", err))?;
 
-    let operand_ref = ErasedRawStridedRef::new(
+    let operand_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("gather", operand)?),
         operand_shape,
@@ -1069,7 +1057,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    let index_ref = ErasedRawStridedRef::new(
+    let index_ref = crate::erased_raw_strided_ref(
         index_dtype,
         typed_bytes(&start_indices.values),
         &start_indices.shape,
@@ -1077,18 +1065,21 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         &out_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    plan.execute(exec_context, &mut out_ref, &operand_ref, &index_ref)
+    let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
+    let index_ptr = ErasedRawStridedPtr::from_ref(&index_ref);
+    plan.execute_uninit(exec_context, &mut out_ref, &operand_ptr, &index_ptr)
         .map_err(|err| crate::Error::backend_source("gather", err))?;
 
-    Ok(out)
+    // SAFETY: the gather plan writes every logical output element.
+    unsafe { out.assume_init() }
 }
 
 fn typed_scatter<T>(
@@ -1311,8 +1302,8 @@ where
 
     // INVARIANT: ErasedScatterPlan first copies the full operand into `out`,
     // then applies every additive update.
-    let mut out = pooled_uninit_tensor(buffers, operand_shape.to_vec())?;
-    let operand_ref = ErasedRawStridedRef::new(
+    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
+    let operand_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("scatter", operand)?),
         operand_shape,
@@ -1320,7 +1311,7 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let index_ref = ErasedRawStridedRef::new(
+    let index_ref = crate::erased_raw_strided_ref(
         index_dtype,
         typed_bytes(&scatter_indices.values),
         &scatter_indices.shape,
@@ -1328,7 +1319,7 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let update_ref = ErasedRawStridedRef::new(
+    let update_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("scatter", updates)?),
         updates_shape,
@@ -1336,24 +1327,29 @@ where
         0,
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         operand_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    plan.execute(
+    let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
+    let index_ptr = ErasedRawStridedPtr::from_ref(&index_ref);
+    let update_ptr = ErasedRawStridedPtr::from_ref(&update_ref);
+    plan.execute_uninit(
         exec_context,
         &mut out_ref,
-        &operand_ref,
-        &index_ref,
-        &update_ref,
+        &operand_ptr,
+        &index_ptr,
+        &update_ptr,
     )
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
 
-    Ok(out)
+    // SAFETY: the scatter plan first copies the initialized operand and then
+    // applies additive updates before returning success.
+    unsafe { out.assume_init() }
 }
 
 fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -1430,11 +1426,8 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         })
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     // INVARIANT: ErasedDynamicSlicePlan writes every output coordinate exactly once.
-    let mut out = pooled_uninit_tensor(buffers, out_shape.clone())?;
-    if T::dtype() == DType::Bool {
-        out.host_data_mut()?.fill(T::pool_zero());
-    }
-    let input_ref = ErasedRawStridedRef::new(
+    let mut out = PooledUninitOutput::<T>::new(buffers, out_shape.clone())?;
+    let input_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("dynamic_slice", input)?),
         input_shape,
@@ -1442,7 +1435,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    let start_ref = ErasedRawStridedRef::new(
+    let start_ref = crate::erased_raw_strided_ref(
         index_dtype,
         typed_bytes(&starts.values),
         &starts.shape,
@@ -1450,18 +1443,21 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         &out_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    plan.execute(exec_context, &mut out_ref, &input_ref, &start_ref)
+    let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
+    let start_ptr = ErasedRawStridedPtr::from_ref(&start_ref);
+    plan.execute_uninit(exec_context, &mut out_ref, &input_ptr, &start_ptr)
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
 
-    Ok(out)
+    // SAFETY: the dynamic-slice plan writes every logical output element.
+    unsafe { out.assume_init() }
 }
 
 fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -1546,11 +1542,8 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     // INVARIANT: ErasedDynamicUpdateSlicePlan copies the full operand into
     // `out` before overwriting the update window.
-    let mut out = pooled_uninit_tensor(buffers, operand_shape.to_vec())?;
-    if T::dtype() == DType::Bool {
-        out.host_data_mut()?.fill(T::pool_zero());
-    }
-    let operand_ref = ErasedRawStridedRef::new(
+    let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
+    let operand_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
         operand_shape,
@@ -1558,7 +1551,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let update_ref = ErasedRawStridedRef::new(
+    let update_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("dynamic_update_slice", update)?),
         update_shape,
@@ -1566,7 +1559,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let start_ref = ErasedRawStridedRef::new(
+    let start_ref = crate::erased_raw_strided_ref(
         index_dtype,
         typed_bytes(&starts.values),
         &starts.shape,
@@ -1574,24 +1567,29 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let mut out_ref = ErasedRawStridedMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
-        typed_bytes_mut(out.host_data_mut()?),
+        out.as_uninit_bytes_mut(),
         operand_shape,
         &out_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    plan.execute(
+    let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
+    let update_ptr = ErasedRawStridedPtr::from_ref(&update_ref);
+    let start_ptr = ErasedRawStridedPtr::from_ref(&start_ref);
+    plan.execute_uninit(
         exec_context,
         &mut out_ref,
-        &operand_ref,
-        &update_ref,
-        &start_ref,
+        &operand_ptr,
+        &update_ptr,
+        &start_ptr,
     )
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
 
-    Ok(out)
+    // SAFETY: the dynamic-update plan first copies the initialized operand and
+    // then overwrites the update window before returning success.
+    unsafe { out.assume_init() }
 }
 
 fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
@@ -1699,7 +1697,7 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let fill = T::pool_zero();
     let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
-    let input_ref = ErasedRawStridedRef::new(
+    let input_ref = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(typed_host_data("pad", input)?),
         input_shape,
@@ -1708,7 +1706,7 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     )
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = ErasedRawStridedUninitMut::new(
+    let mut out_ref = crate::erased_raw_strided_uninit_mut(
         dtype,
         out.as_uninit_bytes_mut(),
         &out_shape,

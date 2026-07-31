@@ -116,24 +116,6 @@ fn checked_product_rejects_product_overflow() {
 }
 
 #[test]
-fn strided_dot_into_does_not_acquire_output_buffer() {
-    let source = include_str!("strided_dot.rs");
-    let start = source
-        .find("pub(crate) fn dot_general_strided_with_backend_into")
-        .expect("missing strided dot into function");
-    let body = &source[start..];
-
-    assert!(
-        body.contains("StridedViewMut::new(out_data"),
-        "dot_general into should wrap caller-provided output storage"
-    );
-    assert!(
-        !body.contains("pool_acquire"),
-        "dot_general into must not acquire a pooled output Vec"
-    );
-}
-
-#[test]
 fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();

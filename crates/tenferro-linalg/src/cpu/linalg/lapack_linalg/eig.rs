@@ -64,7 +64,7 @@ macro_rules! impl_real_eig_to_complex_values {
             s_im: &[$real],
             n: usize,
         ) -> Vec<$complex> {
-            let mut values = buffers.acquire_with_capacity::<$complex>(n);
+            let mut values = buffers.acquire_empty_with_capacity::<$complex>(n);
             for idx in 0..n {
                 values.push(<$complex>::new(s_re[idx], s_im[idx]));
             }

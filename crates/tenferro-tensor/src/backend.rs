@@ -1696,11 +1696,53 @@ fn non_null_bytes<T>(data: &[T]) -> NonNull<u8> {
     NonNull::new(data.as_ptr().cast_mut().cast()).unwrap_or_else(NonNull::dangling)
 }
 
+fn typed_bytes<T>(data: &[T]) -> &[u8] {
+    // SAFETY: u8 has alignment one and the returned bytes retain the shared
+    // lifetime of the typed source slice.
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast(), std::mem::size_of_val(data)) }
+}
+
 fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
     let len = std::mem::size_of_val(data);
     // SAFETY: u8 has alignment one and the returned bytes retain the unique
     // lifetime of the typed destination slice.
     unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast(), len) }
+}
+
+fn erased_raw_strided_ptr<'a>(
+    dtype: KernelDType,
+    data: &'a [u8],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<ErasedRawStridedPtr<'a>> {
+    // SAFETY: callers derive `data` from initialized typed host storage and
+    // retain the backing borrow for the returned descriptor lifetime.
+    unsafe {
+        ErasedRawStridedPtr::from_raw_parts(
+            dtype,
+            non_null_bytes(data),
+            data.len(),
+            dims,
+            strides,
+            offset,
+        )
+    }
+}
+
+fn erased_raw_strided_mut<'a>(
+    dtype: KernelDType,
+    data: &'a mut [u8],
+    dims: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+) -> strided_kernel::Result<ErasedRawStridedMut<'a>> {
+    let data_ptr = NonNull::new(data.as_mut_ptr()).unwrap_or_else(NonNull::dangling);
+    // SAFETY: callers derive `data` from a uniquely borrowed initialized host
+    // destination and retain that borrow for the returned descriptor lifetime.
+    unsafe {
+        ErasedRawStridedMut::from_raw_parts(dtype, data_ptr, data.len(), dims, strides, offset)
+    }
 }
 
 fn execute_one_shot_map<T: 'static>(
@@ -1715,16 +1757,13 @@ fn execute_one_shot_map<T: 'static>(
     // its host storage remains borrowed until replay returns.
     // SAFETY: input_data supplies the pointer and exact byte length; the view
     // owns the matching shape, signed strides, and in-bounds offset.
-    let input_descriptor = unsafe {
-        ErasedRawStridedPtr::new(
-            dtype,
-            non_null_bytes(input_data),
-            std::mem::size_of_val(input_data),
-            input.shape(),
-            input.strides(),
-            input.offset(),
-        )
-    }
+    let input_descriptor = erased_raw_strided_ptr(
+        dtype,
+        typed_bytes(input_data),
+        input.shape(),
+        input.strides(),
+        input.offset(),
+    )
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
 
     let out_dims = SmallVec::<[usize; 8]>::from_slice(out.shape());
@@ -1733,7 +1772,7 @@ fn execute_one_shot_map<T: 'static>(
     let out_data = out.host_storage_mut()?;
     // INVARIANT: the copied output layout describes this uniquely borrowed
     // host storage, already validated as disjoint from every input.
-    let mut out_descriptor = ErasedRawStridedMut::new(
+    let mut out_descriptor = erased_raw_strided_mut(
         dtype,
         typed_bytes_mut(out_data),
         &out_dims,
@@ -1758,32 +1797,26 @@ fn execute_one_shot_zip<T: 'static>(
     // its host storage remains borrowed until replay returns.
     // SAFETY: lhs_data supplies the pointer and exact byte length; the view
     // owns the matching shape, signed strides, and in-bounds offset.
-    let lhs_descriptor = unsafe {
-        ErasedRawStridedPtr::new(
-            dtype,
-            non_null_bytes(lhs_data),
-            std::mem::size_of_val(lhs_data),
-            lhs.shape(),
-            lhs.strides(),
-            lhs.offset(),
-        )
-    }
+    let lhs_descriptor = erased_raw_strided_ptr(
+        dtype,
+        typed_bytes(lhs_data),
+        lhs.shape(),
+        lhs.strides(),
+        lhs.offset(),
+    )
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
     let rhs_data = rhs.host_storage()?;
     // INVARIANT: dtype and layout come from the same validated typed view, and
     // its host storage remains borrowed until replay returns.
     // SAFETY: rhs_data supplies the pointer and exact byte length; the view
     // owns the matching shape, signed strides, and in-bounds offset.
-    let rhs_descriptor = unsafe {
-        ErasedRawStridedPtr::new(
-            dtype,
-            non_null_bytes(rhs_data),
-            std::mem::size_of_val(rhs_data),
-            rhs.shape(),
-            rhs.strides(),
-            rhs.offset(),
-        )
-    }
+    let rhs_descriptor = erased_raw_strided_ptr(
+        dtype,
+        typed_bytes(rhs_data),
+        rhs.shape(),
+        rhs.strides(),
+        rhs.offset(),
+    )
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
 
     let out_dims = SmallVec::<[usize; 8]>::from_slice(out.shape());
@@ -1792,7 +1825,7 @@ fn execute_one_shot_zip<T: 'static>(
     let out_data = out.host_storage_mut()?;
     // INVARIANT: the copied output layout describes this uniquely borrowed
     // host storage, already validated as disjoint from every input.
-    let mut out_descriptor = ErasedRawStridedMut::new(
+    let mut out_descriptor = erased_raw_strided_mut(
         dtype,
         typed_bytes_mut(out_data),
         &out_dims,

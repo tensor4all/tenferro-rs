@@ -2,11 +2,10 @@ use std::mem::size_of_val;
 
 use num_traits::Float;
 use strided_kernel::{
-    col_major_strides, reduce_axis, ErasedRawStridedMut, ErasedRawStridedRef, ErasedReducePlan,
-    ExecContext, KernelDType, ReduceOp,
+    col_major_strides, reduce_axis, ErasedReducePlan, ExecContext, KernelDType, ReduceOp,
 };
 
-use super::{typed_host_data, typed_view, typed_view_from_view};
+use super::{typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::BufferPool;
 use crate::elementwise;
 use crate::materialize_tensor_read;
@@ -732,7 +731,7 @@ where
         axes,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    let source = ErasedRawStridedRef::new(
+    let source = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(input_view.data()),
         input_view.dims(),
@@ -742,7 +741,7 @@ where
     .map_err(|err| crate::Error::backend_source(label, err))?;
     // SAFETY: ErasedReducePlan writes every destination element.
     let mut output = unsafe { uninit_full_overwrite_vec(output_len) };
-    let mut dest = ErasedRawStridedMut::new(
+    let mut dest = crate::erased_raw_strided_mut(
         dtype,
         typed_bytes_mut(&mut output),
         &output_shape,
@@ -849,7 +848,7 @@ where
         axes,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    let source = ErasedRawStridedRef::new(
+    let source = crate::erased_raw_strided_ref(
         dtype,
         typed_bytes(input_view.data()),
         input_view.dims(),
@@ -857,20 +856,21 @@ where
         input_view.offset(),
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    // SAFETY: ErasedReducePlan writes every destination element.
-    let mut output = unsafe { crate::typed_array_uninit_from_pool(buffers, &output_shape) }?;
-    let mut dest = ErasedRawStridedMut::new(
+    let mut output = PooledUninitOutput::<T>::new(buffers, output_shape.clone())?;
+    let mut dest = crate::erased_raw_strided_uninit_mut(
         dtype,
-        typed_bytes_mut(output.data_mut()),
+        output.as_uninit_bytes_mut(),
         &output_shape,
         &output_strides,
         0,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    plan.execute(exec_context, &mut dest, &source)
+    let source_ptr = strided_kernel::ErasedRawStridedPtr::from_ref(&source);
+    plan.execute_uninit(exec_context, &mut dest, &source_ptr)
         .map_err(|err| crate::Error::backend_source(label, err))?;
 
-    Ok(crate::tensor_from_array(output))
+    // SAFETY: the reduction plan writes every logical destination element.
+    unsafe { output.assume_init() }
 }
 
 /// # Errors

@@ -6,7 +6,7 @@
 //! use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 //!
 //! let mut pool = BufferPool::new();
-//! let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
+//! let mut buf = pool.acquire_zeroed::<f64>(4);
 //! buf.fill(1.0);
 //! <f64 as PoolScalar>::pool_release(&mut pool, buf);
 //! assert_eq!(pool.len(), 1);
@@ -74,7 +74,7 @@ pub struct BufferPoolStats {
 /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
-/// let buf = unsafe { <f32 as PoolScalar>::pool_acquire(&mut pool, 8) };
+/// let buf = pool.acquire_zeroed::<f32>(8);
 /// <f32 as PoolScalar>::pool_release(&mut pool, buf);
 /// assert_eq!(pool.len(), 1);
 /// ```
@@ -120,7 +120,7 @@ impl fmt::Debug for BufferPool {
 /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
-/// let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 2) };
+/// let mut buf = pool.acquire_zeroed::<f64>(2);
 /// buf.copy_from_slice(&[3.0, 4.0]);
 /// <f64 as PoolScalar>::pool_release(&mut pool, buf);
 /// ```
@@ -128,57 +128,12 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// Zero value used to initialize acquired buffers.
     fn pool_zero() -> Self;
 
-    /// Acquire a buffer with length `len`.
-    ///
-    /// The vector length is set without initializing its contents. Callers must
-    /// overwrite every element before any read.
-    ///
-    /// # Safety
-    ///
-    /// The returned vector may contain uninitialized or stale elements. Reading
-    /// any element before writing it is undefined behavior. Once acquired, the
-    /// buffer is removed from pool retention accounting. When this is used
-    /// inside a CPU backend pool loan, retained buffers that are lost
-    /// during panic unwinding are replenished with empty replacement buffers of
-    /// the same capacity. The partially initialized in-flight vector itself is
-    /// not reinserted.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
-    ///
-    /// let mut pool = BufferPool::new();
-    /// let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 2) };
-    /// buf.copy_from_slice(&[1.0, 2.0]);
-    /// assert_eq!(buf, vec![1.0, 2.0]);
-    /// ```
-    unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self>;
-
-    /// Acquire a buffer whose elements may be uninitialized.
-    ///
-    /// The returned `MaybeUninit` vector remains safe to drop after an error
-    /// or panic. Convert it back to `Vec<Self>` only after every element has
-    /// been initialized.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
-    ///
-    /// let mut pool = BufferPool::new();
-    /// let mut buf = <f64 as PoolScalar>::pool_acquire_uninit(&mut pool, 2);
-    /// buf[0].write(1.0);
-    /// buf[1].write(2.0);
-    /// assert_eq!(unsafe { buf[1].assume_init_ref() }, &2.0);
-    /// ```
-    fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>>;
-
     /// Acquire a buffer with length `len` and every element set to zero.
     ///
     /// This is the safe path for callers that may read the buffer before every
-    /// element is overwritten. Prefer [`PoolScalar::pool_acquire`] for kernels
-    /// that perform a full overwrite.
+    /// element is overwritten. Full-overwrite kernels should use
+    /// [`crate::PooledUninitOutput`] or an operation-specific uninitialized
+    /// destination guard.
     ///
     /// # Examples
     ///
@@ -380,59 +335,6 @@ macro_rules! impl_pool_scalar {
         impl PoolScalar for $ty {
             fn pool_zero() -> Self {
                 $zero
-            }
-
-            #[allow(clippy::uninit_vec)]
-            unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self> {
-                match take_best_fit(&mut pool.$field, len) {
-                    Some(mut buf) => {
-                        pool.retained_capacity_bytes = pool
-                            .retained_capacity_bytes
-                            .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
-                        increment_in_flight(&mut pool.$in_flight, buf.capacity());
-                        // SAFETY: raw acquire requires caller full-overwrite; len <= capacity here.
-                        unsafe { buf.set_len(len) };
-                        buf
-                    }
-                    None => {
-                        let mut buf = Vec::with_capacity(len);
-                        // SAFETY: raw acquire requires caller full-overwrite; len == capacity here.
-                        unsafe { buf.set_len(len) };
-                        buf
-                    }
-                }
-            }
-
-            fn pool_acquire_uninit(pool: &mut BufferPool, len: usize) -> Vec<MaybeUninit<Self>> {
-                // INVARIANT: PoolScalar is sealed to Copy scalars, so
-                // MaybeUninit<Self> preserves allocation layout and drop safety.
-                match take_best_fit(&mut pool.$field, len) {
-                    Some(buf) => {
-                        pool.retained_capacity_bytes = pool
-                            .retained_capacity_bytes
-                            .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
-                        increment_in_flight(&mut pool.$in_flight, buf.capacity());
-                        let mut buf = ManuallyDrop::new(buf);
-                        // SAFETY: `MaybeUninit<Self>` has the same layout as
-                        // `Self`; best-fit guarantees `len <= capacity`, and
-                        // ManuallyDrop transfers allocation ownership.
-                        unsafe {
-                            Vec::from_raw_parts(
-                                buf.as_mut_ptr().cast::<MaybeUninit<Self>>(),
-                                len,
-                                buf.capacity(),
-                            )
-                        }
-                    }
-                    None => {
-                        let mut buf = Vec::with_capacity(len);
-                        // SAFETY: every bit pattern is valid for MaybeUninit.
-                        unsafe {
-                            buf.set_len(len);
-                        }
-                        buf
-                    }
-                }
             }
 
             fn pool_acquire_zeroed(pool: &mut BufferPool, len: usize) -> Vec<Self> {
@@ -684,28 +586,32 @@ impl BufferPool {
     /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
-    /// let mut buf = pool.acquire_with_capacity::<f64>(4);
+    /// let mut buf = pool.acquire_empty_with_capacity::<f64>(4);
     /// buf.extend_from_slice(&[1.0, 2.0]);
     /// assert_eq!(buf.len(), 2);
     /// assert!(buf.capacity() >= 4);
     /// ```
-    pub fn acquire_with_capacity<T: PoolScalar>(&mut self, cap: usize) -> Vec<T> {
+    #[doc(hidden)]
+    pub fn acquire_empty_with_capacity<T: PoolScalar>(&mut self, cap: usize) -> Vec<T> {
         if cap == 0 {
             return Vec::new();
         }
 
-        // SAFETY: this push-only capacity helper clears length before any element can be read.
-        let mut buf = unsafe { T::pool_acquire(self, cap) };
-        // SAFETY: shrinking length to zero does not read pooled `Copy` elements.
-        unsafe { buf.set_len(0) };
-        buf
+        let (data, _checkout) = <T as private::Sealed>::pool_acquire_uninit_tracked(self, cap)
+            .expect("validated typed pool capacity must be acquirable");
+        let mut data = ManuallyDrop::new(data);
+        let ptr = data.as_mut_ptr().cast::<T>();
+        let capacity = data.capacity();
+        // SAFETY: `MaybeUninit<T>` and `T` have identical layouts, and the
+        // returned vector has length zero, so no element is read before push.
+        unsafe { Vec::from_raw_parts(ptr, 0, capacity) }
     }
 
     /// Acquire a typed vector with length `len` initialized to zero.
     ///
     /// Use this only when the caller may read elements before overwriting the
     /// entire buffer. Full-overwrite kernels should use
-    /// [`PoolScalar::pool_acquire`] to avoid the initialization cost.
+    /// [`crate::PooledUninitOutput`] to avoid the initialization cost.
     ///
     /// # Examples
     ///

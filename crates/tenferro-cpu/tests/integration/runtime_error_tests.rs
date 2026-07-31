@@ -108,19 +108,6 @@ fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
 }
 
 #[test]
-fn cpu_pooled_output_allocation_uses_checked_shape_product() {
-    let indexing_alloc = include_str!("../../src/indexing_alloc.rs");
-    assert!(
-        indexing_alloc.contains("checked_shape_product(\"cpu_pooled_output\", &shape)?"),
-        "CPU pooled output allocation must reject shape-product overflow"
-    );
-    assert!(
-        !indexing_alloc.contains("let len = shape.iter().product();"),
-        "CPU pooled output allocation must not use unchecked shape.iter().product()"
-    );
-}
-
-#[test]
 fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
     let structural = include_str!("../../src/structural.rs");
     let filled_section = source_section(
@@ -136,25 +123,6 @@ fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
     assert!(
         !filled_section.contains("let len = shape.iter().product();"),
         "CPU zero/fill pooled output allocation must not use unchecked shape.iter().product()"
-    );
-}
-
-#[test]
-fn cpu_uninit_pooled_output_allocation_uses_checked_shape_product() {
-    let cpu_lib = include_str!("../../src/lib.rs");
-    let section = source_section(
-        cpu_lib,
-        "pub(crate) unsafe fn typed_array_uninit_from_pool",
-        "pub(crate) fn tensor_from_array",
-    );
-
-    assert!(
-        section.contains("checked_shape_product("),
-        "CPU uninitialized pooled output allocation must reject shape-product overflow"
-    );
-    assert!(
-        !section.contains("shape.iter().product"),
-        "CPU uninitialized pooled output allocation must not use unchecked shape.iter().product()"
     );
 }
 

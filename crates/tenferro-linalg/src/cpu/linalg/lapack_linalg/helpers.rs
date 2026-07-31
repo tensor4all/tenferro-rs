@@ -52,7 +52,7 @@ pub(crate) fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
     data: &[T],
     template: &TypedTensor<U>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let mut owned = buffers.acquire_with_capacity::<T>(data.len());
+    let mut owned = buffers.acquire_empty_with_capacity::<T>(data.len());
     owned.extend_from_slice(data);
     tensor_from_vec_with_template(shape, owned, template)
 }
