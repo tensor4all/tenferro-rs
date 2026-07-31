@@ -3,32 +3,22 @@ use std::path::{Path, PathBuf};
 const PROVIDER_FEATURES: &[(&str, &[&str])] = &[
     (
         "blas-openblas",
-        &[
-            "provider-src",
-            "dep:strided-einsum2",
-            "blas-src/openblas",
-            "lapack-src/openblas",
-            "strided-einsum2/blas-openblas",
-        ],
+        &["provider-src", "blas-src/openblas", "lapack-src/openblas"],
     ),
     (
         "blas-accelerate",
         &[
             "provider-src",
-            "dep:strided-einsum2",
             "blas-src/accelerate",
             "lapack-src/accelerate",
-            "strided-einsum2/blas-accelerate",
         ],
     ),
     (
         "blas-mkl",
         &[
             "provider-src",
-            "dep:strided-einsum2",
             "blas-src/intel-mkl-dynamic-parallel",
             "lapack-src/intel-mkl-dynamic-parallel",
-            "strided-einsum2/blas-mkl",
         ],
     ),
 ];
@@ -102,7 +92,7 @@ fn feature_values(manifest: &str, feature: &str) -> String {
 }
 
 #[test]
-fn cpu_provider_features_select_matching_source_and_einsum_provider() {
+fn cpu_provider_features_select_matching_source_provider() {
     let manifest = manifest("tenferro-cpu");
 
     for (feature, required_values) in PROVIDER_FEATURES {

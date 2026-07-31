@@ -31,13 +31,10 @@ fn cpu_tensor_kernel_parallel_features_are_wired() {
         "workspace strided-kernel dependency must enable the parallel feature: {strided_kernel_line}"
     );
 
-    let cpu_faer_line = cpu_manifest
-        .lines()
-        .find(|line| line.trim_start().starts_with("cpu-faer ="))
-        .expect("tenferro-cpu manifest should declare cpu-faer");
     assert!(
-        cpu_faer_line.contains("strided-einsum2/parallel"),
-        "cpu-faer must propagate strided-einsum2/parallel: {cpu_faer_line}"
+        !workspace_manifest.contains("strided-einsum2")
+            && !cpu_manifest.contains("strided-einsum2"),
+        "tenferro-rs must not retain the removed strided-einsum2 dependency"
     );
 }
 

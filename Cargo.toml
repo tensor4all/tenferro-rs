@@ -55,7 +55,6 @@ strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "9d
 strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "9da9b9f63e688eaf1bf4a78b718a01ac858b1f9f", version = "0.3.0" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "9da9b9f63e688eaf1bf4a78b718a01ac858b1f9f", version = "0.3.0", features = ["parallel"] }
 strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "9da9b9f63e688eaf1bf4a78b718a01ac858b1f9f", version = "0.3.0", features = ["parallel"] }
-strided-einsum2 = { git = "https://github.com/tensor4all/strided-rs.git", rev = "9da9b9f63e688eaf1bf4a78b718a01ac858b1f9f", version = "0.3.0", default-features = false }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
