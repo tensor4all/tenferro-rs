@@ -3,10 +3,13 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
+use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
-use tenferro_tensor::{DType, Error, ErrorKind, Tensor, TensorRead};
+use tenferro_tensor::{
+    BackendSession, DType, Error, ErrorKind, Tensor, TensorRead, TensorStructural,
+};
 
 use crate::backend::LinalgBackend;
 
@@ -618,12 +621,77 @@ fn execute_linalg_extension_materialized_reads<B: LinalgBackend + 'static>(
     execute_linalg_extension(op, &input_refs, ctx)
 }
 
+fn linalg_session_supported<B: LinalgBackend + 'static>(op: &LinalgExtensionOp) -> bool {
+    matches!(op.op(), LinalgOp::LuSolvePrepared { .. })
+        && std::any::TypeId::of::<B>() == std::any::TypeId::of::<tenferro_cpu::CpuBackend>()
+}
+
+fn execute_linalg_extension_in_session(
+    op: &LinalgExtensionOp,
+    session: &mut dyn BackendSession,
+    _extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let LinalgOp::LuSolvePrepared {
+        transpose_a,
+        conjugate_a,
+    } = op.op()
+    else {
+        return Err(Error::unsupported(
+            "linalg_extension",
+            "linalg operation has no scheduler-session implementation",
+        ));
+    };
+    if inputs.len() != 4 {
+        return Err(Error::invalid_argument(
+            "linalg_extension",
+            "inputs",
+            format!(
+                "LuSolvePrepared session execution expected 4 inputs, got {}",
+                inputs.len()
+            ),
+        ));
+    }
+    let Some(output) = with_cpu_exec_session(session, |session| {
+        let materialized_inputs = inputs
+            .iter()
+            .cloned()
+            .map(|input| session.to_contiguous_read(input))
+            .collect::<tenferro_tensor::Result<Vec<_>>>()?;
+        let [a, packed_lu, pivots, b] = materialized_inputs.as_slice() else {
+            return Err(Error::invalid_argument(
+                "linalg_extension",
+                "inputs",
+                "LuSolvePrepared session materialization did not preserve four inputs",
+            ));
+        };
+        crate::cpu::backend::lu_solve_prepared_in_session(
+            session,
+            a,
+            packed_lu,
+            pivots,
+            b,
+            transpose_a,
+            conjugate_a,
+        )
+        .map(|output| vec![output])
+    }) else {
+        return Err(Error::unsupported(
+            "linalg_extension",
+            "selected backend session does not expose the CPU linalg session capability",
+        ));
+    };
+    output
+}
+
 define_extension_runtime! {
     runtime = LinalgRuntime,
     family_id = LINALG_EXTENSION_FAMILY_ID,
     op_type = LinalgExtensionOp,
     execute = execute_linalg_extension,
     execute_reads = execute_linalg_extension_reads,
+    execute_in_session = execute_linalg_extension_in_session,
+    session_supported = linalg_session_supported,
     backend_bound = LinalgBackend,
 }
 

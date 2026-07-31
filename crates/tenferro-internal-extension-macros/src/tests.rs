@@ -73,7 +73,9 @@ fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_regis
         execute = execute_tiny_extension,
         execute_reads = execute_tiny_extension_reads,
     });
-    let source = tokens.to_string();
+    let source = tokens
+        .expect("default session hooks should generate")
+        .to_string();
 
     assert!(source.contains("struct TinyRuntime"));
     assert!(source.contains("struct TinyRuntimeModule"));
@@ -102,7 +104,9 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
         execute_reads = execute_linalg_extension_reads,
         backend_bound = crate::backend::LinalgBackend,
     });
-    let source = tokens.to_string();
+    let source = tokens
+        .expect("custom backend bound should generate")
+        .to_string();
 
     assert!(source.contains("impl < B : crate :: backend :: LinalgBackend + 'static >"));
 }
@@ -116,7 +120,7 @@ fn extension_runtime_macro_generates_required_prepared_read_executor() {
         execute = execute_einsum_extension,
         execute_reads = execute_einsum_extension_reads,
     });
-    let source = tokens.to_string();
+    let source = tokens.expect("read executor should generate").to_string();
 
     assert!(source.contains("fn execute"));
     assert!(source.contains("TensorRead < '_ >"));

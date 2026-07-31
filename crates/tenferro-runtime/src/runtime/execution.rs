@@ -1900,7 +1900,7 @@ mod tests {
     use tenferro_ops::ext_op::ExtensionOp;
     use tenferro_ops::SymDim;
     use tenferro_tensor::{
-        BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
+        BackendSession, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
     };
 
     use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
@@ -2049,6 +2049,56 @@ mod tests {
         observed_reentrant_error: Arc<AtomicBool>,
     }
 
+    #[derive(Debug)]
+    struct SessionProbePreparedOperation {
+        binding: PreparedOperationBinding,
+        specialization: SpecializationProjection,
+        observed_session: Arc<AtomicBool>,
+    }
+
+    impl PreparedOperation for SessionProbePreparedOperation {
+        fn binding(&self) -> &PreparedOperationBinding {
+            &self.binding
+        }
+
+        fn specialization(&self) -> &SpecializationProjection {
+            &self.specialization
+        }
+
+        fn retained_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl PreparedOperationExecutor for SessionProbePreparedOperation {
+        fn execute(
+            &self,
+            _context: &mut ErasedExecutionContext<'_>,
+            _extension_caches: &mut ExtensionCacheStore,
+            _inputs: &[TensorRead<'_>],
+        ) -> Result<Vec<Tensor>> {
+            Err(Error::unsupported(
+                "session_probe",
+                ErrorPhase::Execution,
+                "session probe must use the scheduler-owned session path",
+            ))
+        }
+
+        fn supports_session(&self) -> bool {
+            true
+        }
+
+        fn execute_in_session(
+            &self,
+            session: &mut dyn BackendSession,
+            _extension_caches: &mut ExtensionCacheStore,
+            inputs: &[TensorRead<'_>],
+        ) -> Result<Vec<Tensor>> {
+            self.observed_session.store(true, Ordering::SeqCst);
+            Ok(vec![session.to_contiguous_read(inputs[0].clone())?])
+        }
+    }
+
     impl ReentrantProbePreparedOperation {
         fn probe_reentrant_call(&self, input: Tensor) {
             let executor = self.executor.upgrade().expect("executor still alive");
@@ -2120,6 +2170,43 @@ mod tests {
             input_slots: vec![0],
             output_slots: vec![1],
             n_slots: 2,
+            shape_guards: vec![],
+        }
+    }
+
+    fn partial_session_probe_program() -> ExecProgram {
+        let output_shape = || {
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }]
+        };
+        ExecProgram {
+            instructions: vec![
+                ExecInstruction {
+                    op: ExecOp::Extension(Arc::new(LockProbeOp)),
+                    semantic_operation_index: Some(0),
+                    input_slots: vec![0],
+                    output_slots: vec![1],
+                    dtype: DType::F64,
+                    output_shapes: vec![output_shape()].into(),
+                    output_extents: vec![vec![]].into(),
+                    last_use: vec![false],
+                },
+                ExecInstruction {
+                    op: ExecOp::Extension(Arc::new(LockProbeOp)),
+                    semantic_operation_index: Some(1),
+                    input_slots: vec![1],
+                    output_slots: vec![2],
+                    dtype: DType::F64,
+                    output_shapes: vec![output_shape()].into(),
+                    output_extents: vec![vec![]].into(),
+                    last_use: vec![false],
+                },
+            ],
+            input_slots: vec![0],
+            output_slots: vec![2],
+            n_slots: 3,
             shape_guards: vec![],
         }
     }
@@ -2240,6 +2327,75 @@ mod tests {
             observed_reentrant_error.load(Ordering::SeqCst),
             "same-thread reentrant executor call must fail immediately instead of deadlocking"
         );
+    }
+
+    #[test]
+    fn tensor_backend_executor_dispatches_session_capable_extension_in_one_session_path() {
+        let executor = TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new());
+        let observed_session = Arc::new(AtomicBool::new(false));
+        let prepared = Arc::new(SessionProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            observed_session: Arc::clone(&observed_session),
+        });
+        let operations = vec![PreparedOperationPlan::executable(
+            prepared.clone(),
+            prepared,
+        )];
+
+        let output = ErasedTensorBackendExecutor::execute(
+            &executor,
+            &lock_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect("session-capable extension executes");
+
+        assert_eq!(output[0].shape(), &[2]);
+        assert!(observed_session.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn tensor_backend_executor_batches_session_capable_region_after_boundary() {
+        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
+        let observed_unlocked_state = Arc::new(AtomicBool::new(false));
+        let observed_session = Arc::new(AtomicBool::new(false));
+        let ordinary = Arc::new(LockProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            executor: Arc::downgrade(&executor),
+            observed_unlocked_state: Arc::clone(&observed_unlocked_state),
+        });
+        let session = Arc::new(SessionProbePreparedOperation {
+            binding: probe_binding(),
+            specialization: probe_specialization(),
+            observed_session: Arc::clone(&observed_session),
+        });
+        let operations = vec![
+            PreparedOperationPlan::executable(ordinary.clone(), ordinary),
+            PreparedOperationPlan::executable(session.clone(), session),
+        ];
+
+        let output = ErasedTensorBackendExecutor::execute(
+            executor.as_ref(),
+            &partial_session_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect("mixed session regions execute");
+
+        assert_eq!(output[0].shape(), &[2]);
+        assert!(observed_unlocked_state.load(Ordering::SeqCst));
+        assert!(observed_session.load(Ordering::SeqCst));
+
+        let values = ErasedTensorBackendExecutor::execute_values(
+            executor.as_ref(),
+            &partial_session_probe_program(),
+            &operations,
+            vec![f64_zeros(vec![2])],
+        )
+        .expect("mixed session regions execute in value mode");
+        assert_eq!(values[0].shape(), &[2]);
     }
 
     #[test]

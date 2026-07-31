@@ -13,6 +13,16 @@ and extension cache state, then routes a `CompiledGraph` through segmented
 execution. Consecutive backend-session instructions may run inside one backend
 session.
 
+Prepared extension operations may opt into the same scheduler-owned session by
+implementing the session capability on their prepared executor. The scheduler
+forms a compatible region only when every extension instruction in that region
+advertises the capability; unsupported extensions remain a boundary and are
+never silently retried through the ordinary per-operation path. A session-aware
+executor receives `&mut dyn BackendSession` and must not reacquire a backend
+session or let session-local state escape. Capability selection is backend-type
+specific, so a CPU implementation cannot accidentally claim a CUDA or wgpu
+session until that backend supplies its own mapping.
+
 ```
 Runtime::run_compiled(program, inputs)
   └── runtime preparation / prepared-plan cache

@@ -21,13 +21,16 @@ use super::{
     reduction, structural,
 };
 
-pub(crate) struct CpuExecSession<'a> {
+/// Borrowed CPU execution session used by scheduler-owned extension regions.
+#[doc(hidden)]
+pub struct CpuExecSession<'a> {
     pub(crate) entry: CpuOperationEntry<'a>,
     pub(crate) entered: Option<CpuExecutionContext<'a>>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
     pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
     pub(crate) providers: &'a CpuProviderBundle,
+    pub(crate) backend_kind: super::CpuBackendKind,
 }
 
 fn pooled_zero_tensor<T>(
@@ -65,6 +68,27 @@ fn allocate_dot_output(
 }
 
 impl CpuExecSession<'_> {
+    /// Return the provider selected by the owning CPU backend.
+    #[doc(hidden)]
+    pub fn kind(&self) -> super::CpuBackendKind {
+        self.backend_kind
+    }
+
+    /// Return the resource-domain identity selected for this session.
+    #[doc(hidden)]
+    pub fn domain_id(&self) -> super::CpuDomainId {
+        self.entry.domain_id()
+    }
+
+    /// Run a CPU-owned linalg kernel inside this already-entered session.
+    #[doc(hidden)]
+    pub fn with_linalg_pool<R: Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        self.run_native_with_context(op)
+    }
+
     fn run_native<R: Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,

@@ -191,6 +191,8 @@ pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
     CpuProviderBundleInstallError, CpuProviderSlot, GeneralContractionPolicy,
 };
+#[doc(hidden)]
+pub use exec_session::CpuExecSession;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
@@ -207,6 +209,29 @@ pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,
 };
+
+/// Visit a CPU execution session carried by a type-erased backend session.
+///
+/// This is a backend-leaf capability bridge. The type-name check is performed
+/// before the erased pointer is reconstructed, and the callback cannot return
+/// a borrow of the session, so the borrowed resource lease remains scoped to
+/// the caller's session closure.
+#[doc(hidden)]
+pub fn with_cpu_exec_session<R>(
+    session: &mut dyn tenferro_tensor::BackendSession,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R,
+) -> Option<R> {
+    if session.session_type_name() != std::any::type_name::<CpuExecSession<'static>>() {
+        return None;
+    }
+    let data = unsafe { session.session_data_mut() };
+    // SAFETY: `session_type_name` is supplied by the same blanket
+    // `BackendSession` implementation that produced `session_data_mut`, and
+    // the equality above proves that the erased value is `CpuExecSession`.
+    // The callback is higher-ranked and returns no session borrow, so the
+    // reconstructed reference cannot escape the original session borrow.
+    Some(unsafe { f(&mut *(data.cast::<CpuExecSession<'static>>())) })
+}
 
 // Unit tests exercise the pool-aware kernels through the former convenience
 // names without restoring those names to the production crate surface.
