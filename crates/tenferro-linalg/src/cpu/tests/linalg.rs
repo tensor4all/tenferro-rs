@@ -745,6 +745,62 @@ fn eig_read_returns_correct_outputs_for_diagonal_matrix() {
     assert_eq!(outputs[1].shape(), &[2, 2]);
 }
 
+macro_rules! real_rotation_eig_residual_test {
+    ($name:ident, $real:ty, $real_variant:ident, $get_complex:ident, $tol:expr) => {
+        #[test]
+        fn $name() {
+            let input = Tensor::$real_variant(
+                TypedTensor::<$real>::from_vec_col_major(
+                    vec![2, 2],
+                    vec![0.0 as $real, 1.0 as $real, -1.0 as $real, 0.0 as $real],
+                )
+                .unwrap(),
+            );
+
+            for kind in compiled_linalg_provider_kinds() {
+                let mut backend = CpuBackend::with_threads_and_kind(1, kind).unwrap();
+                let outputs = backend.eig(&input).unwrap();
+                let mut residual_squared = 0.0_f64;
+                let mut vector_squared = 0.0_f64;
+                let mut diagonal_squared = 0.0_f64;
+                for column in 0..2 {
+                    let v0 = $get_complex(&outputs[1], &[0, column]);
+                    let v1 = $get_complex(&outputs[1], &[1, column]);
+                    let lambda = $get_complex(&outputs[0], &[column]);
+                    residual_squared +=
+                        ((-v1 - v0 * lambda).norm_sqr() + (v0 - v1 * lambda).norm_sqr()) as f64;
+                    vector_squared += (v0.norm_sqr() + v1.norm_sqr()) as f64;
+                    diagonal_squared += lambda.norm_sqr() as f64;
+                }
+                let vector_norm = vector_squared.sqrt();
+                let relative_residual = residual_squared.sqrt()
+                    / (2.0_f64.sqrt() * vector_norm + vector_norm * diagonal_squared.sqrt());
+
+                assert!(
+                    relative_residual.is_finite() && relative_residual <= $tol,
+                    "{kind:?} relative AV-VD residual {relative_residual:e} exceeds {}",
+                    $tol
+                );
+            }
+        }
+    };
+}
+
+real_rotation_eig_residual_test!(
+    real_f32_rotation_eig_has_column_major_eigenvectors,
+    f32,
+    F32,
+    get_c32,
+    1.0e-6
+);
+real_rotation_eig_residual_test!(
+    real_f64_rotation_eig_has_column_major_eigenvectors,
+    f64,
+    F64,
+    get_c64,
+    1.0e-14
+);
+
 #[test]
 fn cholesky_read_accepts_all_supported_linalg_view_dtypes() {
     let mut backend = CpuBackend::new();
