@@ -30,6 +30,8 @@ rules text. Those declarations were reintroduced by the later strided pin
 update even though the tenferro-cpu Faer/BLAS contraction implementation no
 longer uses the crate. This change removes that unused build graph and updates
 the active contract text to describe the current tenferro-owned Faer provider.
+The CI build-artifact contract had the same stale assumption; it now checks the
+remaining strided revisions and asserts that `strided-einsum2` stays absent.
 
 No strided-rs code change is required for #1546, and no `Par::rayon(0)` call is
 introduced in tenferro-cpu.

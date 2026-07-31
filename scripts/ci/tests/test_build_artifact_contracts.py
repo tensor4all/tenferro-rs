@@ -64,7 +64,7 @@ class BuildArtifactContracts(unittest.TestCase):
                 for selector in removed_selectors:
                     self.assertNotIn(selector, contents)
 
-    def test_workspace_faer_dependency_disables_broad_defaults(self) -> None:
+    def test_workspace_faer_and_strided_dependencies_follow_contract(self) -> None:
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
@@ -78,12 +78,11 @@ class BuildArtifactContracts(unittest.TestCase):
             "strided-traits",
             "strided-perm",
             "strided-kernel",
-            "strided-einsum2",
         ):
             with self.subTest(dependency=name):
                 self.assertEqual(dependencies[name]["rev"], revision)
 
-        self.assertFalse(dependencies["strided-einsum2"]["default-features"])
+        self.assertNotIn("strided-einsum2", dependencies)
 
     def test_linalg_provider_dependencies_are_isolated(self) -> None:
         manifest = tomllib.loads(
