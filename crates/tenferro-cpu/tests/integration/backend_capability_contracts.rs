@@ -455,7 +455,7 @@ fn gather_delegates_bulk_traversal_to_strided_kernel_plan() {
         "CPU gather bulk traversal should delegate to strided-kernel ErasedGatherPlan"
     );
     assert!(
-        typed_gather.contains(".execute("),
+        typed_gather.contains(".execute_uninit("),
         "CPU gather should execute the prepared strided gather plan"
     );
 }
