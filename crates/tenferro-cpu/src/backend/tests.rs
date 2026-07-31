@@ -922,7 +922,7 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = backend.with_linalg_pool::<()>(|_, pool| {
-            let _in_flight = pool.acquire_empty_with_capacity::<f64>(1024);
+            let _in_flight = pool.acquire_with_capacity::<f64>(1024);
             assert_eq!(pool.retained_capacity_bytes(), 0);
             panic!("forced panic after pool acquisition");
         });

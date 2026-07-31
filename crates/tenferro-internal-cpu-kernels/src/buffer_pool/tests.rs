@@ -41,12 +41,12 @@ fn default_retention_limit_parser_rejects_non_unicode_values() {
 fn acquire_release_reuse() {
     let mut pool = BufferPool::new();
 
-    let buf = pool.acquire_empty_with_capacity::<f64>(64);
+    let buf = pool.acquire_with_capacity::<f64>(64);
     let ptr = buf.as_ptr();
     let cap = buf.capacity();
     <f64 as PoolScalar>::pool_release(&mut pool, buf);
 
-    let reused = pool.acquire_empty_with_capacity::<f64>(64);
+    let reused = pool.acquire_with_capacity::<f64>(64);
     assert_eq!(reused.as_ptr(), ptr);
     assert_eq!(reused.capacity(), cap);
     assert!(pool.is_empty());
@@ -59,7 +59,7 @@ fn best_fit() {
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(200));
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(300));
 
-    let reused = pool.acquire_empty_with_capacity::<f64>(150);
+    let reused = pool.acquire_with_capacity::<f64>(150);
     assert_eq!(reused.capacity(), 200);
     assert_eq!(pool.len(), 2);
 }
@@ -70,11 +70,11 @@ fn type_separation() {
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(16));
     assert_eq!(pool.len(), 1);
 
-    let f32_buf = pool.acquire_empty_with_capacity::<f32>(16);
+    let f32_buf = pool.acquire_with_capacity::<f32>(16);
     assert_eq!(f32_buf.capacity(), 16);
     assert_eq!(pool.len(), 1);
 
-    let f64_buf = pool.acquire_empty_with_capacity::<f64>(16);
+    let f64_buf = pool.acquire_with_capacity::<f64>(16);
     assert_eq!(f64_buf.capacity(), 16);
     assert!(pool.is_empty());
 }
@@ -105,7 +105,7 @@ fn empty_checkout_does_not_expose_initialized_reused_values() {
     let mut pool = BufferPool::new();
 
     <f64 as PoolScalar>::pool_release(&mut pool, vec![7.0, 8.0, 9.0, 10.0]);
-    let reused = pool.acquire_empty_with_capacity::<f64>(4);
+    let reused = pool.acquire_with_capacity::<f64>(4);
 
     assert_eq!(reused.len(), 0);
     assert!(reused.capacity() >= 4);
@@ -119,7 +119,7 @@ fn zero_len_not_pooled() {
 }
 
 #[test]
-fn acquire_empty_with_capacity_reuses_buffer_as_empty_vec() {
+fn acquire_with_capacity_reuses_buffer_as_empty_vec() {
     let mut pool = BufferPool::new();
 
     let buf = vec![1.0_f64; 8];
@@ -127,7 +127,7 @@ fn acquire_empty_with_capacity_reuses_buffer_as_empty_vec() {
     let cap = buf.capacity();
     <f64 as PoolScalar>::pool_release(&mut pool, buf);
 
-    let reused = pool.acquire_empty_with_capacity::<f64>(8);
+    let reused = pool.acquire_with_capacity::<f64>(8);
     assert_eq!(reused.as_ptr(), ptr);
     assert_eq!(reused.len(), 0);
     assert_eq!(reused.capacity(), cap);
@@ -140,7 +140,7 @@ fn acquire_updates_retained_capacity_stats() {
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
 
-    let _reused = pool.acquire_empty_with_capacity::<f64>(4);
+    let _reused = pool.acquire_with_capacity::<f64>(4);
 
     assert_eq!(pool.retained_capacity_bytes(), 0);
     assert!(pool.is_empty());
@@ -151,7 +151,7 @@ fn replenish_in_flight_retained_restores_lost_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
 
-    let _in_flight = pool.acquire_empty_with_capacity::<f64>(8);
+    let _in_flight = pool.acquire_with_capacity::<f64>(8);
     assert_eq!(pool.retained_capacity_bytes(), 0);
     assert!(pool.is_empty());
 
@@ -167,7 +167,7 @@ fn replenish_in_flight_retained_skips_successfully_released_buffers() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
 
-    let buf = pool.acquire_empty_with_capacity::<f64>(8);
+    let buf = pool.acquire_with_capacity::<f64>(8);
     <f64 as PoolScalar>::pool_release(&mut pool, buf);
 
     let stats_before = pool.stats();
@@ -218,7 +218,7 @@ fn retention_limit_evicts_smallest_obsolete_buffers() {
     assert_eq!(pool.stats().buffers, 1);
     assert_eq!(pool.retained_capacity_bytes(), 20 * size_of::<f64>());
 
-    let reused = pool.acquire_empty_with_capacity::<f64>(10);
+    let reused = pool.acquire_with_capacity::<f64>(10);
     assert_eq!(reused.capacity(), 20);
     assert!(pool.is_empty());
 }
@@ -285,7 +285,7 @@ fn pooled_uninit_guard_fresh_handoff_and_panic_discard_are_exact() {
 fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
-    let unrelated = pool.acquire_empty_with_capacity::<f64>(8);
+    let unrelated = pool.acquire_with_capacity::<f64>(8);
     let marker_before = pool.f64_in_flight.clone();
     assert_eq!(marker_before.get(&8), Some(&1));
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 16]);

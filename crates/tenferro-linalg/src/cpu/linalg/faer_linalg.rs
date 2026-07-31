@@ -192,7 +192,7 @@ fn tensor_from_pooled_slice_with_template<T: Clone + PoolScalar>(
     data: &[T],
     placement: &tenferro_tensor::Placement,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let mut owned = buffers.acquire_empty_with_capacity::<T>(data.len());
+    let mut owned = buffers.acquire_with_capacity::<T>(data.len());
     owned.extend_from_slice(data);
     tensor_from_vec_with_template(shape, owned, placement)
 }
@@ -211,7 +211,7 @@ fn col_major_vec_from_mat<T: Copy + PoolScalar>(
 ) -> tenferro_tensor::Result<Vec<T>> {
     let (rows, cols) = mat.shape();
     let len = checked_product("faer_linalg", "matrix", &[rows, cols])?;
-    let mut data = buffers.acquire_empty_with_capacity::<T>(len);
+    let mut data = buffers.acquire_with_capacity::<T>(len);
     for j in 0..cols {
         for i in 0..rows {
             data.push(mat[(i, j)]);
@@ -222,7 +222,7 @@ fn col_major_vec_from_mat<T: Copy + PoolScalar>(
 
 fn vec_from_diag<T: Copy + PoolScalar>(buffers: &mut BufferPool, diag: DiagRef<'_, T>) -> Vec<T> {
     let col = diag.column_vector();
-    let mut data = buffers.acquire_empty_with_capacity::<T>(col.nrows());
+    let mut data = buffers.acquire_with_capacity::<T>(col.nrows());
     for i in 0..col.nrows() {
         data.push(col[i]);
     }
@@ -383,7 +383,7 @@ macro_rules! impl_complex_vec_helpers {
             diag: DiagRef<'_, $faer_complex>,
         ) -> Vec<$complex> {
             let col = diag.column_vector();
-            let mut data = buffers.acquire_empty_with_capacity::<$complex>(col.nrows());
+            let mut data = buffers.acquire_with_capacity::<$complex>(col.nrows());
             for i in 0..col.nrows() {
                 data.push(<$complex>::new(col[i].re, 0.0));
             }
@@ -395,7 +395,7 @@ macro_rules! impl_complex_vec_helpers {
             diag: DiagRef<'_, $faer_complex>,
         ) -> Vec<$complex> {
             let col = diag.column_vector();
-            let mut data = buffers.acquire_empty_with_capacity::<$complex>(col.nrows());
+            let mut data = buffers.acquire_with_capacity::<$complex>(col.nrows());
             for i in 0..col.nrows() {
                 data.push(<$complex>::new(col[i].re, col[i].im));
             }
@@ -408,7 +408,7 @@ macro_rules! impl_complex_vec_helpers {
         ) -> tenferro_tensor::Result<Vec<$complex>> {
             let (rows, cols) = mat.shape();
             let len = checked_product("faer_linalg", "complex matrix", &[rows, cols])?;
-            let mut data = buffers.acquire_empty_with_capacity::<$complex>(len);
+            let mut data = buffers.acquire_with_capacity::<$complex>(len);
             for j in 0..cols {
                 for i in 0..rows {
                     let value = mat[(i, j)];
@@ -531,8 +531,8 @@ macro_rules! impl_real_eig_to_complex_outputs {
         ) -> tenferro_tensor::Result<(Vec<$complex>, Vec<$complex>)> {
             let n = u_real.nrows();
             let matrix_len = checked_product("eig", "eigenvector matrix", &[n, n])?;
-            let mut u = buffers.acquire_empty_with_capacity::<$complex>(matrix_len);
-            let mut s = buffers.acquire_empty_with_capacity::<$complex>(n);
+            let mut u = buffers.acquire_with_capacity::<$complex>(matrix_len);
+            let mut s = buffers.acquire_with_capacity::<$complex>(n);
             let mut j = 0;
             while j < n {
                 if j + 1 >= n
@@ -570,7 +570,7 @@ macro_rules! impl_real_eig_to_complex_values {
             s_im: DiagRef<'_, $real>,
         ) -> Vec<$complex> {
             let n = s_re.column_vector().nrows();
-            let mut s = buffers.acquire_empty_with_capacity::<$complex>(n);
+            let mut s = buffers.acquire_with_capacity::<$complex>(n);
             for j in 0..n {
                 s.push(<$complex>::new(s_re[j], s_im[j]));
             }
@@ -636,7 +636,7 @@ fn transpose_col_major_data<T: Copy + PoolScalar>(
     rows: usize,
     cols: usize,
 ) -> Vec<T> {
-    let mut transposed = buffers.acquire_empty_with_capacity::<T>(data.len());
+    let mut transposed = buffers.acquire_with_capacity::<T>(data.len());
     for j in 0..rows {
         for i in 0..cols {
             transposed.push(data[j + i * rows]);
@@ -701,7 +701,7 @@ where
                 checked_product(op_name, "output core shape", batch_output.shape())?;
             let capacity =
                 checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
-            out_data = Some(buffers.acquire_empty_with_capacity::<T>(capacity));
+            out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
             out_core_shape = Some(batch_output.shape().to_vec());
         }
 
@@ -777,7 +777,7 @@ where
                     checked_product(op_name, "output core shape", tensor.shape())?;
                 let capacity =
                     checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
-                pooled_outputs.push(buffers.acquire_empty_with_capacity::<T>(capacity));
+                pooled_outputs.push(buffers.acquire_with_capacity::<T>(capacity));
             }
             out_data = pooled_outputs;
         } else {
@@ -867,7 +867,7 @@ where
                     checked_product(op_name, "output core shape", tensor.shape())?;
                 let capacity =
                     checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
-                pooled_outputs.push(buffers.acquire_empty_with_capacity::<OutT>(capacity));
+                pooled_outputs.push(buffers.acquire_with_capacity::<OutT>(capacity));
             }
             out_data = pooled_outputs;
         } else {
@@ -983,7 +983,7 @@ where
                 checked_product(op_name, "output core shape", batch_output.shape())?;
             let capacity =
                 checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
-            out_data = Some(buffers.acquire_empty_with_capacity::<T>(capacity));
+            out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
             out_core_shape = Some(batch_output.shape().to_vec());
         }
 
@@ -1280,7 +1280,7 @@ macro_rules! impl_faer_linalg_for_real {
             }
         }
 
-        let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
         rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
         let mut mem = MemBuffer::new(
@@ -1355,7 +1355,7 @@ macro_rules! impl_faer_linalg_for_real {
             }
         }
 
-        let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
         rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
         let mut mem = MemBuffer::new(if transpose_a {
@@ -1411,7 +1411,7 @@ macro_rules! impl_faer_linalg_for_real {
             if b_rows != n {
                 return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
             }
-            let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
             rhs_data.extend_from_slice(b.host_data()?);
             let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
             match (transpose_a, lower, unit_diagonal) {
@@ -1699,7 +1699,7 @@ macro_rules! impl_faer_linalg_for_real {
         let s =
             tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)?;
         let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
-        let mut vt_data = buffers.acquire_empty_with_capacity::<Self>(vt_len);
+        let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
         for j in 0..n {
             for i in 0..v_cols {
                 vt_data.push(v[(j, i)]);
@@ -2149,7 +2149,7 @@ macro_rules! impl_faer_linalg_for_complex {
             }
         }
 
-        let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
         rhs_data.extend_from_slice(b.host_data()?);
         let rhs = MatMut::from_column_major_slice_mut(
             $to_faer_slice_mut(&mut rhs_data),
@@ -2233,7 +2233,7 @@ macro_rules! impl_faer_linalg_for_complex {
             }
         }
 
-        let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
         rhs_data.extend_from_slice(b.host_data()?);
         let rhs =
             MatMut::from_column_major_slice_mut($to_faer_slice_mut(&mut rhs_data), n, b_cols);
@@ -2289,7 +2289,7 @@ macro_rules! impl_faer_linalg_for_complex {
             if b_rows != n {
                 return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
             }
-            let mut rhs_data = buffers.acquire_empty_with_capacity::<Self>(b.host_data()?.len());
+            let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
             rhs_data.extend_from_slice(b.host_data()?);
             let rhs = MatMut::from_column_major_slice_mut(
                 $to_faer_slice_mut(&mut rhs_data),
@@ -2471,7 +2471,7 @@ macro_rules! impl_faer_linalg_for_complex {
         .map_err(|_| decomposition_failed("svd_values"))?;
 
         let col = s.as_ref().column_vector();
-        let mut data = buffers.acquire_empty_with_capacity::<$real>(col.nrows());
+        let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
@@ -2524,7 +2524,7 @@ macro_rules! impl_faer_linalg_for_complex {
         .map_err(|_| decomposition_failed("eigh_values"))?;
 
         let col = values.as_ref().column_vector();
-        let mut data = buffers.acquire_empty_with_capacity::<$real>(col.nrows());
+        let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
@@ -2619,7 +2619,7 @@ macro_rules! impl_faer_linalg_for_complex {
             placement,
         )?;
         let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
-        let mut vt_data = buffers.acquire_empty_with_capacity::<Self>(vt_len);
+        let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
         for j in 0..n {
             for i in 0..v_cols {
                 vt_data.push(v[(j, i)].conj());
@@ -2887,9 +2887,9 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     let batch_total = batch_count("lu_factor", batch_shape)?;
     let lu_len = checked_repeated_len("lu_factor", "packed LU", matrix_len, batch_total)?;
     let pivot_len = checked_repeated_len("lu_factor", "pivots", k, batch_total)?;
-    let mut lu_data = buffers.acquire_empty_with_capacity::<T>(lu_len);
+    let mut lu_data = buffers.acquire_with_capacity::<T>(lu_len);
     let mut pivot_data = Vec::with_capacity(pivot_len);
-    let mut parity_data = buffers.acquire_empty_with_capacity::<T>(batch_total);
+    let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
 
     let first_range = checked_slice_range("lu_factor", 0, matrix_len)?;
     let mut batch_input = tensor_from_pooled_slice_with_template(

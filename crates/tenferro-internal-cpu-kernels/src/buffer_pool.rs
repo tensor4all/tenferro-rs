@@ -586,13 +586,12 @@ impl BufferPool {
     /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
-    /// let mut buf = pool.acquire_empty_with_capacity::<f64>(4);
+    /// let mut buf = pool.acquire_with_capacity::<f64>(4);
     /// buf.extend_from_slice(&[1.0, 2.0]);
     /// assert_eq!(buf.len(), 2);
     /// assert!(buf.capacity() >= 4);
     /// ```
-    #[doc(hidden)]
-    pub fn acquire_empty_with_capacity<T: PoolScalar>(&mut self, cap: usize) -> Vec<T> {
+    pub fn acquire_with_capacity<T: PoolScalar>(&mut self, cap: usize) -> Vec<T> {
         if cap == 0 {
             return Vec::new();
         }

@@ -164,7 +164,7 @@ fn scoped_materialization_reclaims_successful_temporary_for_immediate_reuse() {
 
             assert_eq!(materialized_ptr, seed_ptr);
             assert_eq!(buffers.stats(), retained);
-            let reused = buffers.acquire_empty_with_capacity::<f64>(4);
+            let reused = buffers.acquire_with_capacity::<f64>(4);
             assert_eq!(reused.as_ptr() as usize, seed_ptr);
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())
@@ -204,7 +204,7 @@ fn scoped_materialization_reclaims_temporary_after_numerical_error() {
 
             assert_eq!(error.kind(), ErrorKind::NumericalFailure);
             assert_eq!(buffers.stats(), retained);
-            let reused = buffers.acquire_empty_with_capacity::<f64>(4);
+            let reused = buffers.acquire_with_capacity::<f64>(4);
             assert_eq!(reused.as_ptr() as usize, seed_ptr);
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())
@@ -255,7 +255,7 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
 
             assert_eq!(error.kind(), ErrorKind::RuntimeState);
             assert_eq!(buffers.stats(), retained);
-            let reused = buffers.acquire_empty_with_capacity::<f64>(4);
+            let reused = buffers.acquire_with_capacity::<f64>(4);
             assert_eq!(reused.as_ptr() as usize, seed_ptr);
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())

@@ -351,7 +351,7 @@ where
         crate::Buffer::Host(data) => data.as_slice(),
         crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
-    let mut data = buffers.acquire_empty_with_capacity::<T>(input.len());
+    let mut data = buffers.acquire_with_capacity::<T>(input.len());
     data.extend_from_slice(input);
     TypedTensor::from_buffer_col_major(
         tensor.shape().to_vec(),
