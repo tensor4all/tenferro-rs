@@ -313,6 +313,14 @@ pub trait PreparedOperationExecutor: fmt::Debug + Send + Sync + 'static {
     /// Implementations must use `session` directly and must not reacquire a
     /// backend session. The borrowed session and any operation-local state
     /// must not escape this call.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// prepared operation has no session-aware execution implementation.
+    /// Implementations may return the same typed error when the selected
+    /// backend session does not provide the required capability, or any other
+    /// typed execution error from the operation itself.
     fn execute_in_session(
         &self,
         _session: &mut dyn BackendSession,
