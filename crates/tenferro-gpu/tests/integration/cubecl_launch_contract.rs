@@ -1628,8 +1628,9 @@ fn cuda_float_permutation_routes_through_cutensor_and_policy_is_recorded() {
     );
     assert!(
         cuda.contains("permutation::transpose(self, t, perm)")
-            && cuda.contains("permutation::to_contiguous_view("),
-        "CUDA f32/f64/c32/c64 structural permutation paths should route through cuTENSOR"
+            && cuda.contains("permutation::to_contiguous_view(")
+            && cuda.contains("permutation::copy_view_into(self, src, dst, op)"),
+        "CUDA f32/f64/c32/c64 structural permutation and copy paths should route through cuTENSOR"
     );
     for dtype in ["Tensor::F32", "Tensor::F64", "Tensor::C32", "Tensor::C64"] {
         assert!(

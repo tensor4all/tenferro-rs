@@ -110,6 +110,12 @@ LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+`TensorStructural::copy_read_into` can reuse an already allocated CUDA
+destination; for supported floating and complex permutation layouts it uses
+the backend-owned cuTENSOR permutation plan cache. The source and destination
+must be distinct allocations. CUDA does not silently fall back when the
+required NVIDIA library stack is unavailable; the operation returns a typed
+library/provider error instead.
 CUDA 12.4 is the minimum supported driver/NVRTC runtime. CUDA 12.8 or newer
 enables all CubeCL features supported by the GPU, including the 12.8 tensor-map
 extensions. tenferro compiles against CUDA 12.8 cudarc bindings, but resolves
