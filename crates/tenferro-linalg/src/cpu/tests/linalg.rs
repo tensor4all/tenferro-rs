@@ -1,6 +1,8 @@
 use super::*;
 
 use crate::TensorReadLinalgExt;
+use std::sync::Arc;
+use tenferro_tensor::{Buffer, BufferHandle, MemoryKind, Placement};
 
 fn assert_c32_close(actual: Complex32, expected: Complex32) {
     assert!(
@@ -183,6 +185,106 @@ fn solve_read_into_covers_public_extension_complex_rhs_and_singular_atomicity() 
     assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure);
     assert_eq!(get_f64(&sentinel, &[0, 0]), -37.0);
     assert_eq!(get_f64(&sentinel, &[1, 0]), -37.0);
+}
+
+#[test]
+fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
+    let vector = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 5.0]).unwrap();
+    let mut matrix_storage = vec![-1.0; 8];
+    matrix_storage[1] = 7.0;
+    matrix_storage[2] = 11.0;
+    matrix_storage[5] = 13.0;
+    matrix_storage[6] = 17.0;
+    let matrix = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &matrix_storage).unwrap();
+    let rank3_storage = [19.0];
+    let rank3 =
+        TypedTensorView::from_slice(vec![1, 1, 1], vec![1, 1, 1], 0, &rank3_storage).unwrap();
+    let mut backend = CpuBackend::new();
+
+    backend
+        .with_linalg_pool(|_, buffers| {
+            let vector_output = crate::cpu::linalg::output_from_rhs_view(
+                buffers,
+                &vector.as_view(),
+                "test_output_from_rhs_view",
+            )?;
+            assert_eq!(vector_output.host_data()?, &[3.0, 5.0]);
+
+            let matrix_output = crate::cpu::linalg::output_from_rhs_view(
+                buffers,
+                &matrix,
+                "test_output_from_rhs_view",
+            )?;
+            assert_eq!(matrix_output.host_data()?, &[7.0, 11.0, 13.0, 17.0]);
+
+            let error = crate::cpu::linalg::output_from_rhs_view(
+                buffers,
+                &rank3,
+                "test_output_from_rhs_view",
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                tenferro_tensor::Error::Validation {
+                    source: tenferro_tensor::ValidationError::RankMismatch {
+                        expected: 2,
+                        actual: 3,
+                    },
+                    ..
+                }
+            ));
+
+            let backend_vector = TypedTensor::<f64>::from_buffer_col_major(
+                vec![2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(120, 2))),
+                Placement {
+                    memory_kind: MemoryKind::Device,
+                    device: None,
+                    cpu_affinity: None,
+                },
+            )?;
+            let backend_vector_view = backend_vector.backend_region_view(vec![2], vec![1], 0)?;
+            let error = crate::cpu::linalg::output_from_rhs_view(
+                buffers,
+                &backend_vector_view,
+                "test_output_from_rhs_view",
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                tenferro_tensor::Error::RuntimeState {
+                    op: "test_output_from_rhs_view",
+                    ..
+                }
+            ));
+
+            let backend_matrix = TypedTensor::<f64>::from_buffer_col_major(
+                vec![2, 2],
+                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(121, 4))),
+                Placement {
+                    memory_kind: MemoryKind::Device,
+                    device: None,
+                    cpu_affinity: None,
+                },
+            )?;
+            let backend_matrix_view =
+                backend_matrix.backend_region_view(vec![2, 2], vec![1, 2], 0)?;
+            let error = crate::cpu::linalg::output_from_rhs_view(
+                buffers,
+                &backend_matrix_view,
+                "test_output_from_rhs_view",
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                tenferro_tensor::Error::RuntimeState {
+                    op: "test_output_from_rhs_view",
+                    ..
+                }
+            ));
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
