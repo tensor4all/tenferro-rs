@@ -16,6 +16,7 @@ fn native_operation_enters_the_selected_rayon_executor() {
         gemm_analysis_cache: &mut gemm_analysis_cache,
         indexed_plan_cache: &mut indexed_plan_cache,
         providers: &providers,
+        backend_kind: kind,
     };
 
     assert!(rayon::current_thread_index().is_none());

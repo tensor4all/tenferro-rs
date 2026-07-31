@@ -4,16 +4,17 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::exec::{
-    can_run_in_single_exec_session, collect_output_values_from, collect_outputs_from,
-    eval_exec_ir_single_session_slots_with_workspace,
+    can_run_in_single_exec_session_with_extensions, collect_output_values_from,
+    collect_outputs_from, eval_exec_ir_single_session_slots_with_workspace,
     eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace,
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
     execute_ffi_instruction_cached, execute_ffi_instruction_exec, execute_host_instruction,
-    execute_host_instruction_exec, get_read, initialize_exec_slots_in, is_ffi_instruction,
-    is_host_instruction, reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec,
-    resolve_tensor_shape_exprs, terminal_output_slots, try_execute_terminal_value_instruction,
-    validate_exec_program, DispatchMode, ExecInstruction, ExecOp, ExecProgram, ExecSlot,
-    ExtensionExecutionDispatch,
+    execute_host_instruction_exec, get_read, has_session_capable_extension,
+    initialize_exec_slots_in, is_ffi_instruction, is_host_instruction,
+    is_session_compatible_instruction, reclaim_last_use_inputs_backend,
+    reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
+    try_execute_terminal_value_instruction, validate_exec_program, DispatchMode, ExecInstruction,
+    ExecOp, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
@@ -212,22 +213,38 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
 ) -> Result<Vec<Tensor>> {
     validate_exec_program(program, "segmented executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
-    if has_fused_segment && can_run_in_single_exec_session(program) {
+    if has_fused_segment
+        && can_run_in_single_exec_session_with_extensions(program, extension_dispatch.as_deref())
+    {
         return eval_exec_segmented_single_session_slots_with_workspace(
             backend,
             program,
             inputs,
             slots,
             backend_cache,
+            extension_dispatch,
         );
     }
-    if !has_fused_segment && can_run_in_single_exec_session(program) {
+    if !has_fused_segment
+        && can_run_in_single_exec_session_with_extensions(program, extension_dispatch.as_deref())
+    {
         return eval_exec_ir_single_session_slots_with_workspace(
             backend,
             program,
             inputs,
             slots,
             backend_cache,
+            extension_dispatch,
+        );
+    }
+    if has_session_capable_extension(program, extension_dispatch.as_deref()) {
+        return eval_exec_segmented_session_regions_slots_with_workspace(
+            backend,
+            program,
+            inputs,
+            slots,
+            backend_cache,
+            extension_dispatch,
         );
     }
 
@@ -306,13 +323,24 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 ) -> Result<Vec<TensorValue>> {
     validate_exec_program(program, "segmented value executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
-    if can_run_in_single_exec_session(program) {
+    if can_run_in_single_exec_session_with_extensions(program, extension_dispatch.as_deref()) {
         return eval_exec_segmented_single_session_slot_values_with_workspace(
             backend,
             program,
             inputs,
             slots,
             backend_cache,
+            extension_dispatch,
+        );
+    }
+    if has_session_capable_extension(program, extension_dispatch.as_deref()) {
+        return eval_exec_segmented_session_regions_slot_values_with_workspace(
+            backend,
+            program,
+            inputs,
+            slots,
+            backend_cache,
+            extension_dispatch,
         );
     }
     if !has_fused_segment {
@@ -392,12 +420,271 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
     result
 }
 
+fn segment_is_session_compatible(
+    segment: &Segment,
+    extension_dispatch: Option<&ExtensionExecutionDispatch<'_>>,
+) -> bool {
+    match segment {
+        Segment::Fused { .. } | Segment::Host(_) => true,
+        Segment::Ffi(inst) => is_session_compatible_instruction(inst, extension_dispatch),
+    }
+}
+
+fn segment_instruction_count(segment: &Segment) -> usize {
+    match segment {
+        Segment::Fused { instructions, .. } => instructions.len(),
+        Segment::Ffi(_) | Segment::Host(_) => 1,
+    }
+}
+
+fn eval_exec_segmented_session_regions_slots_with_workspace<'input, B: TensorBackend + 'static>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    backend_cache: &mut B::RuntimeCache,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
+) -> Result<Vec<Tensor>> {
+    let result = (|| {
+        initialize_exec_slots_in(program, inputs, slots)?;
+        let segments = segment_exec_program(program);
+        let mut segment_idx = 0usize;
+        let mut inst_idx = 0usize;
+
+        while segment_idx < segments.len() {
+            if segment_is_session_compatible(&segments[segment_idx], extension_dispatch.as_deref())
+            {
+                let region_start = segment_idx;
+                let instruction_start = inst_idx;
+                while segment_idx < segments.len()
+                    && segment_is_session_compatible(
+                        &segments[segment_idx],
+                        extension_dispatch.as_deref(),
+                    )
+                {
+                    segment_idx += 1;
+                }
+                let region_end = segment_idx;
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    let mut region_inst_idx = instruction_start;
+                    for segment in &segments[region_start..region_end] {
+                        execute_segment_in_session(
+                            exec,
+                            slots,
+                            segment,
+                            region_inst_idx,
+                            extension_dispatch.as_deref_mut(),
+                        )?;
+                        region_inst_idx += segment_instruction_count(segment);
+                    }
+                    Ok::<(), crate::error::Error>(())
+                })?;
+                inst_idx = instruction_start
+                    + segments[region_start..region_end]
+                        .iter()
+                        .map(segment_instruction_count)
+                        .sum::<usize>();
+            } else {
+                let Segment::Ffi(inst) = &segments[segment_idx] else {
+                    return Err(crate::error::Error::runtime_state(
+                        "segmented_execution",
+                        crate::error::ErrorPhase::Execution,
+                        "incompatible execution segment was not an FFI instruction",
+                    ));
+                };
+                execute_ffi_instruction_cached(
+                    backend,
+                    backend_cache,
+                    slots,
+                    inst,
+                    DispatchMode::Segmented,
+                    Some(inst_idx),
+                    extension_dispatch.as_deref_mut(),
+                )?;
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                segment_idx += 1;
+                inst_idx += 1;
+            }
+        }
+
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
+    })();
+    slots.clear();
+    result
+}
+
+fn eval_exec_segmented_session_regions_slot_values_with_workspace<
+    'input,
+    B: TensorBackend + 'static,
+>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    backend_cache: &mut B::RuntimeCache,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
+) -> Result<Vec<TensorValue>> {
+    let result = (|| {
+        initialize_exec_slots_in(program, inputs, slots)?;
+        let terminal_slots = terminal_output_slots(program);
+        let segments = segment_exec_program(program);
+        let mut segment_idx = 0usize;
+        let mut inst_idx = 0usize;
+
+        while segment_idx < segments.len() {
+            if segment_is_session_compatible(&segments[segment_idx], extension_dispatch.as_deref())
+            {
+                let region_start = segment_idx;
+                let instruction_start = inst_idx;
+                while segment_idx < segments.len()
+                    && segment_is_session_compatible(
+                        &segments[segment_idx],
+                        extension_dispatch.as_deref(),
+                    )
+                {
+                    segment_idx += 1;
+                }
+                let region_end = segment_idx;
+                backend.with_backend_session_cached(backend_cache, |exec| {
+                    let mut region_inst_idx = instruction_start;
+                    for segment in &segments[region_start..region_end] {
+                        execute_value_segment_in_session(
+                            exec,
+                            slots,
+                            segment,
+                            region_inst_idx,
+                            &terminal_slots,
+                            extension_dispatch.as_deref_mut(),
+                        )?;
+                        region_inst_idx += segment_instruction_count(segment);
+                    }
+                    Ok::<(), crate::error::Error>(())
+                })?;
+                inst_idx = instruction_start
+                    + segments[region_start..region_end]
+                        .iter()
+                        .map(segment_instruction_count)
+                        .sum::<usize>();
+            } else {
+                let Segment::Ffi(inst) = &segments[segment_idx] else {
+                    return Err(crate::error::Error::runtime_state(
+                        "segmented_execution",
+                        crate::error::ErrorPhase::Execution,
+                        "incompatible execution segment was not an FFI instruction",
+                    ));
+                };
+                if !backend.with_backend_session(|exec| {
+                    try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
+                })? {
+                    execute_ffi_instruction_cached(
+                        backend,
+                        backend_cache,
+                        slots,
+                        inst,
+                        DispatchMode::Segmented,
+                        Some(inst_idx),
+                        extension_dispatch.as_deref_mut(),
+                    )?;
+                }
+                reclaim_last_use_inputs_backend(slots, inst, backend);
+                segment_idx += 1;
+                inst_idx += 1;
+            }
+        }
+
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
+    })();
+    slots.clear();
+    result
+}
+
+fn execute_segment_in_session(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    segment: &Segment,
+    inst_idx: usize,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
+) -> Result<()> {
+    match segment {
+        Segment::Fused {
+            instructions,
+            input_slots,
+            output_slots,
+            last_use,
+        } => execute_fused_segment(
+            exec,
+            slots,
+            instructions,
+            input_slots,
+            output_slots,
+            last_use,
+        ),
+        Segment::Ffi(inst) => {
+            execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx), extension_dispatch)?;
+            reclaim_last_use_inputs_exec(slots, inst, exec);
+            Ok(())
+        }
+        Segment::Host(inst) => {
+            execute_host_instruction_exec(exec, slots, inst)?;
+            reclaim_last_use_inputs_exec(slots, inst, exec);
+            Ok(())
+        }
+    }
+}
+
+fn execute_value_segment_in_session(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    segment: &Segment,
+    inst_idx: usize,
+    terminal_slots: &[bool],
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
+) -> Result<()> {
+    match segment {
+        Segment::Fused {
+            instructions,
+            input_slots,
+            output_slots,
+            last_use,
+        } => execute_fused_value_segment(
+            exec,
+            slots,
+            instructions,
+            input_slots,
+            output_slots,
+            last_use,
+            terminal_slots,
+        ),
+        Segment::Ffi(inst) => {
+            if !try_execute_terminal_value_instruction(exec, slots, inst, terminal_slots)? {
+                execute_ffi_instruction_exec(
+                    exec,
+                    slots,
+                    inst,
+                    Some(inst_idx),
+                    extension_dispatch,
+                )?;
+            }
+            reclaim_last_use_inputs_exec(slots, inst, exec);
+            Ok(())
+        }
+        Segment::Host(inst) => {
+            if !try_execute_terminal_value_instruction(exec, slots, inst, terminal_slots)? {
+                execute_host_instruction_exec(exec, slots, inst)?;
+            }
+            reclaim_last_use_inputs_exec(slots, inst, exec);
+            Ok(())
+        }
+    }
+}
+
 fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
         initialize_exec_slots_in(program, inputs, slots)?;
@@ -421,7 +708,13 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
                         last_use,
                     )?,
                     Segment::Ffi(inst) => {
-                        execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                        execute_ffi_instruction_exec(
+                            exec,
+                            slots,
+                            inst,
+                            Some(inst_idx),
+                            extension_dispatch.as_deref_mut(),
+                        )?;
                         reclaim_last_use_inputs_exec(slots, inst, exec);
                     }
                     Segment::Host(inst) => {
@@ -447,6 +740,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<TensorValue>> {
     let result = (|| {
         initialize_exec_slots_in(program, inputs, slots)?;
@@ -478,7 +772,13 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
                             inst,
                             &terminal_slots,
                         )? {
-                            execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                            execute_ffi_instruction_exec(
+                                exec,
+                                slots,
+                                inst,
+                                Some(inst_idx),
+                                extension_dispatch.as_deref_mut(),
+                            )?;
                         }
                         reclaim_last_use_inputs_exec(slots, inst, exec);
                     }

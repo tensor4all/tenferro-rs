@@ -334,7 +334,10 @@ fn prepared_operation_source_contract_splits_metadata_from_execution_surface() {
 
     for required in [
         "fn execute(",
+        "fn execute_in_session(",
+        "fn supports_session(",
         "&mut ErasedExecutionContext<'_>",
+        "&mut dyn BackendSession",
         "&mut ExtensionCacheStore",
         "&[TensorRead<'_>]",
     ] {

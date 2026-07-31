@@ -677,11 +677,47 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
     result
 }
 
-pub(crate) fn can_run_in_single_exec_session(program: &ExecProgram) -> bool {
+pub(crate) fn can_run_in_single_exec_session_with_extensions(
+    program: &ExecProgram,
+    extension_dispatch: Option<&ExtensionExecutionDispatch<'_>>,
+) -> bool {
     program
         .instructions
         .iter()
-        .all(|inst| !is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
+        .all(|inst| is_session_compatible_instruction(inst, extension_dispatch))
+}
+
+pub(crate) fn has_session_capable_extension(
+    program: &ExecProgram,
+    extension_dispatch: Option<&ExtensionExecutionDispatch<'_>>,
+) -> bool {
+    program.instructions.iter().any(|inst| {
+        matches!(inst.op, ExecOp::Extension(_))
+            && is_session_compatible_instruction(inst, extension_dispatch)
+    })
+}
+
+pub(crate) fn is_session_compatible_instruction(
+    inst: &ExecInstruction,
+    extension_dispatch: Option<&ExtensionExecutionDispatch<'_>>,
+) -> bool {
+    if !is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst) {
+        return true;
+    }
+    let ExecOp::Extension(_) = &inst.op else {
+        return false;
+    };
+    let Some(dispatch) = extension_dispatch else {
+        return false;
+    };
+    let Some(operation_index) = inst.semantic_operation_index else {
+        return false;
+    };
+    dispatch
+        .operations
+        .get(operation_index)
+        .and_then(PreparedOperationPlan::executor)
+        .is_some_and(|executor| executor.supports_session())
 }
 
 pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: TensorBackend>(
@@ -690,6 +726,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
         validate_exec_program(program, "single-session executor")?;
@@ -700,7 +737,13 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
                 if is_host_instruction(inst) {
                     execute_host_instruction_exec(exec, slots, inst)?;
                 } else if is_ffi_instruction(inst) {
-                    execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                    execute_ffi_instruction_exec(
+                        exec,
+                        slots,
+                        inst,
+                        Some(inst_idx),
+                        extension_dispatch.as_deref_mut(),
+                    )?;
                 } else {
                     let result = execute_backend_op(exec, slots, inst)?;
                     slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
@@ -795,6 +838,7 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     cache_slot: Option<usize>,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
     match &inst.op {
         ExecOp::DotGeneral(config) => {
@@ -821,6 +865,47 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
             )?;
             slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
         }
+        ExecOp::Extension(ext) => {
+            let Some(extension_dispatch) = extension_dispatch else {
+                return Err(Error::validation(
+                    "extension",
+                    ErrorPhase::Execution,
+                    ValidationError::InvalidArgument {
+                        argument: "prepared_operation",
+                        message: format!(
+                            "extension instruction for family_id {:?} requires a prepared operation execution handle",
+                            ext.family_id()
+                        ),
+                    },
+                ));
+            };
+            let outputs = execute_prepared_extension_instruction_in_session(
+                exec,
+                slots,
+                inst,
+                ext.as_ref(),
+                extension_dispatch.operations,
+                extension_dispatch.caches,
+            )?;
+            if outputs.len() != inst.output_slots.len() {
+                return Err(Error::validation(
+                    "extension",
+                    ErrorPhase::Execution,
+                    ValidationError::InvalidArgument {
+                        argument: "outputs",
+                        message: format!(
+                            "family_id={:?}: extension runtime returned {} outputs for {} slots",
+                            ext.family_id(),
+                            outputs.len(),
+                            inst.output_slots.len()
+                        ),
+                    },
+                ));
+            }
+            for (slot, tensor) in inst.output_slots.iter().copied().zip(outputs) {
+                slots[slot] = Some(ExecSlot::Owned(tensor));
+            }
+        }
         other => {
             return Err(Error::Internal(format!(
                 "unsupported single-session FFI op: {other:?}"
@@ -828,6 +913,59 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
         }
     }
     Ok(())
+}
+
+fn execute_prepared_extension_instruction_in_session<'input>(
+    session: &mut dyn BackendSession,
+    slots: &[Option<ExecSlot<'input>>],
+    inst: &ExecInstruction,
+    ext: &dyn ExtensionOp,
+    operations: &[PreparedOperationPlan],
+    caches: &mut ExtensionCacheStore,
+) -> Result<Vec<Tensor>> {
+    let operation_index = inst.semantic_operation_index.ok_or_else(|| {
+        Error::runtime_state(
+            "extension",
+            ErrorPhase::Execution,
+            format!(
+                "extension instruction for family_id {:?} is missing semantic operation origin",
+                ext.family_id()
+            ),
+        )
+    })?;
+    let operation = operations.get(operation_index).ok_or_else(|| {
+        Error::runtime_state(
+            "extension",
+            ErrorPhase::Execution,
+            format!(
+                "extension instruction for family_id {:?} references semantic operation {operation_index}, but prepared program has {} operations",
+                ext.family_id(),
+                operations.len()
+            ),
+        )
+    })?;
+    let executor = operation.executor().ok_or_else(|| {
+        Error::runtime_state(
+            "extension",
+            ErrorPhase::Execution,
+            format!(
+                "prepared extension operation for family_id {:?} has no executor bridge",
+                ext.family_id()
+            ),
+        )
+    })?;
+    if !executor.supports_session() {
+        return Err(Error::unsupported(
+            "extension",
+            ErrorPhase::Execution,
+            format!(
+                "prepared extension family_id {:?} does not support the scheduler-owned backend session",
+                ext.family_id()
+            ),
+        ));
+    }
+    let inputs = collect_tensor_reads(slots, &inst.input_slots)?;
+    executor.execute_in_session(session, caches, &inputs)
 }
 
 /// Dispatch a compiled `ExecOp::Extension` instruction.

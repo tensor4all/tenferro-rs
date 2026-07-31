@@ -3370,6 +3370,7 @@ impl CpuBackend {
                     gemm_analysis_cache: cache,
                     indexed_plan_cache: &mut resources.indexed_plan_cache,
                     providers: &providers,
+                    backend_kind: self.kind(),
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",

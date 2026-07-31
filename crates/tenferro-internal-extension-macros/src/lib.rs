@@ -30,6 +30,8 @@ struct RuntimeArgs {
     op_type: Path,
     execute: Path,
     execute_reads: Path,
+    execute_in_session: Option<Path>,
+    session_supported: Option<Path>,
     backend_bound: Path,
 }
 
@@ -67,6 +69,8 @@ impl Parse for RuntimeArgs {
         let mut op_type = None;
         let mut execute = None;
         let mut execute_reads = None;
+        let mut execute_in_session = None;
+        let mut session_supported = None;
         let mut backend_bound = None;
 
         while !input.is_empty() {
@@ -78,6 +82,8 @@ impl Parse for RuntimeArgs {
                 "op_type" => op_type = Some(input.parse()?),
                 "execute" => execute = Some(input.parse()?),
                 "execute_reads" => execute_reads = Some(input.parse()?),
+                "execute_in_session" => execute_in_session = Some(input.parse()?),
+                "session_supported" => session_supported = Some(input.parse()?),
                 "backend_bound" => backend_bound = Some(input.parse()?),
                 other => {
                     return Err(syn::Error::new(
@@ -98,6 +104,8 @@ impl Parse for RuntimeArgs {
             op_type: required(op_type, "op_type")?,
             execute: required(execute, "execute")?,
             execute_reads: required(execute_reads, "execute_reads")?,
+            execute_in_session,
+            session_supported,
             backend_bound: backend_bound
                 .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
         })
@@ -127,10 +135,18 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 ///
 /// `execute_reads` is required. It must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
+///
+/// `session_supported` and `execute_in_session` are optional, but must be
+/// supplied together. The former has signature
+/// `fn<B: BackendBound + 'static>(&OpType) -> bool`; the latter has signature
+/// `fn(&OpType, &mut dyn BackendSession, &mut ExtensionCacheStore, &[TensorRead<'_>])`.
 #[proc_macro]
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
-    expand_extension_runtime(args).into()
+    match expand_extension_runtime(args) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
 }
 
 fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -167,19 +183,44 @@ fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::To
     })
 }
 
-fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
+fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::TokenStream> {
     let RuntimeArgs {
         runtime,
         family_id,
         op_type,
         execute: _execute,
         execute_reads,
+        execute_in_session,
+        session_supported,
         backend_bound,
     } = args;
     let module = format_ident!("{}Module", runtime);
     let planning_config = format_ident!("{}PlanningConfig", runtime);
     let prepared_operation = format_ident!("{}PreparedOperation", runtime);
-    quote! {
+    let session_methods = match (execute_in_session, session_supported) {
+        (Some(execute_in_session), Some(session_supported)) => quote! {
+            fn supports_session(&self) -> bool {
+                #session_supported::<B>(&self.op)
+            }
+
+            fn execute_in_session(
+                &self,
+                session: &mut dyn tenferro_tensor::BackendSession,
+                extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
+                inputs: &[tenferro_tensor::TensorRead<'_>],
+            ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                Ok(#execute_in_session(&self.op, session, extension_caches, inputs)?)
+            }
+        },
+        (None, None) => quote! {},
+        (Some(path), None) | (None, Some(path)) => {
+            return Err(syn::Error::new_spanned(
+                path,
+                "execute_in_session and session_supported must be supplied together",
+            ))
+        }
+    };
+    Ok(quote! {
         pub(crate) struct #runtime<B: #backend_bound + 'static> {
             engine_id: tenferro_runtime::EngineId,
             _backend: std::marker::PhantomData<fn() -> B>,
@@ -341,6 +382,8 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                 );
                 Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
             }
+
+            #session_methods
         }
 
         impl<B: #backend_bound + 'static> tenferro_runtime::ExtensionModule for #module<B>
@@ -385,7 +428,7 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
             }))
         }
 
-    }
+    })
 }
 
 fn expect_string(value: Expr, field: &str) -> syn::Result<String> {

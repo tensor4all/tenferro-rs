@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::program::SemanticOperationView;
 use crate::ExtensionCacheStore;
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_tensor::{BackendSession, Tensor, TensorRead};
 
 use super::{
     ExecutionContextIdentity, ExecutionContextMismatch, HardwareClassId, InputSignature,
@@ -296,6 +296,35 @@ pub trait PreparedOperationExecutor: fmt::Debug + Send + Sync + 'static {
         extension_caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> crate::Result<Vec<Tensor>>;
+
+    /// Return whether this prepared operation can execute inside a borrowed
+    /// backend session.
+    ///
+    /// The scheduler uses this capability to form a session-compatible
+    /// admission region. A false result keeps the operation on the ordinary
+    /// backend-owned execution path; it is never silently retried from inside
+    /// a session.
+    fn supports_session(&self) -> bool {
+        false
+    }
+
+    /// Execute this prepared operation inside the scheduler-owned session.
+    ///
+    /// Implementations must use `session` directly and must not reacquire a
+    /// backend session. The borrowed session and any operation-local state
+    /// must not escape this call.
+    fn execute_in_session(
+        &self,
+        _session: &mut dyn BackendSession,
+        _extension_caches: &mut ExtensionCacheStore,
+        _inputs: &[TensorRead<'_>],
+    ) -> crate::Result<Vec<Tensor>> {
+        Err(crate::Error::unsupported(
+            "prepared_operation.execute_in_session",
+            crate::ErrorPhase::Execution,
+            "prepared operation does not support the scheduler-owned backend session",
+        ))
+    }
 }
 
 /// Shared prepared-operation handle.
