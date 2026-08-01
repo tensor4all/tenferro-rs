@@ -102,9 +102,9 @@ pub fn apply_eager_with_extension_session(
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     ctx.install_extension_module(module)?;
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
-    let outputs = ctx.with_execution_session_and_extension_caches_mut(|extension_ctx| {
+    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
         execute(op.as_ref(), &input_reads, extension_ctx)
-    })?;
+    })??;
     finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
 }
 

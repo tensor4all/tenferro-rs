@@ -72,6 +72,20 @@ fn whole_program_untracked_matches_per_op_nary_result() {
             "whole-program result {g} != per-op {w}"
         );
     }
+    let first = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
+    let first_stats = ctx.cache_stats().unwrap();
+    let second = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
+    let second_stats = ctx.cache_stats().unwrap();
+    assert_eq!(first.shape(), second.shape());
+    assert!(first_stats.extensions.entries > 0);
+    assert_eq!(
+        first_stats.extensions.entries,
+        second_stats.extensions.entries
+    );
+    assert_eq!(
+        second_stats.extensions.hits,
+        first_stats.extensions.hits + 1
+    );
 }
 
 #[test]

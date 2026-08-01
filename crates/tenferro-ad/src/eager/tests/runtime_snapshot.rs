@@ -378,7 +378,7 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
 }
 
 #[test]
-fn execution_session_cache_closure_error_preserves_cpu_registration() {
+fn extension_execution_context_error_preserves_cpu_registration() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let before = runtime.runtime.snapshot().unwrap();
     let before_engine = before
@@ -389,12 +389,13 @@ fn execution_session_cache_closure_error_preserves_cpu_registration() {
     let before_epoch = before.epoch();
 
     let error = runtime
-        .with_execution_session_and_extension_caches_mut::<()>(|_| {
-            Err(tenferro_tensor::Error::BackendFailure {
+        .with_extension_execution_context(|_| {
+            tenferro_tensor::Result::<()>::Err(tenferro_tensor::Error::BackendFailure {
                 op: "test_execution_session_cache_closure",
                 message: "session callback failure".to_owned(),
             })
         })
+        .unwrap()
         .unwrap_err();
     assert!(error.to_string().contains("session callback failure"));
 

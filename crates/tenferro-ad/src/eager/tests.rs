@@ -215,8 +215,6 @@ fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
     assert!(ctx
         .set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap(),))
         .is_err());
-    assert!(ctx.with_extension_caches_mut(|_| ()).is_err());
-
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = ctx.clear_extension_caches();
         let _ = ctx.clear_caches();
