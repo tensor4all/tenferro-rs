@@ -15,9 +15,11 @@ use tenferro_runtime::{
 use tenferro_tensor::{BackendSession, ErrorKind, Tensor};
 
 use super::super::{
-    CpuPlacementBoundEager, CpuRuntimeRegistrationState, EagerBackend, EagerRuntime,
+    plan_eager_registration, CpuPlacementBoundEager, EagerBackend, EagerBackendIdentity,
+    EagerBackendRegistrationState, EagerEngineFamily, EagerRegistrationTarget, EagerRuntime,
     InjectedRegistrationFailure, CPU_RUNTIME_SELECTION_REFRESHES,
 };
+use crate::eager_backend::EagerRegistrationPlan;
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
@@ -47,10 +49,91 @@ fn registration_snapshot_reads(runtime: &EagerRuntime) -> usize {
 fn assert_reconciliation_required(runtime: &EagerRuntime) {
     assert!(matches!(
         runtime
-            .cpu_runtime_registration_state_for_test()
-            .expect("CPU runtime registration state"),
-        CpuRuntimeRegistrationState::ReconciliationRequired
+            .eager_backend_registration_state_for_test()
+            .expect("eager backend registration state"),
+        EagerBackendRegistrationState::ReconciliationRequired
     ));
+}
+
+#[derive(Debug, Default)]
+struct FakeEagerRegistry {
+    engine_ids: Vec<EngineId>,
+}
+
+impl FakeEagerRegistry {
+    fn apply(&mut self, plan: &EagerRegistrationPlan) {
+        let mut next = self.engine_ids.clone();
+        match plan {
+            EagerRegistrationPlan::RemoveOnly { remove } => {
+                next.retain(|id| !remove.contains(id));
+            }
+            EagerRegistrationPlan::RemoveAndInstall { remove, target, .. } => {
+                next.retain(|id| !remove.contains(id));
+                assert!(
+                    !next.contains(target),
+                    "target must be removed before install"
+                );
+                next.push(target.clone());
+            }
+        }
+        self.engine_ids = next;
+    }
+}
+
+fn fake_engine_id(value: &str) -> EngineId {
+    EngineId::new(value).unwrap()
+}
+
+#[test]
+fn provider_neutral_plan_replaces_all_known_families_without_stale_engines() {
+    let known = vec![
+        (EagerEngineFamily::Cpu, fake_engine_id("fake.cpu")),
+        (EagerEngineFamily::Cuda, fake_engine_id("fake.cuda")),
+        (EagerEngineFamily::WebGpu, fake_engine_id("fake.webgpu")),
+    ];
+    let mut registry = FakeEagerRegistry {
+        engine_ids: known.iter().map(|(_, id)| id.clone()).collect(),
+    };
+
+    let plan = plan_eager_registration(
+        &known,
+        &registry.engine_ids,
+        &EagerRegistrationTarget::Install {
+            family: EagerEngineFamily::WebGpu,
+            engine_id: known[2].1.clone(),
+        },
+    );
+    registry.apply(&plan);
+
+    assert_eq!(registry.engine_ids, vec![known[2].1.clone()]);
+}
+
+#[test]
+fn provider_neutral_plan_handles_no_engine_and_cpu_preparation() {
+    let cpu = fake_engine_id("fake.cpu");
+    let known = vec![(EagerEngineFamily::Cpu, cpu.clone())];
+    let mut registry = FakeEagerRegistry {
+        engine_ids: vec![cpu.clone()],
+    };
+
+    let remove = plan_eager_registration(
+        &known,
+        &registry.engine_ids,
+        &EagerRegistrationTarget::NoEngine,
+    );
+    registry.apply(&remove);
+    assert!(registry.engine_ids.is_empty());
+
+    let install = plan_eager_registration(
+        &known,
+        &registry.engine_ids,
+        &EagerRegistrationTarget::Install {
+            family: EagerEngineFamily::Cpu,
+            engine_id: cpu.clone(),
+        },
+    );
+    registry.apply(&install);
+    assert_eq!(registry.engine_ids, vec![cpu]);
 }
 
 fn cpu_engine_id() -> EngineId {
@@ -326,6 +409,42 @@ fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
 }
 
 #[test]
+fn backend_reconciliation_replaces_cpu_with_no_engine_and_back() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let materializations = Arc::new(AtomicUsize::new(0));
+
+    runtime
+        .with_backend_mut(|backend| {
+            *backend = EagerBackend::recording_cpu(Arc::clone(&materializations));
+        })
+        .unwrap();
+    assert!(runtime
+        .runtime
+        .snapshot()
+        .unwrap()
+        .engine(&cpu_engine_id())
+        .is_none());
+    assert!(matches!(
+        runtime.eager_backend_registration_state_for_test().unwrap(),
+        EagerBackendRegistrationState::Synchronized(EagerBackendIdentity::NoEngine)
+    ));
+
+    runtime
+        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(CpuBackend::new()))
+        .unwrap();
+    assert!(runtime
+        .runtime
+        .snapshot()
+        .unwrap()
+        .engine(&cpu_engine_id())
+        .is_some());
+    assert!(matches!(
+        runtime.eager_backend_registration_state_for_test().unwrap(),
+        EagerBackendRegistrationState::Synchronized(EagerBackendIdentity::Cpu { .. })
+    ));
+}
+
+#[test]
 fn failed_backend_mutation_preserves_primary_and_quarantines_registration() {
     let backend = CpuBackend::new();
     let replacement = backend
@@ -461,9 +580,10 @@ fn registration_quarantine_blocks_use_until_retry_then_clears() {
     assert_eq!(retry_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
         runtime
-            .cpu_runtime_registration_state_for_test()
+            .eager_backend_registration_state_for_test()
             .unwrap(),
-        CpuRuntimeRegistrationState::Present { identity } if identity == replacement_identity
+        EagerBackendRegistrationState::Synchronized(EagerBackendIdentity::Cpu { identity })
+            if identity == replacement_identity
     ));
 
     let bound_session_calls = AtomicUsize::new(0);
@@ -498,6 +618,26 @@ fn cpu_runtime_identity_is_shared_only_by_exact_backend_clones() {
         CpuBackend::new().runtime_identity(),
         CpuBackend::new().runtime_identity()
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_registration_state_variant_is_compile_covered_without_hardware() {
+    fn construct(identity: tenferro_gpu::CudaRuntimeIdentity) -> EagerBackendIdentity {
+        EagerBackendIdentity::Cuda { identity }
+    }
+
+    let _ = construct;
+}
+
+#[cfg(feature = "webgpu")]
+#[test]
+fn webgpu_registration_state_variant_is_compile_covered_without_hardware() {
+    fn construct(identity: tenferro_gpu::WebGpuRuntimeIdentity) -> EagerBackendIdentity {
+        EagerBackendIdentity::WebGpu { identity }
+    }
+
+    let _ = construct;
 }
 
 #[test]
