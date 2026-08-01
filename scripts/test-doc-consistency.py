@@ -565,7 +565,8 @@ def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canoni
     assert "preparation/execution substrate is implemented" in normalized_crates
     assert "opposite direction remains dev/test-only" in normalized_crates
     assert "Phase 5 common scheduled-graph checkpoint" in design
-    assert "EngineRegistration::with_tensor_backend_executor" in design
+    assert "assemble_executable_engine_registration" in design
+    assert "EngineRegistration::with_tensor_backend_executor" not in design
     assert "tenferro-cpu::runtime_engine_registration" in design
     assert "The previous `GraphExecutor<B>` facade is retired" in design
     assert "metadata-only layer" in design

@@ -81,6 +81,7 @@ struct CpuRuntimeSelection {
 enum CpuRuntimeRegistrationState {
     Absent,
     Present { identity: CpuRuntimeIdentity },
+    ReconciliationRequired,
 }
 
 impl CpuRuntimeRegistrationState {
@@ -93,6 +94,18 @@ impl CpuRuntimeRegistrationState {
         }
     }
 }
+
+#[cfg(test)]
+#[derive(Debug)]
+enum RegistrationFailureInjection {
+    Disabled,
+    FailNext,
+}
+
+#[cfg(test)]
+#[derive(Debug, thiserror::Error)]
+#[error("test-injected CPU runtime registration failure")]
+struct InjectedRegistrationFailure;
 
 #[derive(Debug, Default, Clone)]
 struct EagerOpProfileEntry {
@@ -293,16 +306,6 @@ where
     Error::runtime_state_source(op, ErrorPhase::Execution, source)
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "eager backend mutation failed ({primary}); runtime registration synchronization also failed ({synchronization})"
-)]
-struct BackendMutationSynchronizationError {
-    #[source]
-    primary: Error,
-    synchronization: Error,
-}
-
 fn cpu_runtime_bridge_unsupported(message: impl Into<String>) -> Error {
     Error::unsupported(
         "CpuPlacementBoundEager::refresh_runtime_selection",
@@ -451,6 +454,7 @@ impl fmt::Debug for CpuPlacementBoundEager {
 
 impl CpuPlacementBoundEager {
     fn refresh_runtime_selection(&mut self) -> Result<()> {
+        self.runtime.reconcile_backend_before_use()?;
         let current_epoch = self.runtime.runtime.epoch().map_err(|source| {
             runtime_state_source("CpuPlacementBoundEager::refresh_runtime_selection", source)
         })?;
@@ -582,6 +586,8 @@ pub struct EagerRuntime {
     registered_cpu_registration: Mutex<CpuRuntimeRegistrationState>,
     #[cfg(test)]
     registration_snapshot_reads: AtomicUsize,
+    #[cfg(test)]
+    registration_failure_injection: Mutex<RegistrationFailureInjection>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -674,10 +680,29 @@ impl fmt::Debug for EagerRuntime {
 }
 
 impl EagerRuntime {
-    fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
-        self.backend.lock().map_err(|_| {
+    fn reconcile_backend_before_use(&self) -> Result<()> {
+        // A placement-bound session owns its backend snapshot independently of
+        // the eager backend mutex. A completed Absent/Present witness is the
+        // fast path; only quarantine needs to reacquire the central backend
+        // lock and attempt publication before the bound session can proceed.
+        let registration = self.lock_cpu_runtime_registration()?;
+        if !matches!(
+            &*registration,
+            CpuRuntimeRegistrationState::ReconciliationRequired
+        ) {
+            return Ok(());
+        }
+        drop(registration);
+        let _backend = self.lock_backend()?;
+        Ok(())
+    }
+
+    pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
+        let backend = self.backend.lock().map_err(|_| {
             Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
-        })
+        })?;
+        self.synchronize_runtime_registration_for_backend(&backend)?;
+        Ok(backend)
     }
 
     fn lock_cpu_runtime_registration(&self) -> Result<MutexGuard<'_, CpuRuntimeRegistrationState>> {
@@ -688,6 +713,40 @@ impl EagerRuntime {
                 "lock poisoned",
             )
         })
+    }
+
+    #[cfg(test)]
+    fn cpu_runtime_registration_state_for_test(&self) -> Result<CpuRuntimeRegistrationState> {
+        self.lock_cpu_runtime_registration()
+            .map(|registration| registration.clone())
+    }
+
+    #[cfg(test)]
+    fn inject_next_registration_failure_for_test(&self) -> Result<()> {
+        let mut injection = self.registration_failure_injection.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_cpu_runtime_registration_failure_injection",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })?;
+        *injection = RegistrationFailureInjection::FailNext;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn take_registration_failure_injection(&self) -> Result<RegistrationFailureInjection> {
+        let mut injection = self.registration_failure_injection.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_cpu_runtime_registration_failure_injection",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })?;
+        Ok(std::mem::replace(
+            &mut *injection,
+            RegistrationFailureInjection::Disabled,
+        ))
     }
 
     fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {
@@ -772,6 +831,17 @@ impl EagerRuntime {
         if *registered_cpu_registration == backend_registration {
             return Ok(());
         }
+        *registered_cpu_registration = CpuRuntimeRegistrationState::ReconciliationRequired;
+        #[cfg(test)]
+        if matches!(
+            self.take_registration_failure_injection()?,
+            RegistrationFailureInjection::FailNext
+        ) {
+            return Err(runtime_state_source(
+                "EagerRuntime::runtime_reconciliation",
+                InjectedRegistrationFailure,
+            ));
+        }
         #[cfg(test)]
         self.registration_snapshot_reads
             .fetch_add(1, Ordering::SeqCst);
@@ -844,6 +914,8 @@ impl EagerRuntime {
             registered_cpu_registration: Mutex::new(registered_cpu_registration),
             #[cfg(test)]
             registration_snapshot_reads: AtomicUsize::new(0),
+            #[cfg(test)]
+            registration_failure_injection: Mutex::new(RegistrationFailureInjection::Disabled),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,
@@ -1419,13 +1491,9 @@ impl EagerRuntime {
             (Ok(result), Ok(())) => Ok(result),
             (Err(primary), Ok(())) => Err(primary),
             (Ok(_), Err(synchronization)) => Err(synchronization),
-            (Err(primary), Err(synchronization)) => Err(runtime_state_source(
-                "EagerRuntime::with_backend_and_extension_caches_mut",
-                BackendMutationSynchronizationError {
-                    primary,
-                    synchronization,
-                },
-            )),
+            (Err(primary), Err(synchronization)) => {
+                Err(Error::with_suppressed(primary, synchronization))
+            }
         }
     }
 

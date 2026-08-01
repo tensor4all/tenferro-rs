@@ -1,19 +1,22 @@
-use std::sync::atomic::Ordering;
+use std::error::Error as StdError;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::{CpuBackend, CpuPlacement, CpuProviderBundle};
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignatureContract, LayoutRuntime, ProviderDeviceIdentity,
-    ProviderId, ReductionRuntime, ResidentOutputContract, RuntimeCacheOwner, RuntimeInputContract,
-    StorageClass,
+    Error as RuntimeError, ErrorPhase, ExecutionContextIdentity, HardwareClassId, IndexingRuntime,
+    InputIngressContract, InputPlacementContract, InputSignatureContract, LayoutRuntime,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, ResidentOutputContract,
+    RuntimeCacheOwner, RuntimeInputContract, StorageClass,
 };
-use tenferro_tensor::{BackendSession, ErrorKind};
+use tenferro_tensor::{BackendSession, ErrorKind, Tensor};
 
 use super::super::{
-    CpuPlacementBoundEager, EagerBackend, EagerRuntime, CPU_RUNTIME_SELECTION_REFRESHES,
+    CpuPlacementBoundEager, CpuRuntimeRegistrationState, EagerBackend, EagerRuntime,
+    InjectedRegistrationFailure, CPU_RUNTIME_SELECTION_REFRESHES,
 };
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -39,6 +42,15 @@ fn reset_registration_snapshot_reads(runtime: &EagerRuntime) {
 
 fn registration_snapshot_reads(runtime: &EagerRuntime) -> usize {
     runtime.registration_snapshot_reads.load(Ordering::SeqCst)
+}
+
+fn assert_reconciliation_required(runtime: &EagerRuntime) {
+    assert!(matches!(
+        runtime
+            .cpu_runtime_registration_state_for_test()
+            .expect("CPU runtime registration state"),
+        CpuRuntimeRegistrationState::ReconciliationRequired
+    ));
 }
 
 fn cpu_engine_id() -> EngineId {
@@ -311,6 +323,164 @@ fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
     );
     assert_ne!(after_engine.registration_identity(), before_registration);
     assert_ne!(after.epoch(), before_epoch);
+}
+
+#[test]
+fn failed_backend_mutation_preserves_primary_and_quarantines_registration() {
+    let backend = CpuBackend::new();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_registration = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered")
+        .registration_identity();
+    runtime.inject_next_registration_failure_for_test().unwrap();
+
+    let error = runtime
+        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
+            *backend = EagerBackend::Cpu(replacement);
+            Err(tenferro_tensor::Error::BackendSource {
+                op: "test_backend_cache_closure",
+                source: Box::new(std::io::Error::other("primary closure source")),
+            })
+        })
+        .unwrap_err();
+
+    assert_reconciliation_required(&runtime);
+    assert_eq!(error.kind(), ErrorKind::BackendFailure);
+    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
+    assert!(matches!(error, RuntimeError::WithSuppressed { .. }));
+
+    let primary = error.primary().expect("primary closure error");
+    assert_eq!(primary.kind(), ErrorKind::BackendFailure);
+    assert_eq!(primary.phase(), Some(ErrorPhase::Execution));
+    let primary_source = StdError::source(primary).expect("typed primary source");
+    assert!(primary_source
+        .to_string()
+        .contains("primary closure source"));
+    assert_eq!(
+        StdError::source(&error)
+            .expect("aggregate delegates primary source")
+            .to_string(),
+        primary.to_string()
+    );
+
+    let suppressed = error
+        .suppressed()
+        .expect("suppressed synchronization error");
+    assert_eq!(suppressed.kind(), ErrorKind::RuntimeState);
+    assert_eq!(suppressed.phase(), Some(ErrorPhase::Execution));
+    assert!(matches!(
+        suppressed,
+        RuntimeError::RuntimeStateSource { .. }
+    ));
+    let suppressed_source = StdError::source(suppressed).expect("typed sync source");
+    assert!(suppressed_source
+        .downcast_ref::<InjectedRegistrationFailure>()
+        .is_some());
+
+    let after = runtime.runtime.snapshot().unwrap();
+    assert_eq!(
+        after
+            .engine(&cpu_engine_id())
+            .expect("CPU engine remains registered")
+            .registration_identity(),
+        before_registration
+    );
+}
+
+#[test]
+fn registration_quarantine_blocks_use_until_retry_then_clears() {
+    let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
+    let backend = CpuBackend::new();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+    let replacement_identity = replacement.runtime_identity();
+    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
+    runtime.inject_next_registration_failure_for_test().unwrap();
+    runtime
+        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
+            *backend = EagerBackend::Cpu(replacement);
+            Ok(())
+        })
+        .unwrap_err();
+
+    runtime.inject_next_registration_failure_for_test().unwrap();
+    let bound_session_calls = AtomicUsize::new(0);
+    let error = cpu
+        .with_eager_session(|_: &mut dyn BackendSession| {
+            bound_session_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(bound_session_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(error, RuntimeError::RuntimeStateSource { .. }));
+    assert_reconciliation_required(&runtime);
+
+    runtime.inject_next_registration_failure_for_test().unwrap();
+    let closure_calls = AtomicUsize::new(0);
+    let error = runtime
+        .with_backend_mut(|_| {
+            closure_calls.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap_err();
+    assert_eq!(closure_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(error, RuntimeError::RuntimeStateSource { .. }));
+    assert_reconciliation_required(&runtime);
+
+    runtime.inject_next_registration_failure_for_test().unwrap();
+    let execution_calls = AtomicUsize::new(0);
+    let error = runtime
+        .exec_outputs_with_runtime(
+            "test_execution.lock_backend",
+            "test_execution.execute",
+            &StdTensorOp::Neg,
+            |_backend, _runtime| {
+                execution_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), crate::Error>(())
+            },
+        )
+        .unwrap_err();
+    assert_eq!(execution_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(error, RuntimeError::RuntimeStateSource { .. }));
+    assert_reconciliation_required(&runtime);
+
+    let retry_calls = AtomicUsize::new(0);
+    runtime
+        .with_backend_mut(|_| {
+            retry_calls.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+    assert_eq!(retry_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        runtime
+            .cpu_runtime_registration_state_for_test()
+            .unwrap(),
+        CpuRuntimeRegistrationState::Present { identity } if identity == replacement_identity
+    ));
+
+    let bound_session_calls = AtomicUsize::new(0);
+    cpu.with_eager_session(|_: &mut dyn BackendSession| {
+        bound_session_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(bound_session_calls.load(Ordering::SeqCst), 1);
+
+    let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let output = runtime
+        .exec_outputs(&StdTensorOp::Neg, &[&input])
+        .unwrap()
+        .pop()
+        .expect("neg output");
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[-2.0]);
 }
 
 #[test]

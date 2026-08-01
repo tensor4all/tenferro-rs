@@ -4,7 +4,6 @@ use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, T
 
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
-use tenferro_runtime::ErrorPhase;
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let normalized = if axis >= 0 {
@@ -524,9 +523,7 @@ impl EagerTensor {
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = {
-            let mut backend = self.ctx.backend.lock().map_err(|_| {
-                Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
-            })?;
+            let mut backend = self.ctx.lock_backend()?;
             backend.upload_host_tensor(&indices)?
         };
         let indices = self.ctx.constant_from(indices)?;
