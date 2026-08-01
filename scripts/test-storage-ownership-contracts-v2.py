@@ -20,6 +20,7 @@ import textwrap
 import tomllib
 import unittest
 from pathlib import Path
+from typing import NamedTuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,9 @@ LEGACY_V1_MANIFEST_FIXTURE = (
 )
 V1_TEST_SUITE = ROOT / "scripts" / "test-check-storage-ownership-contracts.py"
 V2_RED_SUITE = ROOT / "scripts" / "test-storage-ownership-contracts-v2.py"
+CHECKER_RELATIVE = CHECKER.relative_to(ROOT).as_posix()
+LEGACY_FIXTURE_RELATIVE = LEGACY_V1_MANIFEST_FIXTURE.relative_to(ROOT).as_posix()
+V2_RED_SUITE_RELATIVE = V2_RED_SUITE.relative_to(ROOT).as_posix()
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
@@ -98,6 +102,180 @@ CHECKER_CAUSE = "v2-checker-not-implemented"
 RUNNER_CAUSE = "v2-runner-not-implemented"
 FUTURE_ARTIFACT_CAUSE = "future-production-proof-artifact-not-landed"
 MIGRATION_CAUSE = "v2-atomic-migration-not-landed"
+
+
+class _InventoryAllowlistEntry(NamedTuple):
+    kind: str
+    relative_path: str
+    token: str
+    purpose: str
+    expected_count: int
+
+
+# This is an exact, path-scoped allowance for intentional negative evidence in
+# the v2 RED suite and the schema-only fixture.  Every entry has a purpose and
+# an expected occurrence count; post-migration verification rejects drift.
+STORAGE_TOOLING_INVENTORY_ALLOWLIST = (
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        LEGACY_SCHEMA,
+        "v2 RED rejects the legacy manifest schema",
+        3,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "TOP_LEVEL_KEYS = frozenset",
+        "v2 RED names the removed parser surface and tests its rejection",
+        4,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "def _fixture_rows(",
+        "v2 RED names and tests the removed fixture parser for rejection",
+        2,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "def _fixture_suite_rows(",
+        "v2 RED names and tests the removed fixture-suite parser for rejection",
+        2,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "def _scan_rows(",
+        "v2 RED names and tests the removed source-scan parser for rejection",
+        2,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "def _inventory_rows(",
+        "v2 RED names and tests the removed source-inventory parser for rejection",
+        2,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "class FixtureSuite",
+        "v2 RED names and tests the removed fixture-suite model for rejection",
+        2,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "class CheckerTests(unittest.TestCase)",
+        "v2 RED names and tests the removed checker suite for rejection",
+        4,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        '"fixtures"',
+        "v2 RED enumerates and tests the removed fixtures table",
+        6,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        '"fixture_suites"',
+        "v2 RED enumerates and tests the removed fixture_suites table",
+        5,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        '"source_scans"',
+        "v2 RED enumerates and tests the removed source_scans table",
+        4,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        '"source_inventory"',
+        "v2 RED enumerates and tests the removed source_inventory table",
+        4,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "compatibility_mode",
+        "v2 RED proves and tests the legacy compatibility mode is absent",
+        4,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        V2_RED_SUITE_RELATIVE,
+        "test-check-storage-ownership-contracts.py",
+        "v2 RED names and rejects the old suite as a migration-removal target",
+        3,
+    ),
+    _InventoryAllowlistEntry(
+        "content",
+        LEGACY_FIXTURE_RELATIVE,
+        LEGACY_SCHEMA,
+        "schema-only negative v1 fixture",
+        1,
+    ),
+    _InventoryAllowlistEntry(
+        "path",
+        LEGACY_FIXTURE_RELATIVE,
+        "v1",
+        "schema-only negative v1 fixture path",
+        1,
+    ),
+    _InventoryAllowlistEntry(
+        "path",
+        CHECKER_RELATIVE,
+        "check-storage-ownership-contracts.py",
+        "canonical checker path is retained for the v2 implementation",
+        1,
+    ),
+)
+
+STORAGE_TOOLING_INVENTORY_CONTENT_RULES = (
+    (LEGACY_SCHEMA, "legacy manifest schema"),
+    ("TOP_LEVEL_KEYS = frozenset", "legacy top-level parser key set"),
+    ("class FixtureSuite", "legacy fixture-suite model"),
+    ("def _fixture_rows(", "legacy fixture parser"),
+    ("def _fixture_suite_rows(", "legacy fixture-suite parser"),
+    ("def _scan_rows(", "legacy source-scan parser"),
+    ("def _inventory_rows(", "legacy source-inventory parser"),
+    ('"fixtures"', "legacy fixtures parser/table key"),
+    ('"fixture_suites"', "legacy fixture_suites parser/table key"),
+    ('"source_scans"', "legacy source_scans parser/table key"),
+    ('"source_inventory"', "legacy source_inventory parser/table key"),
+    ("[[fixtures]]", "legacy fixtures TOML table"),
+    ("[[fixture_suites]]", "legacy fixture_suites TOML table"),
+    ("[[source_scans]]", "legacy source_scans TOML table"),
+    ("[[source_inventory]]", "legacy source_inventory TOML table"),
+    ("--compatibility", "legacy compatibility flag"),
+    ("--compatibility-mode", "legacy compatibility mode flag"),
+    ("--compat-mode", "legacy compatibility mode alias"),
+    ("--legacy", "legacy compatibility flag"),
+    ("--v1", "legacy schema-selection flag"),
+    ("compatibility_mode", "legacy compatibility mode"),
+    ("legacy_mode", "legacy mode variable"),
+    ("allow_legacy", "legacy opt-in variable"),
+    ("v1_compat", "legacy compatibility variable"),
+    ("class CheckerTests(unittest.TestCase)", "legacy v1 test suite"),
+)
+STORAGE_TOOLING_INVENTORY_PATH_RULES = (
+    ("v1", "legacy versioned tooling path"),
+    ("legacy", "legacy-named tooling path"),
+    (
+        "test-check-storage-ownership-contracts.py",
+        "legacy v1 test-suite path",
+    ),
+    (
+        "check-storage-ownership-contracts.py",
+        "canonical checker path requiring v2 content",
+    ),
+)
 
 
 class RedExpectedFailure(AssertionError):
@@ -172,6 +350,73 @@ def _legacy_tooling_is_current() -> bool:
         if actual != expected:
             return False
     return True
+
+
+def _inventory_allowlisted(kind: str, relative_path: str, token: str) -> bool:
+    return any(
+        entry.kind == kind
+        and entry.relative_path == relative_path
+        and entry.token == token
+        for entry in STORAGE_TOOLING_INVENTORY_ALLOWLIST
+    )
+
+
+def _storage_tooling_inventory(root: Path) -> list[tuple[str, str]]:
+    """Lexically inventory removed storage tooling; never parse or execute it."""
+    scripts_root = root / "scripts"
+    violations: list[tuple[str, str]] = []
+    if not scripts_root.is_dir():
+        return violations
+    for path in sorted(scripts_root.rglob("*"), key=lambda candidate: candidate.as_posix()):
+        if not path.is_file() or path.suffix not in {".py", ".toml"}:
+            continue
+        relative_path = path.relative_to(root).as_posix()
+        for token, _purpose in STORAGE_TOOLING_INVENTORY_PATH_RULES:
+            if token in relative_path and not _inventory_allowlisted(
+                "path", relative_path, token
+            ):
+                violations.append((relative_path, token))
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            violations.append((relative_path, "<unreadable>"))
+            continue
+        for token, _purpose in STORAGE_TOOLING_INVENTORY_CONTENT_RULES:
+            if token in source and not _inventory_allowlisted(
+                "content", relative_path, token
+            ):
+                violations.append((relative_path, token))
+    return violations
+
+
+def _storage_tooling_allowlist_drift(
+    root: Path,
+) -> list[tuple[str, str, str]]:
+    """Return path/token/purpose records when intentional evidence changes."""
+    drift: list[tuple[str, str, str]] = []
+    for entry in STORAGE_TOOLING_INVENTORY_ALLOWLIST:
+        path = root / entry.relative_path
+        if entry.kind == "path":
+            actual_count = (
+                entry.relative_path.count(entry.token) if path.is_file() else 0
+            )
+        else:
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                actual_count = -1
+            else:
+                actual_count = source.count(entry.token)
+        if actual_count != entry.expected_count:
+            drift.append(
+                (
+                    entry.relative_path,
+                    entry.token,
+                    f"{entry.purpose}: expected {entry.expected_count}, "
+                    f"found {actual_count}",
+                )
+            )
+    return drift
 
 
 def _require_v2_checker() -> None:
@@ -1505,17 +1750,14 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         self.assertEqual(production.get("schema"), SCHEMA)
         self.assertEqual(production, tomllib.loads(valid_manifest()))
 
-        checker_source = CHECKER.read_text(encoding="utf-8")
-        self.assertNotIn(f'SCHEMA = "{LEGACY_SCHEMA}"', checker_source)
-        for legacy_surface in (
-            "TOP_LEVEL_KEYS = frozenset",
-            "def _fixture_rows(",
-            "def _fixture_suite_rows(",
-            "def _scan_rows(",
-            "def _inventory_rows(",
-            "class FixtureSuite",
-        ):
-            self.assertNotIn(legacy_surface, checker_source)
+        inventory = _storage_tooling_inventory(ROOT)
+        self.assertEqual(inventory, [], f"legacy tooling path/token violations: {inventory}")
+        allowlist_drift = _storage_tooling_allowlist_drift(ROOT)
+        self.assertEqual(
+            allowlist_drift,
+            [],
+            f"intentional inventory allowlist drift: {allowlist_drift}",
+        )
 
         self.assertTrue(V2_RED_SUITE.is_file())
         self.assertFalse(V1_TEST_SUITE.exists())
@@ -1532,6 +1774,99 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             if parsed.get("schema") == SCHEMA:
                 v2_manifests.append(path)
         self.assertEqual(v2_manifests, [PRODUCTION_MANIFEST])
+
+    def test_post_migration_inventory_rejects_renamed_legacy_tooling(self) -> None:
+        cases = (
+            (
+                "scripts/renamed_checker.py",
+                f'SCHEMA = "{LEGACY_SCHEMA}"\n',
+                LEGACY_SCHEMA,
+            ),
+            (
+                "scripts/renamed_suite.py",
+                "class CheckerTests(unittest.TestCase):\n    pass\n",
+                "class CheckerTests(unittest.TestCase)",
+            ),
+            (
+                "scripts/hidden_compatibility_shim.py",
+                'parser.add_argument("--compatibility-mode", action="store_true")\n',
+                "--compatibility-mode",
+            ),
+            (
+                "scripts/moved_table_parser.py",
+                'TOP_LEVEL_KEYS = frozenset({"fixtures", "fixture_suites"})\n',
+                "TOP_LEVEL_KEYS = frozenset",
+            ),
+            (
+                "scripts/moved_manifest.toml",
+                f'schema = "{LEGACY_SCHEMA}"\n[[fixtures]]\nid = "old"\n',
+                "[[fixtures]]",
+            ),
+        )
+        for relative_path, source, token in cases:
+            with self.subTest(path=relative_path, token=token):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    _write_files(root, {relative_path: source})
+                    violations = _storage_tooling_inventory(root)
+                    self.assertIn((relative_path, token), violations)
+
+    def test_post_migration_inventory_accepts_clean_v2_only_tooling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_files(
+                root,
+                {
+                    "scripts/check-storage-ownership-contracts.py": (
+                        f'SCHEMA = "{SCHEMA}"\n'
+                        "\ndef _load_manifest(path):\n"
+                        "    return {\"schema\": path}\n"
+                    ),
+                    "scripts/run-storage-ownership-contracts.py": (
+                        f'SCHEMA = "{SCHEMA}"\n'
+                    ),
+                    "scripts/storage-ownership-contracts.toml": (
+                        f'schema = "{SCHEMA}"\n'
+                    ),
+                    LEGACY_FIXTURE_RELATIVE: f'schema = "{LEGACY_SCHEMA}"\n',
+                    "scripts/test-storage-ownership-contracts-v2.py": (
+                        "# clean v2-only test tooling\n"
+                    ),
+                },
+            )
+            self.assertEqual(_storage_tooling_inventory(root), [])
+
+    def test_storage_tooling_inventory_allowlist_has_no_repository_drift(self) -> None:
+        self.assertEqual(_storage_tooling_allowlist_drift(ROOT), [])
+
+    def test_storage_tooling_inventory_allowlist_rejects_extra_v2_red_occurrence(
+        self,
+    ) -> None:
+        entry = next(
+            entry
+            for entry in STORAGE_TOOLING_INVENTORY_ALLOWLIST
+            if entry.kind == "content" and entry.relative_path == V2_RED_SUITE_RELATIVE
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_files(
+                root,
+                {
+                    V2_RED_SUITE_RELATIVE: (
+                        V2_RED_SUITE.read_text(encoding="utf-8")
+                        + f"\n{entry.token}\n"
+                    ),
+                    LEGACY_FIXTURE_RELATIVE: LEGACY_V1_MANIFEST_FIXTURE.read_text(
+                        encoding="utf-8"
+                    ),
+                    CHECKER_RELATIVE: CHECKER.read_text(encoding="utf-8"),
+                },
+            )
+            drift = _storage_tooling_allowlist_drift(root)
+            self.assertIn(
+                (V2_RED_SUITE_RELATIVE, entry.token),
+                {(path, token) for path, token, _purpose in drift},
+            )
 
     def test_result_diagnostic_rejects_wrong_schema_and_array_shape(self) -> None:
         for payload in (

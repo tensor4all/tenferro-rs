@@ -294,10 +294,21 @@ the complete `(command_id, index)` and length-case sets and multiplicities with
 the canonical domains. This is coverage only; runner observed argv/cwd, real
 command kinds, TOCTOU, and receipt diagnostics remain deferred.
 
+Checkpoint 1C adds the post-migration tooling inventory. It scans every
+regular `.py` and `.toml` file below `scripts`, including renamed/moved files,
+using lexical path/token checks only; it is not a v1 parser or compatibility
+loader. Exact path+token allowances are purpose-labeled and count-checked for
+the schema-only fixture, canonical checker path, and intentional v2 RED
+rejection strings. Always-run self-tests prove repository drift is empty,
+extra V2-suite occurrences are rejected, clean v2 tooling passes, and renamed
+checker/suite/TOML/parser/shim surfaces produce exact path/token evidence. The
+atomic implementation commit must remove the frozen v1 hashes, quartet
+predicate, and `v2-atomic-migration-not-landed` event.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 53 tests and
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 57 tests and
   reports exactly 189 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no

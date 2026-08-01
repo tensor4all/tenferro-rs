@@ -420,6 +420,25 @@ together, so the expected binding or length diagnostic cannot be masked by
 `E_COMMAND_ID_CONFLICT`; the tests assert exact fields and check the complete
 coordinate and length-case coverage sets and multiplicities.
 
+After the frozen legacy predicate is false, the atomic migration assertion
+lexically inventories every regular `scripts/**/*.py` and `scripts/**/*.toml`
+file, including renamed or moved tooling. It rejects the v1 schema, parser
+models/functions, table keys, compatibility flags/modes, and old checker/test
+suite paths. This inventory is text-only deletion-debt evidence: it does not
+parse, load, or execute a v1 manifest and is not a v1 compatibility parser.
+The only allowances are exact path+token entries for the schema-only negative
+fixture, the canonical checker path, and explicitly enumerated legacy
+rejection constants/test strings in this v2 RED suite. Each allowance has a
+purpose and frozen occurrence count; a new occurrence or missing occurrence
+is an allowlist-drift failure. Temporary-tree tests cover clean v2 tooling and
+renamed checker, suite, TOML, parser, and compatibility-shim surfaces.
+
+The exact-legacy branch raises the typed migration RED before this inventory
+runs. Any partial migration therefore enters the post-migration assertions and
+is an unexpected failure. The atomic implementation commit must delete the
+four frozen v1 SHA-256 values, their exact-quartet predicate, and the
+`v2-atomic-migration-not-landed` expected event; none is a compatibility path.
+
 The RED command emits a machine-readable
 `tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
 keyed by test and subtest parameters and records both a named cause and the
