@@ -98,8 +98,8 @@ use tenferro_tensor::CacheStats;
 use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendCachedDot, BackendRuntimeCache, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use crate::config::{
@@ -120,6 +120,7 @@ mod capability;
 mod dispatch;
 mod error;
 mod event_domain;
+mod exec_session;
 mod ffi;
 mod fusion;
 mod gemm;
@@ -144,6 +145,8 @@ use dispatch::{
 use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
+#[doc(hidden)]
+pub use exec_session::CudaExecSession;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{
@@ -5602,8 +5605,6 @@ impl TensorFusion for CudaBackend {
 }
 
 impl BackendCachedDot for CudaBackend {}
-
-impl BackendSessionHost for CudaBackend {}
 
 impl TensorBuffer for CudaBackend {}
 

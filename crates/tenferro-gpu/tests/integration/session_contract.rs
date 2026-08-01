@@ -1,7 +1,7 @@
-#![cfg(feature = "webgpu")]
-
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 use std::any::type_name;
 
+#[cfg(feature = "webgpu")]
 #[test]
 fn webgpu_session_type_is_distinct_from_owner() {
     use tenferro_gpu::{WebGpuBackend, WebGpuExecSession};
@@ -12,6 +12,7 @@ fn webgpu_session_type_is_distinct_from_owner() {
     );
 }
 
+#[cfg(feature = "webgpu")]
 #[test]
 fn webgpu_session_exposes_backend_session_operations() {
     use tenferro_gpu::WebGpuExecSession;
@@ -27,10 +28,47 @@ fn webgpu_session_exposes_backend_session_operations() {
     ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add;
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_session_type_is_distinct_from_owner() {
+    use tenferro_gpu::{CudaBackend, CudaExecSession};
+
+    assert_ne!(
+        type_name::<CudaBackend>(),
+        type_name::<CudaExecSession<'static>>()
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_session_exposes_backend_session_operations() {
+    use tenferro_gpu::CudaExecSession;
+    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise};
+
+    fn assert_backend_session<S: BackendSession + ?Sized>() {}
+
+    assert_backend_session::<CudaExecSession<'static>>();
+    let _add: fn(
+        &mut CudaExecSession<'static>,
+        &Tensor,
+        &Tensor,
+    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add;
+}
+
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 #[test]
 fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
     let tests = trybuild::TestCases::new();
 
-    tests.compile_fail("tests/ui/webgpu_session_borrow_escape.rs");
-    tests.compile_fail("tests/ui/webgpu_session_owner_projection.rs");
+    #[cfg(feature = "webgpu")]
+    {
+        tests.compile_fail("tests/ui/webgpu_session_borrow_escape.rs");
+        tests.compile_fail("tests/ui/webgpu_session_owner_projection.rs");
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        tests.compile_fail("tests/ui/cuda_session_borrow_escape.rs");
+        tests.compile_fail("tests/ui/cuda_session_owner_projection.rs");
+    }
 }
