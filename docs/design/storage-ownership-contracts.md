@@ -313,6 +313,23 @@ path, graph, promotion, and command-binding cases and an integration case that
 invokes the checked-in production manifest. Temporary repositories contain
 real files and real symlinks; they do not stand in for the production gate.
 
+The base RED snapshot has completed P0, P1, and P2. P4 and P5 remain deferred;
+the CUTOVER candidate activates every required P4/P5 obligation and obtains
+successful runner evidence before atomically activating all P3/P9 obligations.
+In particular, the canonical obligation set includes:
+
+- P1/G1+G4: an executable minimal `rustc` proof of the private dispatch borrow
+  shape and exact `ResolvedWrite` failure recovery;
+- P3/G1+G4: a compile contract using the repository compile-test harness or
+  static assertions for `UseLease`/`BackendRawLease: Send + !Sync` and
+  `BackendRawMapping`/host guards: `!Send + !Sync`;
+- P4/G1+G3: a provider runtime test for take-before-call, exactly-once release,
+  callback panic containment, and root quarantine after release panic.
+
+These are ordinary immutable artifact-command rows, so all-active terminal
+proof necessarily includes their successful runner results. Matching text in
+this document is supplemental and cannot satisfy any of these obligations.
+
 The proof layers remain distinct: Rust borrowing/private constructors prove
 write safety; trybuild, Miri, property, corruption, and provider tests exercise
 dynamic boundaries; source inventories record deletion drift; and the
@@ -322,6 +339,15 @@ is allowed to manufacture ownership proof from an allocation ID or a lock.
 ## G1. Span access and retirement
 
 ### Types and acquisition surface
+
+The following Rust block fixes normative type, visibility, lifetime, field-
+split, and state-transition shape. It is intentionally architecture
+pseudocode: unrelated declarations, imports, and routine method bodies may be
+elided, and the block is not claimed as one standalone crate. Executability is
+proved separately by the canonical P1 minimal `rustc` artifact and the P3/P4
+compile/runtime obligations above. Implementations may rename provisional
+private items, but may not replace the private dispatch shape with a request
+that escapes and permits a second owner/provider borrow.
 
 ```rust
 use core::{cell::Cell, marker::PhantomData, ptr::NonNull};

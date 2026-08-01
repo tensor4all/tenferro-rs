@@ -95,9 +95,12 @@ The executable specification covers:
   active-once/deferred-never runner behavior;
 - actual-Git base-to-candidate immutable identity, candidate-bound runner
   receipt output, non-vacuous P0/P5 CUTOVER proof, and both positive and
-  incomplete-receipt terminal derivation;
+  incomplete-receipt terminal derivation, with no locally constructed positive
+  receipts;
 - stable JSON diagnostic codes and identifying fields, with checked fixture
   replacement helpers rather than unchecked text mutation;
+- canonical and directly invoked future auto-trait/provider-release artifacts,
+  and a persisted executable minimal borrow-shape proof;
 - rejection of the old fixture/source/ownership parallel tables.
 
 The temporary repository helpers are test-only. They do not replace the
@@ -127,8 +130,38 @@ remain intentionally unimplemented.
 An additional coherence review required the worker/reaper auto-trait contract
 and release behavior to be explicit. The remediation therefore also fixes
 lease transfer to `Send + !Sync`, keeps host mappings thread-bound, and makes
-exactly-once panic-contained release/quarantine part of G1 and its RED
-signature assertions.
+exactly-once panic-contained release/quarantine part of G1.
+
+## Rejection of checkpoint 00295401 and remediation
+
+The second review accepted the normative pseudocode convention but rejected
+four executable-proof gaps:
+
+- the positive terminal test supplied a locally constructed receipt instead
+  of proving terminal status from runner output;
+- one diagnostic helper did not validate the diagnostic schema/array shape;
+- lease auto-traits and release lifecycle were checked only as document text,
+  not canonical compile/runtime obligations;
+- the borrow-checking proof was an ephemeral manual `rustc` invocation rather
+  than a repository test.
+
+This follow-up removes receipt construction entirely. Every positive checker
+case consumes an actual future runner receipt, and adversarial receipt cases
+mutate a schema-checked runner result through verified lookup/removal helpers.
+The all-active terminal case executes the runner first and requires receipt
+entries for the auto-trait and release-lifecycle obligations before asking the
+checker for `terminal: true`. Both diagnostic assertion paths validate the
+`tenferro.storage-ownership-diagnostics.v1` envelope and non-empty structured
+diagnostic array.
+
+The canonical graph now owns a deferred P3/G1+G4 compile artifact for
+`UseLease`/`BackendRawLease: Send + !Sync` and thread-bound host mappings/guards,
+plus a deferred P4/G1+G3 provider runtime artifact for exactly-once,
+take-before-call, panic containment, and quarantine. The base snapshot is the
+coherent P0/P1/P2-complete state; P4/P5 and every P3/P9 member obligation are
+activated and receipted in the CUTOVER candidate. A P1 executable self-test
+writes the minimal private-dispatch sketch and invokes `rustc`; document string
+checks remain supplemental and explicitly do not make the gate green.
 
 ## Verification evidence for this checkpoint
 
@@ -137,10 +170,10 @@ Passing deterministic checks:
 - `python3.12 -m py_compile scripts/test-storage-ownership-contracts-v2.py`
 - generated v2 manifests parse with Python 3.12 `tomllib`, including promoted
   CUTOVER and all-active terminal candidates, and cover every canonical unit;
-- the RED signature self-check for `Send + !Sync`, host thread binding,
-  take-before-call release, panic containment, and quarantine;
-- a standalone `rustc --edition=2021` borrow-shape check for the exact private
-  host/device write dispatch and `(ResolvedWrite, Error)` recovery pattern;
+- canonical deferred compile/runtime rows for auto-traits and provider release,
+  plus a RED that invokes those exact future artifact commands;
+- the persisted P1 RED self-test invoking `rustc --edition=2021` for the exact
+  private host/device dispatch and `(ResolvedWrite, Error)` recovery pattern;
 - `python3.12 scripts/check-storage-ownership-contracts.py`;
 - `python3.12 scripts/test-check-storage-ownership-contracts.py` (65 tests);
 - `cargo doc --workspace --no-deps`;
@@ -156,12 +189,13 @@ Passing deterministic checks:
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 27 tests and
-  reports 29 assertion/subtest failures. They are intentional: the v1 checker
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 31 tests and
+  reports 34 assertion/subtest failures. They are intentional: the v1 checker
   lacks v2 structured diagnostics, base/HEAD receipt validation and summary
-  output; the runner is absent; and the checked-in production manifest remains
-  v1. There are no fixture parse errors, unchecked/no-op replacement failures,
-  or unexpected Python exceptions.
+  output; the runner is absent; the two canonical future lifecycle artifacts
+  are not implemented; and the checked-in production manifest remains v1.
+  There are no fixture parse errors, unchecked/no-op replacement failures, or
+  unexpected Python exceptions.
 
 No cargo implementation tests are claimed here because this checkpoint changes
 only design, ledger specification tests, and provenance. The next Phase 1
