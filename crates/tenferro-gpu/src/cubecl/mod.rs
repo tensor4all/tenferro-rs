@@ -340,6 +340,16 @@ mod cuda_zero_scalar {
 
 /// Scalar types supported by [`CudaBackend::zeros`].
 ///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::CudaZeroScalar;
+///
+/// fn accepts_cuda_zero<T: CudaZeroScalar>() {}
+///
+/// accepts_cuda_zero::<f64>();
+/// ```
+///
 /// This capability is sealed; the initial CUDA constructor supports only
 /// `f64`. In particular, `f32` is not admitted:
 ///
