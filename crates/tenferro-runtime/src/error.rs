@@ -243,7 +243,7 @@ pub enum Error {
         source: crate::runtime::EventDomainError,
     },
 
-    /// A `TracedTensor` passed to graph-executor input bindings is not a
+    /// A `TracedTensor` supplied as a compiled-graph input binding is not a
     /// placeholder (has attached data).
     #[error(
         "binding #{binding_index} is not a placeholder; \

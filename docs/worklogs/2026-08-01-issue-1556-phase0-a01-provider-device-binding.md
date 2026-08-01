@@ -140,7 +140,7 @@ cargo test -p tenferro-runtime --lib frozen_executable_selection_returns_one_com
 
 The observed failures included the missing `executable_witness` method, old
 test-only `EngineRegistration::new` callsites, and the old
-`with_tensor_backend_executor` function-pointer reference. This is the honest
+executor-bridge constructor function-pointer reference. This is the honest
 RED boundary for the tagged frozen-witness redesign; no implementation claim
 is made from this run.
 
