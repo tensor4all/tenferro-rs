@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use tenferro_tensor::BackendSession;
+
 use crate::extension_cache::ExtensionCacheStore;
 
 /// Backend and cache state passed to one prepared extension execution.
@@ -39,23 +41,28 @@ use crate::extension_cache::ExtensionCacheStore;
 /// A session borrow cannot escape the call that supplied it.
 ///
 /// ```compile_fail
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 /// use tenferro_runtime::{ExtensionCacheStore, ExtensionExecutionContext};
-/// use tenferro_tensor::BackendSession;
+/// use tenferro_tensor::BackendSessionHost;
 ///
-/// fn leak_session<'session>(
-///     session: &'session mut dyn BackendSession,
-///     caches: &'session mut ExtensionCacheStore,
-/// ) -> &'static mut dyn BackendSession {
-///     let mut context = ExtensionExecutionContext::new(session, caches);
-///     context.backend_mut()
+/// fn leak_context<'a>(
+///     backend: &'a mut CpuBackend,
+///     caches: &'a mut ExtensionCacheStore,
+/// ) -> ExtensionExecutionContext<'a, CpuExecSession<'a>> {
+///     backend.with_backend_session(move |session| {
+///         with_cpu_exec_session(session, |cpu_session| {
+///             ExtensionExecutionContext::new(cpu_session, caches)
+///         })
+///         .unwrap()
+///     })
 /// }
 /// ```
-pub struct ExtensionExecutionContext<'a, B: ?Sized> {
+pub struct ExtensionExecutionContext<'a, B: BackendSession + ?Sized> {
     backend: &'a mut B,
     caches: &'a mut ExtensionCacheStore,
 }
 
-impl<B: ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
+impl<B: BackendSession + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionExecutionContext")
             .field("backend_type", &std::any::type_name::<B>())
@@ -64,7 +71,7 @@ impl<B: ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
     }
 }
 
-impl<'a, B: ?Sized> ExtensionExecutionContext<'a, B> {
+impl<'a, B: BackendSession + ?Sized> ExtensionExecutionContext<'a, B> {
     /// Build a context from externally-owned backend and cache state.
     pub fn new(backend: &'a mut B, caches: &'a mut ExtensionCacheStore) -> Self {
         Self { backend, caches }
