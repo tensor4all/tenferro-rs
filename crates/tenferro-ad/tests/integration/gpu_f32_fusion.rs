@@ -34,7 +34,7 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let result = sum.mul(&c).unwrap().materialized().unwrap();
 
     let result = ctx
-        .with_backend_mut(|backend| backend.download_to_host(result.as_ref()))
+        .with_execution_session(|session| session.download_to_host(result.as_ref()))
         .unwrap()
         .unwrap();
     let values = result

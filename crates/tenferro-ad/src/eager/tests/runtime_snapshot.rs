@@ -1,4 +1,3 @@
-use std::error::Error as StdError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -7,7 +6,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    Error as RuntimeError, ErrorPhase, ExecutionContextIdentity, HardwareClassId, IndexingRuntime,
+    Error as RuntimeError, ExecutionContextIdentity, HardwareClassId, IndexingRuntime,
     InputIngressContract, InputPlacementContract, InputSignatureContract, LayoutRuntime,
     ProviderDeviceIdentity, ProviderId, ReductionRuntime, ResidentOutputContract,
     RuntimeCacheOwner, RuntimeInputContract, StorageClass,
@@ -17,7 +16,7 @@ use tenferro_tensor::{BackendSession, ErrorKind, Tensor};
 use super::super::{
     plan_eager_registration, CpuPlacementBoundEager, EagerBackend, EagerBackendIdentity,
     EagerBackendRegistrationState, EagerEngineFamily, EagerRegistrationTarget, EagerRuntime,
-    InjectedRegistrationFailure, CPU_RUNTIME_SELECTION_REFRESHES,
+    CPU_RUNTIME_SELECTION_REFRESHES,
 };
 use crate::eager_backend::EagerRegistrationPlan;
 
@@ -53,6 +52,17 @@ fn assert_reconciliation_required(runtime: &EagerRuntime) {
             .expect("eager backend registration state"),
         EagerBackendRegistrationState::ReconciliationRequired
     ));
+}
+
+fn replace_backend_for_test(
+    runtime: &EagerRuntime,
+    replacement: EagerBackend,
+) -> crate::Result<()> {
+    {
+        let mut backend = runtime.lock_backend()?;
+        *backend = replacement;
+    }
+    runtime.lock_backend().map(|_| ())
 }
 
 #[derive(Debug, Default)]
@@ -280,7 +290,7 @@ fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
         .expect("CPU engine registered")
         .registration_identity();
 
-    runtime.with_backend_mut(|_| ()).unwrap();
+    runtime.with_execution_session(|_| ()).unwrap();
 
     let after = runtime.runtime.snapshot().unwrap();
     assert_eq!(after.epoch(), before_epoch);
@@ -304,7 +314,7 @@ fn unchanged_cpu_runtime_identity_avoids_registration_snapshot_and_reconfigure()
         .expect("CPU engine registered")
         .registration_identity();
 
-    runtime.with_backend_mut(|_| ()).unwrap();
+    runtime.with_execution_session(|_| ()).unwrap();
 
     let after = runtime.runtime.snapshot().unwrap();
     assert_eq!(registration_snapshot_reads(&runtime), 0);
@@ -331,7 +341,7 @@ fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     assert_ne!(after_extension_epoch, before_epoch);
 
     reset_registration_snapshot_reads(&runtime);
-    runtime.with_backend_mut(|_| ()).unwrap();
+    runtime.with_execution_session(|_| ()).unwrap();
 
     assert_eq!(registration_snapshot_reads(&runtime), 0);
     assert_eq!(
@@ -355,9 +365,7 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
     let before_registration = before_engine.registration_identity();
     let before_epoch = before.epoch();
 
-    runtime
-        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(replacement))
-        .unwrap();
+    replace_backend_for_test(&runtime, EagerBackend::Cpu(replacement)).unwrap();
 
     let after = runtime.runtime.snapshot().unwrap();
     let after_engine = after.engine(&engine_id).expect("CPU engine registered");
@@ -370,13 +378,8 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
 }
 
 #[test]
-fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
-    let backend = CpuBackend::new();
-    let replacement = backend
-        .clone()
-        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
-        .unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
+fn execution_session_cache_closure_error_preserves_cpu_registration() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let before = runtime.runtime.snapshot().unwrap();
     let before_engine = before
         .engine(&cpu_engine_id())
@@ -386,15 +389,14 @@ fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
     let before_epoch = before.epoch();
 
     let error = runtime
-        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
-            *backend = EagerBackend::Cpu(replacement);
+        .with_execution_session_and_extension_caches_mut::<()>(|_| {
             Err(tenferro_tensor::Error::BackendFailure {
-                op: "test_backend_cache_closure",
-                message: "primary closure failure".to_owned(),
+                op: "test_execution_session_cache_closure",
+                message: "session callback failure".to_owned(),
             })
         })
         .unwrap_err();
-    assert!(error.to_string().contains("primary closure failure"));
+    assert!(error.to_string().contains("session callback failure"));
 
     let after = runtime.runtime.snapshot().unwrap();
     let after_engine = after
@@ -404,8 +406,8 @@ fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
         after_engine.provider_device_identity(),
         &before_provider_device
     );
-    assert_ne!(after_engine.registration_identity(), before_registration);
-    assert_ne!(after.epoch(), before_epoch);
+    assert_eq!(after_engine.registration_identity(), before_registration);
+    assert_eq!(after.epoch(), before_epoch);
 }
 
 #[test]
@@ -413,11 +415,11 @@ fn backend_reconciliation_replaces_cpu_with_no_engine_and_back() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let materializations = Arc::new(AtomicUsize::new(0));
 
-    runtime
-        .with_backend_mut(|backend| {
-            *backend = EagerBackend::recording_cpu(Arc::clone(&materializations));
-        })
-        .unwrap();
+    replace_backend_for_test(
+        &runtime,
+        EagerBackend::recording_cpu(Arc::clone(&materializations)),
+    )
+    .unwrap();
     assert!(runtime
         .runtime
         .snapshot()
@@ -429,9 +431,7 @@ fn backend_reconciliation_replaces_cpu_with_no_engine_and_back() {
         EagerBackendRegistrationState::Synchronized(EagerBackendIdentity::NoEngine)
     ));
 
-    runtime
-        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(CpuBackend::new()))
-        .unwrap();
+    replace_backend_for_test(&runtime, EagerBackend::Cpu(CpuBackend::new())).unwrap();
     assert!(runtime
         .runtime
         .snapshot()
@@ -442,74 +442,6 @@ fn backend_reconciliation_replaces_cpu_with_no_engine_and_back() {
         runtime.eager_backend_registration_state_for_test().unwrap(),
         EagerBackendRegistrationState::Synchronized(EagerBackendIdentity::Cpu { .. })
     ));
-}
-
-#[test]
-fn failed_backend_mutation_preserves_primary_and_quarantines_registration() {
-    let backend = CpuBackend::new();
-    let replacement = backend
-        .clone()
-        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
-        .unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
-    let before = runtime.runtime.snapshot().unwrap();
-    let before_registration = before
-        .engine(&cpu_engine_id())
-        .expect("CPU engine registered")
-        .registration_identity();
-    runtime.inject_next_registration_failure_for_test().unwrap();
-
-    let error = runtime
-        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
-            *backend = EagerBackend::Cpu(replacement);
-            Err(tenferro_tensor::Error::BackendSource {
-                op: "test_backend_cache_closure",
-                source: Box::new(std::io::Error::other("primary closure source")),
-            })
-        })
-        .unwrap_err();
-
-    assert_reconciliation_required(&runtime);
-    assert_eq!(error.kind(), ErrorKind::BackendFailure);
-    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
-    assert!(matches!(error, RuntimeError::WithSuppressed { .. }));
-
-    let primary = error.primary().expect("primary closure error");
-    assert_eq!(primary.kind(), ErrorKind::BackendFailure);
-    assert_eq!(primary.phase(), Some(ErrorPhase::Execution));
-    let primary_source = StdError::source(primary).expect("typed primary source");
-    assert!(primary_source
-        .to_string()
-        .contains("primary closure source"));
-    assert_eq!(
-        StdError::source(&error)
-            .expect("aggregate delegates primary source")
-            .to_string(),
-        primary.to_string()
-    );
-
-    let suppressed = error
-        .suppressed()
-        .expect("suppressed synchronization error");
-    assert_eq!(suppressed.kind(), ErrorKind::RuntimeState);
-    assert_eq!(suppressed.phase(), Some(ErrorPhase::Execution));
-    assert!(matches!(
-        suppressed,
-        RuntimeError::RuntimeStateSource { .. }
-    ));
-    let suppressed_source = StdError::source(suppressed).expect("typed sync source");
-    assert!(suppressed_source
-        .downcast_ref::<InjectedRegistrationFailure>()
-        .is_some());
-
-    let after = runtime.runtime.snapshot().unwrap();
-    assert_eq!(
-        after
-            .engine(&cpu_engine_id())
-            .expect("CPU engine remains registered")
-            .registration_identity(),
-        before_registration
-    );
 }
 
 #[test]
@@ -524,12 +456,7 @@ fn registration_quarantine_blocks_use_until_retry_then_clears() {
     let runtime = EagerRuntime::with_cpu_backend(backend);
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
     runtime.inject_next_registration_failure_for_test().unwrap();
-    runtime
-        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
-            *backend = EagerBackend::Cpu(replacement);
-            Ok(())
-        })
-        .unwrap_err();
+    replace_backend_for_test(&runtime, EagerBackend::Cpu(replacement)).unwrap_err();
 
     runtime.inject_next_registration_failure_for_test().unwrap();
     let bound_session_calls = AtomicUsize::new(0);
@@ -546,7 +473,7 @@ fn registration_quarantine_blocks_use_until_retry_then_clears() {
     runtime.inject_next_registration_failure_for_test().unwrap();
     let closure_calls = AtomicUsize::new(0);
     let error = runtime
-        .with_backend_mut(|_| {
+        .with_execution_session(|_| {
             closure_calls.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap_err();
@@ -573,7 +500,7 @@ fn registration_quarantine_blocks_use_until_retry_then_clears() {
 
     let retry_calls = AtomicUsize::new(0);
     runtime
-        .with_backend_mut(|_| {
+        .with_execution_session(|_| {
             retry_calls.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap();

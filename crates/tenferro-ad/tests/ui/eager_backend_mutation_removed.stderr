@@ -1,0 +1,8 @@
+error[E0599]: no method named `with_backend_mut` found for struct `Arc<EagerRuntime>` in the current scope
+ --> tests/ui/eager_backend_mutation_removed.rs:8:10
+  |
+7 | /     runtime
+8 | |         .with_backend_mut(|backend| {
+  | |         -^^^^^^^^^^^^^^^^ method not found in `Arc<EagerRuntime>`
+  | |_________|
+  |

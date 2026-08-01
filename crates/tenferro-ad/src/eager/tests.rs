@@ -22,7 +22,7 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::Tensor;
 use tenferro_tensor::TypedTensorView;
-use tenferro_tensor::{BackendSessionHost, DType, DotGeneralConfig, TensorElementwise};
+use tenferro_tensor::{DType, DotGeneralConfig, TensorElementwise};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
 
@@ -81,6 +81,40 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
             ..
         }
     ));
+}
+
+#[test]
+fn eager_runtime_execution_session_runs_cpu_operation() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let output = runtime
+        .with_execution_session(|session| TensorElementwise::add(session, &lhs, &rhs))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
+fn eager_runtime_session_callback_is_excluded_when_reconciliation_fails() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    {
+        let mut backend = runtime.backend.lock().unwrap();
+        *backend = EagerBackend::Cpu(CpuBackend::new());
+    }
+    runtime.inject_next_registration_failure_for_test().unwrap();
+
+    let callback_calls = AtomicUsize::new(0);
+    let error = runtime
+        .with_execution_session(|_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap_err();
+
+    assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(error, Error::RuntimeStateSource { .. }));
 }
 
 #[test]
@@ -194,7 +228,7 @@ fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
 }
 
 #[test]
-fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
+fn eager_runtime_execution_session_reports_poisoned_backend_lock() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = ctx.backend.lock().unwrap();
@@ -202,7 +236,7 @@ fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
     }));
     assert!(poisoned.is_err());
 
-    let err = ctx.with_backend_mut(|_| ()).unwrap_err();
+    let err = ctx.with_execution_session(|_| ()).unwrap_err();
 
     assert_eq!(err.kind(), ErrorKind::RuntimeState);
     assert!(matches!(
@@ -406,7 +440,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
     assert!(!x_t.materialized_cache_is_initialized());
 
-    let outputs = crate::extension::apply_eager_with_extension_context(
+    let outputs = crate::extension::apply_eager_with_extension_session(
         Arc::new(ReadPathFallbackProbe),
         &[&x_t],
         ReadPathFallbackModule::module(),
@@ -414,13 +448,13 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
             op.as_any()
                 .downcast_ref::<ReadPathFallbackProbe>()
                 .expect("test op payload");
-            let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
-                inputs
-                    .iter()
-                    .cloned()
-                    .map(|input| exec.to_contiguous_read(input))
-                    .collect::<tenferro_tensor::Result<Vec<_>>>()
-            })?;
+            let backend = ctx.backend_mut();
+            let materialized_inputs = inputs
+                .iter()
+                .cloned()
+                .map(|input| TensorStructural::to_contiguous_read(backend, input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>();
+            let materialized_inputs = materialized_inputs?;
             let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
             Ok(vec![input_refs[0].clone()])
         },

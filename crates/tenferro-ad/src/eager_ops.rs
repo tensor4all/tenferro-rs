@@ -371,16 +371,16 @@ impl EagerTensor {
 
         if !self.requires_grad && !other.requires_grad {
             let ctx = Arc::clone(&self.ctx);
-            let output = ctx.with_backend_mut(|backend| {
-                exec_dot_general_with_conj_on_tensor_reads(
-                    self.tensor_read(),
-                    other.tensor_read(),
-                    &config,
-                    lhs_conj,
-                    rhs_conj,
-                    backend,
-                )
-            })??;
+            let mut backend = ctx.lock_backend()?;
+            let output = exec_dot_general_with_conj_on_tensor_reads(
+                self.tensor_read(),
+                other.tensor_read(),
+                &config,
+                lhs_conj,
+                rhs_conj,
+                &mut *backend,
+            )?;
+            drop(backend);
             return Self::new_untracked_result(ctx, output);
         }
 

@@ -6,23 +6,15 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use tenferro_ad::{CpuPlacementBoundEager, EagerBackend, EagerRuntime, EagerTensor};
-use tenferro_cpu::provider::{
-    CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
-};
+use tenferro_ad::{CpuPlacementBoundEager, EagerRuntime, EagerTensor};
 use tenferro_cpu::{
-    discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
-    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
-    CpuPlacementControl, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
-    CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
-    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    discover_cpu_topology, CpuBackend, CpuDomainExecutor, CpuDomainExecutorCapabilities,
+    CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown,
+    CpuInnerParallelism, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, ExternalCpuDomain,
+    NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{
-    BackendSessionHost, CpuDomainId, DotGeneralConfig, Error as TensorError, ErrorKind, Tensor,
-    TensorDot, TensorElementwise,
-};
+use tenferro_tensor::{CpuDomainId, ErrorKind, Tensor, TensorElementwise};
 
 #[derive(Debug, Default)]
 struct ExecutorCounters {
@@ -74,72 +66,8 @@ impl CpuDomainExecutor for CountingExecutor {
     }
 }
 
-#[derive(Debug)]
-struct MarkerGemmProvider {
-    marker: &'static str,
-    calls: Arc<AtomicUsize>,
-}
-
-impl MarkerGemmProvider {
-    fn fail(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
-        Err(TensorError::backend_failure(
-            "placement_bound_snapshot",
-            self.marker,
-        ))
-    }
-}
-
-impl CpuGemmProvider for MarkerGemmProvider {
-    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
-        CpuProviderExecutionCapabilities {
-            thread_count: CpuThreadCountControl::Sequential,
-            placement: CpuPlacementControl::CallingThread,
-            worker_local_sequential: true,
-            accepts_sequential: true,
-            accepts_outer: true,
-            accepts_inner: true,
-        }
-    }
-
-    fn gemm(
-        &self,
-        _context: &tenferro_cpu::CpuExecutionContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.fail()
-    }
-
-    fn strided_batched_gemm(
-        &self,
-        _context: &tenferro_cpu::CpuExecutionContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.fail()
-    }
-
-    fn grouped_gemm(
-        &self,
-        _context: &tenferro_cpu::CpuExecutionContext<'_>,
-        _request: CpuGroupedGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.fail()
-    }
-}
-
 fn placement() -> CpuPlacement {
     CpuPlacement::NumaNode(NumaNodeId::new(0))
-}
-
-fn marker_provider_bundle(
-    kind: CpuBackendKind,
-    marker: &'static str,
-    calls: Arc<AtomicUsize>,
-) -> CpuProviderBundle {
-    CpuProviderBundle::builder(kind)
-        .gemm_provider(Arc::new(MarkerGemmProvider { marker, calls }))
-        .build()
-        .unwrap()
 }
 
 fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
@@ -155,46 +83,13 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
         CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
-    let bundle = marker_provider_bundle(
-        CpuBackendKind::default_compiled(),
-        "external_backend default provider",
-        Arc::new(AtomicUsize::new(0)),
-    );
-    CpuBackend::from_external_managed_domains_with_provider_bundle(
-        CpuDomainId::new(41),
-        [domain],
-        bundle,
-    )
-    .unwrap()
-}
-
-fn with_marker_provider(
-    backend: CpuBackend,
-    marker: &'static str,
-    calls: Arc<AtomicUsize>,
-) -> CpuBackend {
-    let bundle = marker_provider_bundle(backend.kind(), marker, calls);
-    backend.with_provider_bundle(bundle).unwrap()
+    CpuBackend::from_external_managed_domains(CpuDomainId::new(41), [domain]).unwrap()
 }
 
 fn add_one(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad::Result<Tensor> {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     TensorElementwise::add(session, &lhs, &rhs).map_err(RuntimeError::from)
-}
-
-fn dot_error(session: &mut dyn tenferro_tensor::BackendSession) -> RuntimeError {
-    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-    TensorDot::dot_general(session, &lhs, &rhs, &config)
-        .map_err(RuntimeError::from)
-        .unwrap_err()
 }
 
 fn source_chain_contains<E: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
@@ -270,61 +165,6 @@ fn fallible_external_session_enters_each_core_operation_exactly_once() {
 
     assert_eq!(counters.installs.load(Ordering::Relaxed), 3);
     assert_eq!(counters.submits.load(Ordering::Relaxed), 0);
-}
-
-#[test]
-fn binding_snapshots_cpu_coordinator_and_provider_before_runtime_replacement() {
-    let old_executor = Arc::new(ExecutorCounters::default());
-    let new_executor = Arc::new(ExecutorCounters::default());
-    let old_provider_calls = Arc::new(AtomicUsize::new(0));
-    let new_provider_calls = Arc::new(AtomicUsize::new(0));
-    let old_backend = with_marker_provider(
-        external_backend(Arc::clone(&old_executor)),
-        "old provider snapshot",
-        Arc::clone(&old_provider_calls),
-    );
-    let runtime = EagerRuntime::with_cpu_backend(old_backend);
-    let mut cpu = runtime.on_cpu(placement()).unwrap();
-    let replacement = with_marker_provider(
-        external_backend(Arc::clone(&new_executor)),
-        "new provider snapshot",
-        Arc::clone(&new_provider_calls),
-    );
-    runtime
-        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(replacement))
-        .unwrap();
-
-    cpu.with_eager_session(add_one).unwrap();
-    let old_error = cpu
-        .with_eager_session::<()>(|session| Err(dot_error(session)))
-        .unwrap_err();
-    assert!(old_error.to_string().contains("old provider snapshot"));
-    assert_eq!(old_executor.installs.load(Ordering::Relaxed), 2);
-    assert_eq!(new_executor.installs.load(Ordering::Relaxed), 0);
-    assert_eq!(old_provider_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(new_provider_calls.load(Ordering::Relaxed), 0);
-
-    let new_error = runtime
-        .with_backend_mut(|backend| backend.with_backend_session(dot_error))
-        .unwrap();
-    assert!(new_error.to_string().contains("new provider snapshot"));
-    assert_eq!(new_provider_calls.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn binding_retains_selected_executor_owner_after_runtime_replacement() {
-    let old = Arc::new(ExecutorCounters::default());
-    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&old)));
-    let cpu = runtime.on_cpu(placement()).unwrap();
-    runtime
-        .with_backend_mut(|backend| {
-            *backend = EagerBackend::Cpu(external_backend(Arc::new(ExecutorCounters::default())))
-        })
-        .unwrap();
-
-    assert_eq!(old.drops.load(Ordering::Relaxed), 0);
-    drop(cpu);
-    assert_eq!(old.drops.load(Ordering::Relaxed), 1);
 }
 
 #[test]

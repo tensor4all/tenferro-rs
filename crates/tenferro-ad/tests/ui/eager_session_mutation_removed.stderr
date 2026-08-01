@@ -1,0 +1,77 @@
+error[E0308]: mismatched types
+ --> tests/ui/eager_session_mutation_removed.rs:8:16
+  |
+8 |     *session = CpuBackend::new();
+  |     --------   ^^^^^^^^^^^^^^^^^ expected `dyn BackendSession`, found `CpuBackend`
+  |     |
+  |     expected due to the type of this binding
+  |
+  = note: expected trait object `dyn BackendSession`
+                   found struct `CpuBackend`
+  = help: `CpuBackend` implements `BackendSession` so you could box the found value and coerce it to the trait object `Box<dyn BackendSession>`, you will have to change the expected type as well
+
+error[E0277]: the size for values of type `dyn BackendSession` cannot be known at compilation time
+ --> tests/ui/eager_session_mutation_removed.rs:8:5
+  |
+8 |     *session = CpuBackend::new();
+  |     ^^^^^^^^ doesn't have a size known at compile-time
+  |
+  = help: the trait `Sized` is not implemented for `dyn BackendSession`
+  = note: the left-hand-side of an assignment must have a statically known size
+
+error[E0277]: the trait bound `dyn BackendSession: AsMut<_>` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:12:48
+   |
+12 |     let owner: &mut CpuBackend = AsMut::as_mut(session);
+   |                                  ------------- ^^^^^^^ the trait `AsMut<_>` is not implemented for `dyn BackendSession`
+   |                                  |
+   |                                  required by a bound introduced by this call
+
+error[E0308]: mismatched types
+  --> tests/ui/eager_session_mutation_removed.rs:17:34
+   |
+17 |     let owner: &mut CpuBackend = BorrowMut::borrow_mut(session);
+   |                ---------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut CpuBackend`, found `&mut dyn BackendSession`
+   |                |
+   |                expected due to this
+   |
+   = note: expected mutable reference `&mut CpuBackend`
+              found mutable reference `&mut dyn BackendSession`
+   = help: `CpuBackend` implements `BackendSession` so you could change the expected type to `Box<dyn BackendSession>`
+
+error[E0277]: the trait bound `dyn BackendSession: DerefMut` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:22:54
+   |
+22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(session);
+   |                                  ------------------- ^^^^^^^ the trait `DerefMut` is not implemented for `dyn BackendSession`
+   |                                  |
+   |                                  required by a bound introduced by this call
+   |
+help: consider mutably borrowing here
+   |
+22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(&mut session);
+   |                                                      ++++
+
+error[E0277]: the trait bound `dyn BackendSession: Deref` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:22:34
+   |
+22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(session);
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Deref` is not implemented for `dyn BackendSession`
+
+error[E0599]: no method named `backend_mut` found for mutable reference `&mut dyn BackendSession` in the current scope
+  --> tests/ui/eager_session_mutation_removed.rs:27:42
+   |
+27 |     let owner: &mut CpuBackend = session.backend_mut();
+   |                                          ^^^^^^^^^^^ method not found in `&mut dyn BackendSession`
+
+error[E0599]: no method named `parts_mut` found for mutable reference `&mut dyn BackendSession` in the current scope
+  --> tests/ui/eager_session_mutation_removed.rs:32:30
+   |
+32 |     let (owner, _) = session.parts_mut();
+   |                              ^^^^^^^^^
+   |
+help: there is a method `rb_mut` with a similar name
+   |
+32 -     let (owner, _) = session.parts_mut();
+32 +     let (owner, _) = session.rb_mut();
+   |

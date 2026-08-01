@@ -1504,52 +1504,65 @@ impl EagerRuntime {
         Ok(f(&mut caches))
     }
 
-    /// Mutably borrow this runtime's backend.
+    /// Enter one backend execution session and run provider-neutral operations.
     ///
-    /// This hook lets standard extension crates run a whole contraction program
-    /// in a single backend session (instead of one eager op per step) while
-    /// preserving eager value semantics for untracked tensors.
+    /// The callback receives only a lifetime-bound, non-owning backend session.
+    /// Runtime registration is reconciled while the eager backend owner is
+    /// locked, before the callback is invoked.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// // The closure receives `&mut EagerBackend`; standard extension crates
-    /// // use it to open one backend session for a whole contraction program.
-    /// let answer = ctx.with_backend_mut(|_backend| 42).unwrap();
-    /// assert_eq!(answer, 42);
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let output = ctx.with_execution_session(|session| {
+    ///     TensorElementwise::add(session, &lhs, &rhs)
+    /// })??;
+    /// assert_eq!(output.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
-    /// lock is poisoned before the closure can run.
-    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
-        let mut backend = self.lock_backend()?;
-        let result = f(&mut backend);
-        self.synchronize_runtime_registration_for_backend(&backend)?;
-        Ok(result)
-    }
-
-    pub(crate) fn with_backend_and_extension_caches_mut<R>(
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend,
+    /// registration, or runtime lock is poisoned, or if registration
+    /// reconciliation fails before the callback can run. Backend operations
+    /// retain their typed tensor/backend errors inside the callback result.
+    pub fn with_execution_session<R: Send>(
         &self,
-        f: impl FnOnce(&mut EagerBackend, &mut ExtensionCacheStore) -> tenferro_tensor::Result<R>,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> Result<R> {
         let mut backend = self.lock_backend()?;
-        let mut extension_caches = self.lock_extension_caches()?;
-        let result = f(&mut backend, &mut extension_caches).map_err(Error::from);
-        let synchronization = self.synchronize_runtime_registration_for_backend(&backend);
-        match (result, synchronization) {
-            (Ok(result), Ok(())) => Ok(result),
-            (Err(primary), Ok(())) => Err(primary),
-            (Ok(_), Err(synchronization)) => Err(synchronization),
-            (Err(primary), Err(synchronization)) => {
-                Err(Error::with_suppressed(primary, synchronization))
-            }
-        }
+        Ok(backend.with_backend_session(f))
+    }
+
+    // Lock ordering: the eager backend owner is locked and registration is
+    // reconciled first; the extension-cache lock is acquired only after that
+    // gate and remains held through the borrowed session callback.
+    pub(crate) fn with_execution_session_and_extension_caches_mut<R: Send>(
+        &self,
+        f: impl FnOnce(
+                &mut tenferro_runtime::ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+            ) -> tenferro_tensor::Result<R>
+            + Send,
+    ) -> Result<R> {
+        let mut backend = self.lock_backend()?;
+        let mut extension_cache_guard = self.lock_extension_caches()?;
+        let mut extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+        Ok(backend
+            .with_backend_session(move |session| {
+                let mut extension_ctx = tenferro_runtime::ExtensionExecutionContext::new(
+                    session,
+                    &mut extension_caches,
+                );
+                f(&mut extension_ctx)
+            })
+            .map_err(Error::from)?)
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {

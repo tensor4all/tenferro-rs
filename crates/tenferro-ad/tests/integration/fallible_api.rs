@@ -113,31 +113,31 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 }
 
 #[test]
-fn eager_cpu_registration_cache_is_opaque_and_lock_ordered_source_contract() {
+fn eager_registration_cache_is_opaque_and_lock_ordered_source_contract() {
     let source = include_str!("../../src/eager.rs");
     assert!(
-        source.contains("registered_cpu_registration: Mutex<CpuRuntimeRegistrationState>"),
-        "eager runtime should cache typed CPU registration state"
+        source.contains("registered_eager_registration: Mutex<EagerBackendRegistrationState>"),
+        "eager runtime should cache typed provider-neutral registration state"
     );
     assert!(
-        source.contains("enum CpuRuntimeRegistrationState"),
-        "eager runtime should model CPU registration as an explicit sum state"
+        source.contains("enum EagerBackendRegistrationState"),
+        "eager runtime should model registration as an explicit sum state"
     );
     assert!(
-        source.contains("Present { identity: CpuRuntimeIdentity }"),
-        "present CPU registration state should retain the opaque CPU identity"
+        source.contains("Synchronized(EagerBackendIdentity)"),
+        "synchronized registration should retain the opaque backend identity"
     );
     assert!(
-        source.contains("Absent"),
-        "CPU registration state should represent an absent CPU engine explicitly"
+        source.contains("ReconciliationRequired"),
+        "registration state should represent quarantine explicitly"
     );
     assert!(
-        !source.contains("identity: Option<CpuRuntimeIdentity>"),
-        "CPU registration state must not encode absence through Option"
+        !source.contains("identity: Option<EagerBackendIdentity>"),
+        "registration state must not encode quarantine through Option"
     );
     assert!(
-        !source.contains("registered_cpu_backend: Mutex<Option<CpuBackend>>"),
-        "eager runtime must not cache a full CPU backend as identity"
+        !source.contains("registered_eager_backend: Mutex<Option<EagerBackend>>"),
+        "eager runtime must not cache a full backend as identity"
     );
 
     let synchronization = source
@@ -150,8 +150,8 @@ fn eager_cpu_registration_cache_is_opaque_and_lock_ordered_source_contract() {
         "CPU registration synchronization must document its lock ordering"
     );
     assert!(
-        synchronization.contains("lock_cpu_runtime_registration"),
-        "CPU registration synchronization must use the registration-state lock"
+        synchronization.contains("lock_eager_registration"),
+        "registration synchronization must use the registration-state lock"
     );
     assert!(
         !synchronization.contains("shares_runtime_identity_with"),
