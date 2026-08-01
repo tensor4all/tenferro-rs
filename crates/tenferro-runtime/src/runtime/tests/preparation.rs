@@ -16,9 +16,9 @@ use crate::runtime::{
     ExtensionPrepareRequest, HardwareClassId, InputSignature, InputSignatureEntry,
     InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
     PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
-    ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TransferEndpoint,
-    TransferProvider, TransferRequest,
+    ProviderContractError, ProviderDeviceIdentity, ProviderId, ResolvedProgramPlacement, Runtime,
+    RuntimeConfigBuilder, SpecializationProjection, SpecializationRequirements, StorageClass,
+    TransferEndpoint, TransferProvider, TransferRequest,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
@@ -318,6 +318,14 @@ fn storage_class(value: &str) -> StorageClass {
     StorageClass::new(value).expect("valid storage id")
 }
 
+fn provider_device_identity(value: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.preparation").expect("valid provider id"),
+        format!("engine:{value}"),
+    )
+    .expect("valid provider target")
+}
+
 fn layout_class(value: &str) -> LayoutClass {
     LayoutClass::new(value).expect("valid layout id")
 }
@@ -395,6 +403,7 @@ fn engine_registration(
     let signature_storage = storage.clone();
     EngineRegistration::new(
         engine_id(id),
+        provider_device_identity(id),
         ExecutionContextIdentity::of::<RecordingElementwise>(),
         hardware_id("tenferro.cpu.host"),
         Arc::from(vec![storage.clone()]),
@@ -579,6 +588,7 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
             ),
             EngineRegistration::new(
                 extension_engine_id.clone(),
+                provider_device_identity(extension_engine_id.as_str()),
                 ExecutionContextIdentity::of::<RecordingExtensionEngine>(),
                 hardware_id("tenferro.cpu.host"),
                 Arc::from(vec![storage.clone()]),
@@ -642,6 +652,7 @@ fn ineligible_engine_returns_before_prepared_cache_miss() {
     let frozen = two_input_add_program();
     let runtime = runtime_with_engines(vec![EngineRegistration::new(
         engine_id("tenferro.engine.empty"),
+        provider_device_identity("tenferro.engine.empty"),
         ExecutionContextIdentity::of::<()>(),
         hardware_id("tenferro.cpu.host"),
         Arc::from(vec![storage_class("tenferro.storage.host")]),

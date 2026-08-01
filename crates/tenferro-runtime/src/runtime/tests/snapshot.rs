@@ -38,6 +38,30 @@ fn storage(name: &str) -> StorageClass {
     StorageClass::new(name).expect("valid test storage class")
 }
 
+fn provider_target(target: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.provider").expect("valid provider id"),
+        target,
+    )
+    .expect("valid provider target")
+}
+
+fn registration_with_provider_target(
+    engine_name: &str,
+    target: &str,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let host = storage("tenferro.storage.host");
+    EngineRegistration::new(
+        engine_id(engine_name),
+        provider_target(target),
+        ExecutionContextIdentity::of::<TestContext>(),
+        hardware(),
+        Arc::from(vec![host.clone()]),
+        host,
+        capabilities(),
+    )
+}
+
 fn capabilities() -> CoreCapabilityBundle {
     let mut builder = CoreCapabilityBundle::builder();
     builder.elementwise(Arc::new(NoopElementwise));
@@ -51,6 +75,7 @@ fn registration(
     let host = storage("tenferro.storage.host");
     EngineRegistration::new(
         engine_id(engine_name),
+        provider_target(engine_name),
         ExecutionContextIdentity::of::<TestContext>(),
         hardware(),
         Arc::from(vec![host.clone()]),
@@ -63,6 +88,18 @@ fn runtime_with(engine_name: &str, candidate_nonce: u64) -> Result<Runtime, Runt
     let mut builder = Runtime::builder();
     builder.register_engine(registration(engine_name, candidate_nonce)?)?;
     builder.build()
+}
+
+#[derive(Debug)]
+struct UnusedTransferProvider;
+
+impl TransferProvider for UnusedTransferProvider {
+    fn transfer_blocking(
+        &self,
+        _request: TransferRequest<'_>,
+    ) -> crate::Result<tenferro_tensor::Tensor> {
+        Err(crate::Error::Internal("unused test transfer".into()))
+    }
 }
 
 fn single_identity(runtime: &Runtime, engine_name: &str) -> RegistrationIdentity {
@@ -78,6 +115,290 @@ fn single_identity(runtime: &Runtime, engine_name: &str) -> RegistrationIdentity
 fn engine_registration_has_no_implicit_event_domain_driver() {
     let registration = registration("tenferro.engine.no-event-driver", 1).unwrap();
     assert!(registration.event_domain_driver().is_none());
+}
+
+#[test]
+fn duplicate_provider_device_target_is_structured_and_does_not_insert_second_engine(
+) -> Result<(), Box<dyn StdError>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(registration_with_provider_target(
+        "tenferro.engine.target.first",
+        "device-0",
+    )?)?;
+    let error = builder
+        .register_engine(registration_with_provider_target(
+            "tenferro.engine.target.second",
+            "device-0",
+        )?)
+        .expect_err("duplicate physical target must be rejected");
+
+    assert!(matches!(
+        error,
+        RuntimeConfigError::DuplicateProviderDeviceTarget {
+            provider_device_identity,
+            first_engine_id,
+            duplicate_engine_id,
+        } if provider_device_identity == provider_target("device-0")
+            && first_engine_id == engine_id("tenferro.engine.target.first")
+            && duplicate_engine_id == engine_id("tenferro.engine.target.second")
+    ));
+    let runtime = builder.build()?;
+    assert_eq!(runtime.snapshot()?.engine_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn same_target_engine_replacement_is_allowed_and_exposes_binding() -> Result<(), Box<dyn StdError>>
+{
+    let runtime = {
+        let mut builder = Runtime::builder();
+        builder.register_engine(registration_with_provider_target(
+            "tenferro.engine.target.same",
+            "device-0",
+        )?)?;
+        builder.build()?
+    };
+    let before_epoch = runtime.epoch()?;
+
+    runtime.reconfigure(|edit| {
+        edit.replace_engine(registration_with_provider_target(
+            "tenferro.engine.target.same",
+            "device-0",
+        )?)?;
+        Ok(())
+    })?;
+
+    let snapshot = runtime.snapshot()?;
+    assert!(snapshot.epoch() > before_epoch);
+    assert_eq!(
+        snapshot
+            .engine(&engine_id("tenferro.engine.target.same"))
+            .unwrap()
+            .provider_device_identity(),
+        &provider_target("device-0")
+    );
+    Ok(())
+}
+
+#[test]
+fn direct_target_replacement_is_rejected_before_mutation() -> Result<(), Box<dyn StdError>> {
+    let runtime = {
+        let mut builder = Runtime::builder();
+        builder.register_engine(registration_with_provider_target(
+            "tenferro.engine.target.rebind",
+            "device-0",
+        )?)?;
+        builder.build()?
+    };
+    let before = runtime.snapshot()?;
+    let before_epoch = before.epoch();
+
+    let error = runtime
+        .reconfigure(|edit| {
+            edit.replace_engine(registration_with_provider_target(
+                "tenferro.engine.target.rebind",
+                "device-1",
+            )?)?;
+            Ok(())
+        })
+        .expect_err("direct target rebind must require explicit route transaction");
+    let diagnostic = match &error {
+        RuntimeReconfigureError::Edit { source } => source.to_string(),
+        other => panic!("unexpected reconfiguration error: {other:?}"),
+    };
+    assert!(diagnostic.contains("remove affected transfer routes"));
+    assert!(diagnostic.contains("remove the old engine"));
+    assert!(diagnostic.contains("register the replacement under the engine ID"));
+    assert!(diagnostic.contains("re-register the routes"));
+
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::EngineTargetRebind {
+                engine_id,
+                current,
+                replacement,
+            }
+        } if engine_id.as_str() == "tenferro.engine.target.rebind"
+            && current == provider_target("device-0")
+            && replacement == provider_target("device-1")
+    ));
+    let after = runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(after.epoch(), before_epoch);
+    assert_eq!(
+        after
+            .engine(&engine_id("tenferro.engine.target.rebind"))
+            .unwrap()
+            .provider_device_identity(),
+        &provider_target("device-0")
+    );
+    Ok(())
+}
+
+#[test]
+fn stale_route_rejects_target_rebind_and_explicit_route_rebind_succeeds(
+) -> Result<(), Box<dyn StdError>> {
+    let source_id = engine_id("tenferro.engine.route.source");
+    let destination_id = engine_id("tenferro.engine.route.destination");
+    let storage = storage("tenferro.storage.host");
+    let source_endpoint = TransferEndpoint::new(source_id.clone(), storage.clone());
+    let destination_endpoint = TransferEndpoint::new(destination_id.clone(), storage.clone());
+    let provider = Arc::new(UnusedTransferProvider);
+    let runtime = {
+        let mut builder = Runtime::builder();
+        builder.register_engine(registration_with_provider_target(
+            source_id.as_str(),
+            "device-0",
+        )?)?;
+        builder.register_engine(registration_with_provider_target(
+            destination_id.as_str(),
+            "host-0",
+        )?)?;
+        builder.register_transfer_provider(
+            source_endpoint.clone(),
+            destination_endpoint.clone(),
+            Arc::clone(&provider) as Arc<dyn TransferProvider>,
+        )?;
+        builder.build()?
+    };
+    let before = runtime.snapshot()?;
+
+    let stale_error = runtime
+        .reconfigure(|edit| {
+            edit.register_transfer_provider(
+                source_endpoint.clone(),
+                destination_endpoint.clone(),
+                Arc::clone(&provider) as Arc<dyn TransferProvider>,
+            )?;
+            edit.remove_engine(&source_id)?;
+            edit.register_engine(registration_with_provider_target(
+                source_id.as_str(),
+                "device-1",
+            )?)?;
+            Ok(())
+        })
+        .expect_err("retaining a route across a target change must be stale");
+    assert!(matches!(
+        stale_error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::StaleTransferRoute {
+                source_endpoint: actual_source,
+                destination,
+                endpoint,
+                registered,
+                current,
+            }
+        } if actual_source == source_endpoint
+            && destination == destination_endpoint
+            && endpoint == source_endpoint
+            && registered.as_ref() == &provider_target("device-0")
+            && current.as_ref() == &provider_target("device-1")
+    ));
+    let after_failure = runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after_failure));
+    assert_eq!(after_failure.transfer_provider_count(), 1);
+
+    runtime.reconfigure(|edit| {
+        edit.remove_transfer_provider(source_endpoint.clone(), destination_endpoint.clone())?;
+        edit.remove_engine(&source_id)?;
+        edit.register_engine(registration_with_provider_target(
+            source_id.as_str(),
+            "device-1",
+        )?)?;
+        edit.register_transfer_provider(
+            source_endpoint,
+            destination_endpoint,
+            Arc::clone(&provider) as Arc<dyn TransferProvider>,
+        )?;
+        Ok(())
+    })?;
+    let rebound = runtime.snapshot()?;
+    assert_eq!(rebound.transfer_provider_count(), 1);
+    assert_eq!(
+        rebound
+            .engine(&engine_id("tenferro.engine.route.source"))
+            .unwrap()
+            .provider_device_identity(),
+        &provider_target("device-1")
+    );
+    Ok(())
+}
+
+#[test]
+fn route_registration_is_independent_of_engine_registration_order() -> Result<(), Box<dyn StdError>>
+{
+    let source_id = engine_id("tenferro.engine.order.source");
+    let destination_id = engine_id("tenferro.engine.order.destination");
+    let storage = storage("tenferro.storage.host");
+    let provider: Arc<dyn TransferProvider> = Arc::new(UnusedTransferProvider);
+    let mut builder = Runtime::builder();
+    builder.register_transfer_provider(
+        TransferEndpoint::new(source_id.clone(), storage.clone()),
+        TransferEndpoint::new(destination_id.clone(), storage.clone()),
+        provider,
+    )?;
+    builder.register_engine(registration_with_provider_target(
+        destination_id.as_str(),
+        "host-0",
+    )?)?;
+    builder.register_engine(registration_with_provider_target(
+        source_id.as_str(),
+        "device-0",
+    )?)?;
+
+    assert_eq!(builder.build()?.snapshot()?.transfer_provider_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn new_route_binding_ignores_pre_freeze_engine_edits() -> Result<(), Box<dyn StdError>> {
+    let source_id = engine_id("tenferro.engine.pre-freeze.source");
+    let destination_id = engine_id("tenferro.engine.pre-freeze.destination");
+    let storage = storage("tenferro.storage.host");
+    let source_endpoint = TransferEndpoint::new(source_id.clone(), storage.clone());
+    let destination_endpoint = TransferEndpoint::new(destination_id.clone(), storage.clone());
+    let provider: Arc<dyn TransferProvider> = Arc::new(UnusedTransferProvider);
+    let mut builder = Runtime::builder();
+
+    builder.register_engine(registration_with_provider_target(
+        source_id.as_str(),
+        "device-before",
+    )?)?;
+    builder.register_engine(registration_with_provider_target(
+        destination_id.as_str(),
+        "host-before",
+    )?)?;
+    builder.register_transfer_provider(
+        source_endpoint.clone(),
+        destination_endpoint.clone(),
+        provider,
+    )?;
+    builder.remove_engine(&source_id)?;
+    builder.remove_engine(&destination_id)?;
+    builder.register_engine(registration_with_provider_target(
+        source_id.as_str(),
+        "device-after",
+    )?)?;
+    builder.register_engine(registration_with_provider_target(
+        destination_id.as_str(),
+        "host-after",
+    )?)?;
+
+    let snapshot = builder.build()?.snapshot()?;
+    let routes: Vec<_> = snapshot.transfer_routes_for_test().collect();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].source().logical(), &source_endpoint);
+    assert_eq!(routes[0].destination().logical(), &destination_endpoint);
+    assert_eq!(
+        routes[0].source().provider_device_identity(),
+        &provider_target("device-after")
+    );
+    assert_eq!(
+        routes[0].destination().provider_device_identity(),
+        &provider_target("host-after")
+    );
+    Ok(())
 }
 
 #[test]
@@ -180,6 +501,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 
     let empty = EngineRegistration::new(
         engine.clone(),
+        provider_target("validation-empty"),
         ExecutionContextIdentity::of::<TestContext>(),
         hardware(),
         Arc::from(Vec::<StorageClass>::new()),
@@ -194,6 +516,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 
     let duplicate = EngineRegistration::new(
         engine.clone(),
+        provider_target("validation-duplicate"),
         ExecutionContextIdentity::of::<TestContext>(),
         hardware(),
         Arc::from(vec![default.clone(), default.clone()]),
@@ -213,6 +536,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 
     let missing_default = EngineRegistration::new(
         engine.clone(),
+        provider_target("validation-default"),
         ExecutionContextIdentity::of::<TestContext>(),
         hardware(),
         Arc::from(vec![storage("tenferro.storage.device")]),

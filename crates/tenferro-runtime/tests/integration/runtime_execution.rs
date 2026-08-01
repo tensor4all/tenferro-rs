@@ -22,10 +22,10 @@ use tenferro_runtime::{
     ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
     IndexingRuntime, InputIngressContractError, LayoutRuntime, PrepareCapability, PrepareError,
     PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ReductionRuntime, RegistrationKey, Runtime, RuntimeCacheOwner, RuntimeConfigError,
-    RuntimeReconfigureError, SpecializationProjection, StorageClass, TracedTensor,
-    TransferEndpoint, TransferError, TransferProvider, TransferProviderContractError,
-    TransferRequest,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, Runtime,
+    RuntimeCacheOwner, RuntimeConfigError, RuntimeReconfigureError, SpecializationProjection,
+    StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -42,6 +42,15 @@ const ROUTE_HOST_CUDA0_FAMILY: &str = "tenferro-test.route-host-cuda0.v1";
 const ROUTE_HOST_CUDA1_FAMILY: &str = "tenferro-test.route-host-cuda1.v1";
 const ROUTE_CUDA0_HOST_FAMILY: &str = "tenferro-test.route-cuda0-host.v1";
 const ROUTE_CUDA1_HOST_FAMILY: &str = "tenferro-test.route-cuda1-host.v1";
+
+fn test_provider_device_identity(
+    engine_id: &str,
+) -> Result<ProviderDeviceIdentity, RuntimeConfigError> {
+    Ok(ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
+        format!("test-engine:{engine_id}"),
+    )?)
+}
 
 #[derive(Debug)]
 struct RecordingEventToken {
@@ -182,6 +191,7 @@ fn cpu_registration(
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
     EngineRegistration::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
+        test_provider_device_identity(CPU_ENGINE_ID)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
@@ -392,9 +402,11 @@ struct RecordingTransferProvider {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RecordedTransferRequest {
     source_engine_id: EngineId,
+    source_provider_device_identity: ProviderDeviceIdentity,
     source_event_domain_id: EventDomainId,
     source_storage_class: StorageClass,
     destination_engine_id: EngineId,
+    destination_provider_device_identity: ProviderDeviceIdentity,
     destination_event_domain_id: EventDomainId,
     destination_storage_class: StorageClass,
 }
@@ -449,9 +461,13 @@ impl TransferProvider for RecordingTransferProvider {
             .expect("request lock")
             .push(RecordedTransferRequest {
                 source_engine_id: request.source_engine_id().clone(),
+                source_provider_device_identity: request.source_provider_device_identity().clone(),
                 source_event_domain_id: request.source_event_domain_id(),
                 source_storage_class: request.source_storage_class().clone(),
                 destination_engine_id: request.destination_engine_id().clone(),
+                destination_provider_device_identity: request
+                    .destination_provider_device_identity()
+                    .clone(),
                 destination_event_domain_id: request.destination_event_domain_id(),
                 destination_storage_class: request.destination_storage_class().clone(),
             });
@@ -983,6 +999,7 @@ fn cpu_registration_with_id_and_driver(
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        test_provider_device_identity(engine_id)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
@@ -1041,6 +1058,25 @@ fn cpu_registration_with_storage_id(
     include_core_capabilities: bool,
     include_execution_bridge: bool,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    let target = format!("test-engine:{engine_id}");
+    cpu_registration_with_storage_id_for_target(
+        backend,
+        engine_id,
+        storage_id,
+        include_core_capabilities,
+        include_execution_bridge,
+        &target,
+    )
+}
+
+fn cpu_registration_with_storage_id_for_target(
+    backend: &CpuBackend,
+    engine_id: &str,
+    storage_id: &str,
+    include_core_capabilities: bool,
+    include_execution_bridge: bool,
+    target: &str,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let mut capabilities = CoreCapabilityBundle::builder();
     if include_core_capabilities {
@@ -1060,6 +1096,10 @@ fn cpu_registration_with_storage_id(
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
+            target,
+        )?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
@@ -1117,6 +1157,7 @@ fn cpu_registration_with_storage_classes(
     let backend = Arc::new(backend.clone());
     EngineRegistration::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        test_provider_device_identity(engine_id)?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(storage_classes),
@@ -1174,6 +1215,7 @@ fn transfer_endpoint(
 struct PublishedRouteFixture {
     runtime: Runtime,
     source_domain: AllocationDomainId,
+    destination_backend: CpuBackend,
     source_endpoint: TransferEndpoint,
     destination_endpoint: TransferEndpoint,
     provider: Arc<RecordingTransferProvider>,
@@ -1233,6 +1275,7 @@ fn published_route_fixture(
     Ok(PublishedRouteFixture {
         runtime: builder.build()?,
         source_domain,
+        destination_backend,
         source_endpoint,
         destination_endpoint,
         provider,
@@ -1241,6 +1284,18 @@ fn published_route_fixture(
 }
 
 fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dyn StdError>> {
+    let source_identity =
+        test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
+    let destination_identity =
+        test_provider_device_identity(fixture.destination_endpoint.engine_id().as_str())?;
+    execute_published_route_with_targets(fixture, &source_identity, &destination_identity)
+}
+
+fn execute_published_route_with_targets(
+    fixture: &PublishedRouteFixture,
+    expected_source_identity: &ProviderDeviceIdentity,
+    expected_destination_identity: &ProviderDeviceIdentity,
+) -> Result<(), Box<dyn StdError>> {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
@@ -1278,8 +1333,16 @@ fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dy
         fixture.source_endpoint.engine_id()
     );
     assert_eq!(
+        &requests[0].source_provider_device_identity,
+        expected_source_identity
+    );
+    assert_eq!(
         &requests[0].destination_engine_id,
         fixture.destination_endpoint.engine_id()
+    );
+    assert_eq!(
+        &requests[0].destination_provider_device_identity,
+        expected_destination_identity
     );
     assert_eq!(
         &requests[0].source_storage_class,
@@ -1790,11 +1853,59 @@ fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_k
 }
 
 #[test]
+fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
+) -> Result<(), Box<dyn StdError>> {
+    let affected_engine_id = EngineId::new("tenferro-test.engine.rebind-execution.v1")?;
+    let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let fixture = published_route_fixture(affected_engine_id.clone(), route_storage)?;
+    let source_identity =
+        test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
+    let replacement_identity =
+        ProviderDeviceIdentity::new(ProviderId::new("tenferro.test.cpu")?, "test-rebound-target")?;
+    let replacement = cpu_registration_with_storage_id_for_target(
+        &fixture.destination_backend,
+        affected_engine_id.as_str(),
+        fixture.destination_endpoint.storage_class().as_str(),
+        false,
+        true,
+        replacement_identity.target_identity(),
+    )?;
+
+    fixture.runtime.reconfigure(|edit| {
+        edit.remove_transfer_provider(
+            fixture.source_endpoint.clone(),
+            fixture.destination_endpoint.clone(),
+        )?;
+        edit.remove_engine(&affected_engine_id)?;
+        edit.register_engine(replacement)?;
+        edit.register_transfer_provider(
+            fixture.source_endpoint.clone(),
+            fixture.destination_endpoint.clone(),
+            Arc::clone(&fixture.provider) as Arc<dyn TransferProvider>,
+        )?;
+        Ok(())
+    })?;
+
+    execute_published_route_with_targets(&fixture, &source_identity, &replacement_identity)?;
+    let requests = fixture.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].destination_provider_device_identity,
+        replacement_identity
+    );
+    Ok(())
+}
+
+#[test]
 fn execution_bridge_registration_requires_explicit_ingress_contract(
 ) -> Result<(), Box<dyn StdError>> {
     let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
     let registration = EngineRegistration::new(
         EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cpu")?,
+            "test-engine:tenferro-test.engine.missing-ingress.v1",
+        )?,
         ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new("tenferro-test.hardware.missing-ingress.v1")?,
         Arc::from(vec![storage.clone()]),
@@ -2744,9 +2855,13 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(core_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: storage.clone(),
             destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                extension_engine_id
+            )?,
             destination_event_domain_id: destination_event_domain,
             destination_storage_class: storage,
         }]
@@ -3032,9 +3147,13 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(core_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: source_storage,
             destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                extension_engine_id
+            )?,
             destination_event_domain_id: destination_event_domain,
             destination_storage_class: destination_storage,
         }]
@@ -3161,9 +3280,13 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(ingress_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(ingress_engine_id)?,
             source_event_domain_id: ingress_event_domain,
             source_storage_class: ingress_storage,
             destination_engine_id: EngineId::new(consumer_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                consumer_engine_id
+            )?,
             destination_event_domain_id: consumer_event_domain,
             destination_storage_class: consumer_storage,
         }]

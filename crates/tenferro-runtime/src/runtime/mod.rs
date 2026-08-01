@@ -43,8 +43,8 @@ pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{
-    EngineId, ExecutionContextIdentity, HardwareClassId, RegistrationIdentity, RuntimeEpoch,
-    RuntimeId,
+    EngineId, ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId,
+    RegistrationIdentity, RuntimeEpoch, RuntimeId,
 };
 pub use policy::{
     CacheInFlightBehavior, Determinism, ExecutionPolicy, LayoutClass, PrepareOptions,
@@ -63,7 +63,9 @@ pub use specialization::{
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
 };
-pub(crate) use transfer::TransferRoute;
+pub(crate) use transfer::{
+    FrozenTransferRegistry, ResolvedTransferEndpoint, ResolvedTransferRoute, TransferRoute,
+};
 pub use transfer::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };

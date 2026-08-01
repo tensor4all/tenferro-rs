@@ -317,7 +317,9 @@ fn binding_retains_selected_executor_owner_after_runtime_replacement() {
     let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&old)));
     let cpu = runtime.on_cpu(placement()).unwrap();
     runtime
-        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(CpuBackend::new()))
+        .with_backend_mut(|backend| {
+            *backend = EagerBackend::Cpu(external_backend(Arc::new(ExecutorCounters::default())))
+        })
         .unwrap();
 
     assert_eq!(old.drops.load(Ordering::Relaxed), 0);

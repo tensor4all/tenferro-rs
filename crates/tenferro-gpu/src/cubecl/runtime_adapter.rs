@@ -10,8 +10,8 @@ use tenferro_runtime::{
     IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
-    ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
+    ProviderId, ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     UnsupportedReason,
 };
@@ -81,8 +81,13 @@ pub fn cuda_runtime_engine_registration(
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let device_ordinal = backend.runtime().device_ordinal();
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.cuda")?,
+        format!("device:{device_ordinal}"),
+    )?;
     EngineRegistration::new(
         cuda_runtime_engine_id()?,
+        provider_device_identity,
         ExecutionContextIdentity::of::<CudaBackend>(),
         cuda_runtime_hardware_class()?,
         Arc::from(vec![storage.clone()]),

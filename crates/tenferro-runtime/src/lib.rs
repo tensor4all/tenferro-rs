@@ -87,14 +87,14 @@ pub use runtime::{
     PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
     PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan,
     PreparedPlanCacheLimits, PreparedPlanCacheStats, ProgramPlacementConstraint,
-    ProviderContractError, RankRequirement, ReductionPrepareRequest, ReductionRuntime,
-    RegistrationIdentity, RegistrationKey, ResolvedPlanningConfig, ResolvedPlanningKey,
-    ResolvedProgramPlacement, Runtime, RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats,
-    RuntimeConfigBuilder, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId,
-    RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, SubmissionError,
-    TransferEndpoint, TransferError, TransferProvider, TransferProviderContractError,
-    TransferRequest, UnsupportedReason,
+    ProviderContractError, ProviderDeviceIdentity, ProviderId, RankRequirement,
+    ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity, RegistrationKey,
+    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
+    RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats, RuntimeConfigBuilder,
+    RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeReconfiguration,
+    RuntimeReconfigureError, RuntimeStateError, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, SubmissionError, TransferEndpoint, TransferError,
+    TransferProvider, TransferProviderContractError, TransferRequest, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;

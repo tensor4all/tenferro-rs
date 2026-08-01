@@ -1,16 +1,65 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use super::super::schedule::{
     EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
-    ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer, TransferReachability,
+    ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer,
 };
-use super::super::{EngineId, StorageClass, TransferRoute};
+use super::super::{
+    EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, ResolvedTransferRoute,
+    StorageClass, TransferProvider, TransferRequest,
+};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::DType;
 
 fn location(engine: &str, domain: u32, storage: &str) -> ExecutionLocation {
     ExecutionLocation::new(
         EngineId::new(engine).expect("engine id"),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.schedule").expect("provider id"),
+            format!("target:{engine}"),
+        )
+        .expect("provider target"),
         EventDomainId::runtime_created_for_test(domain),
         StorageClass::new(storage).expect("storage class"),
+    )
+}
+
+#[derive(Debug)]
+struct TestTransferProvider;
+
+impl TransferProvider for TestTransferProvider {
+    fn transfer_blocking(
+        &self,
+        _request: TransferRequest<'_>,
+    ) -> crate::Result<tenferro_tensor::Tensor> {
+        Err(crate::Error::Internal("schedule test transfer".into()))
+    }
+}
+
+fn test_identity(target: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.schedule").expect("provider id"),
+        target,
+    )
+    .expect("provider target")
+}
+
+fn registry(routes: &[(&ExecutionLocation, &ExecutionLocation)]) -> FrozenTransferRegistry {
+    let provider: Arc<dyn TransferProvider> = Arc::new(TestTransferProvider);
+    FrozenTransferRegistry::new(
+        routes
+            .iter()
+            .map(|(source, destination)| {
+                (
+                    ResolvedTransferRoute::new(
+                        source.resolved_endpoint().clone(),
+                        destination.resolved_endpoint().clone(),
+                    ),
+                    Arc::clone(&provider),
+                )
+            })
+            .collect::<BTreeMap<_, _>>(),
     )
 }
 
@@ -61,10 +110,7 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
         source.clone(),
         std::slice::from_ref(&source),
         &[source.clone(), destination.clone(), source.clone()],
-        &TransferReachability::from([TransferRoute::new(
-            source.endpoint().clone(),
-            destination.endpoint().clone(),
-        )]),
+        &registry(&[(&source, &destination)]),
     )
     .expect("schedule");
 
@@ -134,10 +180,7 @@ fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
         first.clone(),
         std::slice::from_ref(&first),
         &[first.clone(), reachable.clone(), destination.clone()],
-        &TransferReachability::from([
-            TransferRoute::new(first.endpoint().clone(), reachable.endpoint().clone()),
-            TransferRoute::new(reachable.endpoint().clone(), destination.endpoint().clone()),
-        ]),
+        &registry(&[(&first, &reachable), (&reachable, &destination)]),
     )
     .expect("schedule");
     let transfers = graph.transfers_for_test().collect::<Vec<_>>();
@@ -180,7 +223,7 @@ fn operation_dependencies_follow_input_order_and_are_deduplicated() {
         execution.clone(),
         std::slice::from_ref(&execution),
         &[execution.clone(), execution.clone(), execution.clone()],
-        &TransferReachability::new(),
+        &FrozenTransferRegistry::new(BTreeMap::new()),
     )
     .expect("schedule");
     let ScheduledNode::Operation(operation) = &graph.nodes_for_test()[2] else {
@@ -233,8 +276,14 @@ fn schedule_validation_rejects_dependency_without_prior_completion() {
 fn schedule_validation_rejects_duplicate_completion_identity() {
     let domain = EventDomainId::runtime_created_for_test(1);
     let graph = ScheduledGraph::for_test(vec![
-        ScheduledNode::Operation(ScheduledOperation::for_test(domain)),
-        ScheduledNode::Operation(ScheduledOperation::for_test(domain)),
+        ScheduledNode::Operation(ScheduledOperation::for_test(
+            domain,
+            test_identity("duplicate-first"),
+        )),
+        ScheduledNode::Operation(ScheduledOperation::for_test(
+            domain,
+            test_identity("duplicate-second"),
+        )),
     ]);
 
     assert!(matches!(
@@ -262,7 +311,7 @@ fn retained_bytes_include_operation_dependencies() {
         execution.clone(),
         std::slice::from_ref(&execution),
         &[execution.clone(), execution.clone()],
-        &TransferReachability::new(),
+        &FrozenTransferRegistry::new(BTreeMap::new()),
     )
     .expect("schedule");
     let expected = std::mem::size_of::<ScheduledGraph>()
@@ -280,7 +329,12 @@ fn retained_bytes_include_operation_dependencies() {
 fn transfer_node_bridges_distinct_event_domains() {
     let source = EventDomainId::runtime_created_for_test(1);
     let destination = EventDomainId::runtime_created_for_test(2);
-    let transfer = ScheduledTransfer::for_test(source, destination);
+    let transfer = ScheduledTransfer::for_test(
+        source,
+        destination,
+        test_identity("transfer-source"),
+        test_identity("transfer-destination"),
+    );
 
     assert_ne!(
         transfer.source_event_domain(),
@@ -310,8 +364,16 @@ fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() 
     let source = EventDomainId::runtime_created_for_test(7);
     let destination = EventDomainId::runtime_created_for_test(8);
     let graph = ScheduledGraph::for_test(vec![
-        ScheduledNode::Operation(ScheduledOperation::for_test(source)),
-        ScheduledNode::Transfer(ScheduledTransfer::for_test(source, destination)),
+        ScheduledNode::Operation(ScheduledOperation::for_test(
+            source,
+            test_identity("mock-source"),
+        )),
+        ScheduledNode::Transfer(ScheduledTransfer::for_test(
+            source,
+            destination,
+            test_identity("mock-source"),
+            test_identity("mock-destination"),
+        )),
         ScheduledNode::Operation(ScheduledOperation::new(
             1,
             location(

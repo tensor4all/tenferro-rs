@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,10 +22,12 @@ use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResul
 use super::schedule::EventDomainId;
 use super::{
     CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
-    ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
-    InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
-    RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
-    RuntimeStateError, StorageClass, TransferEndpoint, TransferProvider, TransferRoute,
+    ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    FrozenTransferRegistry, HardwareClassId, InputSignature, PrepareOptions,
+    ProviderDeviceIdentity, RegistrationIdentity, RegistrationKey, ResolvedTransferEndpoint,
+    ResolvedTransferRoute, RuntimeCacheError, RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch,
+    RuntimeId, RuntimeReconfigureError, RuntimeStateError, StorageClass, TransferEndpoint,
+    TransferProvider, TransferRoute,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -38,11 +40,33 @@ struct CandidateEngineRecord {
 }
 
 #[derive(Clone, Debug)]
+enum CandidateTransferBinding {
+    /// A route registered before its complete candidate can be validated.
+    New,
+    /// A route carried forward from a frozen snapshot.
+    Preserved {
+        source: ProviderDeviceIdentity,
+        destination: ProviderDeviceIdentity,
+    },
+    /// A new or preserved route bound by complete-candidate validation.
+    Bound {
+        source: ProviderDeviceIdentity,
+        destination: ProviderDeviceIdentity,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct CandidateTransferRecord {
+    provider: Arc<dyn TransferProvider>,
+    binding: CandidateTransferBinding,
+}
+
+#[derive(Clone, Debug)]
 struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
     modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
-    transfers: BTreeMap<TransferRoute, Arc<dyn TransferProvider>>,
+    transfers: BTreeMap<TransferRoute, CandidateTransferRecord>,
 }
 
 impl CandidateConfig {
@@ -73,7 +97,28 @@ impl CandidateConfig {
             policy: snapshot.policy.clone(),
             engines,
             modules: snapshot.extensions.to_candidate_modules(),
-            transfers: snapshot.transfers.as_ref().clone(),
+            transfers: snapshot
+                .transfers
+                .iter()
+                .map(|(resolved_route, provider)| {
+                    (
+                        TransferRoute::new(
+                            resolved_route.source().logical().clone(),
+                            resolved_route.destination().logical().clone(),
+                        ),
+                        CandidateTransferRecord {
+                            provider: Arc::clone(provider),
+                            binding: CandidateTransferBinding::Preserved {
+                                source: resolved_route.source().provider_device_identity().clone(),
+                                destination: resolved_route
+                                    .destination()
+                                    .provider_device_identity()
+                                    .clone(),
+                            },
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -123,7 +168,7 @@ pub struct RuntimeConfigSnapshot {
     engines: Arc<[FrozenEngineSlot]>,
     engine_indices: BTreeMap<EngineId, usize>,
     extensions: FrozenExtensionSlots,
-    transfers: Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>>,
+    transfers: FrozenTransferRegistry,
     cache_owners: Arc<[FrozenCacheOwner]>,
 }
 
@@ -180,6 +225,11 @@ impl RuntimeConfigSnapshot {
             .map(|slot| slot.registration.engine_id())
     }
 
+    #[cfg(test)]
+    pub(crate) fn transfer_routes_for_test(&self) -> impl Iterator<Item = &ResolvedTransferRoute> {
+        self.transfers.iter().map(|(route, _)| route)
+    }
+
     pub(super) fn engine_views_for_preparation(
         &self,
     ) -> impl Iterator<Item = EngineSnapshotView<'_>> + '_ {
@@ -194,14 +244,12 @@ impl RuntimeConfigSnapshot {
         self.extensions.slot_for_preparation(family_id, engine_id)
     }
 
-    pub(super) fn transfers_for_execution(
-        &self,
-    ) -> Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>> {
-        Arc::clone(&self.transfers)
+    pub(super) fn transfer_registry_for_execution(&self) -> FrozenTransferRegistry {
+        self.transfers.clone()
     }
 
-    pub(super) fn transfer_reachability_for_preparation(&self) -> BTreeSet<TransferRoute> {
-        self.transfers.keys().cloned().collect()
+    pub(super) fn transfer_registry_for_preparation(&self) -> FrozenTransferRegistry {
+        self.transfers.clone()
     }
 
     #[cfg(test)]
@@ -673,7 +721,7 @@ impl Runtime {
         if !changed {
             return Ok(base.epoch());
         }
-        validate_candidate(&candidate)
+        validate_candidate(&mut candidate)
             .map_err(|source| RuntimeReconfigureError::Edit { source })?;
 
         let next_epoch =
@@ -900,6 +948,10 @@ impl RuntimeConfigBuilder {
     /// let destination_id = EngineId::new("example.engine.destination")?;
     /// let source = EngineRegistration::new(
     ///     source_id.clone(),
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.provider")?,
+    ///         "source-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.hardware")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -908,6 +960,10 @@ impl RuntimeConfigBuilder {
     /// )?;
     /// let destination = EngineRegistration::new(
     ///     destination_id.clone(),
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.provider")?,
+    ///         "destination-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.hardware")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -947,6 +1003,26 @@ impl RuntimeConfigBuilder {
             provider,
             &mut changed,
         )?;
+        Ok(self)
+    }
+
+    /// Remove the transfer provider for an endpoint pair.
+    ///
+    /// This explicit removal is required before changing an engine's physical
+    /// binding. The route can then be registered again against the replacement
+    /// binding in the same candidate transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::MissingTransferProvider`] when the exact
+    /// endpoint pair is not registered.
+    pub fn remove_transfer_provider(
+        &mut self,
+        source: TransferEndpoint,
+        destination: TransferEndpoint,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let mut changed = false;
+        remove_transfer_provider_candidate(&mut self.candidate, source, destination, &mut changed)?;
         Ok(self)
     }
 
@@ -990,7 +1066,7 @@ impl RuntimeConfigBuilder {
     /// [`RuntimeConfigError::UnsupportedTransferEndpointStorage`] if a
     /// registered transfer endpoint is invalid for the complete candidate.
     pub fn build(mut self) -> Result<Runtime, RuntimeConfigError> {
-        validate_candidate(&self.candidate)?;
+        validate_candidate(&mut self.candidate)?;
         let runtime_id = RuntimeId::from_nonzero(allocate_nonzero(&NEXT_RUNTIME_ID)?);
         let issuer = allocate_nonzero(&NEXT_REGISTRATION_ISSUER)?;
         let post_ordinal = assign_initial_identities(&mut self.candidate, issuer)?;
@@ -1124,6 +1200,10 @@ impl RuntimeReconfiguration<'_> {
     /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
     ///     Ok(EngineRegistration::new(
     ///         EngineId::new(id)?,
+    ///         tenferro_runtime::ProviderDeviceIdentity::new(
+    ///             tenferro_runtime::ProviderId::new("example.provider")?,
+    ///             format!("engine:{id}"),
+    ///         )?,
     ///         ExecutionContextIdentity::of::<()>(),
     ///         HardwareClassId::new("example.hardware")?,
     ///         Arc::from(vec![storage.clone()]),
@@ -1170,6 +1250,22 @@ impl RuntimeReconfiguration<'_> {
             provider,
             self.changed,
         )?;
+        Ok(self)
+    }
+
+    /// Remove the transfer provider for an endpoint pair in this
+    /// reconfiguration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::MissingTransferProvider`] when the exact
+    /// endpoint pair is not registered.
+    pub fn remove_transfer_provider(
+        &mut self,
+        source: TransferEndpoint,
+        destination: TransferEndpoint,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        remove_transfer_provider_candidate(self.candidate, source, destination, self.changed)?;
         Ok(self)
     }
 
@@ -1234,6 +1330,19 @@ impl<'a> EngineSnapshotView<'a> {
     /// Return the engine ID for this slot.
     pub fn engine_id(&self) -> &'a EngineId {
         self.slot.registration.engine_id()
+    }
+
+    /// Return the immutable provider/device binding for this engine slot.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn inspect(view: tenferro_runtime::EngineSnapshotView<'_>) {
+    /// let _ = view.provider_device_identity();
+    /// # }
+    /// ```
+    pub fn provider_device_identity(&self) -> &'a super::ProviderDeviceIdentity {
+        self.slot.registration.provider_device_identity()
     }
 
     /// Return the runtime-local registration identity for this slot.
@@ -1353,6 +1462,7 @@ fn register_engine_candidate(
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
         Some(_) => Err(RuntimeConfigError::DuplicateEngine { engine_id }),
         None => {
+            ensure_unique_provider_device_target(candidate, &registration)?;
             candidate.engines.insert(
                 engine_id,
                 CandidateEngineRecord {
@@ -1373,18 +1483,29 @@ fn replace_engine_candidate(
 ) -> Result<(), RuntimeConfigError> {
     validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
-    match candidate.engines.get_mut(&engine_id) {
-        Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
-        Some(existing) => {
-            *existing = CandidateEngineRecord {
-                registration,
-                identity: None,
-            };
-            *changed = true;
-            Ok(())
-        }
-        None => Err(RuntimeConfigError::MissingEngine { engine_id }),
+    let Some(existing) = candidate.engines.get(&engine_id) else {
+        return Err(RuntimeConfigError::MissingEngine { engine_id });
+    };
+    if existing.registration.candidate_identical(&registration) {
+        return Ok(());
     }
+    if existing.registration.provider_device_identity() != registration.provider_device_identity() {
+        return Err(RuntimeConfigError::EngineTargetRebind {
+            engine_id,
+            current: existing.registration.provider_device_identity().clone(),
+            replacement: registration.provider_device_identity().clone(),
+        });
+    }
+    ensure_unique_provider_device_target_except(candidate, &registration, &engine_id)?;
+    candidate.engines.insert(
+        engine_id,
+        CandidateEngineRecord {
+            registration,
+            identity: None,
+        },
+    );
+    *changed = true;
+    Ok(())
 }
 
 fn remove_engine_candidate(
@@ -1462,7 +1583,7 @@ fn register_transfer_provider_candidate(
 ) -> Result<(), RuntimeConfigError> {
     let key = TransferRoute::new(source, destination);
     match candidate.transfers.get(&key) {
-        Some(existing) if Arc::ptr_eq(existing, &provider) => Ok(()),
+        Some(existing) if Arc::ptr_eq(&existing.provider, &provider) => Ok(()),
         Some(_) => Err(RuntimeConfigError::ConflictingRegistration {
             key: RegistrationKey::TransferProvider {
                 source: key.source().clone(),
@@ -1470,20 +1591,117 @@ fn register_transfer_provider_candidate(
             },
         }),
         None => {
-            candidate.transfers.insert(key, provider);
+            candidate.transfers.insert(
+                key,
+                CandidateTransferRecord {
+                    provider,
+                    binding: CandidateTransferBinding::New,
+                },
+            );
             *changed = true;
             Ok(())
         }
     }
 }
 
-fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigError> {
+fn remove_transfer_provider_candidate(
+    candidate: &mut CandidateConfig,
+    source: TransferEndpoint,
+    destination: TransferEndpoint,
+    changed: &mut bool,
+) -> Result<(), RuntimeConfigError> {
+    let key = TransferRoute::new(source, destination);
+    if candidate.transfers.remove(&key).is_none() {
+        return Err(RuntimeConfigError::MissingTransferProvider {
+            source_endpoint: key.source().clone(),
+            destination: key.destination().clone(),
+        });
+    }
+    *changed = true;
+    Ok(())
+}
+
+fn ensure_unique_provider_device_target(
+    candidate: &CandidateConfig,
+    registration: &EngineRegistration,
+) -> Result<(), RuntimeConfigError> {
+    ensure_unique_provider_device_target_except(candidate, registration, registration.engine_id())
+}
+
+fn ensure_unique_provider_device_target_except(
+    candidate: &CandidateConfig,
+    registration: &EngineRegistration,
+    ignored_engine_id: &EngineId,
+) -> Result<(), RuntimeConfigError> {
+    if let Some((first_engine_id, _)) = candidate.engines.iter().find(|(engine_id, record)| {
+        *engine_id != ignored_engine_id
+            && record.registration.provider_device_identity()
+                == registration.provider_device_identity()
+    }) {
+        return Err(RuntimeConfigError::DuplicateProviderDeviceTarget {
+            provider_device_identity: registration.provider_device_identity().clone(),
+            first_engine_id: first_engine_id.clone(),
+            duplicate_engine_id: registration.engine_id().clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_candidate(candidate: &mut CandidateConfig) -> Result<(), RuntimeConfigError> {
     for record in candidate.engines.values() {
         validate_engine_execution_contract(&record.registration)?;
     }
-    for route in candidate.transfers.keys() {
-        validate_transfer_endpoint(candidate, route.source())?;
-        validate_transfer_endpoint(candidate, route.destination())?;
+
+    let mut seen_targets = BTreeMap::<ProviderDeviceIdentity, EngineId>::new();
+    for (engine_id, record) in &candidate.engines {
+        if let Some(first_engine_id) = seen_targets.insert(
+            record.registration.provider_device_identity().clone(),
+            engine_id.clone(),
+        ) {
+            return Err(RuntimeConfigError::DuplicateProviderDeviceTarget {
+                provider_device_identity: record.registration.provider_device_identity().clone(),
+                first_engine_id,
+                duplicate_engine_id: engine_id.clone(),
+            });
+        }
+    }
+
+    let mut bindings_to_set = Vec::new();
+    for (route, record) in &candidate.transfers {
+        let source_binding = validate_transfer_endpoint(candidate, route.source())?;
+        let destination_binding = validate_transfer_endpoint(candidate, route.destination())?;
+        let preserved = match &record.binding {
+            CandidateTransferBinding::New => None,
+            CandidateTransferBinding::Preserved {
+                source,
+                destination,
+            }
+            | CandidateTransferBinding::Bound {
+                source,
+                destination,
+            } => Some((source, destination)),
+        };
+        if let Some((registered_source, registered_destination)) = preserved {
+            if registered_source != &source_binding {
+                return Err(RuntimeConfigError::StaleTransferRoute {
+                    source_endpoint: route.source().clone(),
+                    destination: route.destination().clone(),
+                    endpoint: route.source().clone(),
+                    registered: Box::new(registered_source.clone()),
+                    current: Box::new(source_binding.clone()),
+                });
+            }
+            if registered_destination != &destination_binding {
+                return Err(RuntimeConfigError::StaleTransferRoute {
+                    source_endpoint: route.source().clone(),
+                    destination: route.destination().clone(),
+                    endpoint: route.destination().clone(),
+                    registered: Box::new(registered_destination.clone()),
+                    current: Box::new(destination_binding.clone()),
+                });
+            }
+        }
+        bindings_to_set.push((route.clone(), source_binding, destination_binding));
     }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
@@ -1504,13 +1722,22 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
             }
         }
     }
+
+    for (route, source_binding, destination_binding) in bindings_to_set {
+        if let Some(record) = candidate.transfers.get_mut(&route) {
+            record.binding = CandidateTransferBinding::Bound {
+                source: source_binding,
+                destination: destination_binding,
+            };
+        }
+    }
     Ok(())
 }
 
 fn validate_transfer_endpoint(
     candidate: &CandidateConfig,
     endpoint: &TransferEndpoint,
-) -> Result<(), RuntimeConfigError> {
+) -> Result<ProviderDeviceIdentity, RuntimeConfigError> {
     let Some(engine) = candidate.engines.get(endpoint.engine_id()) else {
         return Err(RuntimeConfigError::UnknownTransferEndpointEngine {
             endpoint: endpoint.clone(),
@@ -1525,7 +1752,7 @@ fn validate_transfer_endpoint(
             endpoint: endpoint.clone(),
         });
     }
-    Ok(())
+    Ok(engine.registration.provider_device_identity().clone())
 }
 
 fn validate_engine_execution_contract(
@@ -1589,6 +1816,7 @@ fn freeze_candidate(
 ) -> Result<RuntimeConfigSnapshot, RuntimeConfigError> {
     let mut engines = Vec::with_capacity(candidate.engines.len());
     let mut engine_indices = BTreeMap::new();
+    let mut engine_locations = BTreeMap::new();
     let mut cache_owners = Vec::new();
     for (index, (engine_id, record)) in candidate.engines.into_iter().enumerate() {
         let identity = record
@@ -1610,11 +1838,17 @@ fn freeze_candidate(
                 owner: execution::extension_cache_owner(executor),
             });
         }
+        let provider_device_identity = record.registration.provider_device_identity().clone();
+        let event_domain_id = EventDomainId::runtime_allocated(event_domain_index);
+        engine_locations.insert(
+            engine_id.clone(),
+            (provider_device_identity, event_domain_id),
+        );
         engine_indices.insert(engine_id, index);
         engines.push(FrozenEngineSlot {
             registration: record.registration,
             identity,
-            event_domain_id: EventDomainId::runtime_allocated(event_domain_index),
+            event_domain_id,
         });
     }
     let extensions = freeze_extension_slots(candidate.modules)?;
@@ -1625,6 +1859,62 @@ fn freeze_candidate(
             owner,
         });
     }
+    let mut transfers = BTreeMap::new();
+    for (route, record) in candidate.transfers {
+        let (source_binding, destination_binding) = match record.binding {
+            CandidateTransferBinding::Bound {
+                source,
+                destination,
+            } => (source, destination),
+            CandidateTransferBinding::New | CandidateTransferBinding::Preserved { .. } => {
+                return Err(RuntimeConfigError::UnboundTransferRoute {
+                    source_endpoint: route.source().clone(),
+                    destination: route.destination().clone(),
+                });
+            }
+        };
+        let (source_current, source_event_domain_id) = engine_locations
+            .get(route.source().engine_id())
+            .ok_or_else(|| RuntimeConfigError::UnknownTransferEndpointEngine {
+                endpoint: route.source().clone(),
+            })?;
+        let (destination_current, destination_event_domain_id) = engine_locations
+            .get(route.destination().engine_id())
+            .ok_or_else(|| RuntimeConfigError::UnknownTransferEndpointEngine {
+                endpoint: route.destination().clone(),
+            })?;
+        if &source_binding != source_current {
+            return Err(RuntimeConfigError::StaleTransferRoute {
+                source_endpoint: route.source().clone(),
+                destination: route.destination().clone(),
+                endpoint: route.source().clone(),
+                registered: Box::new(source_binding),
+                current: Box::new(source_current.clone()),
+            });
+        }
+        if &destination_binding != destination_current {
+            return Err(RuntimeConfigError::StaleTransferRoute {
+                source_endpoint: route.source().clone(),
+                destination: route.destination().clone(),
+                endpoint: route.destination().clone(),
+                registered: Box::new(destination_binding),
+                current: Box::new(destination_current.clone()),
+            });
+        }
+        let resolved_route = ResolvedTransferRoute::new(
+            ResolvedTransferEndpoint::new(
+                route.source().clone(),
+                source_binding,
+                *source_event_domain_id,
+            ),
+            ResolvedTransferEndpoint::new(
+                route.destination().clone(),
+                destination_binding,
+                *destination_event_domain_id,
+            ),
+        );
+        transfers.insert(resolved_route, record.provider);
+    }
     Ok(RuntimeConfigSnapshot {
         runtime_id,
         epoch,
@@ -1632,7 +1922,7 @@ fn freeze_candidate(
         engines: engines.into(),
         engine_indices,
         extensions,
-        transfers: Arc::new(candidate.transfers),
+        transfers: FrozenTransferRegistry::new(transfers),
         cache_owners: cache_owners.into(),
     })
 }
@@ -1657,4 +1947,118 @@ fn allocate_nonzero(counter: &AtomicU64) -> Result<NonZeroU64, RuntimeConfigErro
         })
         .map_err(|_| RuntimeConfigError::IdentityExhausted)?;
     NonZeroU64::new(value).ok_or(RuntimeConfigError::IdentityExhausted)
+}
+
+#[cfg(test)]
+mod freeze_tests {
+    use crate::{ProviderId, TransferRequest};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct FreezeTestContext;
+
+    #[derive(Debug)]
+    struct FreezeTestProvider;
+
+    impl TransferProvider for FreezeTestProvider {
+        fn transfer_blocking(
+            &self,
+            _request: TransferRequest<'_>,
+        ) -> crate::Result<tenferro_tensor::Tensor> {
+            Err(crate::Error::Internal("freeze test provider".into()))
+        }
+    }
+
+    fn registration(
+        engine_id: &str,
+        target: &str,
+    ) -> Result<EngineRegistration, RuntimeConfigError> {
+        let engine_id = EngineId::new(engine_id).map_err(RuntimeConfigError::from)?;
+        let storage =
+            StorageClass::new("tenferro.test.freeze.storage").map_err(RuntimeConfigError::from)?;
+        EngineRegistration::new(
+            engine_id,
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.freeze.provider")
+                    .map_err(RuntimeConfigError::from)?,
+                target,
+            )
+            .map_err(RuntimeConfigError::from)?,
+            ExecutionContextIdentity::of::<FreezeTestContext>(),
+            HardwareClassId::new("tenferro.test.freeze.hardware")
+                .map_err(RuntimeConfigError::from)?,
+            Arc::from(vec![storage.clone()]),
+            storage,
+            CoreCapabilityBundle::default(),
+        )
+    }
+
+    fn candidate(binding: CandidateTransferBinding) -> Result<CandidateConfig, RuntimeConfigError> {
+        let source_id =
+            EngineId::new("tenferro.test.freeze.source").map_err(RuntimeConfigError::from)?;
+        let destination_id =
+            EngineId::new("tenferro.test.freeze.destination").map_err(RuntimeConfigError::from)?;
+        let storage =
+            StorageClass::new("tenferro.test.freeze.storage").map_err(RuntimeConfigError::from)?;
+        let source_endpoint = TransferEndpoint::new(source_id.clone(), storage.clone());
+        let destination_endpoint = TransferEndpoint::new(destination_id.clone(), storage);
+        let mut candidate = CandidateConfig::empty();
+        let mut changed = false;
+        register_engine_candidate(
+            &mut candidate,
+            registration(source_id.as_str(), "freeze-source")?,
+            &mut changed,
+        )?;
+        register_engine_candidate(
+            &mut candidate,
+            registration(destination_id.as_str(), "freeze-destination")?,
+            &mut changed,
+        )?;
+        register_transfer_provider_candidate(
+            &mut candidate,
+            source_endpoint.clone(),
+            destination_endpoint.clone(),
+            Arc::new(FreezeTestProvider),
+            &mut changed,
+        )?;
+        candidate
+            .transfers
+            .get_mut(&TransferRoute::new(source_endpoint, destination_endpoint))
+            .expect("registered route")
+            .binding = binding;
+        assign_initial_identities(&mut candidate, NonZeroU64::new(1).unwrap())?;
+        Ok(candidate)
+    }
+
+    #[test]
+    fn freeze_rejects_new_and_preserved_route_bindings_without_validation() {
+        let bindings = [
+            CandidateTransferBinding::New,
+            CandidateTransferBinding::Preserved {
+                source: ProviderDeviceIdentity::new(
+                    ProviderId::new("tenferro.test.freeze.provider").unwrap(),
+                    "freeze-source",
+                )
+                .unwrap(),
+                destination: ProviderDeviceIdentity::new(
+                    ProviderId::new("tenferro.test.freeze.provider").unwrap(),
+                    "freeze-destination",
+                )
+                .unwrap(),
+            },
+        ];
+        for binding in bindings {
+            let error = freeze_candidate(
+                RuntimeId::from_nonzero(NonZeroU64::new(1).unwrap()),
+                RuntimeEpoch::one(),
+                candidate(binding).unwrap(),
+            )
+            .expect_err("freeze must require validation-produced Bound state");
+            assert!(matches!(
+                error,
+                RuntimeConfigError::UnboundTransferRoute { .. }
+            ));
+        }
+    }
 }

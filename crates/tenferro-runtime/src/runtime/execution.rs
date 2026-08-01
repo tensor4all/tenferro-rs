@@ -3,7 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -24,9 +24,10 @@ use crate::runtime::schedule::{
     EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
 };
 use crate::runtime::{
-    CacheOwnerError, CacheStats, EventDomainRun, EventToken, InputSignature, PrepareError,
-    PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, SubmissionError,
-    TransferError, TransferProvider, TransferProviderContractError, TransferRequest, TransferRoute,
+    CacheOwnerError, CacheStats, EventDomainRun, EventToken, FrozenTransferRegistry,
+    InputSignature, PrepareError, PrepareOptions, PreparedOperationPlan, ResolvedTransferRoute,
+    Runtime, RuntimeCacheOwner, SubmissionError, TransferError, TransferProviderContractError,
+    TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -706,7 +707,7 @@ struct PreparedExecutionEngines {
     root_location: ExecutionLocation,
     input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
-    transfers: Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>>,
+    transfers: FrozenTransferRegistry,
 }
 
 #[derive(Debug)]
@@ -890,6 +891,7 @@ fn execution_engines(
     })?;
     let root_location = ExecutionLocation::new(
         root.engine_id().clone(),
+        root_engine.provider_device_identity().clone(),
         root_engine.event_domain_id(),
         storage_class.clone(),
     );
@@ -954,12 +956,13 @@ fn execution_engines(
             executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
             location: ExecutionLocation::new(
                 engine_id.clone(),
+                engine.provider_device_identity().clone(),
                 engine.event_domain_id(),
                 placement.storage_class().clone(),
             ),
         });
     }
-    let transfers = snapshot.transfers_for_execution();
+    let transfers = snapshot.transfer_registry_for_execution();
     Ok(PreparedExecutionEngines {
         snapshot,
         root: root_executor,
@@ -1503,9 +1506,9 @@ fn execute_scheduled_transfer<'input>(
     let destination = transfer.destination_location();
     let provider = execution
         .transfers
-        .get(&TransferRoute::new(
-            source.endpoint().clone(),
-            destination.endpoint().clone(),
+        .get(&ResolvedTransferRoute::new(
+            source.resolved_endpoint().clone(),
+            destination.resolved_endpoint().clone(),
         ))
         .ok_or_else(|| {
             Error::runtime_state_source(

@@ -1161,8 +1161,14 @@ fn owner(
 
 fn engine_with_owner(id: &str, owner: Arc<dyn RuntimeCacheOwner>) -> EngineRegistration {
     let storage = StorageClass::new("tenferro.storage.host").unwrap();
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.cache").unwrap(),
+        format!("engine:{id}"),
+    )
+    .unwrap();
     EngineRegistration::new(
         EngineId::new(id).unwrap(),
+        provider_device_identity,
         ExecutionContextIdentity::of::<()>(),
         HardwareClassId::new("tenferro.hardware.host").unwrap(),
         Arc::from(vec![storage.clone()]),

@@ -19,10 +19,18 @@ use crate::runtime::execution::{
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, PreparedOperationPlan, Runtime, RuntimeConfigError,
-    StorageClass, SubmissionError,
+    ExecutionContextIdentity, HardwareClassId, PreparedOperationPlan, ProviderDeviceIdentity,
+    ProviderId, Runtime, RuntimeConfigError, StorageClass, SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
+
+fn test_provider_device_identity(target: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.execution").expect("provider id"),
+        target,
+    )
+    .expect("provider target")
+}
 
 #[derive(Debug)]
 struct ForeignProbeBuffer {
@@ -190,6 +198,11 @@ fn admission_test_registration(
     let engine_id = EngineId::new("tenferro-test.admission-engine.v1")?;
     let mut registration = EngineRegistration::new(
         engine_id,
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.admission").expect("provider id"),
+            "admission-engine",
+        )
+        .expect("provider target"),
         ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
         HardwareClassId::new("tenferro-test.admission-hardware.v1")?,
         Arc::from(vec![storage.clone()]),
@@ -319,11 +332,13 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
 {
     let root_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-root")?,
+        test_provider_device_identity("output-root"),
         EventDomainId::runtime_created_for_test(1),
         StorageClass::new("tenferro-test.output-root-storage")?,
     );
     let output_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-nonroot")?,
+        test_provider_device_identity("output-nonroot"),
         EventDomainId::runtime_created_for_test(2),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
@@ -368,6 +383,7 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
 fn result_retention_preserves_output_that_reuses_last_input_slot() {
     let location = ExecutionLocation::new(
         EngineId::new("tenferro-test.same-slot-engine").expect("engine id"),
+        test_provider_device_identity("same-slot"),
         EventDomainId::runtime_created_for_test(1),
         StorageClass::new("tenferro-test.same-slot-storage").expect("storage class"),
     );

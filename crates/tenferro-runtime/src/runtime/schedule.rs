@@ -3,21 +3,23 @@
 //! This representation remains crate-private. Later phases attach native
 //! GPU/XLA dispatch and asynchronous completion to the same node families.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 #[cfg(test)]
 use std::error::Error as StdError;
 #[cfg(test)]
 use std::fmt;
 
-use super::TransferRoute;
+use super::{FrozenTransferRegistry, ResolvedTransferEndpoint, ResolvedTransferRoute};
 use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
 use crate::{EngineId, Error, StorageClass, TransferEndpoint};
 
-pub(crate) type TransferReachability = BTreeSet<TransferRoute>;
-
 /// Opaque runtime event-domain identifier.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+///
+/// A0.1 threads the current snapshot-local slot representation through
+/// resolved transfer endpoints. Full event provenance and native token
+/// bridging remain pending for A0.2.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EventDomainId(u32);
 
 impl EventDomainId {
@@ -33,42 +35,57 @@ impl EventDomainId {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ExecutionLocation {
-    endpoint: TransferEndpoint,
-    event_domain_id: EventDomainId,
+    resolved_endpoint: ResolvedTransferEndpoint,
 }
 
 impl ExecutionLocation {
     pub(crate) fn new(
         engine_id: EngineId,
+        provider_device_identity: super::ProviderDeviceIdentity,
         event_domain_id: EventDomainId,
         storage_class: StorageClass,
     ) -> Self {
         Self {
-            endpoint: TransferEndpoint::new(engine_id, storage_class),
-            event_domain_id,
+            resolved_endpoint: ResolvedTransferEndpoint::new(
+                TransferEndpoint::new(engine_id, storage_class),
+                provider_device_identity,
+                event_domain_id,
+            ),
         }
     }
 
     pub(crate) fn engine_id(&self) -> &EngineId {
-        self.endpoint.engine_id()
+        self.resolved_endpoint.logical().engine_id()
     }
 
     pub(crate) fn endpoint(&self) -> &TransferEndpoint {
-        &self.endpoint
+        self.resolved_endpoint.logical()
     }
 
     pub(crate) fn event_domain_id(&self) -> EventDomainId {
-        self.event_domain_id
+        self.resolved_endpoint.event_domain_id()
+    }
+
+    pub(crate) fn provider_device_identity(&self) -> &super::ProviderDeviceIdentity {
+        self.resolved_endpoint.provider_device_identity()
+    }
+
+    pub(crate) fn resolved_endpoint(&self) -> &ResolvedTransferEndpoint {
+        &self.resolved_endpoint
     }
 
     pub(crate) fn storage_class(&self) -> &StorageClass {
-        self.endpoint.storage_class()
+        self.resolved_endpoint.logical().storage_class()
     }
 
     #[cfg(test)]
-    fn for_test(domain: EventDomainId) -> Self {
+    fn for_test(
+        domain: EventDomainId,
+        provider_device_identity: super::ProviderDeviceIdentity,
+    ) -> Self {
         Self::new(
             EngineId::new("tenferro-test.schedule-engine").expect("test engine id"),
+            provider_device_identity,
             domain,
             StorageClass::new("tenferro-test.schedule-storage").expect("test storage class"),
         )
@@ -160,10 +177,13 @@ impl ScheduledOperation {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(domain: EventDomainId) -> Self {
+    pub(crate) fn for_test(
+        domain: EventDomainId,
+        provider_device_identity: super::ProviderDeviceIdentity,
+    ) -> Self {
         Self::new(
             0,
-            ExecutionLocation::for_test(domain),
+            ExecutionLocation::for_test(domain, provider_device_identity),
             [],
             [],
             [],
@@ -232,9 +252,15 @@ impl ScheduledTransfer {
     pub(crate) fn for_test(
         source_event_domain: EventDomainId,
         destination_event_domain: EventDomainId,
+        source_provider_device_identity: super::ProviderDeviceIdentity,
+        destination_provider_device_identity: super::ProviderDeviceIdentity,
     ) -> Self {
-        let source_location = ExecutionLocation::for_test(source_event_domain);
-        let destination_location = ExecutionLocation::for_test(destination_event_domain);
+        let source_location =
+            ExecutionLocation::for_test(source_event_domain, source_provider_device_identity);
+        let destination_location = ExecutionLocation::for_test(
+            destination_event_domain,
+            destination_provider_device_identity,
+        );
         Self::new(
             0,
             source_location,
@@ -404,7 +430,7 @@ impl ScheduledGraph {
         root_location: ExecutionLocation,
         input_locations: &[ExecutionLocation],
         operation_locations: &[ExecutionLocation],
-        transfer_reachability: &TransferReachability,
+        transfer_registry: &FrozenTransferRegistry,
     ) -> Result<Self, ScheduleBuildError> {
         let mut nodes = Vec::with_capacity(program.instructions.len());
         let mut available = vec![Vec::<AvailableValue>::new(); program.n_slots];
@@ -453,9 +479,9 @@ impl ScheduledGraph {
                 let source = values
                     .iter()
                     .find(|value| {
-                        transfer_reachability.contains(&TransferRoute::new(
-                            value.location.endpoint().clone(),
-                            location.endpoint().clone(),
+                        transfer_registry.contains(&ResolvedTransferRoute::new(
+                            value.location.resolved_endpoint().clone(),
+                            location.resolved_endpoint().clone(),
                         ))
                     })
                     .cloned()

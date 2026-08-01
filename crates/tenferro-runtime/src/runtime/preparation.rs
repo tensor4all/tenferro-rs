@@ -22,21 +22,19 @@ use super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedValue, RuntimeCacheSet, SharedRetention,
 };
 use super::extension::ExtensionFamilyId;
-use super::schedule::{
-    ExecutionLocation, ScheduleBuildError, ScheduledGraph, TransferReachability,
-};
+use super::schedule::{ExecutionLocation, ScheduleBuildError, ScheduledGraph};
 use super::{
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, ExecutionContextIdentity,
     ExtensionEngine, ExtensionModuleId, ExtensionPlanningConfig, ExtensionPrepareRequest,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputSignature,
-    InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
-    PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
+    FrozenTransferRegistry, HardwareClassId, IndexingPrepareRequest, IndexingRuntime,
+    InputSignature, InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection,
+    LayoutRuntime, PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
     PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
-    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
-    RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
-    TransferRoute, UnsupportedReason,
+    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, ResolvedTransferRoute,
+    Runtime, RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
@@ -205,7 +203,7 @@ impl PreparedProgramRoot {
         extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
         root_location: ExecutionLocation,
         operation_locations: &[ExecutionLocation],
-        transfer_reachability: &TransferReachability,
+        transfer_registry: &FrozenTransferRegistry,
     ) -> Result<Self, ScheduleBuildError> {
         let semantic = Arc::clone(&identity.semantic);
         let schedule = Arc::new(ScheduledGraph::from_exec_program(
@@ -213,7 +211,7 @@ impl PreparedProgramRoot {
             root_location,
             &identity.input_locations,
             operation_locations,
-            transfer_reachability,
+            transfer_registry,
         )?);
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
@@ -386,7 +384,7 @@ struct PreparationContext {
     staging: Arc<ExecProgram>,
     root_location: ExecutionLocation,
     operation_locations: Arc<[ExecutionLocation]>,
-    transfer_reachability: Arc<TransferReachability>,
+    transfer_registry: FrozenTransferRegistry,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
 }
 
@@ -635,7 +633,7 @@ fn resolve_input_locations(
     program: &ExecProgram,
     root_location: &ExecutionLocation,
     operation_locations: &[ExecutionLocation],
-    transfer_reachability: &TransferReachability,
+    transfer_registry: &FrozenTransferRegistry,
 ) -> PreparedProgramResult<Arc<[ExecutionLocation]>> {
     let consumers = physical_input_consumers(program, root_location, operation_locations).map_err(
         |source| {
@@ -662,14 +660,13 @@ fn resolve_input_locations(
                     .map(move |storage| {
                         ExecutionLocation::new(
                             engine.engine_id().clone(),
+                            engine.provider_device_identity().clone(),
                             engine.event_domain_id(),
                             storage.clone(),
                         )
                     })
             })
-            .find(|source| {
-                source_reaches_all_consumers(source, input_consumers, transfer_reachability)
-            })
+            .find(|source| source_reaches_all_consumers(source, input_consumers, transfer_registry))
             .ok_or_else(|| {
                 Arc::new(PrepareError::NoInputIngress {
                     input_index,
@@ -727,7 +724,7 @@ fn physical_input_consumers(
 fn source_reaches_all_consumers(
     source: &ExecutionLocation,
     consumers: &[ExecutionLocation],
-    transfer_reachability: &TransferReachability,
+    transfer_registry: &FrozenTransferRegistry,
 ) -> bool {
     let mut available = Vec::with_capacity(consumers.len().saturating_add(1));
     available.push(source.clone());
@@ -736,9 +733,9 @@ fn source_reaches_all_consumers(
             continue;
         }
         if !available.iter().any(|location| {
-            transfer_reachability.contains(&TransferRoute::new(
-                location.endpoint().clone(),
-                destination.endpoint().clone(),
+            transfer_registry.contains(&ResolvedTransferRoute::new(
+                location.resolved_endpoint().clone(),
+                destination.resolved_endpoint().clone(),
             ))
         }) {
             return false;
@@ -794,6 +791,7 @@ pub(crate) fn execution_location(
     })?;
     Ok(ExecutionLocation::new(
         placement.engine_id().clone(),
+        engine.provider_device_identity().clone(),
         engine.event_domain_id(),
         placement.storage_class().clone(),
     ))
@@ -953,21 +951,21 @@ fn build_preparation_context(
         .map(|placement| execution_location(snapshot, placement))
         .collect::<PreparedProgramResult<Vec<_>>>()?
         .into();
-    let transfer_reachability = snapshot.transfer_reachability_for_preparation();
+    let transfer_registry = snapshot.transfer_registry_for_preparation();
     let input_locations = resolve_input_locations(
         candidates,
         signature,
         staging,
         &root_location,
         &operation_locations,
-        &transfer_reachability,
+        &transfer_registry,
     )?;
     ScheduledGraph::from_exec_program(
         staging,
         root_location.clone(),
         &input_locations,
         &operation_locations,
-        &transfer_reachability,
+        &transfer_registry,
     )
     .map_err(schedule_prepare_error)?;
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
@@ -996,7 +994,7 @@ fn build_preparation_context(
         staging: Arc::clone(staging),
         root_location,
         operation_locations,
-        transfer_reachability: Arc::new(transfer_reachability),
+        transfer_registry,
         extension_planning: extension_planning.into(),
     })
 }
@@ -1538,7 +1536,7 @@ fn root_for_key(
         Arc::clone(&context.extension_planning),
         context.root_location.clone(),
         &context.operation_locations,
-        &context.transfer_reachability,
+        &context.transfer_registry,
     )
     .map(Arc::new)
     .map_err(|source| match source {

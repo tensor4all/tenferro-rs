@@ -132,6 +132,155 @@ impl EngineId {
     }
 }
 
+/// Validated namespaced identity of a runtime provider.
+///
+/// A provider ID identifies the implementation namespace in the runtime
+/// control plane. It is deliberately distinct from tensor placement metadata.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::ProviderId;
+///
+/// assert_eq!(ProviderId::new("tenferro.cpu")?.as_str(), "tenferro.cpu");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProviderId(Arc<str>);
+
+impl ProviderId {
+    /// Validate a lowercase ASCII namespaced provider identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentityError`] with [`IdentityKind::Provider`] when `value`
+    /// does not match the lowercase ASCII namespaced identifier grammar.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::ProviderId;
+    ///
+    /// assert!(ProviderId::new("tenferro.cuda").is_ok());
+    /// ```
+    pub fn new(value: impl Into<Arc<str>>) -> Result<Self, IdentityError> {
+        validate_identifier(value.into(), IdentityKind::Provider).map(Self)
+    }
+
+    /// Borrow the validated provider identifier text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::ProviderId;
+    ///
+    /// assert_eq!(ProviderId::new("tenferro.cuda")?.as_str(), "tenferro.cuda");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Immutable runtime-control-plane binding of a provider to one physical target.
+///
+/// The target identity is opaque to the runtime and is canonicalized by the
+/// provider. It is not [`tenferro_tensor::DeviceId`] or tensor placement data.
+/// Because this value appears in structured diagnostics and debug output, A0.1
+/// accepts nonempty ASCII graphic text (no controls, whitespace, or Unicode
+/// confusables). Providers that need byte-level or Unicode identities must
+/// first canonicalize them into an escaped diagnostic-safe ASCII form.
+/// Equality, ordering, and hashing include both the provider and target.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+///
+/// let identity = ProviderDeviceIdentity::new(ProviderId::new("tenferro.cuda")?, "device-0")?;
+/// assert_eq!(identity.provider_id().as_str(), "tenferro.cuda");
+/// assert_eq!(identity.target_identity(), "device-0");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProviderDeviceIdentity {
+    provider_id: ProviderId,
+    target_identity: Arc<str>,
+}
+
+impl ProviderDeviceIdentity {
+    /// Construct a provider binding from a validated provider and opaque target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentityError`] with [`IdentityKind::ProviderTarget`] when the
+    /// provider-canonical target identity is empty or is not ASCII graphic
+    /// text. Target text is deliberately diagnostic-safe; opaque
+    /// provider-specific byte or Unicode identities must be encoded by the
+    /// provider before construction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let identity = ProviderDeviceIdentity::new(
+    ///     ProviderId::new("tenferro.cpu")?,
+    ///     "host-0",
+    /// )?;
+    /// assert_eq!(identity.target_identity(), "host-0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(
+        provider_id: ProviderId,
+        target_identity: impl Into<Arc<str>>,
+    ) -> Result<Self, IdentityError> {
+        let target_identity = target_identity.into();
+        if target_identity.is_empty()
+            || !target_identity
+                .chars()
+                .all(|character| character.is_ascii_graphic())
+        {
+            return Err(IdentityError::malformed(IdentityKind::ProviderTarget));
+        }
+        Ok(Self {
+            provider_id,
+            target_identity,
+        })
+    }
+
+    /// Return the validated provider namespace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let provider = ProviderId::new("tenferro.cpu")?;
+    /// let identity = ProviderDeviceIdentity::new(provider.clone(), "host-0")?;
+    /// assert_eq!(identity.provider_id(), &provider);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn provider_id(&self) -> &ProviderId {
+        &self.provider_id
+    }
+
+    /// Return the provider-canonical opaque target identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let identity = ProviderDeviceIdentity::new(ProviderId::new("tenferro.cpu")?, "host-0")?;
+    /// assert_eq!(identity.target_identity(), "host-0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn target_identity(&self) -> &str {
+        &self.target_identity
+    }
+}
+
 /// Validated namespaced identity of a hardware class.
 ///
 /// # Examples

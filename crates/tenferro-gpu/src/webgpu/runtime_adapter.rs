@@ -8,8 +8,9 @@ use tenferro_runtime::{
     HardwareClassId, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutProjection, LayoutSpecialization, PrepareCapability,
     PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
-    ProviderContractError, RuntimeConfigError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, UnsupportedReason,
+    ProviderContractError, ProviderDeviceIdentity, ProviderId, RuntimeConfigError,
+    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 use tenferro_tensor::{
     AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView,
@@ -110,8 +111,13 @@ pub fn webgpu_runtime_engine_registration(
     let runtime = backend.runtime();
     let device_ordinal = runtime.device_ordinal();
     let allocation_domain = runtime.allocation_domain().map(|domain| domain.id);
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.webgpu")?,
+        format!("device:{device_ordinal}"),
+    )?;
     EngineRegistration::new(
         webgpu_runtime_engine_id()?,
+        provider_device_identity,
         ExecutionContextIdentity::of::<WebGpuBackend>(),
         webgpu_runtime_hardware_class()?,
         Arc::from(vec![storage.clone()]),

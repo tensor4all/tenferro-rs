@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use super::{
     execution, CoreCapabilityBundle, EngineId, EventDomainDriver, ExecutionContextIdentity,
-    HardwareClassId, InputSignatureEntry, RuntimeCacheOwner, RuntimeConfigError, StorageClass,
+    HardwareClassId, InputSignatureEntry, ProviderDeviceIdentity, RuntimeCacheOwner,
+    RuntimeConfigError, StorageClass,
 };
 use tenferro_tensor::{AllocationDomainId, Placement, TensorBackend, TensorRead};
 
@@ -31,6 +32,10 @@ struct CandidateRegistrationToken;
 /// let storage = StorageClass::new("tenferro.storage.host")?;
 /// let registration = EngineRegistration::new(
 ///     EngineId::new("tenferro.cpu")?,
+///     tenferro_runtime::ProviderDeviceIdentity::new(
+///         tenferro_runtime::ProviderId::new("tenferro.cpu")?,
+///         "host-0",
+///     )?,
 ///     ExecutionContextIdentity::of::<()>(),
 ///     HardwareClassId::new("tenferro.cpu.host")?,
 ///     Arc::from(vec![storage.clone()]),
@@ -44,6 +49,7 @@ struct CandidateRegistrationToken;
 #[derive(Clone)]
 pub struct EngineRegistration {
     engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
     context_identity: ExecutionContextIdentity,
     hardware_class: HardwareClassId,
     storage_classes: Arc<[StorageClass]>,
@@ -78,6 +84,7 @@ impl EngineRegistration {
     /// default storage class is not supported by this engine.
     pub fn new(
         engine_id: EngineId,
+        provider_device_identity: ProviderDeviceIdentity,
         context_identity: ExecutionContextIdentity,
         hardware_class: HardwareClassId,
         storage_classes: Arc<[StorageClass]>,
@@ -87,6 +94,7 @@ impl EngineRegistration {
         validate_storage_classes(&engine_id, &storage_classes, &default_storage_class)?;
         Ok(Self {
             engine_id,
+            provider_device_identity,
             context_identity,
             hardware_class,
             storage_classes,
@@ -106,6 +114,37 @@ impl EngineRegistration {
     /// Return the engine identifier.
     pub fn engine_id(&self) -> &EngineId {
         &self.engine_id
+    }
+
+    /// Return the immutable provider/device binding for this engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, ProviderDeviceIdentity, ProviderId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let binding = ProviderDeviceIdentity::new(ProviderId::new("tenferro.cpu")?, "host-0")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("tenferro.cpu")?,
+    ///     binding.clone(),
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("tenferro.cpu.host")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::default(),
+    /// )?;
+    /// assert_eq!(registration.provider_device_identity(), &binding);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        &self.provider_device_identity
     }
 
     /// Return the execution-context type identity accepted by the engine.
@@ -149,6 +188,10 @@ impl EngineRegistration {
     /// let storage = StorageClass::new("tenferro.storage.host")?;
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("tenferro.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("tenferro.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("tenferro.cpu.host")?,
     ///     Arc::from([storage.clone()]),
@@ -188,6 +231,10 @@ impl EngineRegistration {
     /// let storage = StorageClass::new("tenferro.storage.host")?;
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("tenferro.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("tenferro.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<CpuBackend>(),
     ///     HardwareClassId::new("tenferro.cpu.host")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -228,6 +275,10 @@ impl EngineRegistration {
     /// let storage = StorageClass::new("example.host")?;
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("example.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.cpu")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -269,6 +320,10 @@ impl EngineRegistration {
     /// let expected = storage.clone();
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("example.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.cpu")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -314,6 +369,10 @@ impl EngineRegistration {
     /// let candidate = storage.clone();
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("example.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.cpu")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -366,6 +425,10 @@ impl EngineRegistration {
     /// let storage = StorageClass::new("example.host")?;
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("example.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("example.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("example.cpu")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -458,6 +521,10 @@ impl EngineRegistration {
     /// let storage = StorageClass::new("tenferro.storage.host")?;
     /// let registration = EngineRegistration::new(
     ///     EngineId::new("tenferro.cpu")?,
+    ///     tenferro_runtime::ProviderDeviceIdentity::new(
+    ///         tenferro_runtime::ProviderId::new("tenferro.cpu")?,
+    ///         "host-0",
+    ///     )?,
     ///     ExecutionContextIdentity::of::<()>(),
     ///     HardwareClassId::new("tenferro.cpu.host")?,
     ///     Arc::from(vec![storage.clone()]),
@@ -487,6 +554,7 @@ impl fmt::Debug for EngineRegistration {
         formatter
             .debug_struct("EngineRegistration")
             .field("engine_id", &self.engine_id)
+            .field("provider_device_identity", &self.provider_device_identity)
             .field("context_identity", &self.context_identity)
             .field("hardware_class", &self.hardware_class)
             .field("storage_class_count", &self.storage_classes.len())

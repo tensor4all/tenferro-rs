@@ -11,8 +11,8 @@ use tenferro_runtime::{
     IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
-    ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
+    ProviderId, ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     TensorRead, UnsupportedReason,
 };
@@ -112,8 +112,18 @@ pub fn runtime_engine_registration_with_id(
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let allocation_domain = backend.allocation_domain();
+    let execution_info = backend.execution_info();
+    let provider_id = match execution_info.backend_kind() {
+        crate::CpuBackendKind::Faer => "tenferro.cpu.faer",
+        crate::CpuBackendKind::Blas => "tenferro.cpu.blas",
+    };
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new(provider_id)?,
+        format!("domain:{}", execution_info.domain_id().as_u64()),
+    )?;
     EngineRegistration::new(
         engine_id,
+        provider_device_identity,
         ExecutionContextIdentity::of::<CpuBackend>(),
         runtime_hardware_class()?,
         Arc::from(vec![storage.clone()]),

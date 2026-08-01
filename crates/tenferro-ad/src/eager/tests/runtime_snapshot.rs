@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, LayoutRuntime, ReductionRuntime,
-    RuntimeCacheOwner, StorageClass,
+    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, LayoutRuntime,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RuntimeCacheOwner, StorageClass,
 };
 use tenferro_tensor::{BackendSession, ErrorKind};
 
@@ -61,8 +61,18 @@ fn cpu_registration_with(
     capabilities: CoreCapabilityBundle,
 ) -> EngineRegistration {
     let storage = cpu_storage_class();
+    let execution_info = backend.execution_info();
+    let provider_id = match execution_info.backend_kind() {
+        tenferro_cpu::CpuBackendKind::Faer => "tenferro.cpu.faer",
+        tenferro_cpu::CpuBackendKind::Blas => "tenferro.cpu.blas",
+    };
     EngineRegistration::new(
         cpu_engine_id(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new(provider_id).unwrap(),
+            format!("domain:{}", execution_info.domain_id().as_u64()),
+        )
+        .unwrap(),
         context_identity,
         cpu_hardware_class(),
         Arc::from([storage.clone()]),
