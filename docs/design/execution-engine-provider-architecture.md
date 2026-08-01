@@ -321,19 +321,22 @@ keeping the compiler artifact backend-neutral:
   through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
   prepare from the backend-neutral `CompiledGraph` and execute through the
   runtime-owned schedule.
-- `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
-  an engine registration. `tenferro-cpu::runtime_engine_registration` provides
-  the CPU registration with direct core preparation capabilities, cache-owner
-  hooks, and the bridge. `tenferro-runtime` still has no production dependency
-  on `tenferro-cpu`.
+- `assemble_executable_engine_registration` is the sole assembly path for an
+  executable engine registration. `tenferro-cpu::runtime_engine_registration`
+  supplies the CPU registration's direct core preparation capabilities,
+  cache-owner hooks, backend witness, and event-domain driver through that
+  common path. `tenferro-runtime` still has no production dependency on
+  `tenferro-cpu`.
 - Runtime-owned preparation is now the executable boundary for core operations
   and installed extension modules. Transfers, collectives, and barriers remain
   scheduler-owned node families for later multi-engine work; they are not
   exposed as a compatibility executor surface.
 
-Phase 5 does not migrate extension-family derived caches, native einsum engine
-planning, CUDA/WebGPU native engines, or XLA subgraph execution. Those remain
-Phase 6 through Phase 8 work.
+At the Phase 5 checkpoint, extension-family derived caches, native einsum
+engine planning, CUDA/WebGPU native adapters, and XLA subgraph execution were
+still deferred. The current CUDA and WebGPU adapters subsequently enter the
+same executable-witness assembly path; broader native einsum planning and XLA
+subgraph execution remain later work.
 
 ### Phase 6 extension resolution and CPU einsum checkpoint (2026-07-25)
 
@@ -1237,9 +1240,9 @@ per-backend native engines.
    backend-specific resolved planning inputs, which remain explicit in the
    runtime snapshot and cache identity.
 2. **Native engines where eager einsum is supported.** The CPU native engine is
-   part of phase 6. The current Phase 7 slice wires WebGPU `dot_general` through
-   the common runtime scheduler and records GPU native einsum as deferred
-   native-engine work rather than guessing a broader provider split. XLA
+   part of phase 6. The current Phase 7 slice registers WebGPU `dot_general`
+   through the common executable-witness path and keeps broader GPU native
+   einsum planning deferred rather than guessing a broader provider split. XLA
    consumes core lowering and requires no native einsum engine.
 3. **One prepared operation.** A native engine represents a complete N-ary
    einsum as one `PreparedOperation`. Eager N-ary einsum through a native
@@ -1733,20 +1736,22 @@ The runtime owns a `DeviceRegistry`; each device has a `GpuDeviceRuntime` with:
 - dependency tracking;
 - admission-control state.
 
-The current CUDA runtime, cuTENSOR handle, and extension cache responsibilities
-would migrate into the per-device runtime. A GPU provider receives a resolved
-`GpuExecutionContext` containing the selected device, stream or queue, scratch
-access, and dependency events. It does not create or globally select a stream.
+The current CUDA and WebGPU adapters retain their runtime resources in their
+backend-owned values and pass the required backend witness, capability bundle,
+ingress contracts, cache owner where applicable, and native event-domain driver
+to `assemble_executable_engine_registration`. A GPU provider receives a
+resolved `GpuExecutionContext` containing the selected device, stream or queue,
+scratch access, and dependency events. It does not create or globally select a
+stream.
 
-The first concrete Phase 7 step is narrower than the full model: WebGPU exposes
-`webgpu_runtime_engine_registration(&WebGpuBackend)` and registers only
-`DotGeneralPreparation` plus a `TensorBackendExecutor<WebGpuBackend>`. Its
-default storage class is the runtime-generic device projection
+The concrete Phase 7 adapters are `cuda_runtime_engine_registration` and
+`webgpu_runtime_engine_registration`. CUDA supplies its supported core
+capabilities and `CudaEventDomainDriver`; WebGPU currently supplies
+`DotGeneralPreparation` and `WebGpuEventDomainDriver`. Both produce complete
+executable registrations through the common runtime assembly path. WebGPU's
+default storage class remains the runtime-generic device projection
 `tenferro.storage.device.v1`, matching tensors whose placement uses
-`MemoryKind::Device`. CUDA is not registered through the common runtime helper
-in this slice because `EngineRegistration::with_tensor_backend_executor`
-requires a cloneable tensor backend, while `CudaBackend` ownership currently
-encapsulates runtime resources without that contract.
+`MemoryKind::Device`.
 
 ## Asynchronous Execution and Events
 
