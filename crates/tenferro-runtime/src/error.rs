@@ -218,6 +218,22 @@ pub enum Error {
         source: BoxError,
     },
 
+    /// A primary error with a second typed error retained as suppressed
+    /// metadata.
+    ///
+    /// The standard error source chain follows `primary`. The suppressed
+    /// error is intentionally exposed through [`Error::suppressed`] because
+    /// [`StdError::source`](std::error::Error::source) can represent only one
+    /// source without losing the primary error's semantics.
+    #[error("primary error: {primary}; suppressed error: {suppressed}")]
+    WithSuppressed {
+        /// The operation's primary failure and the standard error-chain source.
+        #[source]
+        primary: Box<Error>,
+        /// A typed secondary failure retained for diagnostics and recovery.
+        suppressed: Box<Error>,
+    },
+
     /// A runtime event-domain provenance or admission contract failed.
     #[error("event-domain operation failed: {source}")]
     EventDomain {
@@ -564,6 +580,69 @@ impl Error {
         }
     }
 
+    /// Retain a typed secondary error while preserving the primary error's
+    /// classification and standard source chain.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    ///
+    /// let error = Error::with_suppressed(
+    ///     Error::unsupported("backend", ErrorPhase::Execution, "primary"),
+    ///     Error::runtime_state("runtime", ErrorPhase::Execution, "suppressed"),
+    /// );
+    /// assert!(error.primary().is_some());
+    /// assert!(error.suppressed().is_some());
+    /// ```
+    pub fn with_suppressed(primary: Self, suppressed: Self) -> Self {
+        Self::WithSuppressed {
+            primary: Box::new(primary),
+            suppressed: Box::new(suppressed),
+        }
+    }
+
+    /// Return the primary error when this value is a suppressed-error
+    /// aggregate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    ///
+    /// let error = Error::with_suppressed(
+    ///     Error::unsupported("backend", ErrorPhase::Execution, "primary"),
+    ///     Error::runtime_state("runtime", ErrorPhase::Execution, "suppressed"),
+    /// );
+    /// assert_eq!(error.primary().unwrap().phase(), Some(ErrorPhase::Execution));
+    /// ```
+    pub fn primary(&self) -> Option<&Self> {
+        match self {
+            Self::WithSuppressed { primary, .. } => Some(primary),
+            _ => None,
+        }
+    }
+
+    /// Return the typed suppressed error when this value is an aggregate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    ///
+    /// let error = Error::with_suppressed(
+    ///     Error::unsupported("backend", ErrorPhase::Execution, "primary"),
+    ///     Error::runtime_state("runtime", ErrorPhase::Execution, "suppressed"),
+    /// );
+    /// assert_eq!(error.suppressed().unwrap().phase(), Some(ErrorPhase::Execution));
+    /// ```
+    pub fn suppressed(&self) -> Option<&Self> {
+        match self {
+            Self::WithSuppressed { suppressed, .. } => Some(suppressed),
+            _ => None,
+        }
+    }
+
     /// Preserve a typed source returned by an AD rule through a callback
     /// protocol that can carry only a rendered message.
     ///
@@ -648,6 +727,7 @@ impl Error {
             Self::RuntimeState { .. }
             | Self::RuntimeStateSource { .. }
             | Self::EventDomain { .. } => ErrorKind::RuntimeState,
+            Self::WithSuppressed { primary, .. } => primary.kind(),
             Self::PlaceholderDtypeMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::DTypeMismatch)
             }
@@ -697,6 +777,7 @@ impl Error {
             Self::RuntimeState { phase, .. } | Self::RuntimeStateSource { phase, .. } => {
                 Some(*phase)
             }
+            Self::WithSuppressed { primary, .. } => primary.phase(),
             Self::AdRuleSource { .. } => Some(ErrorPhase::GraphBuild),
             Self::PlaceholderDtypeMismatch { .. }
             | Self::PlaceholderShapeMismatch { .. }
@@ -1168,5 +1249,45 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(first.to_string().starts_with("ctx@"));
+    }
+
+    #[test]
+    fn suppressed_error_aggregate_delegates_primary_semantics() {
+        let primary = Error::extension(
+            "backend_mutation",
+            ErrorPhase::Compile,
+            "test.primary.v1",
+            ErrorKind::Io,
+            std::io::Error::other("primary source"),
+        );
+        let suppressed = Error::runtime_state_source(
+            "runtime_reconciliation",
+            ErrorPhase::Execution,
+            std::io::Error::other("suppressed source"),
+        );
+        let primary_kind = primary.kind();
+        let primary_phase = primary.phase();
+        let primary_display = primary.to_string();
+
+        let aggregate = Error::with_suppressed(primary, suppressed);
+
+        assert_eq!(aggregate.kind(), primary_kind);
+        assert_eq!(aggregate.phase(), primary_phase);
+        let source = StdError::source(&aggregate).expect("primary error source");
+        assert_eq!(source.to_string(), primary_display);
+        assert!(StdError::source(source).is_some());
+
+        let primary = aggregate.primary().expect("aggregate primary error");
+        assert_eq!(primary.kind(), primary_kind);
+        assert_eq!(primary.phase(), primary_phase);
+        assert!(StdError::source(primary).is_some());
+
+        let suppressed = aggregate
+            .suppressed()
+            .expect("typed suppressed error metadata");
+        assert_eq!(suppressed.kind(), ErrorKind::RuntimeState);
+        assert_eq!(suppressed.phase(), Some(ErrorPhase::Execution));
+        assert!(matches!(suppressed, Error::RuntimeStateSource { .. }));
+        assert!(StdError::source(suppressed).is_some());
     }
 }
