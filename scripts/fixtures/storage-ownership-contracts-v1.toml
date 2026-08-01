@@ -1,0 +1,54 @@
+schema = "tenferro.storage-ownership-contracts.v1"
+
+[[fixture_suites]]
+id = "g4-trybuild-fail-fixtures"
+kind = "trybuild-fail"
+root = "crates/tenferro-tensor/tests/ui/storage/fail"
+glob = "**/*.rs"
+owner_issue = 1557
+rationale = "Legacy v1 fixture-suite shape retained only as a negative compatibility-rejection sample."
+
+[[fixtures]]
+id = "g4-legacy-owner-swap"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+activation_phase = 1
+path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_current_owner_swap.rs"
+
+[[fixtures]]
+id = "g1-legacy-corruption"
+gate = "G1"
+kind = "corruption"
+status = "deferred"
+owner_issue = 1560
+activation_phase = 4
+future_path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs"
+command = "cargo test -p tenferro-tensor --lib storage::tests::corruption_map"
+
+[[source_scans]]
+id = "g4-legacy-public-mutable-projection"
+gate = "G4"
+kind = "source"
+status = "active"
+owner_issue = 1557
+root = "crates/tenferro-tensor/src"
+glob = "types.rs"
+needle = "pub fn as_view_mut(&mut self)"
+mode = "inventoried"
+rationale = "Legacy v1 source-scan shape retained only as a negative compatibility-rejection sample."
+
+[[source_inventory]]
+id = "g4-legacy-public-mutable-projection"
+gate = "G4"
+kind = "source"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/src/types.rs"
+scan = "g4-legacy-public-mutable-projection"
+needle = "pub fn as_view_mut(&mut self)"
+category = "public-mutable-projection"
+rationale = "Legacy v1 source-inventory shape retained only as a negative compatibility-rejection sample."
+disposition = "replace"
+removal_issue = 1559

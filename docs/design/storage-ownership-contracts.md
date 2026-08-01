@@ -110,8 +110,9 @@ v1 input. The RED specification compares the parsed production manifest with
 the complete canonical `UNITS`/`EDGES`/obligation model used to generate its
 temporary v2 manifests, rather than checking only its schema or checker exit
 status. The v2 gate must convert it to v2 and reject the actual legacy
-`fixtures`/`source_scans`/`source_inventory` tables rather than adding a
-compatibility parser; the RED test records that required migration.
+`fixtures`/`source_scans`/`source_inventory` tables represented by the checked-
+in `scripts/fixtures/storage-ownership-contracts-v1.toml` sample rather than
+adding a compatibility parser; the RED test records that required migration.
 
 ### One canonical graph
 
@@ -337,7 +338,7 @@ the CUTOVER candidate activates every required P4/P5 obligation and obtains
 successful runner evidence before atomically activating all P3/P9 obligations.
 In particular, the canonical obligation set includes:
 
-- P1/G1+G4: a deferred production-code-bound compile/test artifact for the
+- P4/G1+G4: a deferred production-code-bound compile/test artifact for the
   private dispatch borrow shape and exact `ResolvedWrite` failure recovery;
 - P3/G1+G4: a compile contract using the repository compile-test harness or
   static assertions for `UseLease`/`BackendRawLease: Send + !Sync` and
@@ -367,7 +368,7 @@ The following Rust block fixes normative type, visibility, lifetime, field-
 split, and state-transition shape. It is intentionally architecture
 pseudocode: unrelated declarations, imports, and routine method bodies may be
 elided, and the block is not claimed as one standalone crate. Executability is
-proved separately by the canonical P1 production-bound compile/test artifact
+proved separately by the canonical P4 production-bound compile/test artifact
 and the P3/P4 compile/runtime obligations above. Implementations may rename
 provisional private items, but may not replace the private dispatch shape with
 a request that escapes and permits a second owner/provider borrow.

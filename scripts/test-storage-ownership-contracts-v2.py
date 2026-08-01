@@ -25,6 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check-storage-ownership-contracts.py"
 RUNNER = ROOT / "scripts" / "run-storage-ownership-contracts.py"
 PRODUCTION_MANIFEST = ROOT / "scripts" / "storage-ownership-contracts.toml"
+LEGACY_V1_MANIFEST_FIXTURE = (
+    ROOT / "scripts" / "fixtures" / "storage-ownership-contracts-v1.toml"
+)
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 GATES = tuple(f"G{number}" for number in range(1, 8))
@@ -139,8 +142,8 @@ BASE_ACTIVE_OBLIGATIONS = (
 
 DEFERRED_OBLIGATIONS = (
     (
-        "p1-production-borrow-contract",
-        "P1",
+        "p4-production-borrow-contract",
+        "P4",
         ("G1", "G4"),
         "artifact-production-borrow-contract",
         "crates/tenferro-tensor/tests/storage_borrow_contract.rs",
@@ -377,7 +380,7 @@ DIAGNOSTIC_FIELDS = {
 # absorbed by a broad "known RED" label.  The registry must be updated in the
 # same change that lands the corresponding checker/runner/artifact.
 RED_EXPECTED_FAILURES = {
-    "test_actual_legacy_v1_fixture_and_source_tables_are_rejected": {
+    "test_legacy_v1_fixture_and_source_tables_are_rejected": {
         "cause": "v2-checker-not-implemented",
     },
     "test_artifact_paths_are_unique_repository_relative_and_real": {
@@ -386,7 +389,7 @@ RED_EXPECTED_FAILURES = {
     "test_canonical_future_lifecycle_proof_commands_execute": {
         "cause": "future-production-proof-artifact-not-landed",
         "subtests": [
-            {"obligation_id": "p1-production-borrow-contract"},
+            {"obligation_id": "p4-production-borrow-contract"},
             {"obligation_id": "p3-auto-trait-contract"},
             {"obligation_id": "p4-provider-release-lifecycle"},
         ],
@@ -1025,8 +1028,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             fields={"actual": "tenferro.storage-ownership-contracts.v1"},
         )
 
-    def test_actual_legacy_v1_fixture_and_source_tables_are_rejected(self) -> None:
-        legacy = PRODUCTION_MANIFEST.read_text(encoding="utf-8")
+    def test_legacy_v1_fixture_and_source_tables_are_rejected(self) -> None:
+        self.assertTrue(LEGACY_V1_MANIFEST_FIXTURE.is_file())
+        legacy = LEGACY_V1_MANIFEST_FIXTURE.read_text(encoding="utf-8")
         parsed = tomllib.loads(legacy)
         self.assertEqual(parsed["schema"], "tenferro.storage-ownership-contracts.v1")
         self.assertIn("fixtures", parsed)
@@ -1070,7 +1074,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def test_lifecycle_compile_and_runtime_proofs_are_canonical_obligations(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
         expected = {
-            "p1-production-borrow-contract": ("P1", {"G1", "G4"}, "compile-contract"),
+            "p4-production-borrow-contract": ("P4", {"G1", "G4"}, "compile-contract"),
             "p3-auto-trait-contract": ("P3", {"G1", "G4"}, "compile-contract"),
             "p4-provider-release-lifecycle": ("P4", {"G1", "G3"}, "provider-test"),
         }
@@ -1086,7 +1090,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
 
     def test_production_borrow_proof_is_not_a_self_referential_fixture(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
-        row = rows["p1-production-borrow-contract"]
+        row = rows["p4-production-borrow-contract"]
         self.assertEqual(row["artifact"]["path"], "crates/tenferro-tensor/tests/storage_borrow_contract.rs")
         self.assertEqual(
             row["command"]["argv"],
@@ -1098,7 +1102,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def test_canonical_future_lifecycle_proof_commands_execute(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
         for obligation_id in (
-            "p1-production-borrow-contract",
+            "p4-production-borrow-contract",
             "p3-auto-trait-contract",
             "p4-provider-release-lifecycle",
         ):

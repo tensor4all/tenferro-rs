@@ -88,7 +88,9 @@ here.
 
 The executable specification covers:
 
-- the exact production manifest path and v1 rejection without compatibility;
+- the exact production manifest path and canonical-v2 equality gate;
+- an independent checked-in legacy v1 fixture/source sample and rejection test
+  without compatibility;
 - nominal v2 parsing, tagged-state shape, canonical graph edges, P0/P1 root
   independence, P2's single prerequisite, and CUTOVER atomicity;
 - duplicate and unknown graph targets, duplicate artifact targets, missing or
@@ -108,8 +110,8 @@ The executable specification covers:
 - canonical future production-bound borrow, auto-trait, and provider-release
   artifact/command obligations. No inline synthetic borrow compile is
   canonical evidence and no private-name source scan is used;
-- rejection of the actual checked-in legacy v1 fixture/source tables as well
-  as rejection of those tables reappearing in a v2 manifest;
+- rejection of the independent checked-in legacy v1 fixture/source tables as
+  well as rejection of those tables reappearing in a v2 manifest;
 - a machine-readable expected RED event set and report that rejects unknown
   failures, errors, and unexpected subtests.
 
@@ -164,7 +166,7 @@ checker for `terminal: true`. Both diagnostic assertion paths validate the
 `tenferro.storage-ownership-diagnostics.v1` envelope and non-empty structured
 diagnostic array.
 
-The canonical graph now owns a deferred P1/G1+G4 production-bound compile/test
+The canonical graph now owns a deferred P4/G1+G4 production-bound compile/test
 artifact for the private dispatch borrow and exact `ResolvedWrite` recovery,
 plus deferred P3/G1+G4 auto-trait and P4/G1+G3 provider runtime artifacts.
 The base snapshot is the coherent P0/P1/P2-complete state; P4/P5 and every
@@ -181,7 +183,7 @@ Passing deterministic checks:
   CUTOVER and all-active terminal candidates, and cover every canonical unit;
 - canonical deferred compile/runtime rows for auto-traits and provider release,
   plus a RED that invokes those exact future artifact commands;
-- the deferred P1 production-bound borrow artifact/command row, with no
+- the deferred P4 production-bound borrow artifact/command row, with no
   self-referential inline source accepted as canonical evidence;
 - `python3.12 scripts/check-storage-ownership-contracts.py`;
 - `python3.12 scripts/test-check-storage-ownership-contracts.py` (65 tests);
