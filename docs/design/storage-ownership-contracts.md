@@ -38,11 +38,13 @@ Long-term architecture quality gate:
 - New APIs are derived from ownership and lifetime requirements in this
   document, not shaped around preserving legacy call sites. Backward
   compatibility is not a requirement for #1555.
-- A phase that introduces a temporary bridge must inventory it, keep it
-  crate-private and non-authoritative, name the phase that deletes it, and
-  remove it at that phase's exit gate. The completed redesign has no dual
-  storage stack, permanent compatibility adapter, or provider-specific
-  authority escape hatch.
+- One typed, crate-private provider bridge is permitted while an accelerator
+  provider is still being migrated. It must already use the final
+  claim/pin/access/lease/retirement contract, cannot mint ownership or writes,
+  and is removed by the CUDA and WebGPU/Metal migration phases. No AD,
+  submission, or conservative-synchronization adapter is permitted. The
+  completed redesign has no dual storage stack, permanent compatibility
+  adapter, or provider-specific authority escape hatch.
 - A phase is incomplete when it merely adds the new path: it must also delete
   the replaced path and update contract tests, documentation, and source
   inventories. Exceptions require a contract change reviewed before the
@@ -52,8 +54,9 @@ Long-term architecture quality gate:
 
 Terminology:
 
-- **Allocation**: one physical memory span owned by a provider, identified by
-  an `AllocationSpan` (domain-qualified key plus byte range).
+- **Allocation**: one physical memory root and its claims. `AllocationSpan` is
+  metadata (a domain-qualified key plus byte range), never an access
+  capability or proof of ownership.
 - **Owner**: the unique, non-cloneable ownership token for an allocation span
   (`OwnedStorage`, or a tensor/group wrapping it). Invariant I1.
 - **Capability**: the right to access storage, expressed as Rust
@@ -94,68 +97,181 @@ requested range/ids, and resolved span identity, without raw addresses.
 
 ## Phase 1 verification ledger
 
-The machine-readable verification ledger is
-`scripts/storage-ownership-contracts.toml`, checked by
-`scripts/check-storage-ownership-contracts.py`. It is part of the contract,
-not an informal checklist. The current ledger has nine active fixtures and
-nineteen deferred fixtures. Every fixture records its `activation_phase`,
-including active fixtures: for an active row this is the phase that activated
-the obligation; for a deferred row it is the phase in which the future
-artifact must become active.
+The machine-readable ledger is
+`scripts/storage-ownership-contracts.toml`. The v2 checker and runner are
+`scripts/check-storage-ownership-contracts.py` and
+`scripts/run-storage-ownership-contracts.py`; both are deliberately absent in
+their v2 form in this RED checkpoint (the first path still contains the
+superseded v1 checker). The executable RED specification is
+`scripts/test-storage-ownership-contracts-v2.py`; it must remain checked in
+and must invoke the exact production manifest as well as adversarial temporary
+repositories. The checked-in production manifest is currently the superseded
+v1 input. The v2 gate must convert it to v2 and reject v1 rather than adding a
+compatibility parser; the RED test records that required migration.
 
-An active fixture has exactly one repository-relative `path`; a deferred
-fixture has exactly one repository-relative `future_path`, an owning issue, an
-exact execution `command`, and its activation phase. The checker resolves both
-paths beneath the repository root and rejects traversal and symlink escapes.
-The future path is also the activation marker: if that exact artifact appears
-while its row is still deferred, the checker fails with “promote this fixture
-to active”. Deferred future paths are unique, so one future artifact has one
-fixture row; when several obligations share an artifact, the row's rationale
-must state all of them. There is no second enabled/disabled marker. Deferred rows never
-enter an active trybuild suite until the implementation PR changes the row to
-active and moves `future_path` to `path`. Active corruption, Miri, property,
-and provider rows retain an exact command so their executable lane cannot be
-lost during promotion. The `provider` kind is generic; it records a provider
-contract without naming a final public API or requiring a provider to exist in
-Phase 1.
+### One canonical graph
 
-The minimum dynamic verification surface is deliberately recorded before the
-implementation exists:
+P0--P13 are stable identifiers, not a numeric merge order. The registry owns
+units, edges, gates, and atomic cohorts exactly once. Obligations refer to a
+unit ID and gate IDs; they do not repeat issue numbers, phase labels, or
+convergence targets in payloads. P13 is split into two units because freeze
+and final closure have different evidence requirements.
 
-| Gate | Future artifact | Command | Owner / activation | Required surface |
-| --- | --- | --- | --- | --- |
-| G1 | `crates/tenferro-tensor/src/storage/tests/corruption_map.rs` | `cargo test -p tenferro-tensor --lib storage::tests::corruption_map` | #1560 / Phase 4 | corrupted descriptor range rejected at map boundary |
-| G1 | `crates/tenferro-tensor/src/storage/tests/corruption_enqueue.rs` | `cargo test -p tenferro-tensor --lib storage::tests::corruption_enqueue` | #1560 / Phase 4 | corrupted descriptor range rejected at enqueue boundary |
-| G1 | `crates/tenferro-tensor/tests/storage_access.rs` | `cargo miri test -p tenferro-tensor --test storage_access` | #1560 / Phase 4 | host read/write guard slices, empty spans, guard drop/leak; safety never depends on `Drop` |
-| G1 | `crates/tenferro-tensor/tests/storage_access_properties.rs` | `cargo test -p tenferro-tensor --test storage_access_properties` | #1560 / Phase 4 | checked range/alignment overflow and exactly-once root reclamation |
-| G2 | `crates/tenferro-tensor/tests/storage_group.rs` | `cargo miri test -p tenferro-tensor --test storage_group` | #1561 / Phase 5 | descriptor tombstone/stale generational ID and N-way mutable-borrow lifetimes |
-| G2 | `crates/tenferro-tensor/tests/storage_group_properties.rs` | `cargo test -p tenferro-tensor --test storage_group_properties` | #1561 / Phase 5 | N=0, N=1, N>2, empty, reverse-stride, overflow, permutation-independent disjointness, and overlap rejection |
+```text
+p0-control-plane (#1556) ────────────────────────────┐
+                                                     │
+p1-contract-ledger (#1557) ──> p2-root-claims (#1558) │
+                                      │              │
+                                      v              │
+                         p4-access-retirement (#1560)│
+                                      │              │
+                                      v              │
+                         p5-allocation-group (#1561) │
+                                      └──────┬───────┘
+                                             v
+             atomic CUTOVER: p3-host-ownership (#1559)
+                    + p9-runtime-ad-cutover (#1565)
+                                             │
+                                             v
+                              p6-reinterpret (#1562)
+                              ┌──────────────┴──────────────┐
+                              v                             v
+                       p7-cuda (#1563)              p8-webgpu-metal (#1564)
+                              └──────────────┬──────────────┘
+                                             v
+                              p10-api-normalization (#1566)
+                                             │
+                                             v
+                              p13-freeze (#1567-A)
+                              ┌──────────────┴──────────────┐
+                              v                             v
+                       p11-hardware (#1568)          p12-docs (#1569)
+                              └──────────────┬──────────────┘
+                                             v
+                              p13-closure (#1567-B)
+```
 
-The corruption artifacts are intentionally private crate-unit-test modules
-under a provisional `src/storage/tests` layout. Their normative shape is
-privacy, not the final module spelling: hooks may mutate only test-owned
-private descriptor state and may never create an ownership claim, write
-authority, or public unsafe constructor. No corruption hook or production
-storage symbol is added by Phase 1. The current Apple route is WebGPU/wgpu and
-is inventoried under #1564; a deferred provider row records the same contract
-for any native Metal raw binding/provider surface introduced in Phase 8.
+P0 and P1 are independent roots. P2 has exactly one incoming edge, from P1;
+P0 does not gate root-claim design or any phase before cutover. The CUTOVER
+cohort has both P0 and P5 as prerequisites and activates p3 and p9 atomically.
+The cohort contains exactly the host owner and final runtime/AD units. It is
+the only place where public host ownership, detached/scoped runtime ownership,
+and direct group-based AD retention are introduced. There is no Phase 3
+AD-retention adapter, Phase 4 AD bridge, minimal submit bridge, or
+conservative pre-retirement synchronization path to promote or delete.
+The sole provider bridge is a separate typed obligation under the root/provider
+phase; its implementation already obeys the final lease and retirement
+contract and its removal is part of the accelerator migration.
 
-The proof layers have distinct jobs. Rust borrowing and private constructors
-are the write-safety and ownership proof. Corruption tests, Miri, and property
-tests exercise dynamic and unsafe boundaries such as revalidation, retirement,
-overflow, and disjointness; they do not replace the static proof. The source
-inventory is only a narrow lexical deletion/drift ledger, not a Rust safety
-proof. The Phase 12 source-blind audit is the separate check for stale public
-language after the implementation phases remove legacy vocabulary. Public API
-names in this document and in future fixture paths remain provisional until
-their owning phases land; capability, borrow, failure, privacy, and
-reclamation shapes are the normative parts.
+### v2 manifest and promotion contract
+
+The manifest has one `[[obligations]]` table. Each row has an immutable
+obligation ID, one typed `artifact` specification, one typed `command`
+specification, one or more validated gate IDs, one registry `unit` ID, and a
+tagged `state` whose discriminant is exactly `active` or `deferred`. The
+deferred variant additionally carries its canonical activation unit and
+promotion rule.
+There are no parallel active/deferred tables, status strings, terminal flags,
+fixture registries, or synthetic terminal artifacts. A deferred artifact is a
+real future path specification, not an invitation to invent a fixture at
+promotion time.
+
+The artifact specification contains a stable ID, kind, exact repository-
+relative paths, and an optional structural selector. The command specification
+contains a stable ID, an allow-listed typed kind, argv/cwd, path arguments, and
+the exact `artifact_id` it is permitted to inspect. Shell strings, arbitrary
+commands, and command-to-artifact inference are invalid. A command may be
+shared only when its complete typed value and artifact binding are identical.
+
+A promotion compares a base and candidate manifest. For every promoted row it
+must preserve the same obligation ID, artifact value, command value, and
+registry ownership, changing only the tagged state from deferred to active.
+Every member obligation of an atomic cohort must make that transition in the
+same candidate; partial cohort activation is rejected. A changed artifact,
+command, ID, unit, or gate is a new obligation, not a promotion.
+
+The checker emits a candidate-bound receipt containing:
+
+```json
+{
+  "schema": "tenferro.storage-ownership-receipt.v1",
+  "base_commit": "...",
+  "candidate_commit": "...",
+  "base_manifest_sha256": "...",
+  "candidate_manifest_sha256": "...",
+  "promotions": [
+    {
+      "obligation_id": "...",
+      "artifact_id": "...",
+      "artifact_sha256": "...",
+      "command_id": "...",
+      "command_sha256": "...",
+      "state": "active"
+    }
+  ]
+}
+```
+
+The runner executes each active typed command exactly once, passes the exact
+artifact binding, and records the candidate/manifest/artifact/command
+digests. It does not execute deferred commands. The checker validates the
+receipt against the exact base and candidate bytes and resolves every path
+with filesystem-aware traversal and symlink checks. Terminal status is derived
+only from zero deferred obligations, complete atomic promotions, and complete
+candidate-bound receipts. No boolean terminal switch can make a manifest
+complete.
+
+Digest canonicalization is part of the receipt contract: manifest digests are
+SHA-256 over the exact manifest bytes, artifact digests are SHA-256 over the
+resolved repository file bytes, and command digests are SHA-256 over the
+UTF-8, sorted-key, compact JSON encoding of the typed command value. A receipt
+with a correct-looking ID but a digest for another candidate is invalid.
+
+The structural shape is intentionally explicit. A production row has one
+artifact, one command, and one tagged state; the state is not split into
+parallel active/deferred tables:
+
+```toml
+[[obligations]]
+id = "p4-access-retirement"
+unit = "P4"
+gates = ["G1"]
+artifact = { id = "artifact-corruption-map", kind = "corruption-test", path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs" }
+command = { id = "cmd-corruption-map", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"], cwd = ".", path_args = [], artifact_id = "artifact-corruption-map" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+```
+
+Promotion changes only `state.kind` from `deferred` to `active`. The artifact
+ID/path/kind, command ID/kind/argv/cwd/path arguments, unit, and gates remain
+byte-for-byte identical. A changed value is a new obligation and cannot be
+accepted as a promotion. The RED specification fixes the checker invocation
+for base/candidate comparison and the receipt fields so that a later checker
+cannot silently weaken this rule.
+
+The v2 checker accepts `--root`, `--manifest`, and, for promotion validation,
+`--base-manifest`, `--base-commit`, `--candidate-commit`, and `--receipt`.
+The runner accepts `--root` and `--manifest`; it is not permitted to infer a
+different manifest or command target from the current working directory.
+
+The RED suite includes both a structured temporary repository for adversarial
+path, graph, promotion, and command-binding cases and an integration case that
+invokes the checked-in production manifest. Temporary repositories contain
+real files and real symlinks; they do not stand in for the production gate.
+
+The proof layers remain distinct: Rust borrowing/private constructors prove
+write safety; trybuild, Miri, property, corruption, and provider tests exercise
+dynamic boundaries; source inventories record deletion drift; and the
+source-blind documentation audit checks stale public language. None of these
+is allowed to manufacture ownership proof from an allocation ID or a lock.
 
 ## G1. Span access and retirement
 
 ### Types and acquisition surface
 
 ```rust
+use core::{marker::PhantomData, ptr::NonNull};
+use std::ffi::c_void;
+
 pub struct AllocationKey {
     domain: AllocationDomainId,
     local: AllocationId,
@@ -168,86 +284,464 @@ pub struct AllocationSpan {
     guaranteed_alignment: usize, // power of two, describes the span start
 }
 
-// Private representation shape. Names remain provisional.
+// Metadata only. This value is not accepted by an access or binding method.
+// The exact root binding is carried by the private RootBoundSpan type.
+struct RootBoundSpan {
+    root: RootResourceIdentity,
+    range: ByteRange,
+    _sealed: PrivateToken,
+}
+
+pub(crate) struct RootResourcePin {
+    root: RootResourceIdentity,
+    state: Arc<RootResourceState>, // lifetime/deallocator state only
+}
+
+pub(crate) struct OwnedSpanClaim {
+    root: RootResourceIdentity,
+    span: RootBoundSpan,
+    provenance: ClaimProvenance, // private, non-Clone and non-Copy
+}
+
 pub struct OwnedStorage {
-    resource: ProviderResourcePin, // lifetime/deallocator pin; no access authority
-    claim: OwnedSpanClaim,         // unique, non-Clone authority for span()
+    pin: RootResourcePin,
+    claim: OwnedSpanClaim,
 }
 
-struct OwnedSpanClaim {
-    resource: RootResourceId,
-    span: AllocationSpan,
-    provenance: ClaimProvenance, // private, non-Clone proof token
+pub struct StorageRef<'a> {
+    owner: &'a OwnedStorage,
 }
 
-struct ProviderResourcePin {
-    resource: RootResourceId,
-    key: AllocationKey,
-    // provider state plus the exactly-once root deallocator
+pub struct StorageMut<'a> {
+    owner: &'a mut OwnedStorage,
+}
+
+pub(crate) struct RootResourceState {
+    root: RootResourceIdentity,
+    // RootResourcePin's Arc pins this one provider allocation/access object.
+    // There is no second Arc vtable and no per-access allocation.
+    allocation: Box<dyn BackendAllocationAccess>,
+}
+
+pub struct BackendAllocationMetadata {
+    // This is provider-reported validation metadata only. The kernel assigns
+    // RootResourceIdentity during import; a provider cannot construct that
+    // identity or any claim from this value.
+    byte_len: usize,
+    guaranteed_alignment: usize,
+}
+
+impl BackendAllocationMetadata {
+    pub fn new(byte_len: usize, guaranteed_alignment: usize)
+        -> Result<Self, MetadataError>;
+    pub fn byte_len(&self) -> usize;
+    pub fn guaranteed_alignment(&self) -> usize;
+}
+
+pub struct BackendAccessRange {
+    pub byte_offset: usize,
+    pub byte_len: usize,
+    pub guaranteed_alignment: usize,
+}
+
+// This is the sole cross-crate provider extension contract. Provider crates
+// implement this unsafe trait; the storage kernel alone constructs guards and
+// UseLease. The implementation must uphold root identity, checked
+// range/alignment, access ordering, lease retirement, and exactly-once
+// provider cleanup for the allocation represented by the request.
+pub unsafe trait BackendAllocationAccess: Send + Sync + 'static {
+    fn metadata(&self) -> BackendAllocationMetadata;
+    fn map_host_read<'a>(
+        &self,
+        request: &BackendReadRequest<'a>,
+    ) -> Result<BackendRawMapping, AccessError>;
+    fn map_host_write<'a>(
+        &self,
+        request: &BackendWriteRequest<'a>,
+    ) -> Result<BackendRawMapping, AccessError>;
+    fn acquire_device_read(
+        &self,
+        request: &BackendReadRequest<'_>,
+        endpoint: AccessEndpoint,
+    ) -> Result<BackendRawLease, AccessError>;
+    fn acquire_device_write(
+        &self,
+        request: &BackendWriteRequest<'_>,
+        endpoint: AccessEndpoint,
+    ) -> Result<BackendRawLease, AccessError>;
+}
+
+// The request is opaque to provider code and can only be constructed by the
+// private RootResourceState binders below. It contains the exact pin/root
+// witness, claim, and span selected by one ResolvedRead/ResolvedWrite.
+pub struct BackendReadRequest<'a> {
+    _private: (
+        &'a RootResourcePin,
+        &'a OwnedSpanClaim,
+        &'a RootBoundSpan,
+        PrivateToken,
+    ),
+}
+
+pub struct BackendWriteRequest<'a> {
+    _private: (
+        &'a RootResourcePin,
+        &'a mut OwnedSpanClaim,
+        &'a RootBoundSpan,
+        PrivateToken,
+    ),
+}
+
+// These are raw extension carriers rather than storage capabilities. A
+// provider constructs them from its mapping/order token through the narrow
+// request helpers; no carrier contains an owner, claim constructor, mutable
+// capability, or public guard/lease constructor.
+pub struct BackendRawMapping {
+    _private: ProviderMappingParts,
+}
+
+pub struct BackendRawLease {
+    _private: ProviderLeaseParts,
+}
+
+pub struct ProviderMappingParts {
+    pointer: NonNull<u8>,
+    len: usize,
+    release: ProviderReleaseToken,
+}
+
+pub struct ProviderLeaseParts {
+    token: NonNull<c_void>,
+    release: ProviderReleaseToken,
+}
+
+pub struct ProviderReleaseToken {
+    context: *mut c_void,
+    release: unsafe extern "C" fn(*mut c_void),
+}
+
+impl ProviderReleaseToken {
+    // This is a raw carrier constructor, not an ownership/uniqueness proof.
+    // Its safety obligation is part of the one BackendAllocationAccess
+    // provider-extension contract. These constructors create raw carriers
+    // only; they do not establish ownership, uniqueness, or a root claim.
+    pub unsafe fn from_raw_parts(
+        context: *mut c_void,
+        release: unsafe extern "C" fn(*mut c_void),
+    ) -> Self;
+}
+
+impl ProviderMappingParts {
+    pub unsafe fn from_raw_parts(
+        pointer: NonNull<u8>,
+        len: usize,
+        release: ProviderReleaseToken,
+    ) -> Self;
+}
+
+impl ProviderLeaseParts {
+    pub unsafe fn from_raw_parts(
+        token: NonNull<c_void>,
+        release: ProviderReleaseToken,
+    ) -> Self;
+}
+
+impl<'a> BackendReadRequest<'a> {
+    pub fn range(&self) -> BackendAccessRange;
+    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping;
+    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease;
+}
+
+impl<'a> BackendWriteRequest<'a> {
+    pub fn range(&self) -> BackendAccessRange;
+    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping;
+    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease;
+}
+
+// Private kernel wrappers. Sibling provider crates cannot construct these
+// types, HostReadGuard, HostWriteGuard, or UseLease.
+struct BackendReadMapping<'a> {
+    raw: BackendRawMapping,
+    _borrow: PhantomData<&'a [u8]>,
+}
+
+struct BackendWriteMapping<'a> {
+    raw: BackendRawMapping,
+    _borrow: PhantomData<&'a mut [u8]>,
+}
+
+pub(crate) struct HostReadGuard<'a> {
+    mapping: BackendReadMapping<'a>,
+}
+
+pub(crate) struct HostWriteGuard<'a> {
+    mapping: BackendWriteMapping<'a>,
+}
+
+impl RootResourceState {
+    fn bind_read<'a>(
+        &self,
+        pin: &'a RootResourcePin,
+        claim: &'a OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+    ) -> Result<BackendReadRequest<'a>, AccessError>;
+
+    fn bind_write<'a>(
+        &self,
+        pin: &'a RootResourcePin,
+        claim: &'a mut OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+    ) -> Result<BackendWriteRequest<'a>, AccessError>;
+    // Both private binders revalidate state.root == pin.root == claim.root ==
+    // span.root and checked containment before returning an opaque request.
+    // They are not provider-facing or public APIs.
+}
+
+pub(crate) struct ResolvedRead<'a> {
+    capability: StorageRef<'a>, // exact owner/claim/pin selected by resolve
+    span: RootBoundSpan,         // exact span from that capability's claim
+    _sealed: PrivateToken,
+}
+
+pub(crate) struct ResolvedWrite<'a> {
+    capability: StorageMut<'a>, // exact exclusive owner/claim/pin
+    span: RootBoundSpan,         // exact span from that capability's claim
+    _sealed: PrivateToken,
+}
+
+pub(crate) struct UseLease {
+    pin: RootResourcePin,
+    span: RootBoundSpan,
+    mode: AccessMode,
+    provider: BackendRawLease,
+    // No StorageMut conversion, raw write authority, Clone, or public constructor.
 }
 
 impl OwnedStorage {
+    fn as_ref(&self) -> StorageRef<'_>;
+    fn as_mut(&mut self) -> StorageMut<'_>;
+
     fn split_claim(
         self,
         children: &[ByteRange],
     ) -> Result<Vec<Self>, (Self, ClaimSplitError)>;
 }
 
-// Provider allocator/import boundary only.
-unsafe fn import_unique_claim(
-    resource: ProviderResourcePin,
-    span: AllocationSpan,
-    proof: ProviderUniqueImportProof,
-) -> OwnedStorage;
-
-unsafe trait BackendAllocation: Debug + Send + Sync + 'static {
-    fn span(&self) -> AllocationSpan;
-    fn provider(&self) -> ProviderKind;
-    fn as_any(&self) -> &dyn Any; // provider-private diagnostics only
-
-    fn acquire_host_read<'a>(&'a self, span: AllocationSpan)
-        -> Result<HostReadGuard<'a>, AccessError>;
-    fn acquire_host_write<'a>(&'a mut self, span: AllocationSpan)
-        -> Result<HostWriteGuard<'a>, AccessError>;
-    fn acquire_device_read(&self, endpoint: AccessEndpoint, span: AllocationSpan)
-        -> Result<UseLease, AccessError>;
-    fn acquire_device_write(&mut self, endpoint: AccessEndpoint, span: AllocationSpan)
-        -> Result<UseLease, AccessError>;
+impl<'a> StorageRef<'a> {
+    fn resolve(
+        self,
+        descriptor: &ValidatedDescriptor,
+    ) -> Result<ResolvedRead<'a>, AccessError>;
 }
+
+impl<'a> ResolvedRead<'a> {
+    fn backend_read_request(&self) -> Result<BackendReadRequest<'_>, AccessError> {
+        let owner = self.capability.owner;
+        // This private state lookup is reached only through this resolved
+        // value. It rechecks state root == claim root == span root before
+        // producing the opaque request.
+        owner
+            .pin
+            .state
+            .bind_read(&owner.pin, &owner.claim, &self.span)
+    }
+
+    fn acquire_host_read(&self) -> Result<HostReadGuard<'_>, AccessError> {
+        let request = self.backend_read_request()?;
+        let raw = self
+            .capability
+            .owner
+            .pin
+            .state
+            .allocation
+            .map_host_read(&request)?;
+        Ok(HostReadGuard {
+            mapping: BackendReadMapping {
+                raw,
+                _borrow: PhantomData,
+            },
+        })
+    }
+
+    fn acquire_device_read(&self, endpoint: AccessEndpoint)
+        -> Result<UseLease, AccessError> {
+        let request = self.backend_read_request()?;
+        let provider = self
+            .capability
+            .owner
+            .pin
+            .state
+            .allocation
+            .acquire_device_read(&request, endpoint)?;
+        Ok(UseLease {
+            pin: self.capability.owner.pin.clone(),
+            span: self.span.clone(),
+            mode: AccessMode::Read,
+            provider,
+        })
+    }
+}
+
+impl<'a> StorageMut<'a> {
+    fn resolve_write(
+        self,
+        descriptor: &ValidatedWriteDescriptor,
+    ) -> Result<ResolvedWrite<'a>, (Self, AccessError)>;
+}
+
+impl<'a> ResolvedWrite<'a> {
+    fn backend_write_request(&mut self) -> Result<BackendWriteRequest<'_>, AccessError> {
+        let owner = &mut *self.capability.owner;
+        // Borrow disjoint owner fields explicitly. The binder receives the
+        // exact pin/root witness and mutable claim; it never receives both
+        // `&mut OwnedStorage` and `&mut owner.claim`.
+        let (pin, claim) = (&owner.pin, &mut owner.claim);
+        pin.state.bind_write(pin, claim, &self.span)
+    }
+
+    fn acquire_host_write(&mut self) -> Result<HostWriteGuard<'_>, AccessError> {
+        let request = self.backend_write_request()?;
+        let raw = self
+            .capability
+            .owner
+            .pin
+            .state
+            .allocation
+            .map_host_write(&request)?;
+        Ok(HostWriteGuard {
+            mapping: BackendWriteMapping {
+                raw,
+                _borrow: PhantomData,
+            },
+        })
+    }
+
+    fn acquire_device_write(self, endpoint: AccessEndpoint)
+        -> Result<WriteBinding<'a>, (Self, AccessError)> {
+        // A failed private bind or provider admission returns this exact
+        // ResolvedWrite, preserving the exclusive capability for recovery.
+        let mut this = self;
+        let request = match this.backend_write_request() {
+            Ok(request) => request,
+            Err(error) => return Err((this, error)),
+        };
+        let provider = this
+            .capability
+            .owner
+            .pin
+            .state
+            .allocation
+            .acquire_device_write(&request, endpoint);
+        match provider {
+            Ok(provider) => {
+                let lease = UseLease {
+                    pin: this.capability.owner.pin.clone(),
+                    span: this.span.clone(),
+                    mode: AccessMode::Write,
+                    provider,
+                };
+                Ok(WriteBinding {
+                    resolved: this,
+                    lease,
+                })
+            }
+            Err(error) => Err((this, error)),
+        }
+    }
+}
+
+pub struct ImportRejected {
+    allocation: Box<dyn BackendAllocationAccess>,
+    error: ImportError,
+}
+
+// This safe importer validates provider metadata before publishing a claim.
+// On rejection it returns the same one allocation box, so the provider drops
+// it exactly once; on success that box moves into RootResourceState and is
+// pinned by RootResourcePin. The unsafe provider implementation is the only
+// authority proof boundary; there is no second proof token or infallible
+// unsafe import function.
+fn import_owned_storage(
+    allocation: Box<dyn BackendAllocationAccess>,
+) -> Result<OwnedStorage, ImportRejected>;
+
+impl ImportRejected {
+    fn into_parts(self) -> (Box<dyn BackendAllocationAccess>, ImportError);
+}
+
+struct WriteBinding<'a> {
+    resolved: ResolvedWrite<'a>,
+    lease: UseLease,
+}
+
 ```
 
 Contract points:
 
 - There is no public `timeline()`, `TimelineState`, `map_read`, or
-  `map_write`. The provider-internal access state machine stays behind these
-  four acquisition methods (#1555, "Host-visible memory and device
+  `map_write`. The provider-internal access state machine stays behind the
+  owner-scoped acquisition methods (#1555, "Host-visible memory and device
   timelines").
-- Signatures are span-aware from the start. A provider may conservatively
-  track whole allocations in v1; the API and validation stay span-scoped.
+- `AllocationSpan` is metadata only. It may be copied for diagnostics or
+  validation, but it cannot be passed to a provider access method and cannot
+  authorize a read, write, map, enqueue, or lease.
+- Provider implementations receive only the validated `BackendAccessRange`
+  metadata accessor on an opaque request. The range is enough to calculate a
+  provider-local pointer or mapping length, but it carries no
+  `RootResourceIdentity`, claim provenance, or access authority and cannot be
+  constructed into a request by provider code. This keeps the public unsafe
+  extension implementable without exposing `RootBoundSpan`.
+- `RootBoundSpan` is private and carries the exact `RootResourceIdentity`.
+  `ResolvedRead` and `ResolvedWrite` are sealed values constructed only by
+  consuming the matching `StorageRef` or `StorageMut`. Each resolved value
+  directly owns that capability and its exact root-bound span; there is no
+  per-access operation allocation or provider-specific enum. Equal-looking
+  offsets from another root are not interchangeable.
+- Acquisition methods live only on `ResolvedRead`/`ResolvedWrite`; they do not
+  accept a separately supplied span, provider, dispatch object, or resolved
+  capability. The method reaches only the vtable stored in
+  `self.capability.owner.pin.state`, and that state constructs an opaque
+  request from this exact owner claim, pin, and span. The private binder
+  rechecks dynamic root equality before dispatch. Thus no public or
+  crate-facing safe API has an independently sourced receiver-plus-resolved
+  pair to mismatch. Provider crates implement only the narrow unsafe
+  `BackendAllocationAccess` extension contract; the storage kernel does not
+  enumerate providers and does not ask sibling crates to implement private
+  per-access traits.
 - `HostReadGuard`/`HostWriteGuard` expose only the validated byte span as
   immutable/mutable bytes and checked typed slices. Guards borrow the
   allocation (`'a`), so the borrow checker excludes moves (consuming
   submission) and exclusive operations while a guard is alive.
 - `UseLease` is `'static`, provider-private, span- and access-mode-scoped. It
-  holds provider pins (internally reference-counted handles are permitted as
-  pins per I3), not Rust borrows, so it can move into runtime retirement
-  records. Leases are non-cloneable and non-forgeable outside the provider.
-- Write acquisition (`acquire_host_write`, `acquire_device_write`) requires
-  the exclusive capability (`&mut`); read acquisition requires shared. This
-  is the provider-side counterpart of "write mapping and write enqueue
-  require the mutable capability" in #1555.
+  holds a root pin, not a Rust borrow, so it can move into runtime retirement
+  records. It is non-cloneable and non-forgeable, has no conversion to
+  `StorageMut`, and cannot authorize a raw write by itself.
+- Write resolution and acquisition require the exclusive capability (`&mut`);
+  read resolution requires shared. Device write acquisition consumes the
+  `ResolvedWrite` into a `WriteBinding`, retaining the exclusive borrow or the
+  consumed owner package through enqueue and retirement. Its failure type is
+  `(ResolvedWrite<'a>, AccessError)`, so pre-admission failure returns the
+  exact exclusive capability. If a direct API would return the owner and end
+  the `&mut` borrow earlier, it must synchronously retire the device work
+  before returning it.
 - Physical-resource lifetime and span authority are separate. An
   `OwnedSpanClaim` is the unique, non-cloneable authority for its byte span.
-  A `ProviderResourcePin` may be shared internally to keep the provider root
+  A `RootResourcePin` may be shared internally to keep the provider root
   resource and its deallocator alive, but it authorizes neither reads nor
   writes and cannot create a claim. `OwnedStorage` combines exactly one
   claim with such a pin; all safe access starts from that claim through the
-  borrow-taking methods above.
+  borrow-taking methods above. Raw write bindings retain the originating
+  `StorageMut` borrow (or consume the owning package) through enqueue.
 - The claim and pin carry the same private, non-forgeable `RootResourceId`.
   `OwnedStorage` construction checks that relation. `split_claim` consumes
   the parent provenance token before creating children; failure returns the
-  unchanged parent. `import_unique_claim` is the only route that accepts an
-  allocator/provider uniqueness proof not derived from a parent claim.
+  unchanged parent. Provider import uses the safe, fallible
+  `import_owned_storage` path; it reads metadata from that same allocation,
+  and rejection returns the unconsumed provider allocation with a typed
+  `ImportError`. The unsafe `BackendAllocationAccess` implementation is the
+  sole authority proof boundary. Raw carrier constructors are subordinate
+  FFI plumbing inside that boundary and are not a second claim/import proof;
+  no redundant uniqueness proof token exists.
 - Allocation-resource pins do not float unaccounted: every live pin is held
   by an owner claim, an acquired lease/binding, or a retirement/quarantine
   record. Provider endpoint/context handles that are cached independently do
@@ -260,8 +754,8 @@ Contract points:
 - `byte_offset + byte_len` uses checked arithmetic and must fit the provider
   allocation. `guaranteed_alignment` is a power of two describing the start
   of this span, not merely the base allocation.
-- `AllocationKey` equality is domain-qualified (I3, #1558). Provider kind or
-  device ordinal alone is never identity.
+- `AllocationKey` equality is domain-qualified (I3, #1558); provider kind or
+  device ordinal alone never identifies an allocation.
 - Suballocations of one provider resource share `key` and differ by byte
   range. Conflict, hazard, and disjointness reasoning always operates on
   `(key, byte range, access mode)` triples, never on object identity.
@@ -285,6 +779,25 @@ Contract points:
   passes checked arithmetic. Guards over empty spans return empty slices.
   Empty access acquires no provider resources and imposes no ordering. No
   code path may dereference a pointer to justify an empty span.
+
+### Hot-path allocation contract
+
+`StorageRef::resolve`, `StorageMut::resolve_write`, and all G1 acquisition
+methods are allocation-free in the storage kernel. `ResolvedRead` and
+`ResolvedWrite` are fixed-layout values containing the capability, the exact
+`RootBoundSpan`, and the seal; they do not contain a provider enum, a
+per-access `Box`, or any other heap-backed erased operation. Provider
+dispatch uses the one vtable retained in `RootResourceState`. A provider may
+allocate an event or queue object under its own documented backend contract,
+but resolution and the core binding path must not allocate.
+
+The Phase 1 acceptance harness records allocator events around a warmed
+`resolve -> acquire_host_*` and `resolve -> acquire_device_*` loop. The core
+counter must remain zero for both read and write paths (with provider-owned
+event allocation measured separately and explicitly reported). A benchmark
+receipt records the loop count, allocator counter, resolved-value size, and
+backend; a regression that introduces a per-access allocation fails the G1
+performance gate.
 
 ### Ordering rules
 
@@ -311,15 +824,21 @@ write and the set of outstanding uses. The normative ordering behavior:
 ### Revalidation at map and enqueue boundaries
 
 At every guard acquisition (map) and every binding encode (enqueue), the
-implementation resolves the owner and revalidates the descriptor against the
-allocation as defense in depth (I7):
+implementation receives a `ResolvedRead` or `ResolvedWrite` and revalidates
+the descriptor against that value's own claim/pin as defense in depth (I7):
 
-1. resolve `span()` of the owning allocation;
-2. checked containment: descriptor byte range inside the span byte range;
+1. use the already root-bound span carried by the resolved value;
+2. checked containment: descriptor byte range inside that exact span;
 3. alignment: descriptor start satisfies the dtype and provider requirement
    given `guaranteed_alignment`;
-4. access mode: write requires the exclusive/owning path;
+4. access mode: write requires the `ResolvedWrite` path;
 5. for writes, layout injectivity has been proven (G2).
+
+There is no second receiver or free span to compare. A test-only corruption
+hook may alter a private descriptor after resolution, but it cannot replace
+the resolved root, claim, pin, or the pin-state access vtable. RED must assert
+that no safe signature contains an independently supplied provider/dispatch
+receiver together with a resolved capability or span.
 
 Failure is a structured error naming the operation, requested range, and
 resolved span key. Revalidation failure is always an error, never UB, even
@@ -331,10 +850,13 @@ if an internal invariant was violated upstream.
 |---|---|---|---|---|---|---|
 | allocate fresh root and claim | provider allocator returns owning claim | none | provider allocation rules | no claim and provider cleans up unpublished resource | no partially published claim | root is live under its first claim |
 | reject overlapping/imported claim | none until audited construction succeeds | none | none | structured overlap/provenance error; existing claims unchanged | no claim published | unchanged |
+| `StorageRef::resolve` | shared | consumes the `StorageRef` wrapper; owner remains immutably borrowed for the resolved value | descriptor range/alignment validation only | unchanged `StorageRef` plus typed error | no resolved value is published | owner remains live |
+| `StorageMut::resolve_write` | exclusive | consumes the `StorageMut` wrapper and retains its `&mut OwnedStorage` in `ResolvedWrite` | checked range, alignment, and write-injectivity validation | `(StorageMut, AccessError)` with the exact capability returned | no partial resolved capability is published | owner remains live |
 | `acquire_host_read` | shared | allocation for guard lifetime | wait: overlapping device writes (plus reads where provider requires) | no guard, no state change | guard drop unregisters host use | not while guard alive |
 | `acquire_host_write` | exclusive | allocation, exclusively, for guard lifetime | wait: all overlapping device uses | no guard, no state change | drop unregisters; writes made so far are visible bytes, no rollback | not while guard alive |
 | `acquire_device_read` | shared | none beyond the call (lease is a pin) | event dependency on last overlapping write | no lease, no state change | lease drop before submission releases pin | not while lease outstanding |
-| `acquire_device_write` | exclusive | `&mut` for the call; lease pins after | event dependencies for RAW/WAR/WAW | no lease, no state change | same as device read | not while lease outstanding |
+| `acquire_device_write` | exclusive | consumes `ResolvedWrite`; `WriteBinding` retains the owner/`&mut` through enqueue and retirement | event dependencies for RAW/WAR/WAW | unchanged binding capability plus typed error | admitted binding moves to retirement even if its handle is dropped | after covering events retire |
+| direct write API returning an owner | owning | no early end of exclusive access is allowed | synchronous retirement before returning the owner | owner returned only after retirement; otherwise typed error retains it | panic retains/quarantines until retirement | after synchronous retirement |
 | lease submitted with work | owning (runtime owns inputs) | none (pins) | none at submit; retirement via events | enqueue prep failure releases only unsubmitted leases | admitted leases survive handle drop and panic until retirement | after all covering events complete |
 | guard leaked (`mem::forget`) | n/a | borrow ends without `Drop` | none | n/a | provider host-use registration may persist until owner drop; soundness is preserved (access is gone), liveness may degrade; this is documented, not UB | owner drop path below |
 | split owner claim | owning (consumes parent claim) | none | none | original owner returned unchanged | no child is observable until all disjoint claims are built | parent is replaced by children; root resource remains pinned |
@@ -450,7 +972,7 @@ fn into_tensor(self, id: ValueId) -> Result<Tensor, (Self, ExtractError)>;
 One audited module owns the proof. Normative validation order (#1561):
 
 1. validate each layout with checked shape/stride/offset arithmetic;
-2. resolve dtype-sized byte ranges against the current `AllocationSpan`;
+2. resolve dtype-sized byte ranges against the exact root-bound claim span;
 3. prove each mutable layout internally injective;
 4. partition requests by allocation key and root span;
 5. treat empty descriptors as non-overlapping;
@@ -647,9 +1169,9 @@ impl<R> ScopeExitError<R> {
 - `ScopedReadInputs` borrows immutable tensor/group views for `'env` and
   declares its access mode explicitly. Provider read leases are still
   acquired (G1), because logically read-only host and device uses can
-  conflict on some providers. Mutable scoped inputs are out of scope for the
-  redesign; a future mutable-input graph requires an exclusive borrow and a
-  separate signature contract.
+  conflict on some providers. G3 contains no scoped writable-input contract;
+  scoped submission is read-only and no writable scoped row may be inferred
+  from this surface.
 - `ScopedHandle<'s, 'env>` cannot escape the scope (higher-ranked `'s`). Its
   `wait` result contains no `'s` borrow and may leave the scope, but remains
   bounded by the original input lifetime `'env`.
@@ -663,18 +1185,26 @@ impl<R> ScopeExitError<R> {
   `Owned` slot satisfying G2; requesting extraction from a `Borrowed` slot
   returns `BorrowedOutput` and never copies.
 - `ScopedSubmitRejected<'env>` returns the exact unadmitted
-  `ScopedReadInputs<'env>` package with its typed cause. After admission,
-  `ScopedExecutionFailure<'env>` and `ScopedCancelledExecution<'env>` retain
-  the exact borrowed input descriptors for diagnosis; caller ownership was
-  never transferred. Partial or uninitialized owned outputs remain private
-  and are retired and dropped or quarantined before either outcome becomes
-  observable. Consuming accessors return the error and exact input package;
-  private fields are not the recovery contract.
+  `ScopedReadInputs<'env>` with its typed cause. After
+  admission, `ScopedExecutionFailure<'env>` and
+  `ScopedCancelledExecution<'env>` retain the exact borrowed input
+  descriptors for diagnosis; caller ownership was never transferred. Partial
+  or uninitialized owned outputs remain private and are retired and dropped
+  or quarantined before either outcome becomes observable. Consuming
+  accessors return the error and exact input package; private fields are not
+  the recovery contract.
 - Scope exit joins and retires every admitted task whose handle was not
   waited. Dropping a handle abandons observation, not execution. A waited
   `ScopedExecutionBundle<'env>` may be returned from the closure because it
   contains only `'env` borrows plus its own fresh owners, never a scope
   borrow.
+- Scope exit is an explicit synchronous `join_and_retire_all` transition, not
+  a `Drop` side effect. The read-only scope-owned task registry still joins
+  every task and retires every lease before ending the `'env` borrow. If the
+  closure panics, the implementation catches the unwind long enough to
+  perform the same synchronous join/retirement, records secondary failures,
+  and then resumes the original panic. `Drop` is diagnostic cleanup only and
+  never establishes safety or retirement.
 - A normal scope exit reports every unobserved task failure through
   `ScopeExitError<R>` while preserving the closure result. If the closure
   panics, the scope guard still drains, records secondary failures in the
@@ -686,6 +1216,18 @@ impl<R> ScopeExitError<R> {
   enqueue, extraction, and deallocation attempts return `Quarantined`; the
   quarantine registry retains the root resource and context. Thus dropping
   a scoped error cannot expose borrowed storage to work of unknown status.
+- The detached runtime is the only G3 asynchronous path that owns writable
+  inputs: `submit` consumes `ExecutionInputs`, whose `AllocationGroup` owns
+  its `OwnedStorage` values after admission. Those owners move into the
+  retirement record with the leases; no detached record stores a Rust borrow.
+  A static `UseLease` alone never makes an owner externally writable while
+  device work remains.
+- A direct borrowed device-write API is synchronous in its public lifetime
+  shape: it may use `WriteBinding<'a>` internally, but it must join and retire
+  all device work before returning and therefore cannot place `'a` in a
+  `'static` retirement record. It returns the exact borrowed input on
+  pre-admission failure. This is distinct from the read-only scoped API and
+  detached owning submission; there is no scoped write API in this contract.
 
 ### Lifecycle
 
@@ -702,7 +1244,7 @@ or cancellation), then either `Retired(outcome)` or
 | handle drop before completion | none | none | none | n/a | detach: reaper retains owners and leases until retirement; completion is not cancelled | after retirement, by the reaper |
 | cancellation request | none | none | none | n/a | cooperative: honored at pre-enqueue boundaries only; already enqueued device work is never revoked | after retirement |
 | unobserved failure (detached, handle dropped) | none | none | none | reported through the documented runtime error sink/callback; never silent | n/a | after retirement |
-| scoped submit rejected | shared borrows packaged for `'env` | no runtime borrow admitted | none | exact `ScopedReadInputs<'env>` returned with cause | no worker or partial bundle exists | caller-owned inputs unaffected |
+| scoped submit rejected | shared borrow packaged for `'env` | no runtime borrow admitted | none | exact `ScopedReadInputs<'env>` returned with cause | no worker or partial bundle exists | caller-owned inputs unaffected |
 | scoped admitted and `wait`ed | shared borrows of inputs for `'env` | input storage for `'env`; handle for `'s` only | leases per G1; `wait` observes post-retirement outcome | typed scoped outcome; borrowed descriptors retained, partial owned outputs private | panic enters draining/quarantine before outcome | fresh owners after retirement; borrowed slots never reclaimed by bundle |
 | scoped handle dropped | none beyond admitted shared input borrows | inputs remain borrowed for `'env`; handle observation ends | none at drop | n/a | scope registry retains task, owners, and leases | only after scope join/retirement |
 | scope exit with unobserved tasks | none | ends `'s`, not `'env` | joins and drains every admitted task | `ScopeExitError<R>` preserves closure result and aggregates failures/quarantine IDs | panic during closure still drains, reports secondary failures, and resumes original panic | after proven retirement; quarantine registry otherwise |
@@ -746,7 +1288,7 @@ Rules (#1555, "Capability surface and method distribution"; #1559):
    deref target reproduces the ndarray 0.17.0 header-swap unsoundness, and a
    fake DST needs a host address that device storage does not have.
 6. Swap-safety: no public API returns `&mut OwnedStorage`,
-   `&mut Box<dyn BackendAllocation>`, or any mutable projection of an owner
+   `&mut Box<dyn BackendAllocationAccess>`, or any mutable projection of an owner
    container; `StorageMut` is an opaque write capability. Layout mutation is
    available only through operations that revalidate the resulting
    descriptor against the span (G1), so layout and storage cannot be
@@ -774,16 +1316,58 @@ Method-home table:
 - Raw access is lease-bounded. The launch-session shape (#1563):
 
   ```rust
-  session.read(TensorRead<'_>)   -> Result<ReadBinding<'_>>;
-  session.write(TensorWrite<'_>) -> Result<WriteBinding<'_>>;
-  session.enqueue(...)           -> Result<Completion, (Self, EnqueueError)>;
+  let read_binding = resolved_read.acquire_device_read(endpoint)?;
+  let write_binding = match unsafe { bind_raw_write(resolved_write, request) } {
+      Ok(binding) => binding,
+      Err((resolved, error)) => return Err((resolved, error)),
+  };
+  let completion = session.enqueue_borrowed(read_binding, write_binding)?;
   ```
 
-  `TensorRead` and `TensorWrite` are sealed capability wrappers, not public
-  descriptor constructors. `TensorRead` is built only from `StorageRef` plus
-  a validated descriptor; `TensorWrite` is built only from `StorageMut` plus
-  a validated, injective descriptor. Their fields and constructors remain in
-  the audited ownership module.
+  ```rust
+  impl<'a> LaunchSession<'a> {
+      fn enqueue_borrowed(
+          self,
+          read: UseLease,
+          write: WriteBinding<'a>,
+      ) -> Result<RetiredBorrowed<'a>, (Self, EnqueueError)>;
+  }
+  ```
+
+  `RetiredBorrowed<'a>` is returned only after the device work and its lease
+  have retired. A pending completion cannot carry `'a` into a runtime
+  retirement record; detached submission uses the separate owning package.
+
+  `resolved_read` and `resolved_write` are sealed capability wrappers, not
+  public descriptor constructors. A read value is built only from `StorageRef`
+  plus a validated descriptor; a write value is built only from `StorageMut`
+  plus a validated, injective descriptor. Their fields and constructors remain
+  in the audited ownership module. `session` owns only endpoint/event
+  submission state: it cannot resolve a descriptor, select a provider, or
+  supply a second span or claim. Storage authority is carried by the resolved
+  value and then by the binding.
+
+  ```rust
+  struct TensorWrite<'a> {
+      resolved: ResolvedWrite<'a>,
+      _sealed: PrivateToken,
+  }
+
+  struct OwnedTensorWrite {
+      owner: OwnedStorage,
+      span: RootBoundSpan,
+      _sealed: PrivateToken,
+  }
+
+  // `WriteBinding<'a>` is the G1 type: it owns this resolved operation and
+  // its `UseLease` until enqueue admission and retirement finish.
+  ```
+
+  The binding retains the exclusive borrow (or the consumed `OwnedTensorWrite`
+  package)
+  until enqueue admission has either returned the unchanged package or moved
+  it into the runtime retirement record. A static `UseLease` alone never
+  permits reacquiring mutable access while work is pending.
 
   Bindings expose raw pointers only for the session lifetime; every binding
   revalidates domain/endpoint, span, layout arithmetic, alignment, access
@@ -799,17 +1383,17 @@ Method-home table:
 
   ```rust
   unsafe fn bind_raw_write<'a>(
-      capability: StorageMut<'a>,
+      capability: ResolvedWrite<'a>,
       request: ValidatedWriteRequest,
-  ) -> Result<WriteBinding<'a>, AccessError>;
+  ) -> Result<WriteBinding<'a>, (ResolvedWrite<'a>, AccessError)>;
   ```
 
-  `StorageMut` carries the exclusively borrowed claim and its matching
-  resource pin together, so the binder cannot be given an unrelated pin.
-  The binder rechecks request key/range against that capability before
-  exposing raw state. Its safety proof covers only conversion of an existing
-  exclusive capability into provider raw state; it does not establish
-  uniqueness.
+  `ResolvedWrite` carries the exclusively borrowed owner, its matching claim
+  and pin, the root-bound span, and the provider dispatch together, so the
+  binder cannot be given an unrelated pin or provider receiver. The binder
+  rechecks request key/range against that resolved capability before exposing
+  raw state. Its safety proof covers only conversion of an existing exclusive
+  capability into provider raw state; it does not establish uniqueness.
   The call-site inventory is enforced by a source-contract test. Strong
   counts may be diagnostics for leaked pins or retirement latency, never a
   precondition or proof for access authority (I3).
@@ -817,9 +1401,10 @@ Method-home table:
   the runtime task continues to own the containing `OwnedStorage` and makes
   it unreachable to callers until event retirement; the encoding borrow may
   end, but no safe reborrow is possible. The completion lease and root pin
-  move to the retirement record. Scoped submission in G3 is read-only; any
-  future scoped write API must keep its exclusive input borrow live through
-  scope join in its signature. No other async write mode is permitted.
+  move to the retirement record. Scoped submission in G3 is read-only. A
+  direct borrowed write retires synchronously; the only asynchronous write
+  package is the owning `OwnedTensorWrite` path. No other async write mode is
+  permitted.
 - Enqueue failure returns the unchanged session and all unadmitted
   capabilities in `(Self, EnqueueError)`. No raw binding or lease remains
   active, and the owning task/borrow can retry or recover without inference.
@@ -838,7 +1423,7 @@ Method-home table:
 |---|---|---|---|---|---|---|
 | request write from shared pin/handle/lease | shared or none (insufficient) | none | none | structured capability error; no binding or state change | n/a | unchanged |
 | bind raw read | `StorageRef<'a>` | shared capability and resource for binding/session lifetime | dependencies from G1 | no binding; capability remains valid | session retains lease after admitted enqueue | after covering read retires |
-| bind raw write | sealed `TensorWrite<'a>` from matching `StorageMut<'a>` | exclusive claim+pin capability for binding/session lifetime | RAW/WAR/WAW dependencies from G1 | no binding; exclusive capability remains valid | no shared state can recover the consumed exclusivity; admitted lease retires normally | after covering write retires |
+| bind raw write | sealed `TensorWrite<'a>` or `OwnedTensorWrite` from a matching exclusive capability | exclusive claim+pin capability for binding/session lifetime | RAW/WAR/WAW dependencies from G1 | no binding; exact borrowed/owning package remains valid | no shared state can recover the consumed exclusivity; admitted lease retires normally | after covering write retires |
 | enqueue validated bindings | consumes session; detached task retains owners | capabilities cannot be reused during admission or before retirement | provider enqueue/event registration | returns unchanged session and all capabilities in `(Self, EnqueueError)` | admitted leases and root pins move to runtime retirement even if completion handle is dropped | after event-domain retirement |
 | drop last claim with provider pins in flight | owning claim | none | none at drop | n/a | claim, root pin, and leases enter retirement record | root deallocator only after all sibling claims and pins retire |
 | retirement proof fails | provider-internal retirement record | none | attempted wait/poll | error reported | resource and context are quarantined | never speculatively |
@@ -864,7 +1449,7 @@ Common validation commands:
 | 0 (#1556) | runtime/API docs for discovery, caller-selected engine IDs, endpoint routing; examples must not assume CUDA device 0 or a fixed engine ID | common commands |
 | 1 (#1557) | this document; the per-phase ownership table itself | common commands |
 | 2 (#1558) | internal architecture/safety rustdoc for the unsafe allocation boundary; the legacy-bridge inventory | common commands |
-| 3 (#1559) | `docs/spec/tensor-semantics.md` section III rewritten in the PR that removes public `Buffer<T>`; rustdoc/examples broken by clone/Buffer removal; AD interim-rule notes | common commands |
+| 3 (#1559) | `docs/spec/tensor-semantics.md` section III rewritten in the PR that removes public `Buffer<T>`; rustdoc/examples broken by clone/Buffer removal; final owner/view migration notes | common commands |
 | 4 (#1560) | G1 state tables kept current; API rustdoc for guards/leases; waits documented as synchronization points, explicitly not copies | common commands |
 | 5 (#1561) | storage design updates for immutable aliasing, conservative disjointness, N-way borrow lifetimes, extraction | common commands |
 | 6 (#1562) | reinterpretation rustdoc; the reserved section of the views guide (representation view vs numeric cast, supported pairs) | common commands |
@@ -924,8 +1509,9 @@ not an accepted migration.
 
 ### Public API replacement
 
-The `Arc<Tensor>`-returning surface is replaced. The Phase 3 retention
-adapter must not appear in any public signature.
+The `Arc<Tensor>`-returning surface is replaced. No retention adapter appears
+in any public or crate-private runtime boundary; the cutover lands directly on
+the group-qualified descriptor model.
 
 | Current | Replacement sketch | Semantics |
 |---|---|---|
@@ -1002,18 +1588,21 @@ enum AllocationReason {
 - Aggregate pre-migration versus post-migration copy counts are not an
   acceptance criterion.
 
-### Interim Phase 3 rule
+### Atomic cutover and provider bridge
 
-Between the Phase 3 cutover and the Phase 9 group representation:
+Public host ownership (#1559) and final detached/scoped runtime plus direct
+group-based AD retention (#1565) form one atomic promotion cohort. They land
+the final `AllocationGroup`, lease, retirement, and descriptor-liveness
+semantics together. There is no interim AD-retention adapter, minimal
+consuming-submit bridge, or pre-retirement synchronization adapter.
 
-- one inventoried crate-private read-only retention adapter may bridge AD
-  retention. It cannot authorize writes, cannot mint public owners, and
-  cannot appear in public signatures;
-- before Phase 4 retirement machinery exists, provider completion is
-  synchronized conservatively before input owners are released; a failed
-  synchronization retains or quarantines the allocation and never releases
-  or reuses it speculatively;
-- the adapter is listed in the scaffolding inventory; Phase 9 removes it.
+Exactly one typed, inventoried crate-private provider bridge may keep an
+unmigrated accelerator provider buildable. The bridge is implemented against
+the final root-bound claim, access, authority-free lease, and retirement
+contracts; it cannot expose an owner-like shared handle, mint a claim, or
+authorize a write. #1563 and #1564 remove the bridge as their provider paths
+are migrated. If the bridge cannot satisfy the final contract, provider
+migration moves earlier instead of adding a second seam.
 
 ### Validation lanes
 
@@ -1061,15 +1650,22 @@ phase issues carry the full inventories; this index is the cross-reference.
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections) | #1557 harness, #1559 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; tutorial-code checks; source-blind audit | #1569, #1567 |
-| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); generational stale-handle and all-liveness-root extraction tests; checkpoint interior-release test; mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, #1559 interim, #1565 final, #1568 evidence |
+| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); generational stale-handle and all-liveness-root extraction tests; checkpoint interior-release test; mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
 ## Relationship to phase issues
 
-- #1556 (Phase 0) is independent of every gate.
-- #1558 through #1566 implement G1 through G5 and the control plane against
-  this document.
-- #1567 through #1569 validate, document, and close against the frozen
-  candidate.
+- #1556 and #1557 are independent roots of the canonical DAG; #1557 owns the
+  v2 ledger and its executable RED/green gate.
+- #1558 owns the root pin, non-`Clone` claim, and the single typed provider
+  bridge. #1560 owns access/retirement. #1561 owns groups and generational
+  descriptors. None waits for the public host cutover.
+- #1559 and #1565 are one atomic promotion cohort. The cohort lands public
+  host ownership, final detached/scoped runtime ownership, and direct AD group
+  retention together.
+- #1562, #1563, #1564, and #1566 follow the graph above. #1567-A freezes and
+  cleans the candidate; #1568 and #1569 validate the same candidate; #1567-B
+  is the final independent closure audit.
 - A later phase that needs to deviate from a contract here must change this
   document (and its tests) first, in the same PR, with the deviation called
-  out in the PR description.
+  out in the PR description. It may not introduce an interim adapter to avoid
+  the change-control path.

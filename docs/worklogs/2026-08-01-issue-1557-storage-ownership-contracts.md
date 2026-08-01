@@ -1,198 +1,126 @@
-# Worklog: #1557 Storage Ownership Contracts and Phase 1 Verification Harness
+# Worklog: #1557 storage ownership contract and executable RED checkpoint
 
-This worklog records the contract document and verification harness for the
-storage ownership redesign tracked by
-[#1555](https://github.com/tensor4all/tenferro-rs/issues/1555) and owned by
-[#1557](https://github.com/tensor4all/tenferro-rs/issues/1557).
+This worklog records the Phase 1 contract checkpoint for
+[#1557](https://github.com/tensor4all/tenferro-rs/issues/1557), under the
+umbrella redesign in
+[#1555](https://github.com/tensor4all/tenferro-rs/issues/1555).
 
-## Scope
+## Scope and boundary
 
-- Added `docs/design/storage-ownership-contracts.md`: the seven design gates
-  (span access and retirement, `AllocationGroup`, submission, method
-  distribution, raw handles and reclamation, documentation ownership, AD
-  value retention) as signature sketches plus state-transition tables, each
-  row answering the six review-checklist questions from #1557 (capability,
-  borrow, synchronization, failure return, panic/drop state, reclamation
-  legality).
-- Added the document to the `docs/design/index.md` Core Design table.
-- Added the Phase 1 verification harness under #1557: the checked TOML ledger,
-  checker tests, trybuild borrow fixtures, six-family read-only parity, and
-  the source-inventory drift ledger.
-- Completed Task 4 in a separate commit from Task 3: deferred activation
-  metadata, compile/property/Miri/provider obligations, private corruption
-  test obligations, and the Phase 1 verification documentation.
-- No production storage API, unsafe public constructor, corruption hook, or
-  test escape hatch was added.
+This checkpoint delivers two artifacts:
 
-## Phase 1 harness artifacts and evidence
+- `docs/design/storage-ownership-contracts.md`: the normative G1--G7 storage
+  ownership contract, including signature sketches, six-column transition
+  tables, provider-neutral ownership rules, and the phase documentation
+  deliverables.
+- `scripts/test-storage-ownership-contracts-v2.py`: an executable RED
+  specification for the v2 ledger. It invokes the checked-in production
+  manifest and creates adversarial temporary repositories with real files and
+  real symlinks.
 
-The four tasks are intentionally layered:
+The v2 checker and runner are intentionally not implemented in this
+checkpoint. The existing checker file is still the superseded v1
+implementation; it is not a compatibility implementation of v2. Phase 1
+must later replace it with the v2 checker and add the runner. No production
+storage API, unsafe importer, corruption hook, or test escape hatch was added
+here.
 
-- Task 1 added `scripts/storage-ownership-contracts.toml`,
-  `scripts/check-storage-ownership-contracts.py`, and their CI-profile unit
-  tests. The ledger owns fixture identity, phase ownership, path confinement,
-  and source-inventory metadata.
-- Task 2 added the trybuild harness and eight current compile contracts: five
-  fail fixtures and three pass fixtures. Accepted `.stderr` snapshots are
-  checked in; the harness fails on an empty discovery set.
-- Task 3 added the six-family API parity test and the current-main source
-  inventory. The inventory contains 70 narrow scans (65 inventoried and five
-  forbidden) and 78 exact source rows; it is a lexical deletion/drift ledger,
-  not the ownership proof.
-- Task 4 extends the fixture schema with `future_path`, `command`, and
-  `activation_phase`. Deferred rows require all three plus `owner_issue` and
-  are activated by the exact future artifact appearing. Active rows use
-  `path`; dynamic verification kinds retain an executable command. Each future
-  artifact has exactly one deferred fixture row; shared obligations are kept
-  together in that row's rationale. The resulting ledger has 28 fixtures: nine
-  active and nineteen deferred. The G2 split-property obligations are one
-  `storage_group_properties.rs` artifact covering N=0, N=1, N>2, empty,
-  reverse-stride, overflow, disjointness, and overlap cases.
+## Contract decisions fixed by this checkpoint
 
-The Task 4 checker tests were written RED before implementation and then
-GREEN after the schema implementation. They cover missing deferred fields,
-invalid phases, active/deferred path exclusivity, traversal and symlink
-confinement, the existing-future-artifact promotion error, dynamic active
-commands, clean deferred rows, and the generic `provider` kind. The review
-fix added a focused duplicate-future-path test: it was restored to the clean
-parent, observed RED, then the checker was implemented and the full suite ran
-GREEN with 65 tests.
+- P0 (#1556) and P1 (#1557) are independent roots. P2 (#1558) has exactly one
+  prerequisite, P1. P0 joins only at the atomic CUTOVER cohort whose
+  prerequisites are P0 and P5 and whose members are P3 and P9.
+- The ledger has one canonical graph registry and one `[[obligations]]` table.
+  Each obligation has one immutable artifact, one typed command bound to that
+  artifact, one unit, one or more gate IDs, and a tagged `state`. Parallel
+  active/deferred tables, status booleans, terminal flags, synthetic terminal
+  artifacts, and stale p3/p4 ownership rows are rejected by the RED contract.
+- Deferred-to-active promotion changes only the tagged state. Artifact and
+  command identity, including path arguments and binding, remains identical
+  across base and candidate manifests. Candidate-bound receipts include the
+  manifest, artifact, command, and commit digests. Terminal status is derived
+  from obligations, cohort completion, and receipts.
+- Path validation is filesystem-aware. Repository-relative lexical checks are
+  supplemented by canonical resolution so `..`, absolute paths, and real
+  symlink escapes cannot become green. Existing deferred artifacts do not
+  promote themselves.
+- Command execution is fail-closed and allow-listed by typed command kind.
+  Shell strings, empty argv, path escapes, unknown command kinds, unbound
+  target links, and a failed active command are errors. Active commands run
+  once; deferred commands never run.
+- The storage kernel is provider-neutral and allocation-free on resolve/acquire
+  hot paths. It owns one provider vtable in `RootResourceState`; no provider
+  enum, per-access `Box`/`Arc`, or receiver-plus-resolved authority is part of
+  the contract.
+- `BackendAllocationAccess` is the sole unsafe provider extension boundary.
+  Providers can construct metadata and raw mapping/lease carriers, but cannot
+  construct `HostReadGuard`, `HostWriteGuard`, `RootBoundSpan`, claims, or
+  `UseLease`. `import_owned_storage` is safe and fallible; rejection returns
+  the same allocation box through `ImportRejected`.
+- `ResolvedWrite::backend_write_request` explicitly reborrows with
+  `let owner = &mut *self.capability.owner;` before borrowing disjoint pin and
+  claim fields. Device write failure returns the exact resolved exclusive
+  capability. Direct borrowed write is synchronous and retires before its
+  borrow ends; scoped execution is read-only. Detached asynchronous execution
+  owns `OwnedStorage`.
+- AD retention is descriptor/group liveness, not shallow storage cloning.
+  Retention has no copy/allocation reason; explicit duplication, transfers,
+  operation outputs, and checkpoint recomputation are separately classified.
 
-## Context read
+## RED coverage inventory
 
-- #1555 consolidated body (invariants I1 through I10, maintainer synthesis,
-  decomposition-check and evaluation comments).
-- Phase issues #1556 through #1569, including the expanded gate 7 (AD value
-  retention) and the #1568 AD provider-coverage section.
-- Current implementation seams cited in the review threads:
-  `crates/tenferro-ad/src/eager.rs` (`materialized()`, `GradSlot`,
-  `Arc<TensorValue>`), `crates/tenferro-runtime/src/checkpoint.rs`,
-  `crates/tenferro-gpu/src/webgpu/mod.rs` (`map_read`/`map_write` guard
-  types), `crates/tenferro-tensor/src/types.rs`
-  (`try_multi_slice_mut`, `TypedTensorViewMutPair`, `Placement`).
+The executable specification covers:
 
-## Decisions
+- the exact production manifest path and v1 rejection without compatibility;
+- nominal v2 parsing, tagged-state shape, canonical graph edges, P0/P1 root
+  independence, P2's single prerequisite, and CUTOVER atomicity;
+- duplicate and unknown graph targets, duplicate artifact targets, missing or
+  escaping paths, real symlink escapes, existing deferred artifacts, stale
+  `p3-ad-retention`/`p4-ad-runtime` rows, and synthetic terminal artifacts;
+- command allowlist, empty argv, path-argument confinement, exact
+  artifact-command binding, duplicate command identity, fail-closed execution,
+  active-once/deferred-never runner behavior;
+- base-to-candidate immutable identity, candidate-bound receipt fields, and
+  derived terminal status;
+- rejection of the old fixture/source/ownership parallel tables.
 
-- One document, sections numbered G1 through G7 to match the #1555 gate list
-  one to one, so "gate N" resolves to exactly one contract section.
-- `UseLease` is specified as `'static` with provider pins rather than a
-  borrow, because leases must move into runtime retirement records that
-  outlive the submitting borrow. Capability enforcement stays on the
-  acquisition methods (`&self` for reads, `&mut self` for writes); the lease
-  itself carries no authority.
-- Guard leak (`mem::forget`) is documented as sound but possibly
-  liveness-degrading until owner drop, so the contract does not depend on
-  `Drop` running for safety.
-- AD handle types remain `Clone` explicitly: the non-`Clone` rule applies to
-  owners and capabilities, and gate 7 defines handles as read-only
-  descriptor references. This resolves the apparent conflict between
-  "remove shallow `Clone`" (#1559) and existing `EagerTensor` cloning.
-- Copy and allocation accounting use separate reason enums and ledgers.
-  Retention has no variant in either ledger, encoding that retention performs
-  neither a copy nor an allocation instead of relying on aggregate counts.
-- Follow-up contract review after #1570 merged separated a unique
-  `OwnedSpanClaim` from a non-authoritative shared provider-resource pin.
-  Child claims can only be produced by consuming and proving a split of the
-  parent (or at an audited unsafe import boundary), and root deallocation
-  waits for every claim and lease.
-- Scoped execution now has an exact hybrid result shape: borrowed
-  identity/metadata outputs remain `'env`-bounded slots, fresh outputs are
-  owned slots, and `wait` returns an outcome that is independent of the
-  scope lifetime `'s`. Borrowed slots reject extraction without copying.
-- The earlier `lease_unique` sketch was rejected. No transition from a
-  shared pin or handle to exclusive authority exists; the unsafe raw-write
-  binder consumes an already-proven `StorageMut` capability.
-- AD descriptor liveness covers tape, checkpoint, execution, and every
-  sibling public handle. Generational IDs prevent a stale handle from
-  resolving to a reused descriptor slot, and extraction requires the caller
-  to consume the last liveness root.
-- The architecture quality gate rejects ad hoc provider or legacy-API
-  exceptions. All backends and AD/runtime use one ownership kernel; each
-  implementation phase deletes the path it replaces, and every temporary
-  bridge has an explicit removal phase.
-- Scoped retirement failure is an explicit quarantine outcome. Before a
-  borrowed scope can end, the affected root is atomically poisoned so later
-  safe access fails and the quarantine registry retains the resource. This
-  avoids both hidden copies and unsound return of a borrow whose device use
-  has unknown completion.
-- `ValueId` is group-qualified and generational, with
-  `GenerationalDescriptors` as the only liveness registry. Root claims carry
-  private provenance linked to the same root-resource identity as their
-  non-authoritative pin.
+The temporary repository helpers are test-only. They do not replace the
+production-manifest test, and the symlink cases create actual filesystem
+symlinks rather than checking a string containing a symlink-like path.
 
-## Alternatives rejected
+## Verification evidence for this checkpoint
 
-- Splitting the contracts into one document per gate: rejected because #1557
-  requires one canonical path referenced by all later phases.
-- Publishing a `timeline()` accessor in the trait sketch: rejected by the
-  maintainer synthesis; access acquisition methods own that state.
-- Specifying exact final public names: rejected; #1557 requires shapes and
-  capability rules while names stay provisional until owning phases land.
+Passing deterministic checks:
 
-## Verification
+- `python3.12 -m py_compile scripts/test-storage-ownership-contracts-v2.py`
+- generated v2 manifests parse with Python 3.12 `tomllib`, including promoted
+  active states;
+- `git diff --check`.
 
-- Python 3.12.11 is required for the checker and its `tomllib`-based tests;
-  the final environment provides both `python3` and `python3.12` at that
-  version.
-- Task 4 TDD evidence: the new schema tests were first run RED (62 tests,
-  18 failures caused by the unimplemented `activation_phase`/`command`
-  fields), then the checker was implemented and the initial expanded suite ran
-  GREEN (64 tests passed). The duplicate-deferred-`future_path` review test was
-  subsequently observed RED before its checker implementation; the final full
-  checker suite ran GREEN with 65 tests.
-- `python3.12 scripts/check-storage-ownership-contracts.py`: PASS, ledger OK;
-  28 fixtures (nine active, nineteen deferred), 70 source scans (65
-  inventoried, five forbidden), and 78 source-inventory rows.
-- `cargo test -p tenferro-tensor --test storage_compile_contract`: PASS; all
-  eight active trybuild UI cases matched their accepted diagnostics or pass
-  expectations.
-- `cargo test -p tenferro-tensor --test storage_api_parity`: PASS (one parity
-  test).
-- `cargo test -p tenferro-tensor`: PASS (216 unit tests, all integration
-  suites, eight trybuild cases, and 311 doctests).
-- `cargo check -p tenferro-gpu --features webgpu`: PASS. This is the current
-  Apple/Metal route; no native Metal implementation was added.
-- `python3.12 scripts/ci/run_profile.py ci-config`: the checker tests (65),
-  ledger, and all 161 CI-profile unit tests passed. The profile then failed at
-  the separate `actionlint` step because `actionlint` is not installed in the
-  environment (`/bin/sh: actionlint: not found`).
-- `python3.12 scripts/ci/run_profile.py docs`: PASS on one fresh, single
-  process run after the review fixes. Rustdoc completed, Quarto rendered all
-  84 pages including `performance/cpu-benchmark-results-2026-05-23.md`, and
-  the docs-site/link checks passed. No missing performance artifact occurred
-  in this run. The optional dependency graph was skipped with the distinct
-  environment warning `graphviz (dot) not found`. The run materialized
-  untracked rendered `docs/**/*.html` files and `docs/site_libs`; those
-  generated artifacts were moved/cleaned after evidence capture to restore a
-  clean worktree.
-- `bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-tensor --test storage_compile_contract' --test 'cargo test -p tenferro-tensor --test storage_api_parity' --test 'python3 scripts/check-storage-ownership-contracts.py'`: the required preflight
-  stopped before running focused tests because `origin/main` moved from the
-  Task 3 base and this candidate is not based on the latest fetched
-  `origin/main` (`d41d1716`). This is repository-state drift, not a test
-  failure; the focused commands above were run independently.
-- `cargo fmt --all --check`: PASS. `git diff --check`: PASS.
-- `python3.12 scripts/repository-rules-review.py --base origin/main --head
-  HEAD --output-json /tmp/repository-rules-review-task4-final-default.json`:
-  PASS, verdict `pass`, no findings. A separate diagnostic run with an
-  artificial 30-second timeout reported an external-response timeout; the
-  repository-default 120-second run above completed successfully on the
-  final candidate.
-- Task 2's accepted trybuild snapshots remain checked in; Task 3's source
-  inventory remains the lexical deletion/drift ledger, while Rust borrowing
-  and private constructors remain the ownership proof.
+The following RED result is intentional and is evidence that the implementation
+surface has not been silently added in this checkpoint:
 
-## Remaining risks
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` fails because the
+  v2 checker/runner behavior is not implemented yet; the checked-in production
+  manifest is still v1 and therefore also fails the v2 production assertion.
 
-- The G6 command table and deferred `command` fields name current scripts; a
-  phase that renames tooling must update the table and ledger in the same PR.
-- Signature sketches will drift slightly as owning phases land; the change
-  control rule (update document plus tests in the same PR) is the guard.
-- The AD `ValueGuard`/`Gradients` sketches are the least implementation-
-  tested part of the contract; Phase 3 and Phase 9 may need to refine them
-  through the documented change-control path.
-- The deferred rows become active only when their exact future artifact is
-  introduced. The owning phase must promote the row in the same change as the
-  artifact and keep the command and acceptance evidence current.
-- The repository-rules review is an external-LLM-dependent gate in addition
-  to the deterministic checker; this candidate has a recorded PASS, while
-  future environments must report an unavailable external review separately.
+No cargo implementation tests are claimed here because this checkpoint changes
+only design, ledger specification tests, and provenance. The next Phase 1
+checkpoint must first implement the checker/runner against this RED contract,
+then run the full v2 suite, the exact production manifest, the source
+inventory, trybuild, parity, docs, and repository quality gates.
+
+## Residual work and change control
+
+- Replace the v1 production ledger with the v2 single-table schema in the
+  checker/runner implementation checkpoint; do not add a v1 compatibility
+  parser.
+- Implement filesystem-aware artifact resolution, promotion comparison,
+  candidate-bound receipts, typed command execution, and derived terminal
+  reporting to satisfy this RED suite.
+- Keep this design document and this RED specification in the same PR for any
+  semantic contract change. A later phase may refine provisional names only by
+  updating the contract and its executable tests together.
+- The obsolete `HANDOFF-2026-07-25-tenferro-unification6-wip.md` remains a
+  Phase 13 cleanup item; it is intentionally not deleted in this Phase 1
+  checkpoint.
