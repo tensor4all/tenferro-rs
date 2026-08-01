@@ -69,7 +69,7 @@ jobs:
             // tensor core dependency boundary) still block merge via branch
             // protection, but do not need to hold up the GPU runner.
             const required = [
-              "repository rules review",
+              "repository rules review gate",
               "rustfmt",
               "clippy",
               "coverage",
