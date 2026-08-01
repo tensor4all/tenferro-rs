@@ -337,7 +337,7 @@ jobs:
             // non-GPU workspace test aggregate. CUDA archive compilation still
             // runs on a cheap hosted runner in parallel.
             const required = [
-              "repository rules review",
+              "repository rules review gate",
               "rustfmt",
               "clippy",
               "coverage",

@@ -247,7 +247,7 @@ def test_review_bot_workflow_exists() -> None:
     text = read(".github/workflows/review_bot.yml")
 
     assert "name: review bot" in text
-    assert "repository rules review" in text
+    assert "name: repository rules review gate" in text
     assert "DEEPSEEK_API_KEY" in text
     assert "rules-review:waive" in text
 
@@ -263,13 +263,13 @@ def test_review_bot_uses_current_deepseek_model_fallback() -> None:
 def test_repo_settings_requires_repository_rules_review() -> None:
     text = read("ai/repo-settings.json")
 
-    assert '"repository rules review"' in text
+    assert '"repository rules review gate"' in text
 
 
 def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
     text = read(".github/workflows/CI_gpu.yml")
 
-    assert '"repository rules review"' in text
+    assert '"repository rules review gate"' in text
     assert "repository rules review (LLM)" not in text
     assert text.index("pre-gpu-gate:") < text.index("cuda-archive:")
     assert text.index("pre-gpu-gate:") < text.index("runs-on: ubuntu-gpu")

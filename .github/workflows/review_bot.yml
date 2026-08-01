@@ -476,7 +476,7 @@ jobs:
             }
 
   review-bot-gate:
-    name: repository rules review
+    name: repository rules review gate
     needs: [review-bot, review-bot-no-llm, review-bot-waived]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
