@@ -380,6 +380,7 @@ The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSIO
 `E_ARTIFACT_DUPLICATE_TARGET`, `E_ARTIFACT_MISSING`, `E_PATH_ESCAPE`,
 `E_PATH_SYMLINK_ESCAPE`, `E_DEFERRED_ARTIFACT_EXISTS`,
 `E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_ARGV_BINDING`,
+`E_COMMAND_ARGV_LENGTH`,
 `E_COMMAND_CWD_ESCAPE`, `E_COMMAND_PATH_ESCAPE`,
 `E_COMMAND_ARGV_PATH_ESCAPE`, `E_COMMAND_CWD_SYMLINK_ESCAPE`,
 `E_COMMAND_ARGV_SYMLINK_ESCAPE`, `E_COMMAND_ARTIFACT_BINDING`,
@@ -388,7 +389,11 @@ The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSIO
 `E_RECEIPT_EXECUTION_BINDING`, `E_RECEIPT_INCOMPLETE`, and
 `E_TERMINAL_DECLARED`. Command kinds have an exact allow-listed `argv` vector:
 `E_COMMAND_ARGV_BINDING` has exactly `command_id`, `index`, `expected`, and
-`actual`. `E_COMMAND_CWD_ESCAPE` has exactly `command_id` and `cwd`, and
+`actual`; the RED suite exercises every index of every canonical command
+vector. `E_COMMAND_ARGV_LENGTH` has exactly `command_id`, `expected`, and
+`actual`, where `expected` and `actual` are integer vector lengths. The RED
+suite checks both one missing final argument and one appended extra argument
+for every canonical command ID. `E_COMMAND_CWD_ESCAPE` has exactly `command_id` and `cwd`, and
 covers absolute cwd values and cwd values whose normalized path escapes the
 repository. `E_COMMAND_ARGV_PATH_ESCAPE` has exactly `command_id`, `index`,
 and `argument`; every path-bearing argv element is canonicalized independently
@@ -407,6 +412,13 @@ The RED suite includes both a structured temporary repository for adversarial
 path, graph, promotion, and command-binding cases and an integration case that
 invokes the checked-in production manifest. Temporary repositories contain
 real files and real symlinks; they do not stand in for the production gate.
+
+The command-argv RED cases mutate every argv index for every distinct canonical
+command ID and separately remove the final argument or append an extra
+argument. If a future manifest shares an ID, every occurrence is mutated
+together, so the expected binding or length diagnostic cannot be masked by
+`E_COMMAND_ID_CONFLICT`; the tests assert exact fields and check the complete
+coordinate and length-case coverage sets and multiplicities.
 
 The RED command emits a machine-readable
 `tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is

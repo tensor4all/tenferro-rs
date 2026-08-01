@@ -484,6 +484,20 @@ DEFERRED_OBLIGATIONS = (
 )
 
 ALL_OBLIGATIONS = BASE_ACTIVE_OBLIGATIONS + DEFERRED_OBLIGATIONS
+CANONICAL_COMMAND_IDS = tuple(dict.fromkeys(row[6] for row in ALL_OBLIGATIONS))
+CANONICAL_COMMAND_ARGV = {
+    command_id: next(row[8] for row in ALL_OBLIGATIONS if row[6] == command_id)
+    for command_id in CANONICAL_COMMAND_IDS
+}
+CANONICAL_COMMAND_ARGV_COORDINATES = tuple(
+    (command_id, index)
+    for command_id in CANONICAL_COMMAND_IDS
+    for index in range(len(CANONICAL_COMMAND_ARGV[command_id]))
+)
+COMMAND_ARGV_LENGTH_CASES = (
+    "missing-final-argument",
+    "appended-extra-argument",
+)
 CUTOVER_CANDIDATE_OBLIGATIONS = frozenset(
     row[0] for row in DEFERRED_OBLIGATIONS if row[1] in {"P3", "P4", "P5", "P9"}
 )
@@ -515,6 +529,7 @@ DIAGNOSTIC_FIELDS = {
     "E_DEFERRED_ARTIFACT_EXISTS": frozenset({"obligation_id"}),
     "E_COMMAND_KIND": frozenset({"command_id", "kind"}),
     "E_COMMAND_ARGV": frozenset({"command_id"}),
+    "E_COMMAND_ARGV_LENGTH": frozenset({"command_id", "expected", "actual"}),
     "E_COMMAND_ARGV_BINDING": frozenset(
         {"command_id", "index", "expected", "actual"}
     ),
@@ -539,6 +554,13 @@ DIAGNOSTIC_FIELDS = {
     ),
     "E_RECEIPT_INCOMPLETE": frozenset({"obligation_id"}),
     "E_TERMINAL_DECLARED": frozenset({"field"}),
+}
+DIAGNOSTIC_FIELD_TYPES = {
+    "E_COMMAND_ARGV_LENGTH": {
+        "command_id": str,
+        "expected": int,
+        "actual": int,
+    },
 }
 
 # This is the intentional RED boundary for the current checkpoint.  It is
@@ -578,6 +600,18 @@ RED_EXPECTED_FAILURES = {
     },
     "test_command_argv_exact_allowlist_is_enforced": {
         "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"command_id": command_id, "index": index}
+            for command_id, index in CANONICAL_COMMAND_ARGV_COORDINATES
+        ],
+    },
+    "test_command_argv_length_is_enforced": {
+        "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"command_id": command_id, "case": case}
+            for command_id in CANONICAL_COMMAND_IDS
+            for case in COMMAND_ARGV_LENGTH_CASES
+        ],
     },
     "test_command_cwd_confinement_rejects_absolute_and_parent_escape": {
         "cause": "v2-checker-not-implemented",
@@ -939,6 +973,64 @@ def _replace_in_obligation(source: str, obligation_id: str, old: str, new: str) 
     return "\n\n".join(blocks)
 
 
+def _command_argv_occurrences(
+    source: str, command_id: str
+) -> tuple[list[str], list[int], tuple[str, ...]]:
+    rows = [row for row in ALL_OBLIGATIONS if row[6] == command_id]
+    if not rows:
+        raise AssertionError(f"unknown canonical command ID: {command_id}")
+    expected_argv = rows[0][8]
+    if any(row[8] != expected_argv for row in rows):
+        raise AssertionError(
+            f"shared command ID has inconsistent canonical argv: {command_id}"
+        )
+    blocks = source.split("\n\n")
+    matches = [
+        block_index
+        for block_index, block in enumerate(blocks)
+        if f'id = "{command_id}"' in block
+    ]
+    if len(matches) != len(rows):
+        raise AssertionError(
+            f"command ID occurrence count changed for {command_id}: "
+            f"expected {len(rows)}, found {len(matches)}"
+        )
+    return blocks, matches, expected_argv
+
+
+def _replace_command_argv_in_all_occurrences(
+    source: str, command_id: str, *, index: int, actual: str
+) -> tuple[str, str]:
+    blocks, matches, expected_argv = _command_argv_occurrences(source, command_id)
+    if not 0 <= index < len(expected_argv):
+        raise AssertionError(f"argv index out of range for {command_id}: {index}")
+    mutated_argv = expected_argv[:index] + (actual,) + expected_argv[index + 1 :]
+    old = f"argv = {_array(expected_argv)}"
+    new = f"argv = {_array(mutated_argv)}"
+    for block_index in matches:
+        blocks[block_index] = _replace_once(blocks[block_index], old, new)
+    return "\n\n".join(blocks), expected_argv[index]
+
+
+def _replace_command_argv_length_in_all_occurrences(
+    source: str, command_id: str, *, case: str
+) -> tuple[str, int, int]:
+    blocks, matches, expected_argv = _command_argv_occurrences(source, command_id)
+    if not expected_argv:
+        raise AssertionError(f"canonical command argv must not be empty: {command_id}")
+    if case == "missing-final-argument":
+        mutated_argv = expected_argv[:-1]
+    elif case == "appended-extra-argument":
+        mutated_argv = expected_argv + ("unexpected-extra-argument",)
+    else:
+        raise AssertionError(f"unknown argv length case: {case}")
+    old = f"argv = {_array(expected_argv)}"
+    new = f"argv = {_array(mutated_argv)}"
+    for block_index in matches:
+        blocks[block_index] = _replace_once(blocks[block_index], old, new)
+    return "\n\n".join(blocks), len(expected_argv), len(mutated_argv)
+
+
 def _git(root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=root, text=True, capture_output=True, check=False
@@ -1256,6 +1348,8 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             fields = diagnostic.get("fields")
             self.assertIsInstance(fields, dict)
             self.assertEqual(set(fields), DIAGNOSTIC_FIELDS[code])
+            for field, field_type in DIAGNOSTIC_FIELD_TYPES.get(code, {}).items():
+                self.assertIs(type(fields[field]), field_type)
             self.assertIsInstance(diagnostic.get("message"), str)
             codes.append(code)
         self.assertEqual(len(codes), len(set(codes)), payload)
@@ -1735,22 +1829,61 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         )
 
     def test_command_argv_exact_allowlist_is_enforced(self) -> None:
-        mutated = _replace_in_obligation(
-            valid_manifest(),
-            "p1-ledger",
-            'argv = ["python3", "scripts/check-storage-ownership-contracts.py"]',
-            'argv = ["python", "scripts/check-storage-ownership-contracts.py"]',
-        )
-        self.assert_checker_error(
-            mutated,
-            "E_COMMAND_ARGV_BINDING",
-            fields={
-                "command_id": "cmd-ledger",
-                "index": 0,
-                "expected": "python3",
-                "actual": "python",
-            },
-        )
+        exercised: list[tuple[str, int]] = []
+        for command_id, index in CANONICAL_COMMAND_ARGV_COORDINATES:
+            with self.subTest(command_id=command_id, index=index):
+                expected = CANONICAL_COMMAND_ARGV[command_id][index]
+                actual = f"{expected}-mutated-{index}"
+                mutated, expected = _replace_command_argv_in_all_occurrences(
+                    valid_manifest(), command_id, index=index, actual=actual
+                )
+                exercised.append((command_id, index))
+                self.assert_checker_error(
+                    mutated,
+                    "E_COMMAND_ARGV_BINDING",
+                    fields={
+                        "command_id": command_id,
+                        "index": index,
+                        "expected": expected,
+                        "actual": actual,
+                    },
+                )
+        canonical = set(CANONICAL_COMMAND_ARGV_COORDINATES)
+        self.assertEqual(set(exercised), canonical)
+        self.assertEqual(Counter(exercised), Counter(canonical))
+
+    def test_command_argv_length_is_enforced(self) -> None:
+        exercised: list[tuple[str, str]] = []
+        for command_id in CANONICAL_COMMAND_IDS:
+            for case in COMMAND_ARGV_LENGTH_CASES:
+                with self.subTest(command_id=command_id, case=case):
+                    mutated, expected, actual = (
+                        _replace_command_argv_length_in_all_occurrences(
+                            valid_manifest(), command_id, case=case
+                        )
+                    )
+                    exercised.append((command_id, case))
+                    self.assert_checker_error(
+                        mutated,
+                        "E_COMMAND_ARGV_LENGTH",
+                        fields={
+                            "command_id": command_id,
+                            "expected": expected,
+                            "actual": actual,
+                        },
+                    )
+        canonical = {
+            (command_id, case)
+            for command_id in CANONICAL_COMMAND_IDS
+            for case in COMMAND_ARGV_LENGTH_CASES
+        }
+        self.assertEqual(set(exercised), canonical)
+        self.assertEqual(Counter(exercised), Counter(canonical))
+        for case in COMMAND_ARGV_LENGTH_CASES:
+            self.assertEqual(
+                {command_id for command_id, actual_case in exercised if actual_case == case},
+                set(CANONICAL_COMMAND_IDS),
+            )
 
     def test_command_cwd_confinement_rejects_absolute_and_parent_escape(self) -> None:
         for cwd in ("/tmp/ledger-command-outside", "../ledger-command-outside"):

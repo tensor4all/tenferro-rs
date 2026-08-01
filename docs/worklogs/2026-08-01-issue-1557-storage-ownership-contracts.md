@@ -285,14 +285,23 @@ Passing deterministic checks:
   (pass; external LLM review explicitly skipped);
 - `git diff --check`.
 
+The argv allowlist RED coverage now exercises every index of every distinct
+canonical command ID, plus one missing-final-argument and one appended-extra-
+argument case per ID. Shared IDs are mutated at every occurrence before
+checking exact binding fields or the typed `E_COMMAND_ARGV_LENGTH` fields
+(`command_id`, integer `expected`, integer `actual`). The self-tests compare
+the complete `(command_id, index)` and length-case sets and multiplicities with
+the canonical domains. This is coverage only; runner observed argv/cwd, real
+command kinds, TOCTOU, and receipt diagnostics remain deferred.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 52 tests and
-  reports exactly 54 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 53 tests and
+  reports exactly 189 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (31
+  skipped tests. The causes are machine-readable: v2 checker absent (166
   events), v2 runner absent (19 events), future production proof artifacts
   absent (3 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
