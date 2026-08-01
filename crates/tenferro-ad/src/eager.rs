@@ -77,6 +77,23 @@ struct CpuRuntimeSelection {
     capabilities: CoreCapabilityBundle,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CpuRuntimeRegistrationState {
+    Absent,
+    Present { identity: CpuRuntimeIdentity },
+}
+
+impl CpuRuntimeRegistrationState {
+    fn for_backend(backend: &EagerBackend) -> Self {
+        match backend.cpu_backend() {
+            Some(backend) => Self::Present {
+                identity: backend.runtime_identity(),
+            },
+            None => Self::Absent,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct EagerOpProfileEntry {
     calls: usize,
@@ -274,6 +291,16 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     Error::runtime_state_source(op, ErrorPhase::Execution, source)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "eager backend mutation failed ({primary}); runtime registration synchronization also failed ({synchronization})"
+)]
+struct BackendMutationSynchronizationError {
+    #[source]
+    primary: Error,
+    synchronization: Error,
 }
 
 fn cpu_runtime_bridge_unsupported(message: impl Into<String>) -> Error {
@@ -548,7 +575,13 @@ pub struct EagerRuntime {
     id: ContextId,
     runtime: Runtime,
     pub(crate) backend: Mutex<EagerBackend>,
-    registered_cpu_identity: Mutex<Option<CpuRuntimeIdentity>>,
+    // The private Runtime can change its CPU engine only through
+    // synchronize_runtime_registration_for_backend. The backend mutex is the
+    // serialization boundary for that path; extension-only Runtime changes do
+    // not alter the CPU witness and therefore do not invalidate this cache.
+    registered_cpu_registration: Mutex<CpuRuntimeRegistrationState>,
+    #[cfg(test)]
+    registration_snapshot_reads: AtomicUsize,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -647,10 +680,10 @@ impl EagerRuntime {
         })
     }
 
-    fn lock_registered_cpu_identity(&self) -> Result<MutexGuard<'_, Option<CpuRuntimeIdentity>>> {
-        self.registered_cpu_identity.lock().map_err(|_| {
+    fn lock_cpu_runtime_registration(&self) -> Result<MutexGuard<'_, CpuRuntimeRegistrationState>> {
+        self.registered_cpu_registration.lock().map_err(|_| {
             Error::runtime_state(
-                "eager_registered_cpu_identity",
+                "eager_cpu_runtime_registration",
                 ErrorPhase::Execution,
                 "lock poisoned",
             )
@@ -724,14 +757,27 @@ impl EagerRuntime {
     }
 
     fn synchronize_runtime_registration_for_backend(&self, backend: &EagerBackend) -> Result<()> {
+        // Lock ordering: callers hold the eager backend lock first (and the
+        // extension-cache lock second when applicable); this helper acquires
+        // the CPU registration lock before the runtime snapshot lock. Runtime
+        // reconfiguration never acquires an eager lock in reverse.
+        //
+        // Because callers hold the backend lock, comparing this typed witness
+        // state is sufficient: the private Runtime has no other production
+        // path that can replace or remove the CPU engine. Installing an
+        // extension module may advance the Runtime epoch, but cannot change
+        // the CPU engine, so identity equality must remain a true fast path.
+        let backend_registration = CpuRuntimeRegistrationState::for_backend(backend);
+        let mut registered_cpu_registration = self.lock_cpu_runtime_registration()?;
+        if *registered_cpu_registration == backend_registration {
+            return Ok(());
+        }
+        #[cfg(test)]
+        self.registration_snapshot_reads
+            .fetch_add(1, Ordering::SeqCst);
         let engine_id = cpu_runtime_engine_id().map_err(|source| {
             runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source)
         })?;
-        // Lock ordering: callers hold the eager backend lock first (and the
-        // extension-cache lock second when applicable); this helper then
-        // acquires the CPU identity lock before the runtime snapshot lock.
-        // Runtime reconfiguration never acquires an eager lock in reverse.
-        let mut registered_cpu_identity = self.lock_registered_cpu_identity()?;
         let snapshot = self
             .runtime
             .snapshot()
@@ -739,14 +785,6 @@ impl EagerRuntime {
         let has_cpu_engine = snapshot.engine(&engine_id).is_some();
         match backend.cpu_backend() {
             Some(backend) => {
-                let backend_identity = backend.runtime_identity();
-                if has_cpu_engine
-                    && registered_cpu_identity
-                        .as_ref()
-                        .is_some_and(|registered| registered == &backend_identity)
-                {
-                    return Ok(());
-                }
                 let registration = cpu_runtime_engine_registration(&backend).map_err(|source| {
                     runtime_config_error("EagerRuntime::cpu_runtime_engine_registration", source)
                 })?;
@@ -759,11 +797,10 @@ impl EagerRuntime {
                         }
                         Ok(())
                     })
-                    .map(|_| ())
                     .map_err(|source| {
                         runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
                     })?;
-                *registered_cpu_identity = Some(backend_identity);
+                *registered_cpu_registration = backend_registration;
                 Ok(())
             }
             None if has_cpu_engine => {
@@ -775,11 +812,11 @@ impl EagerRuntime {
                     .map_err(|source| {
                         runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
                     })?;
-                *registered_cpu_identity = None;
+                *registered_cpu_registration = backend_registration;
                 Ok(())
             }
             None => {
-                *registered_cpu_identity = None;
+                *registered_cpu_registration = backend_registration;
                 Ok(())
             }
         }
@@ -799,12 +836,14 @@ impl EagerRuntime {
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
         let runtime = build_eager_runtime_for_backend(&backend);
-        let registered_cpu_identity = backend.cpu_backend().map(CpuBackend::runtime_identity);
+        let registered_cpu_registration = CpuRuntimeRegistrationState::for_backend(&backend);
         Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
-            registered_cpu_identity: Mutex::new(registered_cpu_identity),
+            registered_cpu_registration: Mutex::new(registered_cpu_registration),
+            #[cfg(test)]
+            registration_snapshot_reads: AtomicUsize::new(0),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,
@@ -1374,9 +1413,20 @@ impl EagerRuntime {
     ) -> Result<R> {
         let mut backend = self.lock_backend()?;
         let mut extension_caches = self.lock_extension_caches()?;
-        let result = f(&mut backend, &mut extension_caches).map_err(Error::from)?;
-        self.synchronize_runtime_registration_for_backend(&backend)?;
-        Ok(result)
+        let result = f(&mut backend, &mut extension_caches).map_err(Error::from);
+        let synchronization = self.synchronize_runtime_registration_for_backend(&backend);
+        match (result, synchronization) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(_), Err(synchronization)) => Err(synchronization),
+            (Err(primary), Err(synchronization)) => Err(runtime_state_source(
+                "EagerRuntime::with_backend_and_extension_caches_mut",
+                BackendMutationSynchronizationError {
+                    primary,
+                    synchronization,
+                },
+            )),
+        }
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {

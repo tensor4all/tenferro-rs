@@ -31,6 +31,16 @@ fn refreshes() -> usize {
     CPU_RUNTIME_SELECTION_REFRESHES.load(Ordering::SeqCst)
 }
 
+fn reset_registration_snapshot_reads(runtime: &EagerRuntime) {
+    runtime
+        .registration_snapshot_reads
+        .store(0, Ordering::SeqCst);
+}
+
+fn registration_snapshot_reads(runtime: &EagerRuntime) -> usize {
+    runtime.registration_snapshot_reads.load(Ordering::SeqCst)
+}
+
 fn cpu_engine_id() -> EngineId {
     EngineId::new(CPU_ENGINE_ID).unwrap()
 }
@@ -189,6 +199,53 @@ fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
 }
 
 #[test]
+fn unchanged_cpu_runtime_identity_avoids_registration_snapshot_and_reconfigure() {
+    let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    reset_registration_snapshot_reads(&runtime);
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_registration = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered")
+        .registration_identity();
+
+    runtime.with_backend_mut(|_| ()).unwrap();
+
+    let after = runtime.runtime.snapshot().unwrap();
+    assert_eq!(registration_snapshot_reads(&runtime), 0);
+    assert_eq!(after.epoch(), before.epoch());
+    assert_eq!(
+        after
+            .engine(&cpu_engine_id())
+            .expect("CPU engine registered")
+            .registration_identity(),
+        before_registration
+    );
+}
+
+#[test]
+fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
+    let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let before_epoch = runtime.runtime.snapshot().unwrap().epoch();
+
+    runtime
+        .install_extension_module(super::ReadPathFallbackModule::module())
+        .unwrap();
+    let after_extension_epoch = runtime.runtime.snapshot().unwrap().epoch();
+    assert_ne!(after_extension_epoch, before_epoch);
+
+    reset_registration_snapshot_reads(&runtime);
+    runtime.with_backend_mut(|_| ()).unwrap();
+
+    assert_eq!(registration_snapshot_reads(&runtime), 0);
+    assert_eq!(
+        runtime.runtime.snapshot().unwrap().epoch(),
+        after_extension_epoch
+    );
+}
+
+#[test]
 fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
     let backend = CpuBackend::new();
     let replacement = backend
@@ -209,6 +266,45 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
 
     let after = runtime.runtime.snapshot().unwrap();
     let after_engine = after.engine(&engine_id).expect("CPU engine registered");
+    assert_eq!(
+        after_engine.provider_device_identity(),
+        &before_provider_device
+    );
+    assert_ne!(after_engine.registration_identity(), before_registration);
+    assert_ne!(after.epoch(), before_epoch);
+}
+
+#[test]
+fn backend_cache_closure_error_still_synchronizes_mutated_cpu_runtime() {
+    let backend = CpuBackend::new();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_engine = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered");
+    let before_provider_device = before_engine.provider_device_identity().clone();
+    let before_registration = before_engine.registration_identity();
+    let before_epoch = before.epoch();
+
+    let error = runtime
+        .with_backend_and_extension_caches_mut::<()>(|backend, _| {
+            *backend = EagerBackend::Cpu(replacement);
+            Err(tenferro_tensor::Error::BackendFailure {
+                op: "test_backend_cache_closure",
+                message: "primary closure failure".to_owned(),
+            })
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("primary closure failure"));
+
+    let after = runtime.runtime.snapshot().unwrap();
+    let after_engine = after
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered");
     assert_eq!(
         after_engine.provider_device_identity(),
         &before_provider_device

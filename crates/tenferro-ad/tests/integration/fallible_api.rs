@@ -116,8 +116,24 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 fn eager_cpu_registration_cache_is_opaque_and_lock_ordered_source_contract() {
     let source = include_str!("../../src/eager.rs");
     assert!(
-        source.contains("registered_cpu_identity: Mutex<Option<CpuRuntimeIdentity>>"),
-        "eager runtime should cache only the typed CPU runtime identity"
+        source.contains("registered_cpu_registration: Mutex<CpuRuntimeRegistrationState>"),
+        "eager runtime should cache typed CPU registration state"
+    );
+    assert!(
+        source.contains("enum CpuRuntimeRegistrationState"),
+        "eager runtime should model CPU registration as an explicit sum state"
+    );
+    assert!(
+        source.contains("Present { identity: CpuRuntimeIdentity }"),
+        "present CPU registration state should retain the opaque CPU identity"
+    );
+    assert!(
+        source.contains("Absent"),
+        "CPU registration state should represent an absent CPU engine explicitly"
+    );
+    assert!(
+        !source.contains("identity: Option<CpuRuntimeIdentity>"),
+        "CPU registration state must not encode absence through Option"
     );
     assert!(
         !source.contains("registered_cpu_backend: Mutex<Option<CpuBackend>>"),
@@ -134,8 +150,8 @@ fn eager_cpu_registration_cache_is_opaque_and_lock_ordered_source_contract() {
         "CPU registration synchronization must document its lock ordering"
     );
     assert!(
-        synchronization.contains("lock_registered_cpu_identity"),
-        "CPU registration synchronization must use the identity lock"
+        synchronization.contains("lock_cpu_runtime_registration"),
+        "CPU registration synchronization must use the registration-state lock"
     );
     assert!(
         !synchronization.contains("shares_runtime_identity_with"),
