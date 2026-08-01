@@ -27,6 +27,7 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/fail/immutable_typed_view_while_mutable_used.rs"
 
 [[fixtures]]
@@ -35,6 +36,7 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/fail/second_mutable_typed_view.rs"
 
 [[fixtures]]
@@ -43,6 +45,7 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/fail/tensor_view_mut_not_clone.rs"
 
 [[fixtures]]
@@ -51,6 +54,7 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_current_owner_swap.rs"
 rationale = "This is the legacy current-surface baseline and must be replaced by the deferred new-owner fixture in #1559; there is no Buffer compatibility promise."
 
@@ -60,6 +64,7 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_view_mut_not_clone.rs"
 
 [[fixtures]]
@@ -68,6 +73,7 @@ gate = "G2"
 kind = "trybuild-pass"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/pass/disjoint_try_multi_slice_mut.rs"
 
 [[fixtures]]
@@ -76,6 +82,7 @@ gate = "G4"
 kind = "trybuild-pass"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/pass/multiple_immutable_typed_views.rs"
 
 [[fixtures]]
@@ -84,6 +91,7 @@ gate = "G4"
 kind = "trybuild-pass"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/ui/storage/pass/sequential_mutable_typed_views.rs"
 
 [[fixtures]]
@@ -92,7 +100,10 @@ gate = "G3"
 kind = "trybuild-fail"
 status = "deferred"
 owner_issue = 1565
-rationale = "A host guard must not survive a consuming submission. The owning G1/G3 phase will add the real compile-fail fixture."
+activation_phase = 9
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/host_guard_across_consuming_submit.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "A host guard must not survive a consuming submission. Phase 9 adds the compile-fail fixture when the scoped submission API exists."
 
 [[fixtures]]
 id = "g3-scoped-handle-escape"
@@ -100,6 +111,9 @@ gate = "G3"
 kind = "trybuild-fail"
 status = "deferred"
 owner_issue = 1565
+activation_phase = 9
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/scoped_handle_escape.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
 rationale = "A scoped execution handle must not escape its submission scope."
 
 [[fixtures]]
@@ -108,6 +122,9 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "deferred"
 owner_issue = 1559
+activation_phase = 3
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/owned_storage_not_clone.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
 rationale = "The ownership token and mutable capability must remain non-Clone."
 
 [[fixtures]]
@@ -116,15 +133,10 @@ gate = "G4"
 kind = "trybuild-fail"
 status = "deferred"
 owner_issue = 1559
+activation_phase = 3
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/owner_container_swap.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
 rationale = "The public API must not permit swapping owner containers through a mutable projection."
-
-[[fixtures]]
-id = "g2-group-n-way-splitting"
-gate = "G2"
-kind = "property"
-status = "deferred"
-owner_issue = 1561
-rationale = "AllocationGroup splitting needs N=0, N=1, N>2, empty, reverse-stride, and overflow coverage."
 
 [[fixtures]]
 id = "g1-corruption-at-map"
@@ -132,7 +144,10 @@ gate = "G1"
 kind = "corruption"
 status = "deferred"
 owner_issue = 1560
-rationale = "Corrupted descriptor ranges must be rejected at host-map revalidation."
+activation_phase = 4
+future_path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs"
+command = "cargo test -p tenferro-tensor --lib storage::tests::corruption_map"
+rationale = "Corrupted descriptor ranges must be rejected at host-map revalidation. The future helper is private crate-unit-test code only."
 
 [[fixtures]]
 id = "g1-corruption-at-enqueue"
@@ -140,7 +155,10 @@ gate = "G1"
 kind = "corruption"
 status = "deferred"
 owner_issue = 1560
-rationale = "Corrupted descriptor ranges must also be rejected at device enqueue revalidation."
+activation_phase = 4
+future_path = "crates/tenferro-tensor/src/storage/tests/corruption_enqueue.rs"
+command = "cargo test -p tenferro-tensor --lib storage::tests::corruption_enqueue"
+rationale = "Corrupted descriptor ranges must also be rejected at device enqueue revalidation. The future helper is private crate-unit-test code only."
 
 [[fixtures]]
 id = "g1-miri-surface"
@@ -148,7 +166,10 @@ gate = "G1"
 kind = "miri"
 status = "deferred"
 owner_issue = 1560
-rationale = "The host guard, range, and retirement surface requires a supported Miri lane."
+activation_phase = 4
+future_path = "crates/tenferro-tensor/tests/storage_access.rs"
+command = "cargo miri test -p tenferro-tensor --test storage_access"
+rationale = "The host guard, range, and retirement surface requires a supported Miri lane. Cover host read/write guard slices, empty spans, and guard drop/leak behavior without making safety depend on Drop."
 
 [[fixtures]]
 id = "g1-property-surface"
@@ -156,7 +177,10 @@ gate = "G1"
 kind = "property"
 status = "deferred"
 owner_issue = 1560
-rationale = "G1 span/range and retirement invariants require property coverage."
+activation_phase = 4
+future_path = "crates/tenferro-tensor/tests/storage_access_properties.rs"
+command = "cargo test -p tenferro-tensor --test storage_access_properties"
+rationale = "G1 properties cover checked range/alignment overflow and exactly-once root reclamation."
 
 [[fixtures]]
 id = "g2-miri-surface"
@@ -164,7 +188,10 @@ gate = "G2"
 kind = "miri"
 status = "deferred"
 owner_issue = 1561
-rationale = "G2 disjoint-view lifetime behavior requires a supported Miri lane."
+activation_phase = 5
+future_path = "crates/tenferro-tensor/tests/storage_group.rs"
+command = "cargo miri test -p tenferro-tensor --test storage_group"
+rationale = "G2 Miri covers descriptor tombstones/stale generational IDs and N-way mutable-borrow lifetimes."
 
 [[fixtures]]
 id = "g2-property-surface"
@@ -172,7 +199,10 @@ gate = "G2"
 kind = "property"
 status = "deferred"
 owner_issue = 1561
-rationale = "G2 layout injectivity, overlap, and generation invariants require property coverage."
+activation_phase = 5
+future_path = "crates/tenferro-tensor/tests/storage_group_properties.rs"
+command = "cargo test -p tenferro-tensor --test storage_group_properties"
+rationale = "G2 properties cover reverse/zero strides, permutation-independent disjointness, overlapping claim rejection, and N=0, N=1, N>2, empty, and overflow group splits."
 
 [[fixtures]]
 id = "g4-storage-api-parity"
@@ -180,8 +210,108 @@ gate = "G4"
 kind = "parity"
 status = "active"
 owner_issue = 1557
+activation_phase = 1
 path = "crates/tenferro-tensor/tests/storage_api_parity.rs"
 rationale = "One canonical read-only method list is exercised against all six current owner and view faces."
+
+[[fixtures]]
+id = "g1-write-guard-from-shared-capability"
+gate = "G1"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1560
+activation_phase = 4
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/write_guard_from_shared_capability.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "A host write guard must require the exclusive owner capability; shared access must not mint write authority."
+
+[[fixtures]]
+id = "g2-root-access-while-children-live"
+gate = "G2"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1561
+activation_phase = 5
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/root_access_while_children_live.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "The root/source capability is excluded while N-way child mutable borrows remain live."
+
+[[fixtures]]
+id = "g2-mutable-reinterpret-source-alias"
+gate = "G2"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1562
+activation_phase = 6
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/mutable_reinterpret_source_alias.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "Mutable reinterpretation must not reintroduce a source alias or bypass the exclusive capability."
+
+[[fixtures]]
+id = "g3-consuming-submission-positive"
+gate = "G3"
+kind = "trybuild-pass"
+status = "deferred"
+owner_issue = 1565
+activation_phase = 9
+future_path = "crates/tenferro-tensor/tests/ui/storage/pass/consuming_submission.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "The consuming submission path is valid after all borrowed host capabilities have ended and ownership is transferred."
+
+[[fixtures]]
+id = "g3-scoped-borrowed-read-submission-positive"
+gate = "G3"
+kind = "trybuild-pass"
+status = "deferred"
+owner_issue = 1565
+activation_phase = 9
+future_path = "crates/tenferro-tensor/tests/ui/storage/pass/scoped_borrowed_read_submission.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "A scoped submission may borrow read-only inputs for the declared scope and return only the contractually permitted handle."
+
+[[fixtures]]
+id = "g5-native-metal-provider-contract"
+gate = "G5"
+kind = "provider"
+status = "deferred"
+owner_issue = 1564
+activation_phase = 8
+future_path = "crates/tenferro-gpu/tests/native_metal_storage_contract.rs"
+command = "cargo test -p tenferro-gpu --test native_metal_storage_contract"
+rationale = "If a native Metal provider is introduced, its raw binding/provider surface must satisfy the same owner-scoped contract. The current Apple path is WebGPU/wgpu and is inventoried under #1564; this future test name is provisional while the provider contract shape is normative."
+
+[[fixtures]]
+id = "g1-host-write-guard-source-access"
+gate = "G1"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1560
+activation_phase = 4
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/source_access_while_host_write_guard_live.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "Holding a HostWriteGuard must reject source/owner access for the guard lifetime; the exclusive host capability cannot coexist with a source capability."
+
+[[fixtures]]
+id = "g2-unproven-second-mutable-child"
+gate = "G2"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1561
+activation_phase = 5
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/unproven_second_mutable_child.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "After an N-way split, a second mutable child requires a disjointness proof; an unproven child must be rejected by the type boundary."
+
+[[fixtures]]
+id = "g3-detached-submission-borrowed-input"
+gate = "G3"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1565
+activation_phase = 9
+future_path = "crates/tenferro-tensor/tests/ui/storage/fail/detached_submission_borrowed_input.rs"
+command = "cargo test -p tenferro-tensor --test storage_compile_contract"
+rationale = "A detached consuming submission must not accept a borrowed input or owner; borrowed execution belongs to the scoped submission API."
 
 # Task 3 source scans are supplemental drift ledgers, not a Rust safety proof.
 # They intentionally remain lexical (no parser and no comment/string stripping)

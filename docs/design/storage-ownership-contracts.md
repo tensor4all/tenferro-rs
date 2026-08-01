@@ -92,6 +92,65 @@ six review-checklist questions from #1557, abbreviated as:
 Error conventions: all failures are structured errors carrying operation,
 requested range/ids, and resolved span identity, without raw addresses.
 
+## Phase 1 verification ledger
+
+The machine-readable verification ledger is
+`scripts/storage-ownership-contracts.toml`, checked by
+`scripts/check-storage-ownership-contracts.py`. It is part of the contract,
+not an informal checklist. The current ledger has nine active fixtures and
+nineteen deferred fixtures. Every fixture records its `activation_phase`,
+including active fixtures: for an active row this is the phase that activated
+the obligation; for a deferred row it is the phase in which the future
+artifact must become active.
+
+An active fixture has exactly one repository-relative `path`; a deferred
+fixture has exactly one repository-relative `future_path`, an owning issue, an
+exact execution `command`, and its activation phase. The checker resolves both
+paths beneath the repository root and rejects traversal and symlink escapes.
+The future path is also the activation marker: if that exact artifact appears
+while its row is still deferred, the checker fails with “promote this fixture
+to active”. Deferred future paths are unique, so one future artifact has one
+fixture row; when several obligations share an artifact, the row's rationale
+must state all of them. There is no second enabled/disabled marker. Deferred rows never
+enter an active trybuild suite until the implementation PR changes the row to
+active and moves `future_path` to `path`. Active corruption, Miri, property,
+and provider rows retain an exact command so their executable lane cannot be
+lost during promotion. The `provider` kind is generic; it records a provider
+contract without naming a final public API or requiring a provider to exist in
+Phase 1.
+
+The minimum dynamic verification surface is deliberately recorded before the
+implementation exists:
+
+| Gate | Future artifact | Command | Owner / activation | Required surface |
+| --- | --- | --- | --- | --- |
+| G1 | `crates/tenferro-tensor/src/storage/tests/corruption_map.rs` | `cargo test -p tenferro-tensor --lib storage::tests::corruption_map` | #1560 / Phase 4 | corrupted descriptor range rejected at map boundary |
+| G1 | `crates/tenferro-tensor/src/storage/tests/corruption_enqueue.rs` | `cargo test -p tenferro-tensor --lib storage::tests::corruption_enqueue` | #1560 / Phase 4 | corrupted descriptor range rejected at enqueue boundary |
+| G1 | `crates/tenferro-tensor/tests/storage_access.rs` | `cargo miri test -p tenferro-tensor --test storage_access` | #1560 / Phase 4 | host read/write guard slices, empty spans, guard drop/leak; safety never depends on `Drop` |
+| G1 | `crates/tenferro-tensor/tests/storage_access_properties.rs` | `cargo test -p tenferro-tensor --test storage_access_properties` | #1560 / Phase 4 | checked range/alignment overflow and exactly-once root reclamation |
+| G2 | `crates/tenferro-tensor/tests/storage_group.rs` | `cargo miri test -p tenferro-tensor --test storage_group` | #1561 / Phase 5 | descriptor tombstone/stale generational ID and N-way mutable-borrow lifetimes |
+| G2 | `crates/tenferro-tensor/tests/storage_group_properties.rs` | `cargo test -p tenferro-tensor --test storage_group_properties` | #1561 / Phase 5 | N=0, N=1, N>2, empty, reverse-stride, overflow, permutation-independent disjointness, and overlap rejection |
+
+The corruption artifacts are intentionally private crate-unit-test modules
+under a provisional `src/storage/tests` layout. Their normative shape is
+privacy, not the final module spelling: hooks may mutate only test-owned
+private descriptor state and may never create an ownership claim, write
+authority, or public unsafe constructor. No corruption hook or production
+storage symbol is added by Phase 1. The current Apple route is WebGPU/wgpu and
+is inventoried under #1564; a deferred provider row records the same contract
+for any native Metal raw binding/provider surface introduced in Phase 8.
+
+The proof layers have distinct jobs. Rust borrowing and private constructors
+are the write-safety and ownership proof. Corruption tests, Miri, and property
+tests exercise dynamic and unsafe boundaries such as revalidation, retirement,
+overflow, and disjointness; they do not replace the static proof. The source
+inventory is only a narrow lexical deletion/drift ledger, not a Rust safety
+proof. The Phase 12 source-blind audit is the separate check for stale public
+language after the implementation phases remove legacy vocabulary. Public API
+names in this document and in future fixture paths remain provisional until
+their owning phases land; capability, borrow, failure, privacy, and
+reclamation shapes are the normative parts.
+
 ## G1. Span access and retirement
 
 ### Types and acquisition surface

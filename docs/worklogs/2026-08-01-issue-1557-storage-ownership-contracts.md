@@ -1,8 +1,7 @@
-# Worklog: #1557 Storage Ownership Contracts Document
+# Worklog: #1557 Storage Ownership Contracts and Phase 1 Verification Harness
 
-This worklog records the authoring of
-`docs/design/storage-ownership-contracts.md`, the Phase 1 contract document
-for the storage ownership redesign tracked by
+This worklog records the contract document and verification harness for the
+storage ownership redesign tracked by
 [#1555](https://github.com/tensor4all/tenferro-rs/issues/1555) and owned by
 [#1557](https://github.com/tensor4all/tenferro-rs/issues/1557).
 
@@ -16,8 +15,48 @@ for the storage ownership redesign tracked by
   borrow, synchronization, failure return, panic/drop state, reclamation
   legality).
 - Added the document to the `docs/design/index.md` Core Design table.
-- No code changes. The Phase 1 verification harness (trybuild, parity
-  contract, inventories) is separate work under #1557.
+- Added the Phase 1 verification harness under #1557: the checked TOML ledger,
+  checker tests, trybuild borrow fixtures, six-family read-only parity, and
+  the source-inventory drift ledger.
+- Completed Task 4 in a separate commit from Task 3: deferred activation
+  metadata, compile/property/Miri/provider obligations, private corruption
+  test obligations, and the Phase 1 verification documentation.
+- No production storage API, unsafe public constructor, corruption hook, or
+  test escape hatch was added.
+
+## Phase 1 harness artifacts and evidence
+
+The four tasks are intentionally layered:
+
+- Task 1 added `scripts/storage-ownership-contracts.toml`,
+  `scripts/check-storage-ownership-contracts.py`, and their CI-profile unit
+  tests. The ledger owns fixture identity, phase ownership, path confinement,
+  and source-inventory metadata.
+- Task 2 added the trybuild harness and eight current compile contracts: five
+  fail fixtures and three pass fixtures. Accepted `.stderr` snapshots are
+  checked in; the harness fails on an empty discovery set.
+- Task 3 added the six-family API parity test and the current-main source
+  inventory. The inventory contains 70 narrow scans (65 inventoried and five
+  forbidden) and 78 exact source rows; it is a lexical deletion/drift ledger,
+  not the ownership proof.
+- Task 4 extends the fixture schema with `future_path`, `command`, and
+  `activation_phase`. Deferred rows require all three plus `owner_issue` and
+  are activated by the exact future artifact appearing. Active rows use
+  `path`; dynamic verification kinds retain an executable command. Each future
+  artifact has exactly one deferred fixture row; shared obligations are kept
+  together in that row's rationale. The resulting ledger has 28 fixtures: nine
+  active and nineteen deferred. The G2 split-property obligations are one
+  `storage_group_properties.rs` artifact covering N=0, N=1, N>2, empty,
+  reverse-stride, overflow, disjointness, and overlap cases.
+
+The Task 4 checker tests were written RED before implementation and then
+GREEN after the schema implementation. They cover missing deferred fields,
+invalid phases, active/deferred path exclusivity, traversal and symlink
+confinement, the existing-future-artifact promotion error, dynamic active
+commands, clean deferred rows, and the generic `provider` kind. The review
+fix added a focused duplicate-future-path test: it was restored to the clean
+parent, observed RED, then the checker was implemented and the full suite ran
+GREEN with 65 tests.
 
 ## Context read
 
@@ -92,26 +131,68 @@ for the storage ownership redesign tracked by
 
 ## Verification
 
-- `bash scripts/check-pr-fast.sh` (documentation-only mode).
-- `python3 scripts/repository-rules-review.py --base origin/main --head HEAD`.
-- Manual cross-check of every contract clause against the #1555 body and the
-  phase issues it cites; no contradiction found at authoring time.
-- Follow-up amendment: `bash scripts/check-pr-fast.sh` passed after the final
-  edits.
-- Follow-up amendment: `python3 scripts/ci/run_profile.py docs` passed,
-  including rustdoc and the rendered 84-page docs site. The optional
-  dependency graph was skipped because Graphviz `dot` is not installed.
-- Independent contract reviews were repeated after each amendment round;
-  blockers were incorporated before submission.
+- Python 3.12.11 is required for the checker and its `tomllib`-based tests;
+  the final environment provides both `python3` and `python3.12` at that
+  version.
+- Task 4 TDD evidence: the new schema tests were first run RED (62 tests,
+  18 failures caused by the unimplemented `activation_phase`/`command`
+  fields), then the checker was implemented and the initial expanded suite ran
+  GREEN (64 tests passed). The duplicate-deferred-`future_path` review test was
+  subsequently observed RED before its checker implementation; the final full
+  checker suite ran GREEN with 65 tests.
+- `python3.12 scripts/check-storage-ownership-contracts.py`: PASS, ledger OK;
+  28 fixtures (nine active, nineteen deferred), 70 source scans (65
+  inventoried, five forbidden), and 78 source-inventory rows.
+- `cargo test -p tenferro-tensor --test storage_compile_contract`: PASS; all
+  eight active trybuild UI cases matched their accepted diagnostics or pass
+  expectations.
+- `cargo test -p tenferro-tensor --test storage_api_parity`: PASS (one parity
+  test).
+- `cargo test -p tenferro-tensor`: PASS (216 unit tests, all integration
+  suites, eight trybuild cases, and 311 doctests).
+- `cargo check -p tenferro-gpu --features webgpu`: PASS. This is the current
+  Apple/Metal route; no native Metal implementation was added.
+- `python3.12 scripts/ci/run_profile.py ci-config`: the checker tests (65),
+  ledger, and all 161 CI-profile unit tests passed. The profile then failed at
+  the separate `actionlint` step because `actionlint` is not installed in the
+  environment (`/bin/sh: actionlint: not found`).
+- `python3.12 scripts/ci/run_profile.py docs`: PASS on one fresh, single
+  process run after the review fixes. Rustdoc completed, Quarto rendered all
+  84 pages including `performance/cpu-benchmark-results-2026-05-23.md`, and
+  the docs-site/link checks passed. No missing performance artifact occurred
+  in this run. The optional dependency graph was skipped with the distinct
+  environment warning `graphviz (dot) not found`. The run materialized
+  untracked rendered `docs/**/*.html` files and `docs/site_libs`; those
+  generated artifacts were moved/cleaned after evidence capture to restore a
+  clean worktree.
+- `bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-tensor --test storage_compile_contract' --test 'cargo test -p tenferro-tensor --test storage_api_parity' --test 'python3 scripts/check-storage-ownership-contracts.py'`: the required preflight
+  stopped before running focused tests because `origin/main` moved from the
+  Task 3 base and this candidate is not based on the latest fetched
+  `origin/main` (`d41d1716`). This is repository-state drift, not a test
+  failure; the focused commands above were run independently.
+- `cargo fmt --all --check`: PASS. `git diff --check`: PASS.
+- `python3.12 scripts/repository-rules-review.py --base origin/main --head
+  HEAD --output-json /tmp/repository-rules-review-task4-final-default.json`:
+  PASS, verdict `pass`, no findings. A separate diagnostic run with an
+  artificial 30-second timeout reported an external-response timeout; the
+  repository-default 120-second run above completed successfully on the
+  final candidate.
+- Task 2's accepted trybuild snapshots remain checked in; Task 3's source
+  inventory remains the lexical deletion/drift ledger, while Rust borrowing
+  and private constructors remain the ownership proof.
 
 ## Remaining risks
 
-- The G6 command table names current scripts; a phase that renames tooling
-  must update the table in the same PR (stated in the document).
+- The G6 command table and deferred `command` fields name current scripts; a
+  phase that renames tooling must update the table and ledger in the same PR.
 - Signature sketches will drift slightly as owning phases land; the change
   control rule (update document plus tests in the same PR) is the guard.
 - The AD `ValueGuard`/`Gradients` sketches are the least implementation-
   tested part of the contract; Phase 3 and Phase 9 may need to refine them
   through the documented change-control path.
-- The five follow-up decisions above require executable enforcement in the
-  remaining #1557 harness before G1 through G7 are considered frozen.
+- The deferred rows become active only when their exact future artifact is
+  introduced. The owning phase must promote the row in the same change as the
+  artifact and keep the command and acceptance evidence current.
+- The repository-rules review is an external-LLM-dependent gate in addition
+  to the deterministic checker; this candidate has a recorded PASS, while
+  future environments must report an unavailable external review separately.

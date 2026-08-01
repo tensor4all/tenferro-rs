@@ -22,6 +22,9 @@ def _entry(
     gate: str = "G1",
     owner_issue: int | None = 1557,
     path: str | None = "fixtures/ok.rs",
+    future_path: str | None = None,
+    command: str | None = None,
+    activation_phase: int | None = 1,
 ) -> str:
     lines = [
         "[[fixtures]]",
@@ -34,6 +37,12 @@ def _entry(
         lines.append(f"owner_issue = {owner_issue}")
     if path is not None:
         lines.append(f'path = "{path}"')
+    if future_path is not None:
+        lines.append(f'future_path = "{future_path}"')
+    if command is not None:
+        lines.append(f'command = "{command}"')
+    if activation_phase is not None:
+        lines.append(f"activation_phase = {activation_phase}")
     return "\n".join(lines)
 
 
@@ -267,6 +276,265 @@ class CheckerTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_deferred_fixture_requires_future_path_command_and_activation_phase(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "future_path",
+                _entry(
+                    status="deferred",
+                    path=None,
+                    command="cargo test -p tenferro-tensor",
+                    activation_phase=4,
+                ),
+                "deferred fixture 'fixture-ok' must declare future_path",
+            ),
+            (
+                "command",
+                _entry(
+                    status="deferred",
+                    path=None,
+                    future_path="future/fixture.rs",
+                    activation_phase=4,
+                ),
+                "deferred fixture 'fixture-ok' must declare command",
+            ),
+            (
+                "activation_phase",
+                _entry(
+                    status="deferred",
+                    path=None,
+                    future_path="future/fixture.rs",
+                    command="cargo test -p tenferro-tensor",
+                    activation_phase=None,
+                ),
+                "fixture 'fixture-ok' must declare activation_phase",
+            ),
+        )
+        for name, entry, expected in cases:
+            with self.subTest(case=name):
+                result = self.run_checker(
+                    _manifest(entry),
+                    files={"fixtures/ok.rs": "fn fixture() {}\n"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_deferred_fixture_must_use_future_path_not_path(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    status="deferred",
+                    path="future/fixture.rs",
+                    future_path="future/fixture.rs",
+                    command="cargo test -p tenferro-tensor",
+                    activation_phase=4,
+                )
+            ),
+            files={"future/fixture.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "deferred fixture 'fixture-ok' must not declare path",
+            result.stderr,
+        )
+
+    def test_active_fixture_must_use_path_not_future_path(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    status="active",
+                    path=None,
+                    future_path="fixtures/ok.rs",
+                )
+            ),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "active fixture 'fixture-ok' must not declare future_path",
+            result.stderr,
+        )
+        self.assertIn(
+            "active fixture 'fixture-ok' must declare path",
+            result.stderr,
+        )
+
+    def test_deferred_future_paths_must_be_unique(self) -> None:
+        shared_future_path = "future/shared-fixture.rs"
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    entry_id="deferred-one",
+                    status="deferred",
+                    path=None,
+                    future_path=shared_future_path,
+                    command="cargo test -p tenferro-tensor --test storage_compile_contract",
+                    activation_phase=4,
+                ),
+                _entry(
+                    entry_id="deferred-two",
+                    status="deferred",
+                    path=None,
+                    future_path=shared_future_path,
+                    command="cargo test -p tenferro-tensor --test storage_compile_contract",
+                    activation_phase=5,
+                ),
+            )
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "deferred fixtures 'deferred-one' and 'deferred-two' share future_path "
+            "'future/shared-fixture.rs'",
+            result.stderr,
+        )
+
+    def test_active_fixture_requires_activation_phase(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(activation_phase=None)),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture 'fixture-ok' must declare activation_phase",
+            result.stderr,
+        )
+
+    def test_activation_phase_must_be_a_nonnegative_integer(self) -> None:
+        for value in ("\"four\"", "-1", "1.5"):
+            with self.subTest(value=value):
+                result = self.run_checker(
+                    _manifest(
+                        _entry(
+                            activation_phase=None,
+                        )
+                        + f"\nactivation_phase = {value}"
+                    ),
+                    files={"fixtures/ok.rs": "fn fixture() {}\n"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "fixture 'fixture-ok' activation_phase must be a nonnegative integer",
+                    result.stderr,
+                )
+
+    def test_deferred_future_path_must_be_repository_relative(self) -> None:
+        for future_path in ("../future.rs", "/tmp/future.rs"):
+            with self.subTest(future_path=future_path):
+                result = self.run_checker(
+                    _manifest(
+                        _entry(
+                            status="deferred",
+                            path=None,
+                            future_path=future_path,
+                            command="cargo test -p tenferro-tensor",
+                            activation_phase=4,
+                        )
+                    )
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "field 'future_path' must be a repository-relative path",
+                    result.stderr,
+                )
+
+    def test_symlink_escape_in_deferred_future_path_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside:
+            root = Path(temporary)
+            outside_file = Path(outside) / "future.rs"
+            outside_file.write_text("fn outside() {}\n")
+            link = root / "future" / "fixture.rs"
+            link.parent.mkdir(parents=True)
+            self.make_symlink_or_skip(link, outside_file)
+            result = self.run_checker_at_root(
+                root,
+                _manifest(
+                    _entry(
+                        status="deferred",
+                        path=None,
+                        future_path="future/fixture.rs",
+                        command="cargo test -p tenferro-tensor",
+                        activation_phase=4,
+                    )
+                ),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture 'fixture-ok' future_path 'future/fixture.rs' resolves outside repository root",
+            result.stderr,
+        )
+
+    def test_existing_deferred_future_artifact_requests_promotion(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    status="deferred",
+                    path=None,
+                    future_path="future/fixture.rs",
+                    command="cargo test -p tenferro-tensor",
+                    activation_phase=4,
+                )
+            ),
+            files={"future/fixture.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "deferred fixture 'fixture-ok' future_path 'future/fixture.rs' already exists; promote this fixture to active",
+            result.stderr,
+        )
+
+    def test_active_dynamic_verification_fixture_requires_command(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    kind="miri",
+                    path="tests/storage_access.rs",
+                    activation_phase=4,
+                )
+            ),
+            files={"tests/storage_access.rs": "fn miri() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "active fixture 'fixture-ok' kind 'miri' must declare command",
+            result.stderr,
+        )
+
+    def test_clean_deferred_fixture_contract_passes(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    kind="property",
+                    status="deferred",
+                    path=None,
+                    future_path="tests/storage_access_properties.rs",
+                    command="cargo test -p tenferro-tensor --test storage_access_properties",
+                    activation_phase=4,
+                )
+            ),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_provider_fixture_kind_is_supported(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    kind="provider",
+                    status="deferred",
+                    path=None,
+                    future_path="providers/native_metal.rs",
+                    command="cargo test -p tenferro-gpu --test native_metal_storage_contract",
+                    activation_phase=8,
+                )
+            ),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_clean_active_trybuild_fixture_suite_passes(self) -> None:
         result = self.run_checker(
             _manifest(_entry(), _suite()),
@@ -434,7 +702,10 @@ class CheckerTests(unittest.TestCase):
                 _entry(
                     entry_id="deferred-pass",
                     status="deferred",
-                    path="deferred/ok.rs",
+                    path=None,
+                    future_path="deferred/ok.rs",
+                    command="cargo test -p tenferro-tensor --test storage_compile_contract",
+                    activation_phase=4,
                 ),
                 _entry(
                     entry_id="parity-baseline",
@@ -443,7 +714,6 @@ class CheckerTests(unittest.TestCase):
                 ),
             ),
             files={
-                "deferred/ok.rs": "fn deferred() {}\n",
                 "baseline/parity.rs": "fn parity() {}\n",
             },
         )

@@ -6,7 +6,9 @@ intentionally use fail-closed lexical literal counts and do not parse Rust
 syntax or strip comments/strings; narrow production roots/globs and exact
 inventory selectors provide the structural precision.  Compile contracts,
 trybuild, later Miri/property lanes, and the final audit remain the layered
-safety checks.
+safety checks.  Fixture rows are activated by the existence of their exact
+future artifact: deferred rows carry a future path, command, and activation
+phase, while active rows carry the realized path and retain that phase.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ KINDS = frozenset(
         "corruption",
         "miri",
         "property",
+        "provider",
     }
 )
 STATUSES = frozenset({"active", "deferred"})
@@ -62,7 +65,14 @@ TOP_LEVEL_KEYS = frozenset(
 )
 COMMON_KEYS = frozenset({"id", "gate", "kind", "status", "owner_issue"})
 FIXTURE_KEYS = COMMON_KEYS | frozenset(
-    {"path", "future_path", "rationale", "description"}
+    {
+        "path",
+        "future_path",
+        "command",
+        "activation_phase",
+        "rationale",
+        "description",
+    }
 )
 FIXTURE_SUITE_KEYS = frozenset(
     {"id", "kind", "root", "glob", "owner_issue", "rationale"}
@@ -103,6 +113,9 @@ class Fixture:
     kind: str
     status: str
     path: str | None
+    future_path: str | None
+    command: str | None
+    activation_phase: int | None
 
 
 @dataclass(frozen=True)
@@ -217,6 +230,21 @@ def _positive_issue(
     value = row["owner_issue"]
     if type(value) is not int or value <= 0:
         errors.append(f"{label} owner_issue must be a positive integer")
+        return None
+    return value
+
+
+def _activation_phase(
+    row: dict[str, Any], label: str, errors: list[str]
+) -> int | None:
+    if "activation_phase" not in row:
+        errors.append(f"{label} must declare activation_phase")
+        return None
+    value = row["activation_phase"]
+    if type(value) is not int or value < 0:
+        errors.append(
+            f"{label} activation_phase must be a nonnegative integer"
+        )
         return None
     return value
 
@@ -353,11 +381,20 @@ def _fixture_rows(
             if path is not None
             else None
         )
-        if future_path is not None:
+        resolved_future_path = (
             _resolve_under_root(root, future_path, label, errors, field="future_path")
+            if future_path is not None
+            else None
+        )
+        command = _optional_string(row, "command", label, errors)
+        activation_phase = _activation_phase(row, label, errors)
         _optional_string(row, "rationale", label, errors)
 
         if status == "active":
+            if future_path is not None:
+                errors.append(
+                    f"active fixture '{entry_id or '<unknown>'}' must not declare future_path"
+                )
             if path is None:
                 errors.append(f"active fixture '{entry_id or '<unknown>'}' must declare path")
             elif resolved_path is None:
@@ -365,6 +402,28 @@ def _fixture_rows(
             elif not resolved_path.is_file():
                 errors.append(
                     f"active fixture '{entry_id or '<unknown>'}' path does not exist: '{path}'"
+                )
+            if kind in {"corruption", "miri", "property", "provider"} and command is None:
+                errors.append(
+                    f"active fixture '{entry_id or '<unknown>'}' kind '{kind}' must declare command"
+                )
+
+        if status == "deferred":
+            if path is not None:
+                errors.append(
+                    f"deferred fixture '{entry_id or '<unknown>'}' must not declare path"
+                )
+            if future_path is None:
+                errors.append(
+                    f"deferred fixture '{entry_id or '<unknown>'}' must declare future_path"
+                )
+            elif resolved_future_path is not None and resolved_future_path.exists():
+                errors.append(
+                    f"deferred fixture '{entry_id or '<unknown>'}' future_path '{future_path}' already exists; promote this fixture to active"
+                )
+            if command is None:
+                errors.append(
+                    f"deferred fixture '{entry_id or '<unknown>'}' must declare command"
                 )
 
         if entry_id is not None and kind is not None and status is not None:
@@ -374,6 +433,9 @@ def _fixture_rows(
                     kind=kind,
                     status=status,
                     path=path,
+                    future_path=future_path,
+                    command=command,
+                    activation_phase=activation_phase,
                 )
             )
     return fixtures
@@ -919,6 +981,32 @@ def _check_fixture_suites(
             )
 
 
+def _check_deferred_future_path_uniqueness(
+    fixtures: list[Fixture], errors: list[str]
+) -> None:
+    by_future_path: dict[str, list[Fixture]] = {}
+    for fixture in fixtures:
+        if fixture.status == "deferred" and fixture.future_path is not None:
+            by_future_path.setdefault(fixture.future_path, []).append(fixture)
+
+    for future_path, rows in sorted(by_future_path.items()):
+        if len(rows) < 2:
+            continue
+        rows.sort(key=lambda fixture: fixture.entry_id)
+        if len(rows) == 2:
+            identifiers = (
+                f"'{rows[0].entry_id}' and '{rows[1].entry_id}'"
+            )
+        else:
+            identifiers = ", ".join(
+                f"'{fixture.entry_id}'" for fixture in rows
+            )
+        errors.append(
+            f"deferred fixtures {identifiers} share future_path "
+            f"'{future_path}'"
+        )
+
+
 def _manifest_rows(
     data: dict[str, Any], root: Path, errors: list[str]
 ) -> None:
@@ -939,6 +1027,7 @@ def _manifest_rows(
 
     ids: dict[str, str] = {}
     fixtures = _fixture_rows(arrays["fixtures"], root, ids, errors)
+    _check_deferred_future_path_uniqueness(fixtures, errors)
     suites = _fixture_suite_rows(arrays["fixture_suites"], root, ids, errors)
     scans = _scan_rows(arrays["source_scans"], root, ids, errors)
     inventories = _inventory_rows(
