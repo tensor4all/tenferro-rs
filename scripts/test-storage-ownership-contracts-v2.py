@@ -10,6 +10,7 @@ ledger contract from becoming prose that can silently drift.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -24,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check-storage-ownership-contracts.py"
 RUNNER = ROOT / "scripts" / "run-storage-ownership-contracts.py"
 PRODUCTION_MANIFEST = ROOT / "scripts" / "storage-ownership-contracts.toml"
-DESIGN_CONTRACT = ROOT / "docs" / "design" / "storage-ownership-contracts.md"
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 GATES = tuple(f"G{number}" for number in range(1, 8))
@@ -124,22 +124,6 @@ BASE_ACTIVE_OBLIGATIONS = (
         (),
     ),
     (
-        "p1-borrow-dispatch-proof",
-        "P1",
-        ("G1", "G4"),
-        "artifact-borrow-dispatch-proof",
-        "scripts/test-storage-ownership-contracts-v2.py",
-        "python-test",
-        "cmd-borrow-dispatch-proof",
-        "python-test",
-        (
-            "python3",
-            "scripts/test-storage-ownership-contracts-v2.py",
-            "StorageOwnershipV2RedTests.test_private_dispatch_borrow_shape_compiles",
-        ),
-        ("scripts/test-storage-ownership-contracts-v2.py",),
-    ),
-    (
         "p2-root-claims",
         "P2",
         ("G1",),
@@ -154,6 +138,18 @@ BASE_ACTIVE_OBLIGATIONS = (
 )
 
 DEFERRED_OBLIGATIONS = (
+    (
+        "p1-production-borrow-contract",
+        "P1",
+        ("G1", "G4"),
+        "artifact-production-borrow-contract",
+        "crates/tenferro-tensor/tests/storage_borrow_contract.rs",
+        "compile-contract",
+        "cmd-production-borrow-contract",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_borrow_contract"),
+        (),
+    ),
     (
         "p3-host-owner",
         "P3",
@@ -338,6 +334,162 @@ CUTOVER_CANDIDATE_OBLIGATIONS = frozenset(
 CUTOVER_PARTIAL_OBLIGATIONS = frozenset(
     row[0] for row in DEFERRED_OBLIGATIONS if row[1] in {"P4", "P5", "P9"}
 )
+
+# The v2 diagnostic envelope is intentionally narrow.  A checker must emit
+# exactly these identifying fields for each code; a broad "all known errors"
+# response is not a valid witness for a one-fault RED case.
+DIAGNOSTIC_FIELDS = {
+    "E_SCHEMA_VERSION": frozenset({"actual"}),
+    "E_SCHEMA_PARALLEL_TABLE": frozenset({"table"}),
+    "E_SCHEMA_UNKNOWN_TABLE": frozenset({"table"}),
+    "E_OBLIGATION_TAGGED_STATE": frozenset({"obligation_id"}),
+    "E_UNIT_OBLIGATION_MISSING": frozenset({"unit"}),
+    "E_GRAPH_P2_PREREQUISITE": frozenset({"unit"}),
+    "E_GRAPH_DUPLICATE_EDGE": frozenset({"from", "to"}),
+    "E_GRAPH_UNKNOWN_UNIT": frozenset({"unit"}),
+    "E_COHORT_DEFINITION": frozenset({"cohort_id"}),
+    "E_COHORT_PARTIAL_PROMOTION": frozenset({"cohort_id"}),
+    "E_COHORT_PREREQUISITE_INCOMPLETE": frozenset({"unit", "obligation_id"}),
+    "E_OBSOLETE_OWNERSHIP_TABLE": frozenset({"table"}),
+    "E_ARTIFACT_SYNTHETIC_TERMINAL": frozenset({"artifact_id"}),
+    "E_ARTIFACT_DUPLICATE_TARGET": frozenset({"artifact_id"}),
+    "E_ARTIFACT_MISSING": frozenset({"artifact_id"}),
+    "E_PATH_ESCAPE": frozenset({"obligation_id"}),
+    "E_PATH_SYMLINK_ESCAPE": frozenset({"obligation_id"}),
+    "E_DEFERRED_ARTIFACT_EXISTS": frozenset({"obligation_id"}),
+    "E_COMMAND_KIND": frozenset({"command_id", "kind"}),
+    "E_COMMAND_ARGV": frozenset({"command_id"}),
+    "E_COMMAND_PATH_ESCAPE": frozenset({"command_id"}),
+    "E_COMMAND_ARTIFACT_BINDING": frozenset({"command_id"}),
+    "E_COMMAND_TARGET_BINDING": frozenset({"command_id"}),
+    "E_COMMAND_ID_CONFLICT": frozenset({"command_id"}),
+    "E_COMMAND_FAILED": frozenset({"command_id", "exit_code"}),
+    "E_PROMOTION_IDENTITY": frozenset({"obligation_id"}),
+    "E_RECEIPT_COMMIT": frozenset({"actual_head"}),
+    "E_RECEIPT_DIGEST": frozenset({"digest_kind"}),
+    "E_RECEIPT_INCOMPLETE": frozenset({"obligation_id"}),
+    "E_TERMINAL_DECLARED": frozenset({"field"}),
+}
+
+# This is the intentional RED boundary for the current checkpoint.  It is
+# machine-readable and exact at test/subtest granularity: a new failure, an
+# error instead of an assertion failure, or an unexpected subtest is never
+# absorbed by a broad "known RED" label.  The registry must be updated in the
+# same change that lands the corresponding checker/runner/artifact.
+RED_EXPECTED_FAILURES = {
+    "test_actual_legacy_v1_fixture_and_source_tables_are_rejected": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_artifact_paths_are_unique_repository_relative_and_real": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_canonical_future_lifecycle_proof_commands_execute": {
+        "cause": "future-production-proof-artifact-not-landed",
+        "subtests": [
+            {"obligation_id": "p1-production-borrow-contract"},
+            {"obligation_id": "p3-auto-trait-contract"},
+            {"obligation_id": "p4-provider-release-lifecycle"},
+        ],
+    },
+    "test_canonical_graph_keeps_p0_p1_roots_and_p2_only_depends_on_p1": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_checked_in_production_manifest_is_the_gate_input": {
+        "cause": "production-manifest-still-v1",
+    },
+    "test_command_allowlist_is_typed_and_fail_closed": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_command_must_bind_to_exact_artifact_and_target_links": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_cutover_is_atomic_and_partial_activation_is_rejected": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_cutover_requires_non_vacuous_p0_and_p5_receipt_proof": {
+        "cause": "v2-runner-not-implemented",
+        "subtests": [{"unit": "P0"}, {"unit": "P5"}],
+    },
+    "test_deferred_artifact_cannot_be_promoted_by_existing_file_alone": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_every_canonical_unit_has_required_obligations": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_graph_rejects_duplicate_and_unknown_target_links": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_matching_fake_commit_ids_cannot_replace_git_identity": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_nominal_v2_manifest_is_green": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_one_tagged_obligation_table_replaces_parallel_status_tables": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_post_receipt_artifact_mutation_is_rejected": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_post_receipt_base_manifest_mutation_digest_is_rejected": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_post_receipt_symlink_retarget_is_rejected_when_supported": {
+        "cause": "v2-runner-not-implemented",
+        "required": False,
+    },
+    "test_promotion_preserves_immutable_identity_and_binds_receipt_to_candidate": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_promotion_rejects_artifact_or_command_identity_change": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_real_symlink_escape_is_rejected": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_receipt_digests_bind_exact_manifest_artifact_and_command": {
+        "cause": "v2-runner-not-implemented",
+        "subtests": [
+            {"digest_kind": "manifest"},
+            {"digest_kind": "artifact"},
+            {"digest_kind": "command"},
+        ],
+    },
+    "test_runner_emits_exact_candidate_bound_receipt": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_runner_is_fail_closed_on_command_failure": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_runner_receipt_digests_match_independent_sha256_calculations": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_source_and_fixture_tables_cannot_reappear_as_parallel_authority": {
+        "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"table": "fixtures"},
+            {"table": "fixture_suites"},
+            {"table": "source_scans"},
+            {"table": "source_inventory"},
+            {"table": "ownerships"},
+        ],
+    },
+    "test_stale_p3_p4_ownership_rows_are_not_a_second_authority": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_synthetic_terminal_artifacts_and_terminal_flags_are_rejected": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_terminal_state_is_derived_from_obligations_and_receipts": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_terminal_true_requires_zero_deferred_and_complete_receipt": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_v1_is_rejected_without_compatibility_mode": {
+        "cause": "v2-checker-not-implemented",
+    },
+}
 
 
 def _quote(value: str) -> str:
@@ -572,6 +724,31 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _git_show_bytes(root: Path, commit: str, relative_path: str) -> bytes:
+    result = subprocess.run(
+        ["git", "show", f"{commit}:{relative_path}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stdout.decode() + result.stderr.decode())
+    return result.stdout
+
+
+def _sha256_bytes(contents: bytes) -> str:
+    return hashlib.sha256(contents).hexdigest()
+
+
+def _sha256_resolved_path(root: Path, relative_path: str) -> str:
+    return _sha256_bytes((root / relative_path).resolve().read_bytes())
+
+
+def _sha256_command(command: dict[str, object]) -> str:
+    canonical = json.dumps(command, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _sha256_bytes(canonical)
+
+
 def _commit(root: Path, message: str) -> str:
     _git(root, "add", ".")
     _git(root, "commit", "-m", message)
@@ -732,10 +909,13 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         *,
         promote: frozenset[str] = frozenset(),
         message: str = "candidate",
+        active_override: dict[str, str] | None = None,
     ) -> tuple[str, str, str, Path, dict[str, object]]:
-        base = valid_manifest(marker=True)
+        base = valid_manifest(marker=True, active_override=active_override)
         base_commit = _init_git_repository(root, base, files=marker_files())
-        candidate = valid_manifest(marker=True, promote=promote)
+        candidate = valid_manifest(
+            marker=True, active_override=active_override, promote=promote
+        )
         _materialize_active_artifacts(root, candidate)
         (root / "scripts/storage-ownership-contracts.toml").write_text(candidate, encoding="utf-8")
         (root / "candidate-note").write_text(f"{message}\n", encoding="utf-8")
@@ -757,14 +937,24 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         except json.JSONDecodeError:
             self.fail(f"tool did not emit structured diagnostics: {result.stdout}{result.stderr}")
         self.assertIsInstance(payload, dict)
+        self.assertEqual(set(payload), {"schema", "diagnostics"})
         self.assertEqual(payload.get("schema"), "tenferro.storage-ownership-diagnostics.v1")
         diagnostics = payload.get("diagnostics")
         self.assertIsInstance(diagnostics, list)
         self.assertTrue(diagnostics, payload)
+        codes: list[str] = []
         for diagnostic in diagnostics:
             self.assertIsInstance(diagnostic, dict)
-            self.assertIsInstance(diagnostic.get("code"), str)
-            self.assertIsInstance(diagnostic.get("fields"), dict)
+            self.assertEqual(set(diagnostic), {"code", "fields", "message"})
+            code = diagnostic.get("code")
+            self.assertIsInstance(code, str)
+            self.assertIn(code, DIAGNOSTIC_FIELDS)
+            fields = diagnostic.get("fields")
+            self.assertIsInstance(fields, dict)
+            self.assertEqual(set(fields), DIAGNOSTIC_FIELDS[code])
+            self.assertIsInstance(diagnostic.get("message"), str)
+            codes.append(code)
+        self.assertEqual(len(codes), len(set(codes)), payload)
         return payload
 
     def assert_checker_error(
@@ -778,13 +968,13 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         result = self.run_checker(manifest, files=files, extra_args=("--diagnostics-json",))
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = self.parse_diagnostic_payload(result)
-        matching = [item for item in payload["diagnostics"] if item["code"] == code]
-        self.assertTrue(matching, payload)
-        for key, value in (fields or {}).items():
-            self.assertTrue(
-                any(item.get("fields", {}).get(key) == value for item in matching),
-                payload,
-            )
+        diagnostics = payload["diagnostics"]
+        self.assertEqual({item["code"] for item in diagnostics}, {code}, payload)
+        expected_fields = fields or {}
+        for item in diagnostics:
+            self.assertEqual(set(item["fields"]), set(expected_fields), payload)
+            for key, value in expected_fields.items():
+                self.assertEqual(item["fields"][key], value, payload)
 
     def assert_result_diagnostic(
         self,
@@ -795,17 +985,20 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     ) -> None:
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = self.parse_diagnostic_payload(result)
-        matching = [item for item in payload["diagnostics"] if item["code"] == code]
-        self.assertTrue(matching, payload)
-        for key, value in (fields or {}).items():
-            self.assertTrue(any(item.get("fields", {}).get(key) == value for item in matching), payload)
+        diagnostics = payload["diagnostics"]
+        self.assertEqual({item["code"] for item in diagnostics}, {code}, payload)
+        expected_fields = fields or {}
+        for item in diagnostics:
+            self.assertEqual(set(item["fields"]), set(expected_fields), payload)
+            for key, value in expected_fields.items():
+                self.assertEqual(item["fields"][key], value, payload)
 
     def test_checked_in_production_manifest_is_the_gate_input(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
         production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(production.get("schema"), SCHEMA)
         result = self.run_production_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(production, tomllib.loads(valid_manifest()))
 
     def test_result_diagnostic_rejects_wrong_schema_and_array_shape(self) -> None:
         for payload in (
@@ -832,6 +1025,20 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             fields={"actual": "tenferro.storage-ownership-contracts.v1"},
         )
 
+    def test_actual_legacy_v1_fixture_and_source_tables_are_rejected(self) -> None:
+        legacy = PRODUCTION_MANIFEST.read_text(encoding="utf-8")
+        parsed = tomllib.loads(legacy)
+        self.assertEqual(parsed["schema"], "tenferro.storage-ownership-contracts.v1")
+        self.assertIn("fixtures", parsed)
+        self.assertIn("fixture_suites", parsed)
+        self.assertIn("source_scans", parsed)
+        self.assertIn("source_inventory", parsed)
+        self.assert_checker_error(
+            legacy,
+            "E_SCHEMA_VERSION",
+            fields={"actual": "tenferro.storage-ownership-contracts.v1"},
+        )
+
     def test_one_tagged_obligation_table_replaces_parallel_status_tables(self) -> None:
         malformed = _replace_in_obligation(
             valid_manifest(),
@@ -844,8 +1051,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         )
         self.assert_checker_error(
             valid_manifest() + '\n[[obligations.active]]\nid = "legacy-active"\n',
-            "E_SCHEMA_PARALLEL_TABLE",
-            fields={"table": "obligations.active"},
+            "E_SCHEMA_PARALLEL_TABLE", fields={"table": "obligations.active"},
         )
 
     def test_every_canonical_unit_has_required_obligations(self) -> None:
@@ -864,6 +1070,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def test_lifecycle_compile_and_runtime_proofs_are_canonical_obligations(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
         expected = {
+            "p1-production-borrow-contract": ("P1", {"G1", "G4"}, "compile-contract"),
             "p3-auto-trait-contract": ("P3", {"G1", "G4"}, "compile-contract"),
             "p4-provider-release-lifecycle": ("P4", {"G1", "G3"}, "provider-test"),
         }
@@ -875,10 +1082,23 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 self.assertEqual(row["artifact"]["kind"], artifact_kind)
                 self.assertEqual(row["state"]["kind"], "deferred")
                 self.assertEqual(row["command"]["artifact_id"], row["artifact"]["id"])
+                self.assertNotIn("test-storage-ownership-contracts-v2.py", row["artifact"]["path"])
+
+    def test_production_borrow_proof_is_not_a_self_referential_fixture(self) -> None:
+        rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
+        row = rows["p1-production-borrow-contract"]
+        self.assertEqual(row["artifact"]["path"], "crates/tenferro-tensor/tests/storage_borrow_contract.rs")
+        self.assertEqual(
+            row["command"]["argv"],
+            ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_borrow_contract"],
+        )
+        self.assertEqual(row["command"]["artifact_id"], "artifact-production-borrow-contract")
+        self.assertEqual(row["state"]["kind"], "deferred")
 
     def test_canonical_future_lifecycle_proof_commands_execute(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
         for obligation_id in (
+            "p1-production-borrow-contract",
             "p3-auto-trait-contract",
             "p4-provider-release-lifecycle",
         ):
@@ -895,129 +1115,6 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-    def test_lease_thread_transfer_doc_signatures_are_supplemental(self) -> None:
-        design = DESIGN_CONTRACT.read_text(encoding="utf-8")
-        for signature in (
-            "unsafe impl Send for BackendRawLease {}",
-            "_not_sync: PhantomData<Cell<()>>",
-            "_thread_bound: PhantomData<Rc<()>>",
-            "assert_send::<UseLease>();",
-            "let Some(parts) = self.pending.take() else { return Ok(()) };",
-            "catch_unwind(AssertUnwindSafe",
-            "QuarantineReason::ProviderReleasePanic",
-        ):
-            with self.subTest(signature=signature):
-                self.assertIn(signature, design)
-        self.assertNotIn("unsafe impl Sync for BackendRawLease", design)
-        self.assertNotIn("unsafe impl Send for UseLease", design)
-
-    def test_private_dispatch_borrow_shape_compiles(self) -> None:
-        design = DESIGN_CONTRACT.read_text(encoding="utf-8")
-        self.assertIn("fn dispatch_host_write<'a>", design)
-        self.assertIn("fn dispatch_device_write<'a>", design)
-        self.assertNotIn("fn backend_write_request", design)
-        source = r'''
-use std::{marker::PhantomData, sync::Arc};
-
-struct Error;
-struct Endpoint;
-struct Raw;
-struct Claim;
-#[derive(Clone)] struct Span;
-struct Provider;
-
-impl Provider {
-    fn write<'a>(&self, _request: &Request<'a>, _endpoint: Option<Endpoint>)
-        -> Result<Raw, Error> { Ok(Raw) }
-}
-
-struct State { provider: Provider }
-#[derive(Clone)] struct Pin { state: Arc<State> }
-struct Request<'a> { _pin: &'a Pin, _claim: &'a mut Claim, _span: &'a Span }
-
-impl State {
-    fn dispatch_host_write<'a>(
-        &'a self,
-        pin: &'a Pin,
-        claim: &'a mut Claim,
-        span: &'a Span,
-    ) -> Result<Raw, Error> {
-        let request = Request { _pin: pin, _claim: claim, _span: span };
-        self.provider.write(&request, None)
-    }
-
-    fn dispatch_device_write<'a>(
-        &'a self,
-        pin: &'a Pin,
-        claim: &'a mut Claim,
-        span: &'a Span,
-        endpoint: Endpoint,
-    ) -> Result<Raw, Error> {
-        let request = Request { _pin: pin, _claim: claim, _span: span };
-        self.provider.write(&request, Some(endpoint))
-    }
-}
-
-struct Owner { pin: Pin, claim: Claim }
-struct Capability<'a> { owner: &'a mut Owner }
-struct ResolvedWrite<'a> { capability: Capability<'a>, span: Span }
-struct Guard<'a> { _raw: Raw, _borrow: PhantomData<&'a mut [u8]> }
-struct Lease { _pin: Pin, _span: Span, _raw: Raw }
-struct Binding<'a> { _resolved: ResolvedWrite<'a>, _lease: Lease }
-
-impl<'a> ResolvedWrite<'a> {
-    fn acquire_host_write(&mut self) -> Result<Guard<'_>, Error> {
-        let owner = &mut *self.capability.owner;
-        let (pin, claim) = (&owner.pin, &mut owner.claim);
-        let state = &*pin.state;
-        let raw = state.dispatch_host_write(pin, claim, &self.span)?;
-        Ok(Guard { _raw: raw, _borrow: PhantomData })
-    }
-
-    fn acquire_device_write(self, endpoint: Endpoint)
-        -> Result<Binding<'a>, (Self, Error)> {
-        let this = self;
-        let admission = {
-            let owner = &mut *this.capability.owner;
-            let (pin, claim) = (&owner.pin, &mut owner.claim);
-            let state = &*pin.state;
-            state.dispatch_device_write(pin, claim, &this.span, endpoint)
-        };
-        match admission {
-            Ok(raw) => Ok(Binding {
-                _lease: Lease {
-                    _pin: this.capability.owner.pin.clone(),
-                    _span: this.span.clone(),
-                    _raw: raw,
-                },
-                _resolved: this,
-            }),
-            Err(error) => Err((this, error)),
-        }
-    }
-}
-'''
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source_path = root / "private_dispatch_borrow_shape.rs"
-            output_path = root / "private_dispatch_borrow_shape.rmeta"
-            source_path.write_text(source, encoding="utf-8")
-            result = subprocess.run(
-                [
-                    "rustc",
-                    "--edition=2021",
-                    "--crate-type=lib",
-                    "--emit=metadata",
-                    "-o",
-                    str(output_path),
-                    str(source_path),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_canonical_graph_keeps_p0_p1_roots_and_p2_only_depends_on_p1(self) -> None:
         parsed = _parse_registry(valid_manifest())
@@ -1093,8 +1190,7 @@ impl<'a> ResolvedWrite<'a> {
         )
         self.assert_checker_error(
             valid_manifest() + '\nterminal = true\n',
-            "E_TERMINAL_DECLARED",
-            fields={"field": "terminal"},
+            "E_TERMINAL_DECLARED", fields={"field": "terminal"},
         )
 
     def test_terminal_state_is_derived_from_obligations_and_receipts(self) -> None:
@@ -1129,28 +1225,36 @@ impl<'a> ResolvedWrite<'a> {
             files = repository_files()
             _write_files(root, files)
             outside = root.parent / f"ledger-outside-{root.name}.rs"
-            outside.write_text("fn outside() {}\n", encoding="utf-8")
             link = root / "scripts" / "escaped.toml"
-            link.symlink_to(outside)
-            manifest = valid_manifest(active_override={"p1-ledger": "scripts/escaped.toml"})
-            manifest_path = root / "ledger.toml"
-            manifest_path.write_text(manifest, encoding="utf-8")
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(CHECKER),
-                    "--root",
-                    str(root),
-                    "--manifest",
-                    "ledger.toml",
-                    "--diagnostics-json",
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            outside.unlink()
+            try:
+                outside.write_text("fn outside() {}\n", encoding="utf-8")
+                try:
+                    link.symlink_to(outside)
+                except (OSError, NotImplementedError) as error:
+                    self.skipTest(f"real symlinks are unavailable: {error}")
+                manifest = valid_manifest(active_override={"p1-ledger": "scripts/escaped.toml"})
+                manifest_path = root / "ledger.toml"
+                manifest_path.write_text(manifest, encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CHECKER),
+                        "--root",
+                        str(root),
+                        "--manifest",
+                        "ledger.toml",
+                        "--diagnostics-json",
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            finally:
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                if outside.is_symlink() or outside.exists():
+                    outside.unlink()
         self.assert_result_diagnostic(
             result, "E_PATH_SYMLINK_ESCAPE", fields={"obligation_id": "p1-ledger"}
         )
@@ -1172,7 +1276,11 @@ impl<'a> ResolvedWrite<'a> {
             'kind = "python-test", argv = ["python3", "scripts/check-storage-ownership-contracts.py"]',
             'kind = "shell", argv = ["sh", "-c", "echo unsafe"]',
         )
-        self.assert_checker_error(shell, "E_COMMAND_KIND", fields={"kind": "shell"})
+        self.assert_checker_error(
+            shell,
+            "E_COMMAND_KIND",
+            fields={"command_id": "cmd-ledger", "kind": "shell"},
+        )
         empty = _replace_once(
             valid_manifest(),
             'argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_api_parity"]',
@@ -1279,17 +1387,60 @@ impl<'a> ResolvedWrite<'a> {
             )
         self.assert_result_diagnostic(result, "E_RECEIPT_COMMIT", fields={"actual_head": actual_candidate})
 
+    def test_runner_receipt_digests_match_independent_sha256_calculations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_commit, _, candidate, _, receipt = self.emit_runner_receipt(root)
+            self.assertEqual(
+                receipt["base_manifest_sha256"],
+                _sha256_bytes(_git_show_bytes(root, base_commit, "scripts/storage-ownership-contracts.toml")),
+            )
+            self.assertEqual(
+                receipt["candidate_manifest_sha256"],
+                _sha256_bytes((root / "scripts/storage-ownership-contracts.toml").read_bytes()),
+            )
+            rows = {row["id"]: row for row in tomllib.loads(candidate)["obligations"]}
+            for execution in _receipt_executions(receipt):
+                row = rows[execution["obligation_id"]]
+                self.assertEqual(
+                    execution["artifact_sha256"],
+                    _sha256_resolved_path(root, row["artifact"]["path"]),
+                )
+                self.assertEqual(
+                    execution["command_sha256"],
+                    _sha256_command(row["command"]),
+                )
+
     def test_receipt_digests_bind_exact_manifest_artifact_and_command(self) -> None:
         for digest_kind in ("manifest", "artifact", "command"):
             with self.subTest(digest_kind=digest_kind), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                base_commit, _, _, receipt_path, receipt = self.emit_runner_receipt(root)
+                base_commit, _, candidate, receipt_path, receipt = self.emit_runner_receipt(root)
                 if digest_kind == "manifest":
-                    receipt["candidate_manifest_sha256"] = "0" * 64
+                    manifest_path = root / "scripts/storage-ownership-contracts.toml"
+                    manifest_path.write_bytes(
+                        manifest_path.read_bytes() + b"\npost-receipt manifest mutation\n"
+                    )
                 elif digest_kind == "artifact":
-                    _receipt_execution(receipt, "p0-control-plane")["artifact_sha256"] = "0" * 64
+                    row = next(
+                        row for row in tomllib.loads(candidate)["obligations"]
+                        if row["id"] == "p0-control-plane"
+                    )
+                    _receipt_execution(receipt, "p0-control-plane")["artifact_sha256"] = _sha256_bytes(
+                        (root / row["artifact"]["path"]).resolve().read_bytes()
+                        + b"\npost-receipt mutation\n"
+                    )
                 else:
-                    _receipt_execution(receipt, "p0-control-plane")["command_sha256"] = "0" * 64
+                    row = next(
+                        row for row in tomllib.loads(candidate)["obligations"]
+                        if row["id"] == "p0-control-plane"
+                    )
+                    command_bytes = json.dumps(
+                        row["command"], sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                    _receipt_execution(receipt, "p0-control-plane")["command_sha256"] = _sha256_bytes(
+                        command_bytes + b"post-receipt mutation"
+                    )
                 receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
                 result = self.run_repository_checker(
                     root, base_commit, receipt_path, "--diagnostics-json"
@@ -1297,6 +1448,74 @@ impl<'a> ResolvedWrite<'a> {
                 self.assert_result_diagnostic(
                     result, "E_RECEIPT_DIGEST", fields={"digest_kind": digest_kind}
                 )
+
+    def test_post_receipt_artifact_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_commit, _, candidate, receipt_path, _ = self.emit_runner_receipt(root)
+            row = next(
+                row for row in tomllib.loads(candidate)["obligations"]
+                if row["id"] == "p0-control-plane"
+            )
+            artifact = root / row["artifact"]["path"]
+            artifact.write_bytes(artifact.read_bytes() + b"\npost-receipt artifact mutation\n")
+            result = self.run_repository_checker(
+                root, base_commit, receipt_path, "--diagnostics-json"
+            )
+        self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
+
+    def test_post_receipt_base_manifest_mutation_digest_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_commit, _, _, receipt_path, receipt = self.emit_runner_receipt(root)
+            base_bytes = _git_show_bytes(
+                root, base_commit, "scripts/storage-ownership-contracts.toml"
+            )
+            # A Git object is immutable; model a post-receipt mutation of the
+            # base-manifest bytes in the recorded digest independently.
+            receipt["base_manifest_sha256"] = _sha256_bytes(
+                base_bytes + b"\npost-receipt base-manifest mutation\n"
+            )
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            result = self.run_repository_checker(
+                root, base_commit, receipt_path, "--diagnostics-json"
+            )
+        self.assert_result_diagnostic(
+            result, "E_RECEIPT_DIGEST", fields={"digest_kind": "base_manifest"}
+        )
+
+    def test_post_receipt_symlink_retarget_is_rejected_when_supported(self) -> None:
+        override = {"p0-control-plane": "artifacts/control.py"}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = valid_manifest(marker=True, active_override=override)
+            base_commit = _init_git_repository(root, base, files=marker_files())
+            artifact = root / "artifacts/control.py"
+            target_a = root / "artifacts/target-a.py"
+            target_b = root / "artifacts/target-b.py"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            target_a.write_text("target-a\n", encoding="utf-8")
+            target_b.write_text("target-b\n", encoding="utf-8")
+            try:
+                artifact.symlink_to("target-a.py")
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"relative symlinks are unavailable: {error}")
+            base_commit = _commit(root, "base internal artifact symlink")
+            candidate = valid_manifest(marker=True, active_override=override)
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                candidate, encoding="utf-8"
+            )
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            _commit(root, "candidate with internal artifact symlink")
+            receipt_path = root / "receipt.json"
+            runner = self.run_repository_runner(root, base_commit, receipt_path)
+            self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
+            artifact.unlink()
+            artifact.symlink_to("target-b.py")
+            result = self.run_repository_checker(
+                root, base_commit, receipt_path, "--diagnostics-json"
+            )
+        self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
 
     def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1380,7 +1599,11 @@ impl<'a> ResolvedWrite<'a> {
             )
             log_path = root / "runner.log"
             log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-        self.assert_result_diagnostic(result, "E_COMMAND_FAILED", fields={"command_id": "cmd-ledger"})
+        self.assert_result_diagnostic(
+            result,
+            "E_COMMAND_FAILED",
+            fields={"command_id": "cmd-ledger", "exit_code": 23},
+        )
         self.assertNotIn("cmd-owner-compile", log)
 
     def test_terminal_true_requires_zero_deferred_and_complete_receipt(self) -> None:
@@ -1440,5 +1663,128 @@ def _parse_registry(manifest: str) -> dict[str, list[tuple[str, str]]]:
     return {"edges": edges}
 
 
+def _subtest_parameters(subtest: unittest.case.TestCase) -> dict[str, object] | None:
+    params = getattr(subtest, "params", None)
+    if params is None:
+        return None
+    return {str(key): value for key, value in params.items()}
+
+
+class _RedResult(unittest.TextTestResult):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.events: list[dict[str, object]] = []
+
+    def _record(self, test: unittest.case.TestCase, kind: str, params: object) -> None:
+        self.events.append(
+            {
+                "test": test.id().rsplit(".", 1)[-1],
+                "kind": kind,
+                "params": params,
+            }
+        )
+
+    def addFailure(self, test: unittest.case.TestCase, err: object) -> None:
+        self._record(test, "failure", None)
+        super().addFailure(test, err)
+
+    def addError(self, test: unittest.case.TestCase, err: object) -> None:
+        self._record(test, "error", None)
+        super().addError(test, err)
+
+    def addSubTest(
+        self,
+        test: unittest.case.TestCase,
+        subtest: unittest.case.TestCase,
+        err: object | None,
+    ) -> None:
+        if err is not None:
+            self._record(test, "subtest", _subtest_parameters(subtest))
+        super().addSubTest(test, subtest, err)
+
+
+def _expected_red_events() -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for test, specification in RED_EXPECTED_FAILURES.items():
+        subtests = specification.get("subtests")
+        if subtests is None:
+            subtests = [None]
+            kind = "failure"
+        else:
+            kind = "subtest"
+        for params in subtests:
+            events.append(
+                {
+                    "test": test,
+                    "kind": kind,
+                    "params": params,
+                    "cause": specification["cause"],
+                    "required": specification.get("required", True),
+                }
+            )
+    return events
+
+
+def _red_event_key(event: dict[str, object]) -> tuple[str, str, str]:
+    return (
+        str(event["test"]),
+        str(event["kind"]),
+        json.dumps(event["params"], sort_keys=True, separators=(",", ":")),
+    )
+
+
+def _run_red_suite() -> int:
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(StorageOwnershipV2RedTests)
+    runner = unittest.TextTestRunner(
+        stream=sys.stderr,
+        verbosity=1,
+        resultclass=_RedResult,
+    )
+    result = runner.run(suite)
+    expected = _expected_red_events()
+    expected_by_key = {_red_event_key(event): event for event in expected}
+    observed = result.events
+    observed_by_key = {_red_event_key(event): event for event in observed}
+    skipped_tests = {
+        test.id().rsplit(".", 1)[-1] for test, _ in result.skipped
+    }
+    unexpected = [
+        event
+        for event in observed
+        if _red_event_key(event) not in expected_by_key
+    ]
+    missing = [
+        event
+        for event in expected
+        if _red_event_key(event) not in observed_by_key
+        and (event["required"] or event["test"] not in skipped_tests)
+    ]
+    observed_report = []
+    for event in observed:
+        expected_event = expected_by_key.get(_red_event_key(event))
+        observed_report.append(
+            {
+                **event,
+                "cause": expected_event["cause"] if expected_event else None,
+                "classification": "expected" if expected_event else "unexpected",
+            }
+        )
+    report = {
+        "schema": "tenferro.storage-ownership-red-report.v1",
+        "tests_run": result.testsRun,
+        "expected_failure_count": len(expected),
+        "observed_failure_count": len(observed),
+        "expected_failures": expected,
+        "observed_failures": observed_report,
+        "unexpected_failures": unexpected,
+        "missing_expected_failures": missing,
+        "skipped": [test.id() for test, _ in result.skipped],
+    }
+    print(json.dumps(report, sort_keys=True))
+    if unexpected or missing:
+        return 2
+    return 1 if observed else 0
+
+
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(_run_red_suite())

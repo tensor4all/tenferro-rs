@@ -15,8 +15,8 @@ This checkpoint delivers two artifacts:
   deliverables.
 - `scripts/test-storage-ownership-contracts-v2.py`: an executable RED
   specification for the v2 ledger. It invokes the checked-in production
-  manifest and creates adversarial temporary repositories with real files and
-  real symlinks.
+  manifest, compares it to the canonical graph/obligation model, and creates
+  adversarial temporary repositories with real files and real symlinks.
 
 The v2 checker and runner are intentionally not implemented in this
 checkpoint. The existing checker file is still the superseded v1
@@ -42,6 +42,10 @@ here.
   Candidate-bound runner receipts include successful results and the manifest,
   artifact, command, and actual Git commit digests. Terminal status is derived
   from obligations, cohort completion, and complete receipts.
+- Receipt tests independently compute SHA-256 values and exercise artifact
+  mutation, post-receipt base-manifest digest mutation, and in-repository
+  symlink retargeting. The checker must validate resolved bytes rather than a
+  path string or a nonzero-looking digest.
 - Path validation is filesystem-aware. Repository-relative lexical checks are
   supplemented by canonical resolution so `..`, absolute paths, and real
   symlink escapes cannot become green. Existing deferred artifacts do not
@@ -96,12 +100,18 @@ The executable specification covers:
 - actual-Git base-to-candidate immutable identity, candidate-bound runner
   receipt output, non-vacuous P0/P5 CUTOVER proof, and both positive and
   incomplete-receipt terminal derivation, with no locally constructed positive
-  receipts;
+  receipts; independently recomputed digest values and post-receipt mutation
+  rejection;
 - stable JSON diagnostic codes and identifying fields, with checked fixture
-  replacement helpers rather than unchecked text mutation;
-- canonical and directly invoked future auto-trait/provider-release artifacts,
-  and a persisted executable minimal borrow-shape proof;
-- rejection of the old fixture/source/ownership parallel tables.
+  replacement helpers rather than unchecked text mutation. Every one-fault
+  case requires an exact diagnostic code set and field shape;
+- canonical future production-bound borrow, auto-trait, and provider-release
+  artifact/command obligations. No inline synthetic borrow compile is
+  canonical evidence and no private-name source scan is used;
+- rejection of the actual checked-in legacy v1 fixture/source tables as well
+  as rejection of those tables reappearing in a v2 manifest;
+- a machine-readable expected RED event set and report that rejects unknown
+  failures, errors, and unexpected subtests.
 
 The temporary repository helpers are test-only. They do not replace the
 production-manifest test, and the symlink cases create actual filesystem
@@ -154,14 +164,13 @@ checker for `terminal: true`. Both diagnostic assertion paths validate the
 `tenferro.storage-ownership-diagnostics.v1` envelope and non-empty structured
 diagnostic array.
 
-The canonical graph now owns a deferred P3/G1+G4 compile artifact for
-`UseLease`/`BackendRawLease: Send + !Sync` and thread-bound host mappings/guards,
-plus a deferred P4/G1+G3 provider runtime artifact for exactly-once,
-take-before-call, panic containment, and quarantine. The base snapshot is the
-coherent P0/P1/P2-complete state; P4/P5 and every P3/P9 member obligation are
-activated and receipted in the CUTOVER candidate. A P1 executable self-test
-writes the minimal private-dispatch sketch and invokes `rustc`; document string
-checks remain supplemental and explicitly do not make the gate green.
+The canonical graph now owns a deferred P1/G1+G4 production-bound compile/test
+artifact for the private dispatch borrow and exact `ResolvedWrite` recovery,
+plus deferred P3/G1+G4 auto-trait and P4/G1+G3 provider runtime artifacts.
+The base snapshot is the coherent P0/P1/P2-complete state; P4/P5 and every
+P3/P9 member obligation are activated and receipted in the CUTOVER candidate.
+Any synthetic borrow snippet is supplemental only; private-name text matching
+is not a proof.
 
 ## Verification evidence for this checkpoint
 
@@ -172,8 +181,8 @@ Passing deterministic checks:
   CUTOVER and all-active terminal candidates, and cover every canonical unit;
 - canonical deferred compile/runtime rows for auto-traits and provider release,
   plus a RED that invokes those exact future artifact commands;
-- the persisted P1 RED self-test invoking `rustc --edition=2021` for the exact
-  private host/device dispatch and `(ResolvedWrite, Error)` recovery pattern;
+- the deferred P1 production-bound borrow artifact/command row, with no
+  self-referential inline source accepted as canonical evidence;
 - `python3.12 scripts/check-storage-ownership-contracts.py`;
 - `python3.12 scripts/test-check-storage-ownership-contracts.py` (65 tests);
 - `cargo doc --workspace --no-deps`;
@@ -189,13 +198,14 @@ Passing deterministic checks:
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 31 tests and
-  reports 34 assertion/subtest failures. They are intentional: the v1 checker
-  lacks v2 structured diagnostics, base/HEAD receipt validation and summary
-  output; the runner is absent; the two canonical future lifecycle artifacts
-  are not implemented; and the checked-in production manifest remains v1.
-  There are no fixture parse errors, unchecked/no-op replacement failures, or
-  unexpected Python exceptions.
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 35 tests and
+  reports exactly 40 expected failure/subtest events. The emitted
+  `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
+  zero missing expected events. The causes are machine-readable: v2 checker
+  absent (22 events), v2 runner absent (14 events), future production proof
+  artifacts absent (3 events), and the checked-in production manifest still
+  v1 (1 event). The symlink-retarget event is portable/optional when the host
+  cannot create symlinks. There are no unexpected Python errors.
 
 No cargo implementation tests are claimed here because this checkpoint changes
 only design, ledger specification tests, and provenance. The next Phase 1
@@ -208,6 +218,9 @@ inventory, trybuild, parity, docs, and repository quality gates.
 - Replace the v1 production ledger with the v2 single-table schema in the
   checker/runner implementation checkpoint; do not add a v1 compatibility
   parser.
+- Keep the production-manifest equality assertion coupled to the canonical
+  `UNITS`/`EDGES`/obligation model; do not weaken it to schema or checker-exit
+  checks.
 - Implement filesystem-aware artifact resolution, promotion comparison,
   candidate-bound receipts, typed command execution, and derived terminal
   reporting to satisfy this RED suite.

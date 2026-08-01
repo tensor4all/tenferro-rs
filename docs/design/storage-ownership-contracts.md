@@ -106,7 +106,11 @@ superseded v1 checker). The executable RED specification is
 `scripts/test-storage-ownership-contracts-v2.py`; it must remain checked in
 and must invoke the exact production manifest as well as adversarial temporary
 repositories. The checked-in production manifest is currently the superseded
-v1 input. The v2 gate must convert it to v2 and reject v1 rather than adding a
+v1 input. The RED specification compares the parsed production manifest with
+the complete canonical `UNITS`/`EDGES`/obligation model used to generate its
+temporary v2 manifests, rather than checking only its schema or checker exit
+status. The v2 gate must convert it to v2 and reject the actual legacy
+`fixtures`/`source_scans`/`source_inventory` tables rather than adding a
 compatibility parser; the RED test records that required migration.
 
 ### One canonical graph
@@ -238,7 +242,11 @@ Digest canonicalization is part of the receipt contract: manifest digests are
 SHA-256 over the exact manifest bytes, artifact digests are SHA-256 over the
 resolved repository file bytes, and command digests are SHA-256 over the
 UTF-8, sorted-key, compact JSON encoding of the typed command value. A receipt
-with a correct-looking ID but a digest for another candidate is invalid.
+with a correct-looking ID but a digest for another candidate is invalid. The
+verification harness independently recomputes all four digest classes and
+mutates artifact bytes, the base-manifest digest, and candidate files after a
+receipt. An in-repository symlink is retargeted after receipt where the host
+supports symlinks; the checker must reject the changed resolved artifact bytes.
 
 The structural shape is intentionally explicit. A production row has one
 artifact, one command, and one tagged state; the state is not split into
@@ -289,7 +297,11 @@ Checker and runner failures have a stable machine-readable envelope when
 
 `code` and the identifying `fields` are compatibility-stable within schema
 v1; human `message` text is not. The RED suite therefore asserts codes and
-relevant IDs/paths rather than prose.
+relevant IDs/paths rather than prose. Each one-fault case requires the exact
+one-code set and the exact field-key shape registered by the RED harness;
+duplicate codes, unknown codes, extra envelope keys, missing `message`, or
+extra identifying fields are failures. This prevents a checker from passing a
+negative case by emitting every known code or an unrelated diagnostic.
 
 The v1 code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
 `E_SCHEMA_PARALLEL_TABLE`, `E_SCHEMA_UNKNOWN_TABLE`,
@@ -313,13 +325,20 @@ path, graph, promotion, and command-binding cases and an integration case that
 invokes the checked-in production manifest. Temporary repositories contain
 real files and real symlinks; they do not stand in for the production gate.
 
+The RED command emits a machine-readable
+`tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
+keyed by test and subtest parameters and records a named cause. The runner
+compares the observed failure/error/subtest events with that exact set: an
+unlisted event or a missing expected event makes the RED harness itself fail,
+so an implementation cannot relabel an unexpected regression as intentional.
+
 The base RED snapshot has completed P0, P1, and P2. P4 and P5 remain deferred;
 the CUTOVER candidate activates every required P4/P5 obligation and obtains
 successful runner evidence before atomically activating all P3/P9 obligations.
 In particular, the canonical obligation set includes:
 
-- P1/G1+G4: an executable minimal `rustc` proof of the private dispatch borrow
-  shape and exact `ResolvedWrite` failure recovery;
+- P1/G1+G4: a deferred production-code-bound compile/test artifact for the
+  private dispatch borrow shape and exact `ResolvedWrite` failure recovery;
 - P3/G1+G4: a compile contract using the repository compile-test harness or
   static assertions for `UseLease`/`BackendRawLease: Send + !Sync` and
   `BackendRawMapping`/host guards: `!Send + !Sync`;
@@ -327,8 +346,12 @@ In particular, the canonical obligation set includes:
   callback panic containment, and root quarantine after release panic.
 
 These are ordinary immutable artifact-command rows, so all-active terminal
-proof necessarily includes their successful runner results. Matching text in
-this document is supplemental and cannot satisfy any of these obligations.
+proof necessarily includes their successful runner results. A synthetic
+borrow snippet may be used as a supplemental design experiment, but it is not
+canonical evidence and cannot satisfy the P1 obligation. Private item names in
+the pseudocode are provisional; the future production-bound artifact must
+prove the structural capability/borrow/recovery contract through the real
+crate harness.
 
 The proof layers remain distinct: Rust borrowing/private constructors prove
 write safety; trybuild, Miri, property, corruption, and provider tests exercise
@@ -344,10 +367,10 @@ The following Rust block fixes normative type, visibility, lifetime, field-
 split, and state-transition shape. It is intentionally architecture
 pseudocode: unrelated declarations, imports, and routine method bodies may be
 elided, and the block is not claimed as one standalone crate. Executability is
-proved separately by the canonical P1 minimal `rustc` artifact and the P3/P4
-compile/runtime obligations above. Implementations may rename provisional
-private items, but may not replace the private dispatch shape with a request
-that escapes and permits a second owner/provider borrow.
+proved separately by the canonical P1 production-bound compile/test artifact
+and the P3/P4 compile/runtime obligations above. Implementations may rename
+provisional private items, but may not replace the private dispatch shape with
+a request that escapes and permits a second owner/provider borrow.
 
 ```rust
 use core::{cell::Cell, marker::PhantomData, ptr::NonNull};
