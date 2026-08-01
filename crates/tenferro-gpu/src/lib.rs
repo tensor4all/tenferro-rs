@@ -51,8 +51,8 @@ pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 pub use webgpu::{
     download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
     webgpu_runtime_engine_registration, webgpu_runtime_engine_registration_with_id,
-    webgpu_runtime_hardware_class, AppleContext, AppleTransferStats, WebGpuBackend, WebGpuRuntime,
-    WebGpuRuntimeIdentity,
+    webgpu_runtime_hardware_class, AppleContext, AppleTransferStats, WebGpuBackend,
+    WebGpuExecSession, WebGpuRuntime, WebGpuRuntimeIdentity,
 };
 
 /// Narrow owner-scoped WebGPU handle interop for extension crates.

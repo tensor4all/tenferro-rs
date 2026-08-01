@@ -6,13 +6,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache,
-    BackendSessionHost, Buffer, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error,
-    GatherConfig, GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind,
-    PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
+    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache, Buffer,
+    CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig, GpuBackendKind,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, PadConfig, Placement,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -21,6 +21,7 @@ mod apple;
 mod error;
 #[cfg(not(target_family = "wasm"))]
 mod event_domain;
+mod exec_session;
 mod gemm;
 pub(crate) mod interop;
 mod kernels;
@@ -31,6 +32,8 @@ mod structural;
 
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
+#[doc(hidden)]
+pub use exec_session::WebGpuExecSession;
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
 pub use runtime::{webgpu_available, WebGpuRuntime, WebGpuRuntimeIdentity};
 pub use runtime_adapter::{
@@ -978,7 +981,5 @@ impl BackendRuntimeCache for WebGpuBackend {
 }
 
 impl BackendCachedDot for WebGpuBackend {}
-
-impl BackendSessionHost for WebGpuBackend {}
 
 impl TensorBackend for WebGpuBackend {}

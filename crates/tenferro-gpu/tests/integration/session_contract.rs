@@ -1,0 +1,36 @@
+#![cfg(feature = "webgpu")]
+
+use std::any::type_name;
+
+#[test]
+fn webgpu_session_type_is_distinct_from_owner() {
+    use tenferro_gpu::{WebGpuBackend, WebGpuExecSession};
+
+    assert_ne!(
+        type_name::<WebGpuBackend>(),
+        type_name::<WebGpuExecSession<'static>>()
+    );
+}
+
+#[test]
+fn webgpu_session_exposes_backend_session_operations() {
+    use tenferro_gpu::WebGpuExecSession;
+    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise};
+
+    fn assert_backend_session<S: BackendSession + ?Sized>() {}
+
+    assert_backend_session::<WebGpuExecSession<'static>>();
+    let _add: fn(
+        &mut WebGpuExecSession<'static>,
+        &Tensor,
+        &Tensor,
+    ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add;
+}
+
+#[test]
+fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
+    let tests = trybuild::TestCases::new();
+
+    tests.compile_fail("tests/ui/webgpu_session_borrow_escape.rs");
+    tests.compile_fail("tests/ui/webgpu_session_owner_projection.rs");
+}
