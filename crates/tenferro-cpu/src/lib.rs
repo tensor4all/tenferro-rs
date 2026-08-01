@@ -220,10 +220,13 @@ pub use topology::{
 /// a borrow of the session, so the borrowed resource lease remains scoped to
 /// the caller's session closure.
 #[doc(hidden)]
-pub fn with_cpu_exec_session<R>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+pub fn with_cpu_exec_session<B, R>(
+    session: &mut B,
     f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R,
-) -> Option<R> {
+) -> Option<R>
+where
+    B: tenferro_tensor::BackendSession + ?Sized,
+{
     if session.session_type_name() != std::any::type_name::<CpuExecSession<'static>>() {
         return None;
     }

@@ -9,12 +9,24 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "cpu-faer")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_tensor::backend::{BackendSessionHost, TensorBackend};
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
+
+pub(super) fn with_cpu_linalg<R>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
+    })
+}
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {

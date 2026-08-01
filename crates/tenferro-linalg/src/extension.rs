@@ -7,9 +7,10 @@ use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
-use tenferro_tensor::{
-    BackendSession, DType, Error, ErrorKind, Tensor, TensorRead, TensorStructural,
-};
+use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
+
+#[cfg(feature = "cuda")]
+use tenferro_gpu::with_cuda_exec_session;
 
 use crate::backend::LinalgBackend;
 
@@ -564,21 +565,55 @@ impl ExtensionOp for LinalgExtensionOp {
     }
 }
 
-fn execute_linalg_extension<B: LinalgBackend + 'static>(
-    op: &LinalgExtensionOp,
-    inputs: &[&Tensor],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    execute_linalg(op.op(), inputs, ctx.backend_mut())
-}
-
-pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
+pub(crate) fn execute_linalg_extension_reads<B: BackendSession + ?Sized>(
     op: &LinalgExtensionOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    execute_linalg_extension_reads_on_session(op, inputs, ctx.backend_mut())
+}
+
+pub(crate) fn execute_linalg_extension_reads_owner<B: TensorBackend>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let (backend, caches) = ctx.parts_mut();
+    backend.with_backend_session(|session| {
+        let mut session_ctx = ExtensionExecutionContext::new(session, caches);
+        execute_linalg_extension_reads(op, inputs, &mut session_ctx)
+    })
+}
+
+fn execute_linalg_extension_reads_on_session<B: BackendSession + ?Sized>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    session: &mut B,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if let Some(result) = with_cpu_exec_session(session, |session| {
+        execute_linalg_extension_reads_in_session(op, inputs, session)
+    }) {
+        return result;
+    }
+    #[cfg(feature = "cuda")]
+    if let Some(result) = with_cuda_exec_session(session, |session| {
+        execute_linalg_extension_reads_in_session(op, inputs, session)
+    }) {
+        return result;
+    }
+    Err(Error::unsupported(
+        "linalg_extension",
+        "selected backend session does not expose a linalg execution capability",
+    ))
+}
+
+fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    session: &mut S,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     if op.op() == LinalgOp::Cholesky {
-        return Ok(vec![ctx.backend_mut().cholesky_read(inputs[0].clone())?]);
+        return Ok(vec![session.cholesky_read(inputs[0].clone())?]);
     }
     if let LinalgOp::TriangularSolve {
         left_side,
@@ -587,7 +622,7 @@ pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
         unit_diagonal,
     } = op.op()
     {
-        match ctx.backend_mut().triangular_solve_read(
+        match session.triangular_solve_read(
             inputs[0].clone(),
             inputs[1].clone(),
             left_side,
@@ -600,28 +635,19 @@ pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
             Err(error) => return Err(error),
         }
     }
-    execute_linalg_extension_materialized_reads(op, inputs, ctx)
-}
 
-fn execute_linalg_extension_materialized_reads<B: LinalgBackend + 'static>(
-    op: &LinalgExtensionOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // Linalg backends currently operate on compact tensors; materialization is
-    // explicit here so borrowed views cannot silently bypass backend errors.
-    let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
-        inputs
-            .iter()
-            .cloned()
-            .map(|input| exec.to_contiguous_read(input))
-            .collect::<tenferro_tensor::Result<Vec<_>>>()
-    })?;
+    // Linalg kernels operate on compact tensors; materialization is explicit
+    // here so borrowed views cannot bypass provider errors.
+    let materialized_inputs = inputs
+        .iter()
+        .cloned()
+        .map(|input| session.to_contiguous_read(input))
+        .collect::<tenferro_tensor::Result<Vec<_>>>()?;
     let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    execute_linalg_extension(op, &input_refs, ctx)
+    execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: LinalgBackend + 'static>(op: &LinalgExtensionOp) -> bool {
+fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp) -> bool {
     matches!(op.op(), LinalgOp::LuSolvePrepared { .. })
         && std::any::TypeId::of::<B>() == std::any::TypeId::of::<tenferro_cpu::CpuBackend>()
 }
@@ -632,11 +658,7 @@ fn execute_linalg_extension_in_session(
     _extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let LinalgOp::LuSolvePrepared {
-        transpose_a,
-        conjugate_a,
-    } = op.op()
-    else {
+    if !matches!(op.op(), LinalgOp::LuSolvePrepared { .. }) {
         return Err(Error::unsupported(
             "linalg_extension",
             "linalg operation has no scheduler-session implementation",
@@ -652,47 +674,18 @@ fn execute_linalg_extension_in_session(
             ),
         ));
     }
-    let Some(output) = with_cpu_exec_session(session, |session| {
-        let materialized_inputs = inputs
-            .iter()
-            .cloned()
-            .map(|input| session.to_contiguous_read(input))
-            .collect::<tenferro_tensor::Result<Vec<_>>>()?;
-        let [a, packed_lu, pivots, b] = materialized_inputs.as_slice() else {
-            return Err(Error::invalid_argument(
-                "linalg_extension",
-                "inputs",
-                "LuSolvePrepared session materialization did not preserve four inputs",
-            ));
-        };
-        crate::cpu::backend::lu_solve_prepared_in_session(
-            session,
-            a,
-            packed_lu,
-            pivots,
-            b,
-            transpose_a,
-            conjugate_a,
-        )
-        .map(|output| vec![output])
-    }) else {
-        return Err(Error::unsupported(
-            "linalg_extension",
-            "selected backend session does not expose the CPU linalg session capability",
-        ));
-    };
-    output
+    execute_linalg_extension_reads_on_session(op, inputs, session)
 }
 
 define_extension_runtime! {
     runtime = LinalgRuntime,
     family_id = LINALG_EXTENSION_FAMILY_ID,
     op_type = LinalgExtensionOp,
-    execute = execute_linalg_extension,
-    execute_reads = execute_linalg_extension_reads,
+    execute = execute_linalg_extension_reads_owner,
+    execute_reads = execute_linalg_extension_reads_owner,
     execute_in_session = execute_linalg_extension_in_session,
     session_supported = linalg_session_supported,
-    backend_bound = LinalgBackend,
+    backend_bound = TensorBackend,
 }
 
 fn execute_linalg<B: LinalgBackend>(
@@ -770,39 +763,35 @@ fn execute_linalg<B: LinalgBackend>(
     }
 }
 
-fn signdet_from_lu_factor<B: LinalgBackend>(
+fn signdet_from_lu_factor<B: LinalgBackend + ?Sized>(
     input_dtype: DType,
     packed_lu: &Tensor,
     parity: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| {
-        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
-        let det_u = exec.reduce_prod_read(TensorRead::from_tensor(&diag), &[0])?;
-        let det = exec.mul_read(
-            TensorRead::from_tensor(parity),
-            TensorRead::from_tensor(&det_u),
-        )?;
-        if matches!(input_dtype, DType::C32 | DType::C64) {
-            let abs = exec.abs_read(TensorRead::from_tensor(&det))?;
-            let abs = exec.convert(&abs, input_dtype)?;
-            exec.div_read(TensorRead::from_tensor(&det), TensorRead::from_tensor(&abs))
-        } else {
-            exec.sign_read(TensorRead::from_tensor(&det))
-        }
-    })
+    let diag = backend.extract_diagonal(packed_lu, 0, 1)?;
+    let det_u = backend.reduce_prod_read(TensorRead::from_tensor(&diag), &[0])?;
+    let det = backend.mul_read(
+        TensorRead::from_tensor(parity),
+        TensorRead::from_tensor(&det_u),
+    )?;
+    if matches!(input_dtype, DType::C32 | DType::C64) {
+        let abs = backend.abs_read(TensorRead::from_tensor(&det))?;
+        let abs = backend.convert(&abs, input_dtype)?;
+        backend.div_read(TensorRead::from_tensor(&det), TensorRead::from_tensor(&abs))
+    } else {
+        backend.sign_read(TensorRead::from_tensor(&det))
+    }
 }
 
-fn logabsdet_from_lu_factor<B: LinalgBackend>(
+fn logabsdet_from_lu_factor<B: LinalgBackend + ?Sized>(
     packed_lu: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| {
-        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
-        let abs = exec.abs_read(TensorRead::from_tensor(&diag))?;
-        let log = exec.log_read(TensorRead::from_tensor(&abs))?;
-        exec.reduce_sum_read(TensorRead::from_tensor(&log), &[0])
-    })
+    let diag = backend.extract_diagonal(packed_lu, 0, 1)?;
+    let abs = backend.abs_read(TensorRead::from_tensor(&diag))?;
+    let log = backend.log_read(TensorRead::from_tensor(&abs))?;
+    backend.reduce_sum_read(TensorRead::from_tensor(&log), &[0])
 }
 
 pub(crate) fn apply_svd_gauge(

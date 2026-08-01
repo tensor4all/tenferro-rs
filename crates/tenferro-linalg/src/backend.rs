@@ -1,4 +1,4 @@
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorWrite};
+use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorWrite};
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
@@ -19,7 +19,7 @@ use crate::extension::{
 /// let mut backend = CpuBackend::new();
 /// accepts_linalg_backend(&mut backend);
 /// ```
-pub trait LinalgBackend: TensorBackend {
+pub trait LinalgBackend: BackendSession {
     /// Compute a Cholesky factorization.
     ///
     /// # Errors

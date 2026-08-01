@@ -14,6 +14,8 @@ use tenferro_tensor::{
     ValidationError,
 };
 
+use super::support;
+
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
@@ -477,238 +479,248 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 fn cpu_lu_solve_prepared_consumes_packed_factor_outputs() {
     let mut backend = CpuBackend::new();
 
-    let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
-    let b = f64_tensor(vec![2, 1], vec![4.0, 9.0]);
-    let factors = backend.lu_factor(&a).unwrap();
-    let x = backend
-        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-        .unwrap();
-    assert_eq!(f64_values(&x), vec![2.0, 3.0]);
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
+        let b = f64_tensor(vec![2, 1], vec![4.0, 9.0]);
+        let factors = backend.lu_factor(&a).unwrap();
+        let x = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert_eq!(f64_values(&x), vec![2.0, 3.0]);
 
-    let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 2.0, 3.0]);
-    let b = f64_tensor(vec![2, 1], vec![5.0, 31.0]);
-    let factors = backend.lu_factor(&a).unwrap();
-    let x = backend
-        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, false)
-        .unwrap();
-    let values = f64_values(&x);
-    assert!((values[0] - 5.0).abs() < 1.0e-12);
-    assert!((values[1] - 7.0).abs() < 1.0e-12);
+        let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 2.0, 3.0]);
+        let b = f64_tensor(vec![2, 1], vec![5.0, 31.0]);
+        let factors = backend.lu_factor(&a).unwrap();
+        let x = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, false)
+            .unwrap();
+        let values = f64_values(&x);
+        assert!((values[0] - 5.0).abs() < 1.0e-12);
+        assert!((values[1] - 7.0).abs() < 1.0e-12);
 
-    let a = c64_tensor(
-        vec![2, 2],
-        vec![
-            Complex64::new(1.0, 1.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(2.0, -1.0),
-        ],
-    );
-    let b = c64_tensor(
-        vec![2, 1],
-        vec![Complex64::new(2.0, -2.0), Complex64::new(6.0, 3.0)],
-    );
-    let factors = backend.lu_factor(&a).unwrap();
-    let x = backend
-        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, true)
-        .unwrap();
-    let values = c64_values(&x);
-    assert!((values[0] - Complex64::new(2.0, 0.0)).norm() < 1.0e-12);
-    assert!((values[1] - Complex64::new(3.0, 0.0)).norm() < 1.0e-12);
+        let a = c64_tensor(
+            vec![2, 2],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(2.0, -1.0),
+            ],
+        );
+        let b = c64_tensor(
+            vec![2, 1],
+            vec![Complex64::new(2.0, -2.0), Complex64::new(6.0, 3.0)],
+        );
+        let factors = backend.lu_factor(&a).unwrap();
+        let x = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, true)
+            .unwrap();
+        let values = c64_values(&x);
+        assert!((values[0] - Complex64::new(2.0, 0.0)).norm() < 1.0e-12);
+        assert!((values[1] - Complex64::new(3.0, 0.0)).norm() < 1.0e-12);
+    });
 }
 
 #[test]
 fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
     let mut backend = CpuBackend::new();
 
-    let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
-    let factors = backend.lu_factor(&a).unwrap();
-    assert!(matches!(&factors[0], Tensor::F32(t) if t.shape() == [2, 2]));
-    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [2, 2]));
-    assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data().unwrap() == [-1.0]));
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
+        let factors = backend.lu_factor(&a).unwrap();
+        assert!(matches!(&factors[0], Tensor::F32(t) if t.shape() == [2, 2]));
+        assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [2, 2]));
+        assert!(matches!(&factors[2], Tensor::F32(t) if t.host_data().unwrap() == [-1.0]));
 
-    let a = c32_tensor(
-        vec![2, 2],
-        vec![
-            Complex32::new(2.0, 0.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(3.0, 1.0),
-        ],
-    );
-    let factors = backend.lu_factor(&a).unwrap();
-    assert!(matches!(&factors[0], Tensor::C32(t) if t.shape() == [2, 2]));
-    assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [1, 2]));
-    assert!(
-        matches!(&factors[2], Tensor::C32(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
-    );
+        let a = c32_tensor(
+            vec![2, 2],
+            vec![
+                Complex32::new(2.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(3.0, 1.0),
+            ],
+        );
+        let factors = backend.lu_factor(&a).unwrap();
+        assert!(matches!(&factors[0], Tensor::C32(t) if t.shape() == [2, 2]));
+        assert!(matches!(&factors[1], Tensor::I32(t) if t.host_data().unwrap() == [1, 2]));
+        assert!(
+            matches!(&factors[2], Tensor::C32(t) if t.host_data().unwrap() == [Complex32::new(1.0, 0.0)])
+        );
+    });
 }
 
 #[test]
 fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
     let mut backend = CpuBackend::new();
 
-    let s = backend
-        .svd_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
-        .unwrap();
-    assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let s = backend
+            .svd_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
+            .unwrap();
+        assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
 
-    let s = backend
-        .svd_values(&f64_tensor(
-            vec![2, 2, 2],
-            vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
-        ))
-        .unwrap();
-    assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2, 2]));
+        let s = backend
+            .svd_values(&f64_tensor(
+                vec![2, 2, 2],
+                vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
+            ))
+            .unwrap();
+        assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2, 2]));
 
-    let s = backend
-        .svd_values(&c32_tensor(
-            vec![2, 2],
-            vec![
-                Complex32::new(3.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(4.0, 0.0),
-            ],
-        ))
-        .unwrap();
-    assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
+        let s = backend
+            .svd_values(&c32_tensor(
+                vec![2, 2],
+                vec![
+                    Complex32::new(3.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(4.0, 0.0),
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(s, Tensor::F32(ref t) if t.shape() == [2]));
 
-    let s = backend
-        .svd_values(&c64_tensor(
-            vec![2, 2],
-            vec![
-                Complex64::new(3.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(4.0, 0.0),
-            ],
-        ))
-        .unwrap();
-    assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2]));
+        let s = backend
+            .svd_values(&c64_tensor(
+                vec![2, 2],
+                vec![
+                    Complex64::new(3.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(4.0, 0.0),
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(s, Tensor::F64(ref t) if t.shape() == [2]));
 
-    let values = backend
-        .eigh_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
-        .unwrap();
-    assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+        let values = backend
+            .eigh_values(&f32_tensor(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0]))
+            .unwrap();
+        assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
 
-    let values = backend
-        .eigh_values(&f64_tensor(
-            vec![2, 2, 2],
-            vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
-        ))
-        .unwrap();
-    assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2, 2]));
+        let values = backend
+            .eigh_values(&f64_tensor(
+                vec![2, 2, 2],
+                vec![3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0],
+            ))
+            .unwrap();
+        assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2, 2]));
 
-    let values = backend
-        .eigh_values(&c32_tensor(
-            vec![2, 2],
-            vec![
-                Complex32::new(3.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(4.0, 0.0),
-            ],
-        ))
-        .unwrap();
-    assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
+        let values = backend
+            .eigh_values(&c32_tensor(
+                vec![2, 2],
+                vec![
+                    Complex32::new(3.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(4.0, 0.0),
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(values, Tensor::F32(ref t) if t.shape() == [2]));
 
-    let values = backend
-        .eigh_values(&c64_tensor(
-            vec![2, 2],
-            vec![
-                Complex64::new(3.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(4.0, 0.0),
-            ],
-        ))
-        .unwrap();
-    assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2]));
+        let values = backend
+            .eigh_values(&c64_tensor(
+                vec![2, 2],
+                vec![
+                    Complex64::new(3.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(4.0, 0.0),
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(values, Tensor::F64(ref t) if t.shape() == [2]));
+    });
 }
 
 #[test]
 fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
     let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]);
-    let factors = backend.lu_factor(&a).unwrap();
-    let b = f64_tensor(vec![2], vec![6.0, 20.0]);
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]);
+        let factors = backend.lu_factor(&a).unwrap();
+        let b = f64_tensor(vec![2], vec![6.0, 20.0]);
 
-    let x = backend
-        .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-        .unwrap();
-    assert_eq!(x.shape(), &[2]);
-    assert_eq!(f64_values(&x), vec![3.0, 5.0]);
+        let x = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert_eq!(x.shape(), &[2]);
+        assert_eq!(f64_values(&x), vec![3.0, 5.0]);
 
-    let empty_a = f64_tensor(vec![0, 0], Vec::new());
-    let empty_b = f64_tensor(vec![0, 1], Vec::new());
-    let empty_pivots = i32_tensor(vec![0], Vec::new());
-    let x = backend
-        .lu_solve_prepared(&empty_a, &empty_a, &empty_pivots, &empty_b, false, false)
-        .unwrap();
-    assert_eq!(x.shape(), &[0, 1]);
+        let empty_a = f64_tensor(vec![0, 0], Vec::new());
+        let empty_b = f64_tensor(vec![0, 1], Vec::new());
+        let empty_pivots = i32_tensor(vec![0], Vec::new());
+        let x = backend
+            .lu_solve_prepared(&empty_a, &empty_a, &empty_pivots, &empty_b, false, false)
+            .unwrap();
+        assert_eq!(x.shape(), &[0, 1]);
 
-    let bad_pivots = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let err = backend
-        .lu_solve_prepared(&a, &factors[0], &bad_pivots, &b, false, false)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "lu_solve_prepared",
-            source: ValidationError::DTypeMismatch { .. },
-        }
-    ));
+        let bad_pivots = f64_tensor(vec![2], vec![1.0, 2.0]);
+        let err = backend
+            .lu_solve_prepared(&a, &factors[0], &bad_pivots, &b, false, false)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "lu_solve_prepared",
+                source: ValidationError::DTypeMismatch { .. },
+            }
+        ));
 
-    let bad_b = c64_tensor(
-        vec![2, 1],
-        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-    );
-    let err = backend
-        .lu_solve_prepared(&a, &factors[0], &factors[1], &bad_b, false, false)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "lu_solve_prepared",
-            source: ValidationError::DTypeMismatch { .. },
-        }
-    ));
+        let bad_b = c64_tensor(
+            vec![2, 1],
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        );
+        let err = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &bad_b, false, false)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "lu_solve_prepared",
+                source: ValidationError::DTypeMismatch { .. },
+            }
+        ));
 
-    let bad_pivots = i32_tensor(vec![2], vec![0, 2]);
-    let err = backend
-        .lu_solve_prepared(&a, &a, &bad_pivots, &b, false, false)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "lu_solve_prepared",
-            source: ValidationError::InvalidArgument {
-                argument: "pivot",
-                ..
-            },
-        }
-    ));
+        let bad_pivots = i32_tensor(vec![2], vec![0, 2]);
+        let err = backend
+            .lu_solve_prepared(&a, &a, &bad_pivots, &b, false, false)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "lu_solve_prepared",
+                source: ValidationError::InvalidArgument {
+                    argument: "pivot",
+                    ..
+                },
+            }
+        ));
+    });
 }
 
 #[test]
 fn cpu_lu_solve_prepared_rejects_rank_less_than_two() {
     let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let b = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let pivots = i32_tensor(vec![2], vec![1, 2]);
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let a = f64_tensor(vec![2], vec![1.0, 2.0]);
+        let b = f64_tensor(vec![2], vec![1.0, 2.0]);
+        let pivots = i32_tensor(vec![2], vec![1, 2]);
 
-    let err = backend
-        .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
-        .unwrap_err();
+        let err = backend
+            .lu_solve_prepared(&a, &a, &pivots, &b, true, false)
+            .unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "lu_solve_prepared",
-            source: ValidationError::RankMismatch { .. },
-        }
-    ));
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "lu_solve_prepared",
+                source: ValidationError::RankMismatch { .. },
+            }
+        ));
+    });
 }
 
 #[test]
@@ -717,43 +729,45 @@ fn cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading() {
     let b = backend_f64_tensor(vec![2, 1], 102);
     let mut backend = CpuBackend::new();
 
-    assert_no_panic_backend_download_error("cholesky", || backend.cholesky(&a));
-    assert_no_panic_backend_download_error("triangular_solve", || {
-        backend.triangular_solve(&a, &b, true, true, false, false)
-    });
-    assert_no_panic_backend_download_error("lu", || backend.lu(&a));
-    assert_no_panic_backend_download_error("full_piv_lu", || backend.full_piv_lu(&a));
-    assert_no_panic_backend_download_error("full_piv_lu_solve", || {
-        backend.full_piv_lu_solve(&a, &b, false)
-    });
-    assert_no_panic_backend_download_error("svd", || backend.svd(&a));
-    assert_no_panic_backend_download_error("qr", || backend.qr(&a));
-    assert_no_panic_backend_download_error("eigh", || backend.eigh(&a));
-    assert_no_panic_backend_download_error("eig", || backend.eig(&a));
-    assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
-    assert_no_panic_backend_download_error("solve", || {
-        backend.solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-    });
-    assert_no_panic_backend_download_error("triangular_solve", || {
-        backend.triangular_solve_read(
-            TensorRead::from_tensor(&a),
-            TensorRead::from_tensor(&b),
-            true,
-            true,
-            false,
-            false,
-        )
-    });
+    support::with_cpu_linalg(&mut backend, |backend| {
+        assert_no_panic_backend_download_error("cholesky", || backend.cholesky(&a));
+        assert_no_panic_backend_download_error("triangular_solve", || {
+            backend.triangular_solve(&a, &b, true, true, false, false)
+        });
+        assert_no_panic_backend_download_error("lu", || backend.lu(&a));
+        assert_no_panic_backend_download_error("full_piv_lu", || backend.full_piv_lu(&a));
+        assert_no_panic_backend_download_error("full_piv_lu_solve", || {
+            backend.full_piv_lu_solve(&a, &b, false)
+        });
+        assert_no_panic_backend_download_error("svd", || backend.svd(&a));
+        assert_no_panic_backend_download_error("qr", || backend.qr(&a));
+        assert_no_panic_backend_download_error("eigh", || backend.eigh(&a));
+        assert_no_panic_backend_download_error("eig", || backend.eig(&a));
+        assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
+        assert_no_panic_backend_download_error("solve", || {
+            backend.solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        });
+        assert_no_panic_backend_download_error("triangular_solve", || {
+            backend.triangular_solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                true,
+                true,
+                false,
+                false,
+            )
+        });
 
-    let host_c64 = c64_tensor(
-        vec![2, 1],
-        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-    );
-    assert_no_panic_backend_download_error("solve", || {
-        backend.solve_read(
-            TensorRead::from_tensor(&a),
-            TensorRead::from_tensor(&host_c64),
-        )
+        let host_c64 = c64_tensor(
+            vec![2, 1],
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        );
+        assert_no_panic_backend_download_error("solve", || {
+            backend.solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&host_c64),
+            )
+        });
     });
 }
 
@@ -763,86 +777,92 @@ fn cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths() {
     let b = backend_f64_tensor(vec![0, 1], 103);
     let mut backend = CpuBackend::new();
 
-    assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
-    assert_no_panic_backend_download_error("full_piv_lu_solve", || {
-        backend.full_piv_lu_solve(&a, &b, false)
+    support::with_cpu_linalg(&mut backend, |backend| {
+        assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
+        assert_no_panic_backend_download_error("full_piv_lu_solve", || {
+            backend.full_piv_lu_solve(&a, &b, false)
+        });
     });
 }
 
 #[test]
 fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
     let mut backend = CpuBackend::new();
-    let f64_a = f64_tensor(vec![0, 0], Vec::new());
-    let c64_b = c64_tensor(vec![0, 1], Vec::new());
-    let i32_a = i32_tensor(vec![0, 0], Vec::new());
-    let i32_b = i32_tensor(vec![0, 1], Vec::new());
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let f64_a = f64_tensor(vec![0, 0], Vec::new());
+        let c64_b = c64_tensor(vec![0, 1], Vec::new());
+        let i32_a = i32_tensor(vec![0, 0], Vec::new());
+        let i32_b = i32_tensor(vec![0, 1], Vec::new());
 
-    let err = backend.solve(&f64_a, &c64_b).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "solve",
-            source: ValidationError::DTypeMismatch { .. },
-        }
-    ));
+        let err = backend.solve(&f64_a, &c64_b).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "solve",
+                source: ValidationError::DTypeMismatch { .. },
+            }
+        ));
 
-    let err = backend
-        .solve_read(
-            TensorRead::from_tensor(&f64_a),
-            TensorRead::from_tensor(&c64_b),
-        )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "solve",
-            source: ValidationError::DTypeMismatch { .. },
-        }
-    ));
+        let err = backend
+            .solve_read(
+                TensorRead::from_tensor(&f64_a),
+                TensorRead::from_tensor(&c64_b),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "solve",
+                source: ValidationError::DTypeMismatch { .. },
+            }
+        ));
 
-    let err = backend.solve(&i32_a, &i32_b).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Extension {
-            op: "solve",
-            family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
-            kind: tenferro_tensor::ErrorKind::Unsupported,
-            ..
-        }
-    ));
+        let err = backend.solve(&i32_a, &i32_b).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Extension {
+                op: "solve",
+                family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                kind: tenferro_tensor::ErrorKind::Unsupported,
+                ..
+            }
+        ));
+    });
 }
 
 #[test]
 fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
     let mut backend = CpuBackend::new();
-    let f64_a = f64_tensor(vec![0, 0], Vec::new());
-    let c64_b = c64_tensor(vec![0, 1], Vec::new());
-    let i32_a = i32_tensor(vec![0, 0], Vec::new());
-    let i32_b = i32_tensor(vec![0, 1], Vec::new());
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let f64_a = f64_tensor(vec![0, 0], Vec::new());
+        let c64_b = c64_tensor(vec![0, 1], Vec::new());
+        let i32_a = i32_tensor(vec![0, 0], Vec::new());
+        let i32_b = i32_tensor(vec![0, 1], Vec::new());
 
-    let err = backend
-        .full_piv_lu_solve(&f64_a, &c64_b, false)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "full_piv_lu_solve",
-            source: ValidationError::DTypeMismatch { .. },
-        }
-    ));
+        let err = backend
+            .full_piv_lu_solve(&f64_a, &c64_b, false)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "full_piv_lu_solve",
+                source: ValidationError::DTypeMismatch { .. },
+            }
+        ));
 
-    let err = backend
-        .full_piv_lu_solve(&i32_a, &i32_b, false)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Extension {
-            op: "full_piv_lu_solve",
-            family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
-            kind: tenferro_tensor::ErrorKind::Unsupported,
-            ..
-        }
-    ));
+        let err = backend
+            .full_piv_lu_solve(&i32_a, &i32_b, false)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Extension {
+                op: "full_piv_lu_solve",
+                family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                kind: tenferro_tensor::ErrorKind::Unsupported,
+                ..
+            }
+        ));
+    });
 }
 
 #[test]
@@ -850,20 +870,22 @@ fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
     let input = f64_tensor(vec![0], Vec::new());
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.cholesky(&input)));
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let result = catch_unwind(AssertUnwindSafe(|| backend.cholesky(&input)));
 
-    assert!(result.is_ok(), "cholesky should return Err, not panic");
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "cholesky",
-            source: ValidationError::RankMismatch {
-                expected: 2,
-                actual: 1,
-            },
-        }
-    ));
+        assert!(result.is_ok(), "cholesky should return Err, not panic");
+        let err = result.unwrap().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "cholesky",
+                source: ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: 1,
+                },
+            }
+        ));
+    });
 }
 
 #[test]
@@ -872,24 +894,26 @@ fn solve_rejects_singular_matrix() {
     let b = f64_tensor(vec![2, 1], vec![1.0, 2.0]);
     let mut backend = CpuBackend::new();
 
-    let err = backend.solve(&a, &b).unwrap_err();
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let err = backend.solve(&a, &b).unwrap_err();
 
-    assert_eq!(err.kind(), ErrorKind::NumericalFailure);
-    assert!(matches!(
-        err.source()
-            .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
-        Some(tenferro_linalg::Error::Singular { op: "solve" })
-    ));
+        assert_eq!(err.kind(), ErrorKind::NumericalFailure);
+        assert!(matches!(
+            err.source()
+                .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
+            Some(tenferro_linalg::Error::Singular { op: "solve" })
+        ));
 
-    let err = backend
-        .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        .unwrap_err();
-    assert_eq!(err.kind(), ErrorKind::NumericalFailure);
-    assert!(matches!(
-        err.source()
-            .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
-        Some(tenferro_linalg::Error::Singular { op: "solve" })
-    ));
+        let err = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NumericalFailure);
+        assert!(matches!(
+            err.source()
+                .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
+            Some(tenferro_linalg::Error::Singular { op: "solve" })
+        ));
+    });
 }
 
 #[test]
@@ -898,22 +922,24 @@ fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
     let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
     let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        backend.triangular_solve(&a, &b, true, true, false, false)
-    }));
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            backend.triangular_solve(&a, &b, true, true, false, false)
+        }));
 
-    assert!(
-        result.is_ok(),
-        "triangular_solve should return Err on batch mismatch, not panic"
-    );
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "triangular_solve",
-            source: ValidationError::ShapeMismatch(_),
-        }
-    ));
+        assert!(
+            result.is_ok(),
+            "triangular_solve should return Err on batch mismatch, not panic"
+        );
+        let err = result.unwrap().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "triangular_solve",
+                source: ValidationError::ShapeMismatch(_),
+            }
+        ));
+    });
 }
 
 #[test]
@@ -922,22 +948,24 @@ fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
     let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
     let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        backend.full_piv_lu_solve(&a, &b, false)
-    }));
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            backend.full_piv_lu_solve(&a, &b, false)
+        }));
 
-    assert!(
-        result.is_ok(),
-        "full_piv_lu_solve should return Err on batch mismatch, not panic"
-    );
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::Validation {
-            op: "full_piv_lu_solve",
-            source: ValidationError::ShapeMismatch(_),
-        }
-    ));
+        assert!(
+            result.is_ok(),
+            "full_piv_lu_solve should return Err on batch mismatch, not panic"
+        );
+        let err = result.unwrap().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "full_piv_lu_solve",
+                source: ValidationError::ShapeMismatch(_),
+            }
+        ));
+    });
 }
 
 #[test]
@@ -946,25 +974,27 @@ fn cpu_solve_read_covers_direct_vector_and_matrix_rhs_views() {
     let vector = f64_tensor(vec![2], vec![4.0, 6.0]);
     let mut backend = CpuBackend::new();
 
-    let vector_output = backend
-        .solve_read(
-            TensorRead::from_tensor(&a),
-            TensorRead::from_tensor(&vector),
-        )
-        .unwrap();
-    assert_eq!(f64_values(&vector_output), vec![2.0, 2.0]);
+    support::with_cpu_linalg(&mut backend, |backend| {
+        let vector_output = backend
+            .solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&vector),
+            )
+            .unwrap();
+        assert_eq!(f64_values(&vector_output), vec![2.0, 2.0]);
 
-    let mut storage = vec![-1.0_f64; 8];
-    storage[1] = 4.0;
-    storage[2] = 6.0;
-    storage[5] = 8.0;
-    storage[6] = 9.0;
-    let matrix_view = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &storage).unwrap();
-    let matrix_output = backend
-        .solve_read(
-            TensorRead::from_tensor(&a),
-            TensorRead::from_view(TensorView::F64(matrix_view)),
-        )
-        .unwrap();
-    assert_eq!(f64_values(&matrix_output), vec![2.0, 2.0, 4.0, 3.0]);
+        let mut storage = vec![-1.0_f64; 8];
+        storage[1] = 4.0;
+        storage[2] = 6.0;
+        storage[5] = 8.0;
+        storage[6] = 9.0;
+        let matrix_view = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &storage).unwrap();
+        let matrix_output = backend
+            .solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_view(TensorView::F64(matrix_view)),
+            )
+            .unwrap();
+        assert_eq!(f64_values(&matrix_output), vec![2.0, 2.0, 4.0, 3.0]);
+    });
 }

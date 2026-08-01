@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager_with_extension_context;
+use tenferro_ad::extension::apply_eager_with_extension_session;
 use tenferro_ad::EagerTensor;
 use tenferro_runtime::{ErrorPhase, ExtensionModule};
 
@@ -317,7 +317,7 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
     let op = Arc::new(LinalgExtensionOp::new(op));
     let execute_op = Arc::clone(&op);
     let module = eager_cpu_extension_module()?;
-    apply_eager_with_extension_context(op, inputs, module, move |_op, input_reads, ctx| {
+    apply_eager_with_extension_session(op, inputs, module, move |_op, input_reads, ctx| {
         execute_linalg_extension_reads(&execute_op, input_reads, ctx)
     })
 }

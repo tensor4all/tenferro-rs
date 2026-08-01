@@ -35,7 +35,7 @@ fn linalg_fresh_tagging_is_field_only_and_allocation_free() {
         .split_once("trait FreshLinalgOutput")
         .expect("CPU linalg should define fresh-output tagging")
         .1
-        .split_once("impl LinalgBackend for CpuBackend")
+        .split_once("impl LinalgBackend for CpuExecSession")
         .expect("fresh-output tagging should precede the linalg implementation")
         .0;
 
@@ -56,14 +56,17 @@ fn decomposition_vectors_tag_every_fresh_output_with_the_selected_domain() {
     let general = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let symmetric = placed_matrix(vec![4.0, 1.0, 1.0, 3.0], remote);
 
-    for outputs in [
-        backend.svd(&general).unwrap(),
-        backend.qr(&general).unwrap(),
-        backend.lu(&general).unwrap(),
-        backend.full_piv_lu(&general).unwrap(),
-        backend.eigh(&symmetric).unwrap(),
-        backend.eig(&general).unwrap(),
-    ] {
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        vec![
+            backend.svd(&general).unwrap(),
+            backend.qr(&general).unwrap(),
+            backend.lu(&general).unwrap(),
+            backend.full_piv_lu(&general).unwrap(),
+            backend.eigh(&symmetric).unwrap(),
+            backend.eig(&general).unwrap(),
+        ]
+    });
+    for outputs in outputs {
         assert_selected(&outputs, selected);
     }
 
@@ -79,12 +82,15 @@ fn linalg_single_outputs_tag_the_selected_domain() {
     let general = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let symmetric = placed_matrix(vec![4.0, 1.0, 1.0, 3.0], remote);
 
-    for output in [
-        backend.svd_values(&general).unwrap(),
-        backend.eigh_values(&symmetric).unwrap(),
-        backend.eig_values(&general).unwrap(),
-        backend.cholesky(&symmetric).unwrap(),
-    ] {
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        vec![
+            backend.svd_values(&general).unwrap(),
+            backend.eigh_values(&symmetric).unwrap(),
+            backend.eig_values(&general).unwrap(),
+            backend.cholesky(&symmetric).unwrap(),
+        ]
+    });
+    for output in outputs {
         assert_eq!(output.placement().cpu_affinity, Some(selected));
     }
 }
@@ -106,7 +112,10 @@ fn zero_extent_solve_output_is_still_tagged_as_a_fresh_allocation() {
     let a = Tensor::F64(a);
     let b = Tensor::F64(b);
 
-    let output = backend.full_piv_lu_solve(&a, &b, false).unwrap();
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.full_piv_lu_solve(&a, &b, false)
+    })
+    .unwrap();
 
     assert_eq!(output.shape(), &[0]);
     assert_eq!(output.placement().cpu_affinity, Some(selected));
@@ -121,11 +130,12 @@ fn prepared_lu_composition_tags_its_final_permutation_output() {
     let remote = remote_domain(selected);
     let a = placed_matrix(vec![4.0, 2.0, 1.0, 3.0], remote);
     let b = placed_matrix(vec![1.0, 2.0, 3.0, 4.0], remote);
-    let factor = backend.lu_factor(&a).unwrap();
-
-    let output = backend
-        .lu_solve_prepared(&a, &factor[0], &factor[1], &b, true, false)
-        .unwrap();
+    let (_factor, output) = with_cpu_linalg(&mut backend, |backend| {
+        let factor = backend.lu_factor(&a)?;
+        let output = backend.lu_solve_prepared(&a, &factor[0], &factor[1], &b, true, false)?;
+        Ok::<_, tenferro_tensor::Error>((factor, output))
+    })
+    .unwrap();
 
     assert_eq!(output.placement().cpu_affinity, Some(selected));
     assert_eq!(a.placement().cpu_affinity, Some(remote));

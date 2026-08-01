@@ -5,7 +5,7 @@ fn test_solve_zero_dim_returns_zeros() {
     let mut backend = CpuBackend::new();
     let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 0], vec![]).unwrap());
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 1], vec![]).unwrap());
-    let x = backend.solve(&a, &b).unwrap();
+    let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[0, 1]);
 }
 
@@ -15,7 +15,7 @@ fn test_solve_with_1d_vector_rhs() {
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]).unwrap());
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![5.0, 7.0]).unwrap());
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b).unwrap();
+    let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2]);
     let expected = matmul_f64(
         &[2.0, 1.0, 0.0, 3.0],
@@ -33,36 +33,15 @@ fn test_prepared_lu_solve_reuses_an_entered_cpu_session() {
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![4.0_f64, 9.0]).unwrap();
     let mut backend = CpuBackend::new();
-    let factors = backend.lu_factor(&a).unwrap();
+    let factors = with_cpu_linalg(&mut backend, |backend| backend.lu_factor(&a)).unwrap();
 
-    let (direct, transposed) = backend
-        .with_backend_session(|exec| {
-            let Some(result) = with_cpu_exec_session(exec, |session| {
-                let direct = crate::cpu::backend::lu_solve_prepared_in_session(
-                    session,
-                    &a,
-                    &factors[0],
-                    &factors[1],
-                    &b,
-                    false,
-                    false,
-                )?;
-                let transposed = crate::cpu::backend::lu_solve_prepared_in_session(
-                    session,
-                    &a,
-                    &factors[0],
-                    &factors[1],
-                    &b,
-                    true,
-                    false,
-                )?;
-                Ok::<_, tenferro_tensor::Error>((direct, transposed))
-            }) else {
-                panic!("CpuBackend must expose CpuExecSession");
-            };
-            result
-        })
-        .unwrap();
+    let (direct, transposed) = with_cpu_linalg(&mut backend, |session| {
+        let direct = session.lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)?;
+        let transposed =
+            session.lu_solve_prepared(&a, &factors[0], &factors[1], &b, true, false)?;
+        Ok::<_, tenferro_tensor::Error>((direct, transposed))
+    })
+    .unwrap();
 
     assert_f64_close(get_f64(&direct, &[0, 0]), 2.0);
     assert_f64_close(get_f64(&direct, &[1, 0]), 7.0 / 3.0);
@@ -82,7 +61,7 @@ fn test_solve_with_batched_vector_rhs() {
     let b =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap());
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b).unwrap();
+    let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
 }
 
@@ -93,9 +72,10 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 1.0]).unwrap(),
     );
     let b_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
-    let err = backend
-        .triangular_solve(&a_f32, &b_f64, true, true, false, false)
-        .unwrap_err();
+    let err = with_cpu_linalg(&mut backend, |backend| {
+        backend.triangular_solve(&a_f32, &b_f64, true, true, false, false)
+    })
+    .unwrap_err();
     assert!(matches!(
         err,
         tenferro_tensor::Error::Validation {
@@ -107,9 +87,10 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
     let a_i64 =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
     let b_i64 = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap());
-    let err = backend
-        .triangular_solve(&a_i64, &b_i64, true, true, false, false)
-        .unwrap_err();
+    let err = with_cpu_linalg(&mut backend, |backend| {
+        backend.triangular_solve(&a_i64, &b_i64, true, true, false, false)
+    })
+    .unwrap_err();
     assert!(matches!(
         err,
         tenferro_tensor::Error::Extension {
@@ -128,15 +109,17 @@ fn test_linalg_returns_errors_for_unsupported_dtypes() {
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
     let i64_rhs = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]).unwrap());
 
-    assert!(backend.cholesky(&i64_matrix).is_err());
-    assert!(backend.svd(&i64_matrix).is_err());
-    assert!(backend.qr(&i64_matrix).is_err());
-    assert!(backend.eigh(&i64_matrix).is_err());
-    assert!(backend.eig(&i64_matrix).is_err());
-    assert!(backend.solve(&i64_matrix, &i64_rhs).is_err());
-    assert!(backend
-        .triangular_solve(&i64_matrix, &i64_rhs, true, true, false, false)
-        .is_err());
+    with_cpu_linalg(&mut backend, |backend| {
+        assert!(backend.cholesky(&i64_matrix).is_err());
+        assert!(backend.svd(&i64_matrix).is_err());
+        assert!(backend.qr(&i64_matrix).is_err());
+        assert!(backend.eigh(&i64_matrix).is_err());
+        assert!(backend.eig(&i64_matrix).is_err());
+        assert!(backend.solve(&i64_matrix, &i64_rhs).is_err());
+        assert!(backend
+            .triangular_solve(&i64_matrix, &i64_rhs, true, true, false, false)
+            .is_err());
+    });
 }
 
 #[test]
@@ -145,7 +128,7 @@ fn test_solve_zero_dim_rhs_returns_zeros() {
     let a =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], vec![]).unwrap());
-    let x = backend.solve(&a, &b).unwrap();
+    let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[0]);
 }
 
@@ -156,7 +139,7 @@ fn test_solve_with_regular_matrix_rhs() {
     let b =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]).unwrap());
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b).unwrap();
+    let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
     let x_data = match &x {
         Tensor::F64(inner) => inner.host_data().unwrap().to_vec(),
@@ -174,14 +157,14 @@ fn test_lu_unsupported_dtype_returns_error() {
     let input =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
     let mut backend = CpuBackend::new();
-    assert!(backend.lu(&input).is_err());
+    assert!(with_cpu_linalg(&mut backend, |backend| backend.lu(&input)).is_err());
 }
 
 #[test]
 fn test_lu_zero_sized_batch_outputs_empty_parity() {
     let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()).unwrap());
     let mut backend = CpuBackend::new();
-    let outputs = backend.lu(&input).unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| backend.lu(&input)).unwrap();
 
     assert_eq!(outputs.len(), 4);
     assert_eq!(outputs[0].shape(), &[2, 2, 0]);
@@ -201,7 +184,7 @@ fn test_svd_unsupported_dtype_returns_error() {
     let input =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
     let mut backend = CpuBackend::new();
-    assert!(backend.svd(&input).is_err());
+    assert!(with_cpu_linalg(&mut backend, |backend| backend.svd(&input)).is_err());
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -210,9 +193,10 @@ fn test_faer_svd_decomposition_failure_returns_error() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap();
 
-    let err = backend
-        .with_linalg_pool(|context, buffers| faer_linalg::svd(context, buffers, &input))
-        .unwrap_err();
+    let err = with_cpu_linalg(&mut backend, |backend| {
+        backend.with_linalg_pool(|context, buffers| faer_linalg::svd(context, buffers, &input))
+    })
+    .unwrap_err();
 
     assert!(err.to_string().contains("svd"), "unexpected error: {err}");
 }
@@ -225,9 +209,10 @@ fn test_faer_eig_decomposition_failure_returns_error() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap(),
     );
 
-    let err = backend
-        .with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, &input))
-        .unwrap_err();
+    let err = with_cpu_linalg(&mut backend, |backend| {
+        backend.with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, &input))
+    })
+    .unwrap_err();
 
     assert!(err.to_string().contains("eig"), "unexpected error: {err}");
 }
@@ -237,7 +222,7 @@ fn test_qr_unsupported_dtype_returns_error() {
     let input =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 0, 0, 1]).unwrap());
     let mut backend = CpuBackend::new();
-    assert!(backend.qr(&input).is_err());
+    assert!(with_cpu_linalg(&mut backend, |backend| backend.qr(&input)).is_err());
 }
 
 #[test]
@@ -246,7 +231,7 @@ fn test_eig_returns_complex_outputs_for_real_input() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0, -1.0, 1.0, 0.0]).unwrap(),
     );
     let mut backend = CpuBackend::new();
-    let outputs = backend.eig(&input).unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].shape(), &[2]);
     assert_eq!(outputs[1].shape(), &[2, 2]);

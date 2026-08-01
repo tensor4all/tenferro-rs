@@ -786,7 +786,7 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         let vector_as_matrix = if b_is_vector {
             let mut shape = vec![b.shape()[0], 1];
             shape.extend_from_slice(&b.shape()[1..]);
-            Some(backend.with_backend_session(|exec| exec.reshape_read(b.clone(), &shape))?)
+            Some(backend.reshape_read(b.clone(), &shape)?)
         } else {
             None
         };
@@ -1179,35 +1179,27 @@ fn slogdet_from_lu<B: LinalgBackend>(
     (_p, _l, u, parity): (Tensor, Tensor, Tensor, Tensor),
     backend: &mut B,
 ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-    let diag = backend.with_backend_session(|exec| exec.extract_diagonal(&u, 0, 1))?;
-    let sign_u = backend.with_backend_session(|exec| {
-        let sign = exec.sign_read(TensorRead::from_tensor(&diag))?;
-        exec.reduce_prod_read(TensorRead::from_tensor(&sign), &[0])
-    })?;
-    let sign = backend.with_backend_session(|exec| {
-        exec.mul_read(
-            TensorRead::from_tensor(&parity),
-            TensorRead::from_tensor(&sign_u),
-        )
-    })?;
-    let logabsdet = backend.with_backend_session(|exec| {
-        let abs = exec.abs_read(TensorRead::from_tensor(&diag))?;
-        let log = exec.log_read(TensorRead::from_tensor(&abs))?;
-        exec.reduce_sum_read(TensorRead::from_tensor(&log), &[0])
-    })?;
+    let diag = backend.extract_diagonal(&u, 0, 1)?;
+    let sign = backend.sign_read(TensorRead::from_tensor(&diag))?;
+    let sign_u = backend.reduce_prod_read(TensorRead::from_tensor(&sign), &[0])?;
+    let sign = backend.mul_read(
+        TensorRead::from_tensor(&parity),
+        TensorRead::from_tensor(&sign_u),
+    )?;
+    let abs = backend.abs_read(TensorRead::from_tensor(&diag))?;
+    let log = backend.log_read(TensorRead::from_tensor(&abs))?;
+    let logabsdet = backend.reduce_sum_read(TensorRead::from_tensor(&log), &[0])?;
     Ok((sign, logabsdet))
 }
 fn det_impl<B: LinalgBackend>(
     (sign, logabsdet): (Tensor, Tensor),
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| {
-        let magnitude = exec.exp_read(TensorRead::from_tensor(&logabsdet))?;
-        exec.mul_read(
-            TensorRead::from_tensor(&sign),
-            TensorRead::from_tensor(&magnitude),
-        )
-    })
+    let magnitude = backend.exp_read(TensorRead::from_tensor(&logabsdet))?;
+    backend.mul_read(
+        TensorRead::from_tensor(&sign),
+        TensorRead::from_tensor(&magnitude),
+    )
 }
 fn inv_owned<B: LinalgBackend>(a: &Tensor, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
     let eye = eye_like(a.dtype(), a.shape(), backend)?;
@@ -1257,13 +1249,13 @@ fn norm_from_read<B: LinalgBackend>(
         <[usize]>::to_vec,
     );
     if axes.is_empty() {
-        return backend.with_backend_session(|exec| exec.to_contiguous_read(input));
+        return backend.to_contiguous_read(input);
     }
     validate_axes("norm", original_shape.len(), &axes)?;
     let reduced = if can_square_without_abs(input.dtype(), axes.len(), ord) {
         frobenius_norm_read(input.clone(), &axes, backend)?
     } else {
-        let abs = backend.with_backend_session(|exec| exec.abs_read(input))?;
+        let abs = backend.abs_read(input)?;
         match axes.len() {
             1 => norm_over_axes(&abs, &axes, ord, backend)?,
             2 => matrix_norm(&abs, &axes, ord, backend)?,
@@ -1299,9 +1291,7 @@ fn broadcast<B: LinalgBackend>(
     if input.shape() == shape {
         return Ok(input.clone());
     }
-    backend.with_backend_session(|exec| {
-        exec.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
-    })
+    backend.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
 }
 
 fn eye_like<B: LinalgBackend>(
@@ -1316,7 +1306,7 @@ fn eye_like<B: LinalgBackend>(
     diagonal_shape.extend_from_slice(&shape[2..]);
     let scalar = scalar_real(dtype, 1.0)?;
     let diagonal = broadcast(&scalar, &diagonal_shape, &[], backend)?;
-    backend.with_backend_session(|exec| exec.embed_diagonal(&diagonal, 0, 1))
+    backend.embed_diagonal(&diagonal, 0, 1)
 }
 
 fn ensure_float_or_complex(op: &'static str, dtype: DType) -> tenferro_tensor::Result<()> {
@@ -1364,30 +1354,27 @@ fn pinv_from_svd<B: LinalgBackend>(
     rtol: f64,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let abs_s = backend.with_backend_session(|exec| exec.abs_read(TensorRead::from_tensor(&s)))?;
+    let abs_s = backend.abs_read(TensorRead::from_tensor(&s))?;
     let s_max = reduce_max(&abs_s, &[0], backend)?;
     let threshold_scalar = scalar_real(abs_s.dtype(), rtol.max(0.0))?;
     let threshold = binary_mul(&s_max, &threshold_scalar, backend)?;
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, s.shape(), backend)?;
-    let mask = backend.with_backend_session(|exec| {
-        let mask = exec.compare_read(
+    let mask = {
+        let mask = backend.compare_read(
             TensorRead::from_tensor(&abs_s),
             TensorRead::from_tensor(&threshold),
             &CompareDir::Gt,
         )?;
-        exec.convert(&mask, s.dtype())
-    })?;
+        backend.convert(&mask, s.dtype())?
+    };
     let ones = ones_like(&s, backend)?;
-    let neg_mask =
-        backend.with_backend_session(|exec| exec.neg_read(TensorRead::from_tensor(&mask)))?;
+    let neg_mask = backend.neg_read(TensorRead::from_tensor(&mask))?;
     let offset = binary_add(&ones, &neg_mask, backend)?;
     let denom = binary_add(&s, &offset, backend)?;
-    let s_inv = backend.with_backend_session(|exec| {
-        exec.div_read(
-            TensorRead::from_tensor(&mask),
-            TensorRead::from_tensor(&denom),
-        )
-    })?;
+    let s_inv = backend.div_read(
+        TensorRead::from_tensor(&mask),
+        TensorRead::from_tensor(&denom),
+    )?;
     let v = conjugate_transpose(&vt, backend)?;
     let uh = conjugate_transpose(&u, backend)?;
     let vs = scale_matrix_columns(&v, &s_inv, backend)?;
@@ -1404,9 +1391,7 @@ fn binary_add<B: LinalgBackend>(
     rhs: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| {
-        exec.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-    })
+    backend.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
 }
 
 fn binary_mul<B: LinalgBackend>(
@@ -1414,9 +1399,7 @@ fn binary_mul<B: LinalgBackend>(
     rhs: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| {
-        exec.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-    })
+    backend.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
 }
 
 fn reduce_max<B: LinalgBackend>(
@@ -1424,7 +1407,7 @@ fn reduce_max<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| exec.reduce_max_read(TensorRead::from_tensor(input), axes))
+    backend.reduce_max_read(TensorRead::from_tensor(input), axes)
 }
 
 fn reduce_sum<B: LinalgBackend>(
@@ -1432,7 +1415,7 @@ fn reduce_sum<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| exec.reduce_sum_read(TensorRead::from_tensor(input), axes))
+    backend.reduce_sum_read(TensorRead::from_tensor(input), axes)
 }
 
 fn reduce_min<B: LinalgBackend>(
@@ -1440,7 +1423,7 @@ fn reduce_min<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| exec.reduce_min_read(TensorRead::from_tensor(input), axes))
+    backend.reduce_min_read(TensorRead::from_tensor(input), axes)
 }
 
 fn reshape<B: LinalgBackend>(
@@ -1448,7 +1431,7 @@ fn reshape<B: LinalgBackend>(
     shape: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| exec.reshape_read(TensorRead::from_tensor(input), shape))
+    backend.reshape_read(TensorRead::from_tensor(input), shape)
 }
 
 fn transpose<B: LinalgBackend>(
@@ -1456,7 +1439,7 @@ fn transpose<B: LinalgBackend>(
     perm: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|exec| exec.transpose_read(TensorRead::from_tensor(input), perm))
+    backend.transpose_read(TensorRead::from_tensor(input), perm)
 }
 
 fn broadcast_batch_scalar_to_leading_axis<B: LinalgBackend>(
@@ -1472,8 +1455,7 @@ fn conjugate_transpose<B: LinalgBackend>(
     input: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let conj =
-        backend.with_backend_session(|exec| exec.conj_read(TensorRead::from_tensor(input)))?;
+    let conj = backend.conj_read(TensorRead::from_tensor(input))?;
     let mut perm: Vec<usize> = (0..input.shape().len()).collect();
     perm.swap(0, 1);
     transpose(&conj, &perm, backend)
@@ -1504,13 +1486,11 @@ fn matmul_preserve_trailing_batch<B: LinalgBackend>(
         lhs_batch_dims: batch.clone(),
         rhs_batch_dims: batch,
     };
-    backend.with_backend_session(|exec| {
-        exec.dot_general_read(
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
-            &config,
-        )
-    })
+    backend.dot_general_read(
+        TensorRead::from_tensor(lhs),
+        TensorRead::from_tensor(rhs),
+        &config,
+    )
 }
 
 fn linalg_matmul_read<B: LinalgBackend>(
@@ -1528,9 +1508,7 @@ fn linalg_matmul_read<B: LinalgBackend>(
         lhs_batch_dims,
         rhs_batch_dims,
     };
-    backend.with_backend_session(|exec| {
-        exec.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
-    })
+    backend.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }
 
 fn frobenius_norm<B: LinalgBackend>(
@@ -1538,10 +1516,8 @@ fn frobenius_norm<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let sum = backend.with_backend_session(|exec| {
-        exec.reduce_sum_squares_read(TensorRead::from_tensor(abs), axes)
-    })?;
-    backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
+    let sum = backend.reduce_sum_squares_read(TensorRead::from_tensor(abs), axes)?;
+    backend.sqrt_read(TensorRead::from_tensor(&sum))
 }
 
 fn frobenius_norm_read<B: LinalgBackend>(
@@ -1549,8 +1525,8 @@ fn frobenius_norm_read<B: LinalgBackend>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let sum = backend.with_backend_session(|exec| exec.reduce_sum_squares_read(input, axes))?;
-    backend.with_backend_session(|exec| exec.sqrt_read(TensorRead::from_tensor(&sum)))
+    let sum = backend.reduce_sum_squares_read(input, axes)?;
+    backend.sqrt_read(TensorRead::from_tensor(&sum))
 }
 
 fn p_norm<B: LinalgBackend>(
@@ -1570,20 +1546,16 @@ fn p_norm<B: LinalgBackend>(
         return frobenius_norm(abs, axes, backend);
     }
     let power = scalar_real(abs.dtype(), p)?;
-    let powered = backend.with_backend_session(|exec| {
-        exec.pow_read(
-            TensorRead::from_tensor(abs),
-            TensorRead::from_tensor(&power),
-        )
-    })?;
+    let powered = backend.pow_read(
+        TensorRead::from_tensor(abs),
+        TensorRead::from_tensor(&power),
+    )?;
     let sum = reduce_sum(&powered, axes, backend)?;
     let inverse = scalar_real(abs.dtype(), 1.0 / p)?;
-    backend.with_backend_session(|exec| {
-        exec.pow_read(
-            TensorRead::from_tensor(&sum),
-            TensorRead::from_tensor(&inverse),
-        )
-    })
+    backend.pow_read(
+        TensorRead::from_tensor(&sum),
+        TensorRead::from_tensor(&inverse),
+    )
 }
 
 fn count_nonzero<B: LinalgBackend>(
@@ -1593,14 +1565,12 @@ fn count_nonzero<B: LinalgBackend>(
 ) -> tenferro_tensor::Result<Tensor> {
     let zero = scalar_real(abs.dtype(), 0.0)?;
     let zero = broadcast(&zero, abs.shape(), &[], backend)?;
-    let mask = backend.with_backend_session(|exec| {
-        exec.compare_read(
-            TensorRead::from_tensor(abs),
-            TensorRead::from_tensor(&zero),
-            &CompareDir::Gt,
-        )
-    })?;
-    let mask = backend.with_backend_session(|exec| exec.convert(&mask, abs.dtype()))?;
+    let mask = backend.compare_read(
+        TensorRead::from_tensor(abs),
+        TensorRead::from_tensor(&zero),
+        &CompareDir::Gt,
+    )?;
+    let mask = backend.convert(&mask, abs.dtype())?;
     reduce_sum(&mask, axes, backend)
 }
 

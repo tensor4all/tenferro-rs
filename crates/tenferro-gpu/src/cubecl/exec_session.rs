@@ -10,8 +10,9 @@ use tenferro_tensor::config::{
 use tenferro_tensor::{
     DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite, TypedTensor,
 };
+use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
-use super::{CudaBackend, CudaRuntime, CudaRuntimeIdentity};
+use super::{CudaBackend, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
 
 /// Borrowed CUDA execution capability.
 #[doc(hidden)]
@@ -52,6 +53,54 @@ impl CudaExecSession<'_> {
     {
         self.backend.slice_typed(input, config)
     }
+
+    /// Borrow the CUDA extension cache owned by the provider runtime.
+    #[doc(hidden)]
+    pub fn cuda_extension_cache(&self) -> &CudaExtensionCache {
+        self.backend.cuda_extension_cache()
+    }
+
+    #[doc(hidden)]
+    pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + CubePrimitive + Clone,
+    {
+        self.backend.triu_typed(input, k)
+    }
+
+    #[doc(hidden)]
+    pub fn to_contiguous<T, R>(
+        &mut self,
+        view: &TypedTensorView<'_, T, R>,
+    ) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: TensorScalar,
+        R: TensorRank,
+        CudaBackend: TensorViewCanonicalization<T, R>,
+    {
+        self.backend.to_contiguous(view)
+    }
+}
+
+/// Visit a CUDA execution session through the erased backend-session surface.
+///
+/// This is intentionally a scoped leaf-capability bridge: the callback cannot
+/// return a borrow of the reconstructed session.
+#[doc(hidden)]
+pub fn with_cuda_exec_session<B, R>(
+    session: &mut B,
+    f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R,
+) -> Option<R>
+where
+    B: BackendSession + ?Sized,
+{
+    if session.session_type_name() != std::any::type_name::<CudaExecSession<'static>>() {
+        return None;
+    }
+    let data = unsafe { session.session_data_mut() };
+    // SAFETY: the type-name check and the BackendSession erased-pointer
+    // contract identify the value as CudaExecSession for this scoped visit.
+    Some(unsafe { f(&mut *(data.cast::<CudaExecSession<'static>>())) })
 }
 
 macro_rules! delegate {

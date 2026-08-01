@@ -1,9 +1,10 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
+use std::sync::Arc;
 use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
     Buffer, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TypedTensor,
+    GatherConfig, PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -31,6 +32,7 @@ pub struct CpuExecSession<'a> {
     pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
     pub(crate) providers: &'a CpuProviderBundle,
     pub(crate) backend_kind: super::CpuBackendKind,
+    pub(crate) allocation_domain: Option<&'a Arc<dyn SharedTensorAllocationDomain>>,
 }
 
 fn pooled_zero_tensor<T>(
@@ -78,6 +80,12 @@ impl CpuExecSession<'_> {
     #[doc(hidden)]
     pub fn domain_id(&self) -> super::CpuDomainId {
         self.entry.domain_id()
+    }
+
+    /// Return the shared allocator selected for this execution session.
+    #[doc(hidden)]
+    pub fn shared_allocation_domain(&self) -> Option<Arc<dyn SharedTensorAllocationDomain>> {
+        self.allocation_domain.cloned()
     }
 
     /// Run a CPU-owned linalg kernel inside this already-entered session.

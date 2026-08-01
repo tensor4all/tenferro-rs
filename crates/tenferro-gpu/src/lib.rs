@@ -42,8 +42,8 @@ mod webgpu;
 pub use cubecl::{
     cuda_capabilities, cuda_runtime_engine_id, cuda_runtime_engine_registration,
     cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class, device_ptr,
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaExecSession, CudaRuntime,
-    CudaRuntimeIdentity,
+    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
+    CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
 };
 #[cfg(feature = "cuda")]
 #[doc(hidden)]

@@ -3426,6 +3426,7 @@ impl CpuBackend {
                     indexed_plan_cache: &mut resources.indexed_plan_cache,
                     providers: &providers,
                     backend_kind: self.kind(),
+                    allocation_domain: self.allocation_domain.as_ref(),
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",

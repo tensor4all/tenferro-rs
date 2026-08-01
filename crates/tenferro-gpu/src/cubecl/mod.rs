@@ -146,7 +146,7 @@ use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_ope
 
 pub use capability::cuda_capabilities;
 #[doc(hidden)]
-pub use exec_session::CudaExecSession;
+pub use exec_session::{with_cuda_exec_session, CudaExecSession};
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{
