@@ -88,7 +88,8 @@ here.
 
 The executable specification covers:
 
-- the exact production manifest path and canonical-v2 equality gate;
+- the exact production manifest path, explicit current-v1 state, and the
+  post-migration canonical-v2 equality/checker-success gate;
 - an independent checked-in legacy v1 fixture/source sample and rejection test
   without compatibility;
 - nominal v2 parsing, tagged-state shape, canonical graph edges, P0/P1 root
@@ -100,10 +101,11 @@ The executable specification covers:
   artifact-command binding, duplicate command identity, fail-closed execution,
   active-once/deferred-never runner behavior;
 - actual-Git base-to-candidate immutable identity, candidate-bound runner
-  receipt output, non-vacuous P0/P5 CUTOVER proof, and both positive and
+  receipt output, exact per-execution obligation/artifact/command/candidate
+  bindings, non-vacuous P0/P5 CUTOVER proof, and both positive and
   incomplete-receipt terminal derivation, with no locally constructed positive
-  receipts; independently recomputed digest values and post-receipt mutation
-  rejection;
+  receipts; independently recomputed manifest/artifact/command digest values
+  and post-receipt mutation rejection;
 - stable JSON diagnostic codes and identifying fields, with checked fixture
   replacement helpers rather than unchecked text mutation. Every one-fault
   case requires an exact diagnostic code set and field shape;
@@ -113,11 +115,15 @@ The executable specification covers:
 - rejection of the independent checked-in legacy v1 fixture/source tables as
   well as rejection of those tables reappearing in a v2 manifest;
 - a machine-readable expected RED event set and report that rejects unknown
-  failures, errors, and unexpected subtests.
+  failures, errors, skips, duplicate events, and unexpected subtests while
+  requiring equal expected/observed event counts.
 
 The temporary repository helpers are test-only. They do not replace the
 production-manifest test, and the symlink cases create actual filesystem
-symlinks rather than checking a string containing a symlink-like path.
+symlinks rather than checking a string containing a symlink-like path. A
+separate required capability test emits an explicit machine-readable failure
+when the host cannot create symlinks; dependent symlink cases cannot turn that
+condition into a skipped green result.
 
 ## Rejection of checkpoint 546f18be and remediation
 
@@ -174,6 +180,29 @@ P3/P9 member obligation are activated and receipted in the CUTOVER candidate.
 Any synthetic borrow snippet is supplemental only; private-name text matching
 is not a proof.
 
+## Fresh SPEC review remediation
+
+The fresh Phase 1 SPEC review found five weaknesses in checkpoint `22ea3d63`.
+This follow-up changes only the executable RED specification and its normative
+records; the checker and runner remain intentionally unimplemented.
+
+- Production assertions are now independent. The current checked-in manifest
+  is explicitly asserted to be v1 and unequal to the canonical v2 model. A
+  separate gate requires the future v2 checker to reject that v1 input, and its
+  v2 branch requires exact canonical equality before checker success.
+- Every receipt execution is checked against the parsed candidate manifest for
+  obligation, artifact, command, candidate commit, artifact digest, and
+  command digest. Three negative mutations require the exact
+  `E_RECEIPT_EXECUTION_BINDING` code and field set.
+- RED event matching uses a `Counter`-backed multiset. Extra duplicate events,
+  missing events, skips, and total-count mismatches are explicit failures.
+- Symlink support is probed by an independent required test. Unsupported
+  capability is an unexpected RED event; dependent cases use no optional
+  expected-failure escape. Temporary external symlink fixtures are cleaned in
+  `finally` blocks.
+- The normative production-bound borrow statement now names P4, and the
+  diagnostic registry documents the new execution-binding code.
+
 ## Verification evidence for this checkpoint
 
 Passing deterministic checks:
@@ -200,14 +229,15 @@ Passing deterministic checks:
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 35 tests and
-  reports exactly 40 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 39 tests and
+  reports exactly 43 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
-  zero missing expected events. The causes are machine-readable: v2 checker
-  absent (22 events), v2 runner absent (14 events), future production proof
-  artifacts absent (3 events), and the checked-in production manifest still
-  v1 (1 event). The symlink-retarget event is portable/optional when the host
-  cannot create symlinks. There are no unexpected Python errors.
+  zero missing expected events, equal expected/observed event counts, and no
+  skipped tests. The causes are machine-readable: v2 checker absent (23
+  events), v2 runner absent (17 events), and future production proof artifacts
+  absent (3 events). The required symlink capability test passes on this host;
+  an unsupported host would add an unexpected capability event and return 2.
+  There are no unexpected Python errors.
 
 No cargo implementation tests are claimed here because this checkpoint changes
 only design, ledger specification tests, and provenance. The next Phase 1

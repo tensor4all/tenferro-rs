@@ -106,10 +106,12 @@ superseded v1 checker). The executable RED specification is
 `scripts/test-storage-ownership-contracts-v2.py`; it must remain checked in
 and must invoke the exact production manifest as well as adversarial temporary
 repositories. The checked-in production manifest is currently the superseded
-v1 input. The RED specification compares the parsed production manifest with
-the complete canonical `UNITS`/`EDGES`/obligation model used to generate its
-temporary v2 manifests, rather than checking only its schema or checker exit
-status. The v2 gate must convert it to v2 and reject the actual legacy
+v1 input. While it remains v1, the RED specification independently asserts
+that schema and records that the parsed production manifest is not the
+canonical v2 model; a separate v2-checker gate requires rejection of that
+legacy input. After migration, the same gate requires exact canonical
+`UNITS`/`EDGES`/obligation equality before requiring checker success. The
+v2 gate must convert it to v2 and reject the actual legacy
 `fixtures`/`source_scans`/`source_inventory` tables represented by the checked-
 in `scripts/fixtures/storage-ownership-contracts-v1.toml` sample rather than
 adding a compatibility parser; the RED test records that required migration.
@@ -226,10 +228,13 @@ The runner emits a candidate-bound receipt containing:
 ```
 
 The runner executes each active typed command exactly once, passes the exact
-artifact binding, and records one result per active obligation plus the
-candidate/manifest/artifact/command digests. It does not execute deferred
-commands. The checker validates the receipt; it does not manufacture command
-results. Both tools resolve `candidate_commit` from `git rev-parse HEAD` and
+artifact binding, and records one result per active obligation. Every
+execution must bind the manifest-derived `obligation_id`, `artifact_id`, and
+`command_id`, repeat the actual candidate commit, and carry the
+manifest-derived artifact and command digests. The receipt also carries the
+exact base/candidate manifest digests. It does not execute deferred commands.
+The checker validates the receipt; it does not manufacture command results.
+Both tools resolve `candidate_commit` from `git rev-parse HEAD` and
 load the base manifest from the same repository-relative manifest path at the
 actual `base_commit` Git object. The supplied base must be an ancestor of
 HEAD. Thus matching fake strings in the CLI and receipt cannot substitute for
@@ -246,8 +251,11 @@ UTF-8, sorted-key, compact JSON encoding of the typed command value. A receipt
 with a correct-looking ID but a digest for another candidate is invalid. The
 verification harness independently recomputes all four digest classes and
 mutates artifact bytes, the base-manifest digest, and candidate files after a
-receipt. An in-repository symlink is retargeted after receipt where the host
-supports symlinks; the checker must reject the changed resolved artifact bytes.
+receipt. An in-repository symlink is retargeted after receipt. A separate
+machine-readable capability test is required before the symlink cases; an
+unsupported host is an explicit failure/event, never a skipped or optional
+green result. On capable hosts the checker must reject the changed resolved
+artifact bytes.
 
 The structural shape is intentionally explicit. A production row has one
 artifact, one command, and one tagged state; the state is not split into
@@ -289,7 +297,7 @@ Checker and runner failures have a stable machine-readable envelope when
   "diagnostics": [
     {
       "code": "E_RECEIPT_INCOMPLETE",
-      "fields": {"unit": "P5", "obligation_id": "p5-allocation-group"},
+      "fields": {"obligation_id": "p5-allocation-group"},
       "message": "supplemental human explanation"
     }
   ]
@@ -316,10 +324,12 @@ The v1 code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
 `E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_PATH_ESCAPE`,
 `E_COMMAND_ARTIFACT_BINDING`, `E_COMMAND_TARGET_BINDING`,
 `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`, `E_PROMOTION_IDENTITY`,
-`E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`, `E_RECEIPT_INCOMPLETE`, and
-`E_TERMINAL_DECLARED`. Adding a code is compatible; changing the meaning or
-required identifying fields of an existing code requires a diagnostic schema
-revision.
+`E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`, `E_RECEIPT_EXECUTION_BINDING`,
+`E_RECEIPT_INCOMPLETE`, and `E_TERMINAL_DECLARED`. The execution-binding
+code has exactly `obligation_id`, `field`, `expected`, and `actual`
+fields and is used for a swapped or forged execution identity. Adding a code
+is compatible; changing the meaning or required identifying fields of an
+existing code requires a diagnostic schema revision.
 
 The RED suite includes both a structured temporary repository for adversarial
 path, graph, promotion, and command-binding cases and an integration case that
@@ -329,9 +339,11 @@ real files and real symlinks; they do not stand in for the production gate.
 The RED command emits a machine-readable
 `tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
 keyed by test and subtest parameters and records a named cause. The runner
-compares the observed failure/error/subtest events with that exact set: an
-unlisted event or a missing expected event makes the RED harness itself fail,
-so an implementation cannot relabel an unexpected regression as intentional.
+compares observed failure/error/subtest/skip events with that exact set as a
+multiset, preserves duplicate multiplicity, and requires equal total event
+counts. An unlisted event, duplicate event, skipped required test, or missing
+expected event makes the RED harness itself fail, so an implementation cannot
+relabel an unexpected regression as intentional.
 
 The base RED snapshot has completed P0, P1, and P2. P4 and P5 remain deferred;
 the CUTOVER candidate activates every required P4/P5 obligation and obtains
@@ -349,7 +361,7 @@ In particular, the canonical obligation set includes:
 These are ordinary immutable artifact-command rows, so all-active terminal
 proof necessarily includes their successful runner results. A synthetic
 borrow snippet may be used as a supplemental design experiment, but it is not
-canonical evidence and cannot satisfy the P1 obligation. Private item names in
+canonical evidence and cannot satisfy the P4 obligation. Private item names in
 the pseudocode are provisional; the future production-bound artifact must
 prove the structural capability/borrow/recovery contract through the real
 crate harness.

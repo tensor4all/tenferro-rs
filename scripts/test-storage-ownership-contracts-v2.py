@@ -10,6 +10,7 @@ ledger contract from becoming prose that can silently drift.
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 import subprocess
@@ -30,6 +31,7 @@ LEGACY_V1_MANIFEST_FIXTURE = (
 )
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
+LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
 GATES = tuple(f"G{number}" for number in range(1, 8))
 
 # P0 and P1 are independent roots.  P2 has exactly one prerequisite, P1.
@@ -370,6 +372,9 @@ DIAGNOSTIC_FIELDS = {
     "E_PROMOTION_IDENTITY": frozenset({"obligation_id"}),
     "E_RECEIPT_COMMIT": frozenset({"actual_head"}),
     "E_RECEIPT_DIGEST": frozenset({"digest_kind"}),
+    "E_RECEIPT_EXECUTION_BINDING": frozenset(
+        {"obligation_id", "field", "expected", "actual"}
+    ),
     "E_RECEIPT_INCOMPLETE": frozenset({"obligation_id"}),
     "E_TERMINAL_DECLARED": frozenset({"field"}),
 }
@@ -397,8 +402,8 @@ RED_EXPECTED_FAILURES = {
     "test_canonical_graph_keeps_p0_p1_roots_and_p2_only_depends_on_p1": {
         "cause": "v2-checker-not-implemented",
     },
-    "test_checked_in_production_manifest_is_the_gate_input": {
-        "cause": "production-manifest-still-v1",
+    "test_v2_checker_rejects_legacy_production_manifest_until_migration": {
+        "cause": "v2-checker-not-implemented",
     },
     "test_command_allowlist_is_typed_and_fail_closed": {
         "cause": "v2-checker-not-implemented",
@@ -437,9 +442,8 @@ RED_EXPECTED_FAILURES = {
     "test_post_receipt_base_manifest_mutation_digest_is_rejected": {
         "cause": "v2-runner-not-implemented",
     },
-    "test_post_receipt_symlink_retarget_is_rejected_when_supported": {
+    "test_post_receipt_symlink_retarget_is_rejected": {
         "cause": "v2-runner-not-implemented",
-        "required": False,
     },
     "test_promotion_preserves_immutable_identity_and_binds_receipt_to_candidate": {
         "cause": "v2-runner-not-implemented",
@@ -456,6 +460,14 @@ RED_EXPECTED_FAILURES = {
             {"digest_kind": "manifest"},
             {"digest_kind": "artifact"},
             {"digest_kind": "command"},
+        ],
+    },
+    "test_receipt_execution_identity_mutations_are_rejected": {
+        "cause": "v2-runner-not-implemented",
+        "subtests": [
+            {"field": "artifact_id"},
+            {"field": "command_id"},
+            {"field": "candidate_commit"},
         ],
     },
     "test_runner_emits_exact_candidate_bound_receipt": {
@@ -752,6 +764,51 @@ def _sha256_command(command: dict[str, object]) -> str:
     return _sha256_bytes(canonical)
 
 
+def _probe_symlink_capability() -> dict[str, object]:
+    """Return a structured, non-skipping result for the required symlink tests."""
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        target = root / "target"
+        link = root / "link"
+        target.write_bytes(b"symlink capability probe\n")
+        try:
+            link.symlink_to(target.name)
+        except (OSError, NotImplementedError) as error:
+            return {
+                "available": False,
+                "event": "symlink-capability-unavailable",
+                "operation": "relative-symlink",
+                "platform": sys.platform,
+                "error_type": type(error).__name__,
+                "errno": getattr(error, "errno", None),
+            }
+        return {
+            "available": True,
+            "event": "symlink-capability-available",
+            "operation": "relative-symlink",
+            "platform": sys.platform,
+        }
+
+
+def _create_required_symlink(link: Path, target: Path, *, operation: str) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as error:
+        raise RuntimeError(
+            json.dumps(
+                {
+                    "event": "symlink-capability-lost",
+                    "required": True,
+                    "operation": operation,
+                    "platform": sys.platform,
+                    "error_type": type(error).__name__,
+                    "errno": getattr(error, "errno", None),
+                },
+                sort_keys=True,
+            )
+        ) from error
+
+
 def _commit(root: Path, message: str) -> str:
     _git(root, "add", ".")
     _git(root, "commit", "-m", message)
@@ -835,7 +892,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 check=False,
             )
 
-    def run_production_checker(self) -> subprocess.CompletedProcess[str]:
+    def run_production_checker(
+        self, *extra_args: str
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
@@ -844,6 +903,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 str(ROOT),
                 "--manifest",
                 "scripts/storage-ownership-contracts.toml",
+                *extra_args,
             ],
             cwd=ROOT,
             text=True,
@@ -996,12 +1056,51 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             for key, value in expected_fields.items():
                 self.assertEqual(item["fields"][key], value, payload)
 
-    def test_checked_in_production_manifest_is_the_gate_input(self) -> None:
+    def test_checked_in_production_manifest_tracks_the_v2_canonical_gate(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
         production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
+        canonical = tomllib.loads(valid_manifest())
+        if production.get("schema") == LEGACY_SCHEMA:
+            self.assertEqual(production["schema"], LEGACY_SCHEMA)
+            self.assertNotEqual(production, canonical)
+            return
+
+        self.assertEqual(production.get("schema"), SCHEMA)
+        self.assertEqual(production, canonical)
         result = self.run_production_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(production, tomllib.loads(valid_manifest()))
+
+    def test_required_symlink_capability_is_available(self) -> None:
+        capability = _probe_symlink_capability()
+        self.assertTrue(
+            capability["available"],
+            json.dumps(
+                {
+                    "event": "symlink-capability-unavailable",
+                    "required": True,
+                    "capability": capability,
+                },
+                sort_keys=True,
+            ),
+        )
+
+    def test_v2_checker_rejects_legacy_production_manifest_until_migration(self) -> None:
+        self.assertTrue(PRODUCTION_MANIFEST.is_file())
+        production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
+        canonical = tomllib.loads(valid_manifest())
+        if production.get("schema") == LEGACY_SCHEMA:
+            self.assertEqual(production["schema"], LEGACY_SCHEMA)
+            result = self.run_production_checker("--diagnostics-json")
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assert_result_diagnostic(
+                result, "E_SCHEMA_VERSION", fields={"actual": LEGACY_SCHEMA}
+            )
+            return
+
+        self.assertEqual(production.get("schema"), SCHEMA)
+        self.assertEqual(production, canonical)
+        result = self.run_production_checker()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_result_diagnostic_rejects_wrong_schema_and_array_shape(self) -> None:
         for payload in (
@@ -1232,10 +1331,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             link = root / "scripts" / "escaped.toml"
             try:
                 outside.write_text("fn outside() {}\n", encoding="utf-8")
-                try:
-                    link.symlink_to(outside)
-                except (OSError, NotImplementedError) as error:
-                    self.skipTest(f"real symlinks are unavailable: {error}")
+                _create_required_symlink(
+                    link, outside, operation="repository-relative-escape"
+                )
                 manifest = valid_manifest(active_override={"p1-ledger": "scripts/escaped.toml"})
                 manifest_path = root / "ledger.toml"
                 manifest_path.write_text(manifest, encoding="utf-8")
@@ -1488,7 +1586,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             result, "E_RECEIPT_DIGEST", fields={"digest_kind": "base_manifest"}
         )
 
-    def test_post_receipt_symlink_retarget_is_rejected_when_supported(self) -> None:
+    def test_post_receipt_symlink_retarget_is_rejected(self) -> None:
         override = {"p0-control-plane": "artifacts/control.py"}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1500,10 +1598,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             artifact.parent.mkdir(parents=True, exist_ok=True)
             target_a.write_text("target-a\n", encoding="utf-8")
             target_b.write_text("target-b\n", encoding="utf-8")
-            try:
-                artifact.symlink_to("target-a.py")
-            except (OSError, NotImplementedError) as error:
-                self.skipTest(f"relative symlinks are unavailable: {error}")
+            _create_required_symlink(
+                artifact, Path("target-a.py"), operation="post-receipt-initial"
+            )
             base_commit = _commit(root, "base internal artifact symlink")
             candidate = valid_manifest(marker=True, active_override=override)
             (root / "scripts/storage-ownership-contracts.toml").write_text(
@@ -1515,7 +1612,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             runner = self.run_repository_runner(root, base_commit, receipt_path)
             self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
             artifact.unlink()
-            artifact.symlink_to("target-b.py")
+            _create_required_symlink(
+                artifact, Path("target-b.py"), operation="post-receipt-retarget"
+            )
             result = self.run_repository_checker(
                 root, base_commit, receipt_path, "--diagnostics-json"
             )
@@ -1560,18 +1659,92 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def test_runner_emits_exact_candidate_bound_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            base_commit, candidate_commit, _, _, receipt = self.emit_runner_receipt(root)
+            base_commit, candidate_commit, candidate, _, receipt = self.emit_runner_receipt(root)
             log = (root / "runner.log").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(receipt["base_commit"], base_commit)
-        self.assertEqual(receipt["candidate_commit"], candidate_commit)
-        self.assertEqual(
-            {row["obligation_id"] for row in receipt["executions"]},
-            {row[0] for row in BASE_ACTIVE_OBLIGATIONS},
-        )
-        for row in BASE_ACTIVE_OBLIGATIONS:
-            self.assertEqual(log.count(row[6]), 1)
-        for row in DEFERRED_OBLIGATIONS:
-            self.assertNotIn(row[6], log)
+            self.assertEqual(receipt["base_commit"], base_commit)
+            self.assertEqual(receipt["candidate_commit"], candidate_commit)
+            self.assertEqual(
+                receipt["base_manifest_sha256"],
+                _sha256_bytes(
+                    _git_show_bytes(root, base_commit, "scripts/storage-ownership-contracts.toml")
+                ),
+            )
+            self.assertEqual(
+                receipt["candidate_manifest_sha256"],
+                _sha256_bytes((root / "scripts/storage-ownership-contracts.toml").read_bytes()),
+            )
+            manifest_rows = {
+                row["id"]: row for row in tomllib.loads(candidate)["obligations"]
+            }
+            active_rows = [
+                row for row in manifest_rows.values() if row["state"]["kind"] == "active"
+            ]
+            executions = _receipt_executions(receipt)
+            self.assertEqual(len(executions), len(active_rows))
+            self.assertEqual(
+                Counter(row["obligation_id"] for row in executions),
+                Counter(row["id"] for row in active_rows),
+            )
+            for execution in executions:
+                obligation_id = execution["obligation_id"]
+                self.assertIn(obligation_id, manifest_rows)
+                manifest_row = manifest_rows[obligation_id]
+                self.assertEqual(obligation_id, manifest_row["id"])
+                self.assertEqual(execution["artifact_id"], manifest_row["artifact"]["id"])
+                self.assertEqual(execution["command_id"], manifest_row["command"]["id"])
+                self.assertEqual(execution["candidate_commit"], candidate_commit)
+                self.assertEqual(execution["exit_code"], 0)
+                self.assertEqual(
+                    execution["artifact_sha256"],
+                    _sha256_resolved_path(root, manifest_row["artifact"]["path"]),
+                )
+                self.assertEqual(
+                    execution["command_sha256"], _sha256_command(manifest_row["command"])
+                )
+            for row in BASE_ACTIVE_OBLIGATIONS:
+                self.assertEqual(log.count(row[6]), 1)
+            for row in DEFERRED_OBLIGATIONS:
+                self.assertNotIn(row[6], log)
+
+    def test_receipt_execution_identity_mutations_are_rejected(self) -> None:
+        mutations = {
+            "artifact_id": "artifact-contract-document",
+            "command_id": "cmd-contract-document",
+            "candidate_commit": "f" * 40,
+        }
+        for field, actual in mutations.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base_commit, candidate_commit, candidate, receipt_path, receipt = (
+                    self.emit_runner_receipt(root)
+                )
+                manifest_row = next(
+                    row
+                    for row in tomllib.loads(candidate)["obligations"]
+                    if row["id"] == "p0-control-plane"
+                )
+                expected = (
+                    manifest_row["artifact"]["id"]
+                    if field == "artifact_id"
+                    else manifest_row["command"]["id"]
+                    if field == "command_id"
+                    else candidate_commit
+                )
+                _receipt_execution(receipt, "p0-control-plane")[field] = actual
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                result = self.run_repository_checker(
+                    root, base_commit, receipt_path, "--diagnostics-json"
+                )
+                self.assert_result_diagnostic(
+                    result,
+                    "E_RECEIPT_EXECUTION_BINDING",
+                    fields={
+                        "obligation_id": "p0-control-plane",
+                        "field": field,
+                        "expected": expected,
+                        "actual": actual,
+                    },
+                )
 
     def test_runner_is_fail_closed_on_command_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1645,6 +1818,24 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         self.assertNotIn("done =", valid_manifest())
         self.assertNotIn("status =", valid_manifest())
 
+    def test_red_event_matching_rejects_duplicate_events(self) -> None:
+        expected = [
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "cause": "test-fixture",
+            }
+        ]
+        observed = [
+            {"test": "sample", "kind": "failure", "params": None},
+            {"test": "sample", "kind": "failure", "params": None},
+        ]
+        _, unexpected, missing, count_matches = _compare_red_events(expected, observed)
+        self.assertFalse(count_matches)
+        self.assertEqual(len(unexpected), 1)
+        self.assertEqual(missing, [])
+
 
 def _parse_registry(manifest: str) -> dict[str, list[tuple[str, str]]]:
     """Parse only the graph fields needed by the RED self-checks."""
@@ -1696,6 +1887,10 @@ class _RedResult(unittest.TextTestResult):
         self._record(test, "error", None)
         super().addError(test, err)
 
+    def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:
+        self._record(test, "skip", {"reason": reason})
+        super().addSkip(test, reason)
+
     def addSubTest(
         self,
         test: unittest.case.TestCase,
@@ -1723,7 +1918,6 @@ def _expected_red_events() -> list[dict[str, object]]:
                     "kind": kind,
                     "params": params,
                     "cause": specification["cause"],
-                    "required": specification.get("required", True),
                 }
             )
     return events
@@ -1737,6 +1931,44 @@ def _red_event_key(event: dict[str, object]) -> tuple[str, str, str]:
     )
 
 
+def _compare_red_events(
+    expected: list[dict[str, object]], observed: list[dict[str, object]]
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    bool,
+]:
+    expected_by_key = {_red_event_key(event): event for event in expected}
+    remaining = Counter(_red_event_key(event) for event in expected)
+    unexpected: list[dict[str, object]] = []
+    observed_report: list[dict[str, object]] = []
+    for event in observed:
+        key = _red_event_key(event)
+        expected_event = expected_by_key.get(key)
+        if remaining[key] > 0:
+            remaining[key] -= 1
+            classification = "expected"
+        else:
+            unexpected.append(event)
+            classification = "unexpected"
+        observed_report.append(
+            {
+                **event,
+                "cause": expected_event["cause"] if expected_event else None,
+                "classification": classification,
+            }
+        )
+
+    missing: list[dict[str, object]] = []
+    for event in expected:
+        key = _red_event_key(event)
+        if remaining[key] > 0:
+            missing.append(event)
+            remaining[key] -= 1
+    return observed_report, unexpected, missing, len(observed) == len(expected)
+
+
 def _run_red_suite() -> int:
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(StorageOwnershipV2RedTests)
     runner = unittest.TextTestRunner(
@@ -1746,38 +1978,18 @@ def _run_red_suite() -> int:
     )
     result = runner.run(suite)
     expected = _expected_red_events()
-    expected_by_key = {_red_event_key(event): event for event in expected}
     observed = result.events
-    observed_by_key = {_red_event_key(event): event for event in observed}
-    skipped_tests = {
-        test.id().rsplit(".", 1)[-1] for test, _ in result.skipped
-    }
-    unexpected = [
-        event
-        for event in observed
-        if _red_event_key(event) not in expected_by_key
-    ]
-    missing = [
-        event
-        for event in expected
-        if _red_event_key(event) not in observed_by_key
-        and (event["required"] or event["test"] not in skipped_tests)
-    ]
-    observed_report = []
-    for event in observed:
-        expected_event = expected_by_key.get(_red_event_key(event))
-        observed_report.append(
-            {
-                **event,
-                "cause": expected_event["cause"] if expected_event else None,
-                "classification": "expected" if expected_event else "unexpected",
-            }
-        )
+    observed_report, unexpected, missing, count_matches = _compare_red_events(
+        expected, observed
+    )
     report = {
         "schema": "tenferro.storage-ownership-red-report.v1",
         "tests_run": result.testsRun,
         "expected_failure_count": len(expected),
         "observed_failure_count": len(observed),
+        "expected_event_count": len(expected),
+        "observed_event_count": len(observed),
+        "event_count_matches": count_matches,
         "expected_failures": expected,
         "observed_failures": observed_report,
         "unexpected_failures": unexpected,
@@ -1785,7 +1997,7 @@ def _run_red_suite() -> int:
         "skipped": [test.id() for test, _ in result.skipped],
     }
     print(json.dumps(report, sort_keys=True))
-    if unexpected or missing:
+    if unexpected or missing or not count_matches:
         return 2
     return 1 if observed else 0
 
