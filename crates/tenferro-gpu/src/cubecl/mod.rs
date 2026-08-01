@@ -328,6 +328,34 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
     })
 }
 
+mod cuda_zero_scalar {
+    use cubecl::prelude::{CubeElement, CubePrimitive};
+
+    pub trait Sealed: CubeElement + CubePrimitive + Clone + Send + Sync + 'static {
+        // Marker trait; bounds are available to the CUDA implementation.
+    }
+
+    impl Sealed for f64 {}
+}
+
+/// Scalar types supported by [`CudaBackend::zeros`].
+///
+/// This capability is sealed; the initial CUDA constructor supports only
+/// `f64`. In particular, `f32` is not admitted:
+///
+/// ```compile_fail
+/// use tenferro_gpu::CudaBackend;
+///
+/// fn rejected(backend: &CudaBackend) {
+///     let _ = backend.zeros::<f32>(1);
+/// }
+/// ```
+pub trait CudaZeroScalar: tenferro_tensor::TensorScalar + cuda_zero_scalar::Sealed {
+    // Marker trait; implementations are fixed by the private supertrait.
+}
+
+impl CudaZeroScalar for f64 {}
+
 /// CubeCL-based GPU backend.
 ///
 /// # Examples
@@ -757,7 +785,7 @@ impl CudaBackend {
         &self.inner.rt
     }
 
-    /// Allocate a one-dimensional `f64` CUDA tensor initialized to positive zero.
+    /// Allocate a one-dimensional CUDA tensor initialized to positive zero.
     ///
     /// The initialization kernel is enqueued on this backend's current stream;
     /// this method does not synchronize or transfer data to the host.
@@ -766,9 +794,10 @@ impl CudaBackend {
     ///
     /// ```
     /// use tenferro_gpu::CudaBackend;
-    /// use tenferro_tensor::{Result, Tensor};
+    /// use tenferro_tensor::{Result, TypedTensor};
     ///
-    /// let _zeros: fn(&CudaBackend, usize) -> Result<Tensor> = CudaBackend::zeros_f64;
+    /// let _zeros: fn(&CudaBackend, usize) -> Result<TypedTensor<f64>> =
+    ///     CudaBackend::zeros::<f64>;
     /// ```
     ///
     /// # Errors
@@ -777,22 +806,29 @@ impl CudaBackend {
     /// requested length cannot be represented by the CUDA launch or allocation,
     /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
     /// bound to this backend's runtime.
-    pub fn zeros_f64(&self, len: usize) -> crate::Result<Tensor> {
-        let count = cube_count_for_len_for_op(len, "zeros_f64")?;
-        let output = alloc_output_for_op::<f64>(self.runtime(), &[len], "zeros_f64")?;
+    pub fn zeros<T: CudaZeroScalar>(&self, len: usize) -> crate::Result<TypedTensor<T>> {
+        const OP: &str = "zeros";
+        let count = cube_count_for_len_for_op(len, OP)?;
+        let output = alloc_output_for_op::<T>(self.runtime(), &[len], OP)?;
         launch_nullary_into(
             self.runtime(),
             &output,
-            "zeros_f64",
+            OP,
             count,
             cube_dim_1d(),
-            |client, count, dim, out| unsafe {
-                structural::fill_zero_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
-                    client, count, dim, out,
-                );
+            |client, count, dim, out| {
+                // SAFETY: `output` is a fresh, unaliased dense allocation of exactly
+                // `len` elements. `launch_nullary_into` validates its runtime and
+                // backing length before binding it; the launch covers the domain, and
+                // the kernel guards every write with `ABSOLUTE_POS < out.len()`.
+                unsafe {
+                    structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                        client, count, dim, out,
+                    );
+                }
             },
         )?;
-        Ok(Tensor::F64(output))
+        Ok(output)
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
