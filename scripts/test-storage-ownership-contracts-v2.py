@@ -36,6 +36,64 @@ SCHEMA = "tenferro.storage-ownership-contracts.v2"
 LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
 GATES = tuple(f"G{number}" for number in range(1, 8))
 
+CLI_CONTRACT_SCHEMA = "tenferro.storage-ownership-cli-contract.v1"
+CLI_CONTRACT_PROBE = "--contract-schema"
+CHECKER_CLI_CONTRACT = {
+    "schema": CLI_CONTRACT_SCHEMA,
+    "tool": "check-storage-ownership-contracts",
+    "role": "checker",
+    "manifest_schema": SCHEMA,
+    "probe": CLI_CONTRACT_PROBE,
+    "options": [
+        "--root",
+        "--manifest",
+        "--base-commit",
+        "--receipt",
+        "--summary-json",
+        "--diagnostics-json",
+    ],
+}
+RUNNER_CLI_CONTRACT = {
+    "schema": CLI_CONTRACT_SCHEMA,
+    "tool": "run-storage-ownership-contracts",
+    "role": "runner",
+    "manifest_schema": SCHEMA,
+    "probe": CLI_CONTRACT_PROBE,
+    "options": [
+        "--root",
+        "--manifest",
+        "--base-commit",
+        "--receipt-out",
+        "--diagnostics-json",
+    ],
+}
+
+# These are temporary RED-only sentinels for the exact pre-migration quartet.
+# The atomic v2 implementation commit must delete this predicate and all four
+# frozen values; they are not a v1 compatibility surface.
+LEGACY_V1_QUARTET_SHA256 = (
+    (
+        "manifest",
+        PRODUCTION_MANIFEST,
+        "7694da2a07fb702cdc0e2003eeff6b2610d1b8714cd19f78a04b07e4c9082fcf",
+    ),
+    (
+        "checker",
+        CHECKER,
+        "91ab78217adbb74f8f6bf55a48ec6bb0c6c7eea17b9c51251dcdc092627dc718",
+    ),
+    (
+        "suite",
+        V1_TEST_SUITE,
+        "e4dbf32d274f7671430a7a1e474016337b60fcab555087e2d111d093acccbdfe",
+    ),
+    (
+        "fixture",
+        LEGACY_V1_MANIFEST_FIXTURE,
+        "fed8c80e0e5b8969f18a46f729644bad267adeb8a137499638d3a4926ed1b2ec",
+    ),
+)
+
 CHECKER_CAUSE = "v2-checker-not-implemented"
 RUNNER_CAUSE = "v2-runner-not-implemented"
 FUTURE_ARTIFACT_CAUSE = "future-production-proof-artifact-not-landed"
@@ -62,56 +120,58 @@ class RedExpectedError(RuntimeError):
         super().__init__(f"intentional RED: {cause}")
 
 
-def _v2_checker_unavailable_cause() -> str | None:
-    """Prove that the checked-in checker is absent or still the v1 tool."""
-    if not CHECKER.is_file():
-        return CHECKER_CAUSE
+def _probe_cli_contract(
+    tool: Path, expected: dict[str, object]
+) -> bool:
+    """Accept availability only after a successful exact JSON CLI probe."""
     try:
-        source = CHECKER.read_text(encoding="utf-8")
-    except OSError:
-        return CHECKER_CAUSE
-    if f'SCHEMA = "{SCHEMA}"' not in source:
-        return CHECKER_CAUSE
-    return None
+        result = subprocess.run(
+            [sys.executable, str(tool), CLI_CONTRACT_PROBE],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5.0,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0 or result.stderr != "":
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return type(payload) is dict and payload == expected
+
+
+def _v2_checker_unavailable_cause() -> str | None:
+    """Prove checker availability through its machine-readable CLI contract."""
+    return (
+        None
+        if _probe_cli_contract(CHECKER, CHECKER_CLI_CONTRACT)
+        else CHECKER_CAUSE
+    )
 
 
 def _v2_runner_unavailable_cause() -> str | None:
-    """Prove that the v2 runner has not landed at its reserved path."""
-    return None if RUNNER.is_file() else RUNNER_CAUSE
+    """Prove runner availability through its machine-readable CLI contract."""
+    return (
+        None
+        if _probe_cli_contract(RUNNER, RUNNER_CLI_CONTRACT)
+        else RUNNER_CAUSE
+    )
 
 
 def _legacy_tooling_is_current() -> bool:
-    """Prove the exact legacy-tool state owned by the next atomic migration."""
-    # Every component is part of the predicate.  Changing even one component
-    # makes this false, so partial migration reaches the assertions below as
-    # an ordinary unexpected failure rather than an intentional RED event.
-    try:
-        production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
-        checker_source = CHECKER.read_text(encoding="utf-8")
-        v1_test_source = V1_TEST_SUITE.read_text(encoding="utf-8")
-        legacy_fixture = tomllib.loads(
-            LEGACY_V1_MANIFEST_FIXTURE.read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        return False
-    return (
-        production.get("schema") == LEGACY_SCHEMA
-        and f'SCHEMA = "{LEGACY_SCHEMA}"' in checker_source
-        and "TOP_LEVEL_KEYS = frozenset" in checker_source
-        and "def _fixture_rows(" in checker_source
-        and "def _fixture_suite_rows(" in checker_source
-        and "class CheckerTests" in v1_test_source
-        and "def _manifest(" in v1_test_source
-        and "storage-ownership-contracts.v1" in v1_test_source
-        and set(legacy_fixture)
-        == {
-            "schema",
-            "fixture_suites",
-            "fixtures",
-            "source_scans",
-            "source_inventory",
-        }
-    )
+    """Prove the exact legacy-tool state by frozen bytes, not source shape."""
+    for _, path, expected in LEGACY_V1_QUARTET_SHA256:
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return False
+        if actual != expected:
+            return False
+    return True
 
 
 def _require_v2_checker() -> None:
@@ -490,6 +550,9 @@ RED_EXPECTED_FAILURES = {
     "test_atomic_v2_migration_removes_legacy_surface": {
         "cause": "v2-atomic-migration-not-landed",
     },
+    "test_checker_cli_schema_probe_is_required": {
+        "cause": "v2-checker-not-implemented",
+    },
     "test_legacy_v1_fixture_and_source_tables_are_rejected": {
         "cause": "v2-checker-not-implemented",
     },
@@ -601,6 +664,9 @@ RED_EXPECTED_FAILURES = {
             {"field": "command_id"},
             {"field": "candidate_commit"},
         ],
+    },
+    "test_runner_cli_schema_probe_is_required": {
+        "cause": "v2-runner-not-implemented",
     },
     "test_runner_emits_exact_candidate_bound_receipt": {
         "cause": "v2-runner-not-implemented",
@@ -1259,6 +1325,62 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             ),
         )
 
+    def test_cli_schema_probe_rejects_non_contract_evidence(self) -> None:
+        for tool, expected in (
+            ("checker", CHECKER_CLI_CONTRACT),
+            ("runner", RUNNER_CLI_CONTRACT),
+        ):
+            wrong_schema = {**expected, "schema": "wrong"}
+            adversarial_sources = (
+                ("comment", "# --contract-schema\n"),
+                (
+                    "unused-constant",
+                    f"CONTRACT_SCHEMA = {expected!r}\n",
+                ),
+                ("file-existence", ""),
+                ("wrong-json", 'print("not-json")\n'),
+                (
+                    "stderr",
+                    "import sys\n"
+                    f"print({json.dumps(json.dumps(expected))})\n"
+                    "sys.stderr.write(\"not-json\")\n",
+                ),
+                (
+                    "extra-stdout",
+                    f"print({json.dumps(json.dumps(expected))})\n"
+                    "print(\"extra\")\n",
+                ),
+                (
+                    "wrong-schema",
+                    f"print({json.dumps(json.dumps(wrong_schema))!r})\n",
+                ),
+            )
+            for case, source in adversarial_sources:
+                with self.subTest(tool=tool, case=case):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        probe = Path(temporary) / "fake-tool.py"
+                        probe.write_text(source, encoding="utf-8")
+                        self.assertFalse(_probe_cli_contract(probe, expected))
+
+    def test_cli_schema_probe_accepts_exact_contract(self) -> None:
+        for tool, expected in (
+            ("checker", CHECKER_CLI_CONTRACT),
+            ("runner", RUNNER_CLI_CONTRACT),
+        ):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as temporary:
+                probe = Path(temporary) / "fake-tool.py"
+                probe.write_text(
+                    f"print({json.dumps(json.dumps(expected))})\n",
+                    encoding="utf-8",
+                )
+                self.assertTrue(_probe_cli_contract(probe, expected))
+
+    def test_checker_cli_schema_probe_is_required(self) -> None:
+        _require_v2_checker()
+
+    def test_runner_cli_schema_probe_is_required(self) -> None:
+        _require_v2_runner()
+
     def test_v2_checker_rejects_legacy_production_manifest_until_migration(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
         production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
@@ -1281,14 +1403,15 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         if _legacy_tooling_is_current():
             raise RedExpectedFailure(MIGRATION_CAUSE)
 
+        _require_v2_checker()
+        _require_v2_runner()
+
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
         production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(production.get("schema"), SCHEMA)
         self.assertEqual(production, tomllib.loads(valid_manifest()))
 
-        self.assertTrue(CHECKER.is_file())
         checker_source = CHECKER.read_text(encoding="utf-8")
-        self.assertIn(f'SCHEMA = "{SCHEMA}"', checker_source)
         self.assertNotIn(f'SCHEMA = "{LEGACY_SCHEMA}"', checker_source)
         for legacy_surface in (
             "TOP_LEVEL_KEYS = frozenset",

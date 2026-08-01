@@ -294,6 +294,58 @@ HEAD. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
+Availability is an explicit CLI contract, not source inspection or path
+existence. Both future tools must accept `--contract-schema`, exit successfully
+without loading a manifest, write exactly one JSON object to stdout, and write
+nothing to stderr. The RED verifier invokes the script with the current Python
+interpreter and accepts the result only when its parsed object equals the
+corresponding contract below including the complete `options` list; comments,
+unused constants, an existing file, non-JSON output, extra keys, stderr noise,
+and a wrong schema or tool are unavailable:
+
+```json
+{
+  "schema": "tenferro.storage-ownership-cli-contract.v1",
+  "tool": "check-storage-ownership-contracts",
+  "role": "checker",
+  "manifest_schema": "tenferro.storage-ownership-contracts.v2",
+  "probe": "--contract-schema",
+  "options": [
+    "--root",
+    "--manifest",
+    "--base-commit",
+    "--receipt",
+    "--summary-json",
+    "--diagnostics-json"
+  ]
+}
+```
+
+The runner returns the same shape with `tool` equal to
+`run-storage-ownership-contracts`, `role` equal to `runner`, and `options`
+equal to `--root`, `--manifest`, `--base-commit`, `--receipt-out`, and
+`--diagnostics-json`:
+
+```json
+{
+  "schema": "tenferro.storage-ownership-cli-contract.v1",
+  "tool": "run-storage-ownership-contracts",
+  "role": "runner",
+  "manifest_schema": "tenferro.storage-ownership-contracts.v2",
+  "probe": "--contract-schema",
+  "options": [
+    "--root",
+    "--manifest",
+    "--base-commit",
+    "--receipt-out",
+    "--diagnostics-json"
+  ]
+}
+```
+
+This probe is only an availability handshake; it does not execute ledger
+commands or provide runner evidence.
+
 Checker and runner failures have a stable machine-readable envelope when
 `--diagnostics-json` is selected:
 

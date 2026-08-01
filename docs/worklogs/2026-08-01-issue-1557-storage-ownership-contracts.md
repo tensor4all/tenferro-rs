@@ -57,6 +57,12 @@ escape hatch was added here.
   path-bearing argv escapes even when `path_args` lies, cwd/argv symlink
   escapes, unknown command kinds, unbound target links, and a failed active
   command are errors. Active commands run once; deferred commands never run.
+- Checker/runner availability is a strict CLI handshake. Each future tool must
+  accept `--contract-schema`, return exit code 0, emit the exact JSON contract
+  for its role and v2 manifest schema on stdout, and emit no stderr. The RED
+  suite invokes and parses that probe; source spelling, comments, unused
+  constants, path existence, wrong JSON, extra stdout, stderr noise, and a
+  wrong schema/tool are not availability evidence.
 - The storage kernel is provider-neutral and allocation-free on resolve/acquire
   hot paths. It owns one provider vtable in `RootResourceState`; no provider
   enum, per-access `Box`/`Arc`, or receiver-plus-resolved authority is part of
@@ -118,6 +124,9 @@ The executable specification covers:
   confinement additionally fixes exact argv allowlist differences, cwd
   lexical escapes, argv path escapes independent of `path_args`, cwd/argv
   symlink escapes, and post-receipt command-path retarget revalidation;
+- exact checker and runner `--contract-schema` probes, including positive
+  fake-tool cases for both roles and adversarial comment, unused-constant,
+  file-existence, wrong-JSON, wrong-schema, stderr, and extra-output cases;
 - canonical future production-bound borrow, auto-trait, and provider-release
   artifact/command obligations. No inline synthetic borrow compile is
   canonical evidence and no private-name source scan is used;
@@ -226,14 +235,32 @@ symlink diagnostic is required when a path accepted for a receipt is retargeted
 outside the repository before checker revalidation.
 
 The atomic migration test is intentionally RED only while the deterministic
-legacy predicate proves the current v1 manifest/checker/parser/suite/fixture
-surface is still present. Once that predicate is false, the test requires the
-production manifest to equal the independent v2 verifier expectation exactly,
-the checker to contain no v1 parser/schema acceptance surface, the v1 suite to
-be absent, and the legacy fixture to contain only its v1 schema marker. The
+legacy predicate proves the current v1 manifest/checker/suite/fixture bytes are
+still exactly the frozen quartet below. Once that predicate is false, the test
+requires the production manifest to equal the independent v2 verifier
+expectation exactly and both future tools to pass their exact CLI probes. It
+also rejects the v1 parser/schema surface, requires the v1 suite to be absent,
+and requires the legacy fixture to contain only its v1 schema marker. The
 production TOML remains the sole machine registry authority after migration;
 Python constants in this RED script are independent verifier expectations and
 the design graph is explanatory documentation.
+
+The temporary RED-only quartet is byte-pinned as follows:
+
+- `scripts/storage-ownership-contracts.toml` (production v1 manifest):
+  `7694da2a07fb702cdc0e2003eeff6b2610d1b8714cd19f78a04b07e4c9082fcf`
+- `scripts/check-storage-ownership-contracts.py` (v1 checker):
+  `91ab78217adbb74f8f6bf55a48ec6bb0c6c7eea17b9c51251dcdc092627dc718`
+- `scripts/test-check-storage-ownership-contracts.py` (v1 test suite):
+  `e4dbf32d274f7671430a7a1e474016337b60fcab555087e2d111d093acccbdfe`
+- `scripts/fixtures/storage-ownership-contracts-v1.toml` (full v1 fixture):
+  `fed8c80e0e5b8969f18a46f729644bad267adeb8a137499638d3a4926ed1b2ec`
+
+Only that exact pre-migration byte state may emit the typed
+`v2-atomic-migration-not-landed` RED event. The frozen hashes, their predicate,
+and that expected migration event are temporary RED evidence: the atomic v2
+implementation commit must delete all of them, with no v1 compatibility
+surface.
 
 ## Verification evidence for this checkpoint
 
@@ -261,12 +288,12 @@ Passing deterministic checks:
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 48 tests and
-  reports exactly 52 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 52 tests and
+  reports exactly 54 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (30
-  events), v2 runner absent (18 events), future production proof artifacts
+  skipped tests. The causes are machine-readable: v2 checker absent (31
+  events), v2 runner absent (19 events), future production proof artifacts
   absent (3 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
   subtest parameters as a multiset. The required symlink capability test
@@ -285,7 +312,10 @@ inventory, trybuild, parity, docs, and repository quality gates.
   migration: replace the v1 production ledger with the exact v2 single-table
   registry, delete/replace the v1 checker parser and test suite, and reduce
   the legacy fixture to schema-only rejection. Do not add a v1 compatibility
-  parser or retain the old tooling as a supported path.
+  parser or retain the old tooling as a supported path. It must also delete
+  the frozen quartet hashes/predicate and the
+  `v2-atomic-migration-not-landed` expected event; those are temporary RED-only
+  sentinels, not a compatibility surface.
 - Keep the production-manifest equality assertion coupled to the sole machine
   registry and the independent `UNITS`/`EDGES`/obligation verifier
   expectations; do not weaken it to schema or checker-exit checks.
