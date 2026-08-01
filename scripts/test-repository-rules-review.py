@@ -754,6 +754,46 @@ def test_contains_sensitive_text_ignores_env_lookup_code() -> None:
     assert not mod.contains_sensitive_text(text)
 
 
+def test_summarize_llm_review_computes_dropped_count() -> None:
+    mod = load_module()
+    summary = mod.summarize_llm_review(
+        chunk_sizes=[118923, 46296],
+        elapsed_seconds=4.56,
+        returned_count=3,
+        kept_count=1,
+    )
+    assert "2 dropped" in summary
+
+
+def test_format_report_includes_llm_summary_line() -> None:
+    mod = load_module()
+    report = mod.format_report(
+        base="base",
+        head="head",
+        verdict="pass",
+        findings=[],
+        waived=False,
+        llm_summary="LLM review: 1 chunk(s) (10 chars) in 0.5s; "
+        "0 finding(s) returned, 0 kept, 0 dropped by diff-anchor filtering.",
+    )
+    lines = report.splitlines()
+    assert lines[1] == "Verdict: pass"
+    assert lines[2].startswith("LLM review: 1 chunk(s)")
+    assert lines[3] == "No findings."
+
+
+def test_format_report_omits_llm_summary_when_absent() -> None:
+    mod = load_module()
+    report = mod.format_report(
+        base="base",
+        head="head",
+        verdict="pass",
+        findings=[],
+        waived=False,
+    )
+    assert "LLM review:" not in report
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -788,6 +828,9 @@ def main() -> int:
         test_redact_sensitive_text_masks_common_secret_forms,
         test_sensitive_diff_finding_checks_added_lines_only,
         test_contains_sensitive_text_ignores_env_lookup_code,
+        test_summarize_llm_review_computes_dropped_count,
+        test_format_report_includes_llm_summary_line,
+        test_format_report_omits_llm_summary_when_absent,
     ]:
         test()
     return 0

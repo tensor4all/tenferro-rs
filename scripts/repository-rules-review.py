@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -772,6 +773,23 @@ def llm_skipped_finding(reason: str) -> Finding:
     )
 
 
+def summarize_llm_review(
+    *,
+    chunk_sizes: list[int],
+    elapsed_seconds: float,
+    returned_count: int,
+    kept_count: int,
+) -> str:
+    dropped = returned_count - kept_count
+    return (
+        f"LLM review: {len(chunk_sizes)} chunk(s) "
+        f"({', '.join(f'{size} chars' for size in chunk_sizes)}) "
+        f"in {elapsed_seconds:.1f}s; "
+        f"{returned_count} finding(s) returned, {kept_count} kept, "
+        f"{dropped} dropped by diff-anchor filtering."
+    )
+
+
 def format_report(
     *,
     base: str,
@@ -779,11 +797,14 @@ def format_report(
     verdict: str,
     findings: list[Finding],
     waived: bool,
+    llm_summary: str | None = None,
 ) -> str:
     lines = [
         f"Repository rules review ({base}...{head})",
         f"Verdict: {verdict}",
     ]
+    if llm_summary:
+        lines.append(llm_summary)
     if waived:
         lines.append("Waived by maintainer label.")
     if not findings:
@@ -1047,6 +1068,8 @@ def main(argv: list[str] | None = None) -> int:
             args.output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return 0
 
+    llm_summary: str | None = None
+    llm_stats: dict[str, Any] | None = None
     if not args.dry_run and not sensitive_finding:
         api_key = os.environ.get("DEEPSEEK_API_KEY")
         if not api_key:
@@ -1060,8 +1083,16 @@ def main(argv: list[str] | None = None) -> int:
             worktree=args.worktree,
         )
         chunks = split_diff_chunks(redact_file_diffs(file_diffs))
+        chunk_sizes = [len(chunk) for chunk in chunks]
+        print(
+            f"LLM review: model {args.model}, {len(chunks)} chunk(s), "
+            f"sizes {chunk_sizes} chars",
+            file=sys.stderr,
+        )
         llm_findings: list[Finding] = []
-        for chunk in chunks:
+        llm_started = time.monotonic()
+        for index, chunk in enumerate(chunks, start=1):
+            chunk_started = time.monotonic()
             try:
                 _, chunk_findings = review_chunk(
                     api_key=api_key,
@@ -1074,17 +1105,42 @@ def main(argv: list[str] | None = None) -> int:
                     timeout=args.timeout,
                 )
             except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+                print(
+                    f"LLM chunk {index}/{len(chunks)}: failed after "
+                    f"{time.monotonic() - chunk_started:.1f}s: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
                 findings.append(llm_response_error_finding(exc))
                 break
-            llm_findings.extend(chunk_findings)
-        findings.extend(
-            filter_findings(
-                merge_findings(llm_findings),
-                files,
-                added_lines,
-                allow_global=False,
+            print(
+                f"LLM chunk {index}/{len(chunks)}: {len(chunk)} chars, "
+                f"{len(chunk_findings)} finding(s), "
+                f"{time.monotonic() - chunk_started:.1f}s",
+                file=sys.stderr,
             )
+            llm_findings.extend(chunk_findings)
+        merged_llm_findings = merge_findings(llm_findings)
+        kept_llm_findings = filter_findings(
+            merged_llm_findings,
+            files,
+            added_lines,
+            allow_global=False,
         )
+        llm_elapsed = time.monotonic() - llm_started
+        llm_summary = summarize_llm_review(
+            chunk_sizes=chunk_sizes,
+            elapsed_seconds=llm_elapsed,
+            returned_count=len(merged_llm_findings),
+            kept_count=len(kept_llm_findings),
+        )
+        llm_stats = {
+            "chunk_sizes": chunk_sizes,
+            "elapsed_seconds": round(llm_elapsed, 3),
+            "findings_returned": len(merged_llm_findings),
+            "findings_kept": len(kept_llm_findings),
+        }
+        findings.extend(kept_llm_findings)
 
     block_findings = [item for item in findings if item.severity == "block"]
     verdict = reconcile_verdict(block_findings)
@@ -1095,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
         verdict=verdict,
         findings=findings,
         waived=False,
+        llm_summary=llm_summary,
     )
     print(report_body)
 
@@ -1106,6 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
         "changed_files": files,
         "rule_sections": section_names,
         "prompt_version": PROMPT_VERSION,
+        "llm_review": llm_stats,
     }
     if args.output_json:
         args.output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
