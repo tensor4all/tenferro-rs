@@ -4,7 +4,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
 use crate::cubecl::{gpu_available, CudaBackend, CudaRuntime};
-use crate::{Error, Tensor};
+use crate::{DeviceKind, Error, GpuBackendKind, MemoryKind, Tensor};
 use tenferro_tensor::TensorElementwise;
 
 #[cube(launch_unchecked)]
@@ -44,6 +44,43 @@ fn cube_count_for_len_rejects_u32_overflow() {
         }
     ));
 }
+
+#[test]
+fn zeros_f64_has_the_narrow_public_signature() {
+    let _zeros: fn(&CudaBackend, usize) -> crate::Result<Tensor> = CudaBackend::zeros_f64;
+}
+
+gpu_test!(test_zeros_f64_exact_values_placement_and_overflow, {
+    let backend = CudaBackend::new(0).unwrap();
+
+    for len in [0, 1, 17, 4097] {
+        let zeros = backend.zeros_f64(len).unwrap();
+        assert_eq!(zeros.shape(), &[len]);
+        assert_eq!(zeros.dtype(), crate::DType::F64);
+        assert_eq!(zeros.placement().memory_kind, MemoryKind::Device);
+        let device = zeros.placement().device.as_ref().unwrap();
+        assert_eq!(device.kind, DeviceKind::Gpu(GpuBackendKind::Cuda));
+        assert_eq!(device.ordinal, 0);
+
+        let host = download_tensor(backend.runtime(), &zeros).unwrap();
+        assert!(host
+            .as_slice::<f64>()
+            .unwrap()
+            .iter()
+            .all(|value| value.to_bits() == 0));
+    }
+
+    assert!(matches!(
+        backend.zeros_f64(usize::MAX),
+        Err(Error::Validation {
+            op: "zeros_f64",
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "length",
+                ..
+            },
+        })
+    ));
+});
 
 gpu_test!(test_runtime_init, {
     let rt = CudaRuntime::new(0);

@@ -757,6 +757,50 @@ impl CudaBackend {
         &self.inner.rt
     }
 
+    /// Allocate a one-dimensional `f64` CUDA tensor initialized to positive zero.
+    ///
+    /// The initialization kernel is enqueued on this backend's current stream;
+    /// this method does not synchronize or transfer data to the host.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_tensor::{Result, Tensor};
+    ///
+    /// let _zeros: fn(&CudaBackend, usize) -> Result<Tensor> = CudaBackend::zeros_f64;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the
+    /// requested length cannot be represented by the CUDA launch or allocation,
+    /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
+    /// bound to this backend's runtime.
+    pub fn zeros_f64(&self, len: usize) -> crate::Result<Tensor> {
+        let stable_validation_op = |error| match error {
+            crate::Error::Validation { source, .. } => {
+                crate::Error::validation("zeros_f64", source)
+            }
+            error => error,
+        };
+        let count = cube_count_for_len(len).map_err(stable_validation_op)?;
+        let output = alloc_output::<f64>(self.runtime(), &[len]).map_err(stable_validation_op)?;
+        launch_nullary_into(
+            self.runtime(),
+            &output,
+            "zeros_f64",
+            count,
+            cube_dim_1d(),
+            |client, count, dim, out| unsafe {
+                structural::fill_zero_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+                    client, count, dim, out,
+                );
+            },
+        )?;
+        Ok(Tensor::F64(output))
+    }
+
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
         if let Some(handle) = self.inner.cutensor.get() {
             return Ok(handle);
