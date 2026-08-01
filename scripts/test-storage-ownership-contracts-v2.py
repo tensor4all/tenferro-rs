@@ -34,6 +34,60 @@ SCHEMA = "tenferro.storage-ownership-contracts.v2"
 LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
 GATES = tuple(f"G{number}" for number in range(1, 8))
 
+CHECKER_CAUSE = "v2-checker-not-implemented"
+RUNNER_CAUSE = "v2-runner-not-implemented"
+FUTURE_ARTIFACT_CAUSE = "future-production-proof-artifact-not-landed"
+
+
+class RedExpectedFailure(AssertionError):
+    """An intentional RED assertion with a machine-readable cause."""
+
+    def __init__(self, cause: str) -> None:
+        if not cause or not cause.replace("-", "").isalnum():
+            raise ValueError("expected RED cause must be a stable slug")
+        self.cause = cause
+        super().__init__(f"intentional RED: {cause}")
+
+
+class RedExpectedError(RuntimeError):
+    """An intentional RED execution error with a machine-readable cause."""
+
+    def __init__(self, cause: str) -> None:
+        if not cause or not cause.replace("-", "").isalnum():
+            raise ValueError("expected RED cause must be a stable slug")
+        self.cause = cause
+        super().__init__(f"intentional RED: {cause}")
+
+
+def _v2_checker_unavailable_cause() -> str | None:
+    """Prove that the checked-in checker is absent or still the v1 tool."""
+    if not CHECKER.is_file():
+        return CHECKER_CAUSE
+    try:
+        source = CHECKER.read_text(encoding="utf-8")
+    except OSError:
+        return CHECKER_CAUSE
+    if f'SCHEMA = "{SCHEMA}"' not in source:
+        return CHECKER_CAUSE
+    return None
+
+
+def _v2_runner_unavailable_cause() -> str | None:
+    """Prove that the v2 runner has not landed at its reserved path."""
+    return None if RUNNER.is_file() else RUNNER_CAUSE
+
+
+def _require_v2_checker() -> None:
+    cause = _v2_checker_unavailable_cause()
+    if cause is not None:
+        raise RedExpectedFailure(cause)
+
+
+def _require_v2_runner() -> None:
+    cause = _v2_runner_unavailable_cause()
+    if cause is not None:
+        raise RedExpectedError(cause)
+
 # P0 and P1 are independent roots.  P2 has exactly one prerequisite, P1.
 # P0 enters the graph only through the atomic CUTOVER cohort.
 UNITS = (
@@ -506,6 +560,16 @@ RED_EXPECTED_FAILURES = {
     },
 }
 
+# The cause registry fixes the event shape as well as its prose label.  A
+# missing checker is an expected assertion failure, while attempting to invoke
+# a missing runner is an expected execution error.  Subtests retain the same
+# distinction instead of being collapsed into one generic event kind.
+RED_CAUSE_EVENT_SHAPES = {
+    CHECKER_CAUSE: ("failure", "RedExpectedFailure"),
+    RUNNER_CAUSE: ("error", "RedExpectedError"),
+    FUTURE_ARTIFACT_CAUSE: ("failure", "RedExpectedFailure"),
+}
+
 
 def _quote(value: str) -> str:
     return json.dumps(value)
@@ -871,6 +935,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         files: dict[str, str] | None = None,
         extra_args: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
+        _require_v2_checker()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             _write_files(root, files or repository_files())
@@ -895,6 +960,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def run_production_checker(
         self, *extra_args: str
     ) -> subprocess.CompletedProcess[str]:
+        _require_v2_checker()
         return subprocess.run(
             [
                 sys.executable,
@@ -919,6 +985,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         *,
         diagnostics: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        _require_v2_runner()
         return subprocess.run(
             [
                 sys.executable,
@@ -946,6 +1013,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         receipt_path: Path,
         output_flag: str,
     ) -> subprocess.CompletedProcess[str]:
+        _require_v2_checker()
         return subprocess.run(
             [
                 sys.executable,
@@ -1208,7 +1276,8 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             with self.subTest(obligation_id=obligation_id):
                 row = rows[obligation_id]
                 artifact = ROOT / row["artifact"]["path"]
-                self.assertTrue(artifact.is_file(), f"future proof artifact is absent: {artifact}")
+                if not artifact.is_file():
+                    raise RedExpectedFailure(FUTURE_ARTIFACT_CAUSE)
                 command = row["command"]
                 result = subprocess.run(
                     command["argv"],
@@ -1323,6 +1392,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         )
 
     def test_real_symlink_escape_is_rejected(self) -> None:
+        _require_v2_checker()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             files = repository_files()
@@ -1621,6 +1691,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
 
     def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
+        _require_v2_checker()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = valid_manifest()
@@ -1747,6 +1818,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 )
 
     def test_runner_is_fail_closed_on_command_failure(self) -> None:
+        _require_v2_runner()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             files = marker_files()
@@ -1824,17 +1896,137 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 "test": "sample",
                 "kind": "failure",
                 "params": None,
+                "exception_type": "RedExpectedFailure",
                 "cause": "test-fixture",
             }
         ]
         observed = [
-            {"test": "sample", "kind": "failure", "params": None},
-            {"test": "sample", "kind": "failure", "params": None},
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "exception_type": "RedExpectedFailure",
+                "cause": "test-fixture",
+            },
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "exception_type": "RedExpectedFailure",
+                "cause": "test-fixture",
+            },
         ]
         _, unexpected, missing, count_matches = _compare_red_events(expected, observed)
         self.assertFalse(count_matches)
         self.assertEqual(len(unexpected), 1)
         self.assertEqual(missing, [])
+
+    def test_red_event_matching_rejects_unrelated_exception_and_wrong_cause(self) -> None:
+        expected = [
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "exception_type": "RedExpectedFailure",
+                "cause": "v2-checker-not-implemented",
+            }
+        ]
+        for observed in (
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "exception_type": "AssertionError",
+                "cause": None,
+            },
+            {
+                "test": "sample",
+                "kind": "error",
+                "params": None,
+                "exception_type": "RuntimeError",
+                "cause": None,
+            },
+            {
+                "test": "sample",
+                "kind": "failure",
+                "params": None,
+                "exception_type": "RedExpectedFailure",
+                "cause": "wrong-cause",
+            },
+        ):
+            with self.subTest(observed=observed):
+                _, unexpected, missing, count_matches = _compare_red_events(
+                    expected, [observed]
+                )
+                self.assertFalse(count_matches)
+                self.assertEqual(len(unexpected), 1)
+                self.assertEqual(len(missing), 1)
+
+    def test_red_event_matching_rejects_skipped_subtest(self) -> None:
+        expected = [
+            {
+                "test": "sample",
+                "kind": "subtest-failure",
+                "params": {"case": "required"},
+                "exception_type": "RedExpectedFailure",
+                "cause": "future-production-proof-artifact-not-landed",
+            }
+        ]
+        observed = [
+            {
+                "test": "sample",
+                "kind": "skip",
+                "params": {"case": "required"},
+                "exception_type": None,
+                "cause": None,
+                "reason": "capability unavailable",
+            }
+        ]
+        _, unexpected, missing, count_matches = _compare_red_events(expected, observed)
+        self.assertFalse(count_matches)
+        self.assertEqual(len(unexpected), 1)
+        self.assertEqual(len(missing), 1)
+
+    def test_red_result_preserves_subtest_failure_error_and_skip_metadata(self) -> None:
+        import io
+
+        expected_failure = RedExpectedFailure("test-fixture")
+        expected_error = RedExpectedError("test-fixture")
+        self.assertIsInstance(expected_failure, AssertionError)
+        self.assertIsInstance(expected_error, RuntimeError)
+        self.assertEqual(expected_failure.cause, "test-fixture")
+        self.assertEqual(expected_error.cause, "test-fixture")
+
+        class Probe(unittest.TestCase):
+            def test_events(self) -> None:
+                with self.subTest(case="failure"):
+                    self.fail("unrelated assertion")
+                with self.subTest(case="error"):
+                    raise RuntimeError("unrelated runtime error")
+                with self.subTest(case="skip"):
+                    self.skipTest("capability unavailable")
+
+        result = _RedResult(stream=io.StringIO(), descriptions=False, verbosity=0)
+        unittest.defaultTestLoader.loadTestsFromTestCase(Probe).run(result)
+        self.assertEqual(
+            [event["kind"] for event in result.events],
+            ["subtest-failure", "subtest-error", "skip"],
+        )
+        self.assertEqual(
+            [event["params"] for event in result.events],
+            [
+                {"case": "failure"},
+                {"case": "error"},
+                {"case": "skip"},
+            ],
+        )
+        self.assertEqual(result.events[0]["exception_type"], "AssertionError")
+        self.assertIsNone(result.events[0]["cause"])
+        self.assertEqual(result.events[1]["exception_type"], "RuntimeError")
+        self.assertIsNone(result.events[1]["cause"])
+        self.assertIsNone(result.events[2]["exception_type"])
+        self.assertIsNone(result.events[2]["cause"])
+        self.assertEqual(result.events[2]["reason"], "capability unavailable")
 
 
 def _parse_registry(manifest: str) -> dict[str, list[tuple[str, str]]]:
@@ -1865,30 +2057,68 @@ def _subtest_parameters(subtest: unittest.case.TestCase) -> dict[str, object] | 
     return {str(key): value for key, value in params.items()}
 
 
+def _exception_metadata(err: object) -> tuple[str | None, str | None]:
+    if not isinstance(err, tuple) or len(err) < 2:
+        return None, None
+    exception_type = err[0]
+    exception = err[1]
+    type_name = getattr(exception_type, "__name__", type(exception).__name__)
+    cause = getattr(exception, "cause", None)
+    if cause is not None and not isinstance(cause, str):
+        cause = str(cause)
+    return str(type_name), cause
+
+
+def _is_assertion_failure(err: object) -> bool:
+    if not isinstance(err, tuple) or not err:
+        return False
+    exception_type = err[0]
+    return isinstance(exception_type, type) and issubclass(
+        exception_type, AssertionError
+    )
+
+
 class _RedResult(unittest.TextTestResult):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self.events: list[dict[str, object]] = []
 
-    def _record(self, test: unittest.case.TestCase, kind: str, params: object) -> None:
-        self.events.append(
-            {
-                "test": test.id().rsplit(".", 1)[-1],
-                "kind": kind,
-                "params": params,
-            }
-        )
+    def _record(
+        self,
+        test: unittest.case.TestCase,
+        kind: str,
+        params: object,
+        *,
+        err: object | None = None,
+        reason: str | None = None,
+    ) -> None:
+        exception_type, cause = _exception_metadata(err)
+        event: dict[str, object] = {
+            "test": test.id().rsplit(".", 1)[-1],
+            "kind": kind,
+            "params": params,
+            "exception_type": exception_type,
+            "cause": cause,
+        }
+        if reason is not None:
+            event["reason"] = reason
+        self.events.append(event)
 
     def addFailure(self, test: unittest.case.TestCase, err: object) -> None:
-        self._record(test, "failure", None)
+        self._record(test, "failure", _subtest_parameters(test), err=err)
         super().addFailure(test, err)
 
     def addError(self, test: unittest.case.TestCase, err: object) -> None:
-        self._record(test, "error", None)
+        self._record(test, "error", _subtest_parameters(test), err=err)
         super().addError(test, err)
 
     def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:
-        self._record(test, "skip", {"reason": reason})
+        self._record(
+            test,
+            "skip",
+            _subtest_parameters(test),
+            reason=reason,
+        )
         super().addSkip(test, reason)
 
     def addSubTest(
@@ -1898,7 +2128,13 @@ class _RedResult(unittest.TextTestResult):
         err: object | None,
     ) -> None:
         if err is not None:
-            self._record(test, "subtest", _subtest_parameters(subtest))
+            kind = "subtest-failure" if _is_assertion_failure(err) else "subtest-error"
+            self._record(
+                test,
+                kind,
+                _subtest_parameters(subtest),
+                err=err,
+            )
         super().addSubTest(test, subtest, err)
 
 
@@ -1906,28 +2142,36 @@ def _expected_red_events() -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
     for test, specification in RED_EXPECTED_FAILURES.items():
         subtests = specification.get("subtests")
+        is_subtest = subtests is not None
         if subtests is None:
             subtests = [None]
-            kind = "failure"
-        else:
-            kind = "subtest"
+        cause = str(specification["cause"])
+        base_kind, exception_type = RED_CAUSE_EVENT_SHAPES[cause]
+        kind = (
+            f"subtest-{base_kind}"
+            if is_subtest
+            else base_kind
+        )
         for params in subtests:
             events.append(
                 {
                     "test": test,
                     "kind": kind,
                     "params": params,
-                    "cause": specification["cause"],
+                    "exception_type": exception_type,
+                    "cause": cause,
                 }
             )
     return events
 
 
-def _red_event_key(event: dict[str, object]) -> tuple[str, str, str]:
+def _red_event_key(event: dict[str, object]) -> tuple[str, str, str, str, str]:
     return (
         str(event["test"]),
         str(event["kind"]),
         json.dumps(event["params"], sort_keys=True, separators=(",", ":")),
+        json.dumps(event.get("exception_type"), sort_keys=True),
+        json.dumps(event.get("cause"), sort_keys=True),
     )
 
 
@@ -1939,13 +2183,11 @@ def _compare_red_events(
     list[dict[str, object]],
     bool,
 ]:
-    expected_by_key = {_red_event_key(event): event for event in expected}
     remaining = Counter(_red_event_key(event) for event in expected)
     unexpected: list[dict[str, object]] = []
     observed_report: list[dict[str, object]] = []
     for event in observed:
         key = _red_event_key(event)
-        expected_event = expected_by_key.get(key)
         if remaining[key] > 0:
             remaining[key] -= 1
             classification = "expected"
@@ -1955,7 +2197,6 @@ def _compare_red_events(
         observed_report.append(
             {
                 **event,
-                "cause": expected_event["cause"] if expected_event else None,
                 "classification": classification,
             }
         )
@@ -1966,7 +2207,9 @@ def _compare_red_events(
         if remaining[key] > 0:
             missing.append(event)
             remaining[key] -= 1
-    return observed_report, unexpected, missing, len(observed) == len(expected)
+    expected_counts = Counter(_red_event_key(event) for event in expected)
+    observed_counts = Counter(_red_event_key(event) for event in observed)
+    return observed_report, unexpected, missing, observed_counts == expected_counts
 
 
 def _run_red_suite() -> int:
