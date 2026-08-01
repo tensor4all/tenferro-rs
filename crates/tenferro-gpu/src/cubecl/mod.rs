@@ -131,9 +131,9 @@ mod runtime;
 mod runtime_adapter;
 
 use dispatch::{
-    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
-    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
-    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    alloc_bool_output, alloc_output, alloc_output_for_op, bool_tensor_array_arg, comptime_sequence,
+    cube_count_for_len, cube_count_for_len_for_op, cube_dim_1d, dtype_mismatch, ensure_axes_unique,
+    ensure_axis, ensure_rank, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
@@ -327,6 +327,44 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
         )
     })
 }
+
+mod cuda_zero_scalar {
+    use cubecl::prelude::{CubeElement, CubePrimitive};
+
+    pub trait Sealed: CubeElement + CubePrimitive + Clone + Send + Sync + 'static {
+        // Marker trait; bounds are available to the CUDA implementation.
+    }
+
+    impl Sealed for f64 {}
+}
+
+/// Scalar types supported by [`CudaBackend::zeros`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::CudaZeroScalar;
+///
+/// fn accepts_cuda_zero<T: CudaZeroScalar>() {}
+///
+/// accepts_cuda_zero::<f64>();
+/// ```
+///
+/// This capability is sealed; the initial CUDA constructor supports only
+/// `f64`. In particular, `f32` is not admitted:
+///
+/// ```compile_fail
+/// use tenferro_gpu::CudaBackend;
+///
+/// fn rejected(backend: &CudaBackend) {
+///     let _ = backend.zeros::<f32>(1);
+/// }
+/// ```
+pub trait CudaZeroScalar: tenferro_tensor::TensorScalar + cuda_zero_scalar::Sealed {
+    // Marker trait; implementations are fixed by the private supertrait.
+}
+
+impl CudaZeroScalar for f64 {}
 
 /// CubeCL-based GPU backend.
 ///
@@ -755,6 +793,52 @@ impl CudaBackend {
     /// ```
     pub fn runtime(&self) -> &CudaRuntime {
         &self.inner.rt
+    }
+
+    /// Allocate a one-dimensional CUDA tensor initialized to positive zero.
+    ///
+    /// The initialization kernel is enqueued on this backend's current stream;
+    /// this method does not synchronize or transfer data to the host.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_tensor::{Result, TypedTensor};
+    ///
+    /// let _zeros: fn(&CudaBackend, usize) -> Result<TypedTensor<f64>> =
+    ///     CudaBackend::zeros::<f64>;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the
+    /// requested length cannot be represented by the CUDA launch or allocation,
+    /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
+    /// bound to this backend's runtime.
+    pub fn zeros<T: CudaZeroScalar>(&self, len: usize) -> crate::Result<TypedTensor<T>> {
+        const OP: &str = "zeros";
+        let count = cube_count_for_len_for_op(len, OP)?;
+        let output = alloc_output_for_op::<T>(self.runtime(), &[len], OP)?;
+        launch_nullary_into(
+            self.runtime(),
+            &output,
+            OP,
+            count,
+            cube_dim_1d(),
+            |client, count, dim, out| {
+                // SAFETY: `output` is a fresh, unaliased dense allocation of exactly
+                // `len` elements. `launch_nullary_into` validates its runtime and
+                // backing length before binding it; the launch covers the domain, and
+                // the kernel guards every write with `ABSOLUTE_POS < out.len()`.
+                unsafe {
+                    structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                        client, count, dim, out,
+                    );
+                }
+            },
+        )?;
+        Ok(output)
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {

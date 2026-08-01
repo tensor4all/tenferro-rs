@@ -262,7 +262,8 @@ fn webgpu_materialization_does_not_inherit_host_defaults() {
 fn cubecl_output_allocations_use_checked_shape_products() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
     assert!(
-        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_output\", shape)?;"),
+        dispatch.contains("alloc_output_for_op(rt, shape, \"cubecl_alloc_output\")")
+            && dispatch.contains("let len = checked_shape_product(op, shape)?;"),
         "CubeCL typed output allocation must reject shape-product overflow"
     );
     assert!(
