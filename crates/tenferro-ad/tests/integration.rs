@@ -29,6 +29,8 @@ mod dtype_propagation;
 mod dynamic_truncate;
 #[path = "integration/eager_device_placement_contract.rs"]
 mod eager_device_placement_contract;
+#[path = "integration/eager_backend_capability_contract.rs"]
+mod eager_backend_capability_contract;
 #[path = "integration/eager_fixed_pivot_cross.rs"]
 mod eager_fixed_pivot_cross;
 #[path = "integration/eager_runtime_api.rs"]
