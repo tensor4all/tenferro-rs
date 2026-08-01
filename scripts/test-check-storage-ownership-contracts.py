@@ -37,6 +37,32 @@ def _entry(
     return "\n".join(lines)
 
 
+def _suite(
+    *,
+    entry_id: str = "suite-pass",
+    kind: str | None = "trybuild-pass",
+    root: str | None = "fixtures",
+    glob: str | None = "**/*.rs",
+    owner_issue: int | None = 1557,
+    rationale: str | None = "cover the active trybuild fixtures in this root",
+) -> str:
+    lines = [
+        "[[fixture_suites]]",
+        f'id = "{entry_id}"',
+    ]
+    if kind is not None:
+        lines.append(f'kind = "{kind}"')
+    if root is not None:
+        lines.append(f'root = "{root}"')
+    if glob is not None:
+        lines.append(f'glob = "{glob}"')
+    if owner_issue is not None:
+        lines.append(f"owner_issue = {owner_issue}")
+    if rationale is not None:
+        lines.append(f'rationale = "{rationale}"')
+    return "\n".join(lines)
+
+
 def _inventory(
     *,
     entry_id: str = "source-ok",
@@ -173,7 +199,7 @@ class CheckerTests(unittest.TestCase):
 
     def test_clean_fixture_and_exact_source_inventory_pass(self) -> None:
         result = self.run_checker(
-            _manifest(_entry(), _inventory(), _scan()),
+            _manifest(_entry(), _suite(), _inventory(), _scan()),
             files={
                 "fixtures/ok.rs": "fn fixture() {}\n",
                 "src/legacy.rs": "const RAW_HANDLE: &str = \"legacy\";\n",
@@ -233,6 +259,203 @@ class CheckerTests(unittest.TestCase):
             "deferred fixture 'fixture-ok' must declare owner_issue",
             result.stderr,
         )
+
+    def test_clean_active_trybuild_fixture_suite_passes(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _suite()),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fixture_suite_requires_schema_fields(self) -> None:
+        cases = (
+            ("kind", _suite(kind=None), "fixture suite 'suite-pass' must declare kind"),
+            ("root", _suite(root=None), "fixture suite 'suite-pass' must declare root"),
+            ("glob", _suite(glob=None), "fixture suite 'suite-pass' must declare glob"),
+            (
+                "owner_issue",
+                _suite(owner_issue=None),
+                "fixture suite 'suite-pass' must declare owner_issue",
+            ),
+            (
+                "rationale",
+                _suite(rationale=None),
+                "fixture suite 'suite-pass' must declare rationale",
+            ),
+        )
+        for name, suite, expected in cases:
+            with self.subTest(case=name):
+                result = self.run_checker(
+                    _manifest(_entry(), suite),
+                    files={"fixtures/ok.rs": "fn fixture() {}\n"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_fixture_suite_rejects_unknown_and_line_number_fields(self) -> None:
+        for field, declaration, expected in (
+            (
+                "description",
+                'description = "temporary"',
+                "fixture suite 'suite-pass' has unknown field 'description'",
+            ),
+            (
+                "line",
+                "line = 12",
+                "fixture suite 'suite-pass' must not use line-number key 'line'",
+            ),
+        ):
+            with self.subTest(field=field):
+                result = self.run_checker(
+                    _manifest(_entry(), _suite() + f"\n{declaration}"),
+                    files={"fixtures/ok.rs": "fn fixture() {}\n"},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_fixture_suite_kind_must_be_trybuild_kind(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _suite(kind="source")),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture suite 'suite-pass' kind must be 'trybuild-fail' or 'trybuild-pass'",
+            result.stderr,
+        )
+
+    def test_fixture_suite_absolute_glob_fails_without_traceback(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _suite(glob="/tmp/*.rs")),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture suite 'suite-pass' field 'glob' must be a repository-relative glob",
+            result.stderr,
+        )
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_fixture_suite_root_must_exist_and_match_a_file(self) -> None:
+        missing_root = self.run_checker(
+            _manifest(_entry(path="missing/ok.rs"), _suite(root="missing")),
+        )
+        self.assertNotEqual(missing_root.returncode, 0)
+        self.assertIn(
+            "active fixture suite 'suite-pass' root does not exist: 'missing'",
+            missing_root.stderr,
+        )
+
+        empty = self.run_checker(
+            _manifest(_entry(path="other/ok.txt"), _suite(root="other")),
+            files={"other/ok.txt": "not a Rust fixture\n"},
+        )
+        self.assertNotEqual(empty.returncode, 0)
+        self.assertIn(
+            "active fixture suite 'suite-pass' glob '**/*.rs' matches no files",
+            empty.stderr,
+        )
+
+    def test_suite_file_without_fixture_row_is_rejected(self) -> None:
+        result = self.run_checker(
+            _manifest(_suite()),
+            files={"fixtures/orphan.rs": "fn orphan() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture suite 'suite-pass' matched file 'fixtures/orphan.rs' without exactly one active trybuild-pass fixture row",
+            result.stderr,
+        )
+
+    def test_active_trybuild_fixture_outside_all_matching_suites_is_rejected(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _entry(entry_id="other-fixture", path="other/ok.rs"),
+                _suite(root="other"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn outside_suite() {}\n",
+                "other/ok.rs": "fn covered() {}\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "active trybuild fixture 'fixture-ok' path 'fixtures/ok.rs' must be covered by exactly one matching fixture suite; found 0",
+            result.stderr,
+        )
+
+    def test_suite_kind_mismatch_and_wrong_trybuild_directory_are_rejected(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(path="fixtures/pass.rs"),
+                _suite(kind="trybuild-fail", root="fixtures"),
+            ),
+            files={"fixtures/pass.rs": "fn pass() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture suite 'suite-pass' matched file 'fixtures/pass.rs' with fixture 'fixture-ok' kind 'trybuild-pass'; expected 'trybuild-fail'",
+            result.stderr,
+        )
+        self.assertIn(
+            "active trybuild fixture 'fixture-ok' path 'fixtures/pass.rs' must be covered by exactly one matching fixture suite; found 0",
+            result.stderr,
+        )
+
+    def test_overlapping_suite_coverage_is_rejected(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _suite(
+                    entry_id="suite-pass-overlap",
+                    rationale="intentionally overlaps for the test",
+                ),
+            ),
+            files={"fixtures/ok.rs": "fn fixture() {}\n"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture path 'fixtures/ok.rs' is matched by more than one fixture suite: 'suite-pass', 'suite-pass-overlap'",
+            result.stderr,
+        )
+
+    def test_deferred_trybuild_and_active_nontrybuild_rows_need_no_suite(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(
+                    entry_id="deferred-pass",
+                    status="deferred",
+                    path="deferred/ok.rs",
+                ),
+                _entry(
+                    entry_id="parity-baseline",
+                    kind="parity",
+                    path="baseline/parity.rs",
+                ),
+            ),
+            files={
+                "deferred/ok.rs": "fn deferred() {}\n",
+                "baseline/parity.rs": "fn parity() {}\n",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_suite_diagnostics_use_sorted_repository_relative_matches(self) -> None:
+        result = self.run_checker(
+            _manifest(_suite()),
+            files={
+                "fixtures/z-last.rs": "fn z_last() {}\n",
+                "fixtures/a-first.rs": "fn a_first() {}\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fixtures/a-first.rs", result.stderr)
+        self.assertIn("fixtures/z-last.rs", result.stderr)
+        first = result.stderr.index("fixtures/a-first.rs")
+        second = result.stderr.index("fixtures/z-last.rs")
+        self.assertLess(first, second)
 
     def test_inventory_needle_must_occur_exactly_once_in_declared_file(self) -> None:
         missing = self.run_checker(
@@ -330,6 +553,7 @@ class CheckerTests(unittest.TestCase):
         result = self.run_checker(
             _manifest(
                 _entry(),
+                _suite(),
                 _inventory(symbol="const RAW_HANDLE", needle=None),
                 _scan(needle="const RAW_HANDLE"),
             ),
@@ -454,6 +678,7 @@ class CheckerTests(unittest.TestCase):
         result = self.run_checker(
             _manifest(
                 _entry(),
+                _suite(),
                 _inventory(status="deferred"),
                 _scan(status="deferred"),
             ),
@@ -571,6 +796,43 @@ class CheckerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "active source scan 'raw-handle-scan' candidate 'src/escape.rs' resolves outside repository root",
+            result.stderr,
+        )
+
+    def test_symlink_escape_in_fixture_suite_root_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside:
+            root = Path(temporary)
+            outside_root = Path(outside) / "fixtures"
+            outside_root.mkdir()
+            link = root / "fixtures-link"
+            self.make_symlink_or_skip(link, outside_root)
+
+            result = self.run_checker_at_root(
+                root,
+                _manifest(_entry(path="fixtures-link/ok.rs"), _suite(root="fixtures-link")),
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "fixture suite 'suite-pass' root 'fixtures-link' resolves outside repository root",
+            result.stderr,
+        )
+
+    def test_symlink_escape_in_fixture_suite_candidate_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside:
+            root = Path(temporary)
+            outside_file = Path(outside) / "orphan.rs"
+            outside_file.write_text("fn outside() {}\n")
+            fixtures = root / "fixtures"
+            fixtures.mkdir()
+            link = fixtures / "escape.rs"
+            self.make_symlink_or_skip(link, outside_file)
+
+            result = self.run_checker_at_root(root, _manifest(_suite()))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "active fixture suite 'suite-pass' candidate 'fixtures/escape.rs' resolves outside repository root",
             result.stderr,
         )
 

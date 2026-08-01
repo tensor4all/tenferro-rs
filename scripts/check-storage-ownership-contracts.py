@@ -39,10 +39,15 @@ LINE_NUMBER_KEYS = frozenset(
     }
 )
 
-TOP_LEVEL_KEYS = frozenset({"schema", "fixtures", "source_scans", "source_inventory"})
+TOP_LEVEL_KEYS = frozenset(
+    {"schema", "fixtures", "fixture_suites", "source_scans", "source_inventory"}
+)
 COMMON_KEYS = frozenset({"id", "gate", "kind", "status", "owner_issue"})
 FIXTURE_KEYS = COMMON_KEYS | frozenset(
     {"path", "future_path", "rationale", "description"}
+)
+FIXTURE_SUITE_KEYS = frozenset(
+    {"id", "kind", "root", "glob", "owner_issue", "rationale"}
 )
 SCAN_KEYS = frozenset(
     {
@@ -71,6 +76,23 @@ INVENTORY_KEYS = COMMON_KEYS | frozenset(
         "description",
     }
 )
+
+
+@dataclass(frozen=True)
+class Fixture:
+    entry_id: str
+    kind: str
+    status: str
+    path: str | None
+
+
+@dataclass(frozen=True)
+class FixtureSuite:
+    entry_id: str
+    kind: str
+    root: str
+    glob: str
+    resolved_root: Path | None
 
 
 @dataclass(frozen=True)
@@ -275,7 +297,8 @@ def _file_contents(
 
 def _fixture_rows(
     rows: list[Any], root: Path, ids: dict[str, str], errors: list[str]
-) -> None:
+) -> list[Fixture]:
+    fixtures: list[Fixture] = []
     for row in rows:
         if not isinstance(row, dict):
             errors.append("fixture entries must be TOML tables")
@@ -285,7 +308,7 @@ def _fixture_rows(
         _check_unknown_keys(row, FIXTURE_KEYS, label, errors)
         entry_id = _entry_id(row, "fixture", ids, errors)
         _gate(row, label, errors)
-        _kind(row, label, errors)
+        kind = _kind(row, label, errors)
         status = _status(row, label, errors)
         _positive_issue(row, label, errors, required=False)
         if "owner_issue" not in row:
@@ -323,6 +346,78 @@ def _fixture_rows(
                 errors.append(
                     f"active fixture '{entry_id or '<unknown>'}' path does not exist: '{path}'"
                 )
+
+        if entry_id is not None and kind is not None and status is not None:
+            fixtures.append(
+                Fixture(
+                    entry_id=entry_id,
+                    kind=kind,
+                    status=status,
+                    path=path,
+                )
+            )
+    return fixtures
+
+
+def _fixture_suite_rows(
+    rows: list[Any], root: Path, ids: dict[str, str], errors: list[str]
+) -> list[FixtureSuite]:
+    suites: list[FixtureSuite] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("fixture suite entries must be TOML tables")
+            continue
+        label = _label("fixture suite", row)
+        _check_line_number_keys(row, label, errors)
+        _check_unknown_keys(row, FIXTURE_SUITE_KEYS, label, errors)
+        entry_id = _entry_id(row, "fixture suite", ids, errors)
+        kind = _required_string(row, "kind", label, errors)
+        if kind is not None and kind not in {"trybuild-fail", "trybuild-pass"}:
+            errors.append(
+                f"{label} kind must be 'trybuild-fail' or 'trybuild-pass'"
+            )
+        root_value = _relative_path(
+            _required_string(row, "root", label, errors), "root", label, errors
+        )
+        glob_value = _required_string(row, "glob", label, errors)
+        _positive_issue(row, label, errors, required=True)
+        _required_string(row, "rationale", label, errors)
+
+        valid_glob = glob_value is not None
+        if glob_value is not None:
+            glob_path = Path(glob_value)
+            if glob_path.is_absolute() or ".." in glob_path.parts:
+                errors.append(
+                    f"{label} field 'glob' must be a repository-relative glob"
+                )
+                valid_glob = False
+
+        resolved_root = (
+            _resolve_under_root(root, root_value, label, errors, field="root")
+            if root_value is not None
+            else None
+        )
+        if (
+            entry_id is not None
+            and kind in {"trybuild-fail", "trybuild-pass"}
+            and root_value is not None
+            and glob_value is not None
+            and valid_glob
+        ):
+            if resolved_root is not None and not resolved_root.is_dir():
+                errors.append(
+                    f"active fixture suite '{entry_id}' root does not exist: '{root_value}'"
+                )
+            suites.append(
+                FixtureSuite(
+                    entry_id=entry_id,
+                    kind=kind,
+                    root=root_value,
+                    glob=glob_value,
+                    resolved_root=resolved_root,
+                )
+            )
+    return suites
 
 
 def _scan_rows(
@@ -586,6 +681,129 @@ def _scan_sources(
                 )
 
 
+def _fixture_suite_candidates(
+    root: Path, suite: FixtureSuite, errors: list[str]
+) -> list[str]:
+    if suite.resolved_root is None or not suite.resolved_root.is_dir():
+        return []
+
+    try:
+        candidates = sorted(
+            (
+                path
+                for path in suite.resolved_root.glob(suite.glob)
+                if path.is_file()
+            ),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
+    except (NotImplementedError, OSError, ValueError) as error:
+        errors.append(
+            f"active fixture suite '{suite.entry_id}' cannot scan "
+            f"root '{suite.root}' with glob '{suite.glob}': {error}"
+        )
+        return []
+
+    matches: list[str] = []
+    for path in candidates:
+        relative = path.relative_to(root).as_posix()
+        resolved = _resolve_under_root(
+            root,
+            relative,
+            f"active fixture suite '{suite.entry_id}'",
+            errors,
+            field="candidate",
+        )
+        if resolved is not None:
+            matches.append(relative)
+    return matches
+
+
+def _check_fixture_suites(
+    root: Path,
+    fixtures: list[Fixture],
+    suites: list[FixtureSuite],
+    errors: list[str],
+) -> None:
+    active_by_path: dict[str, list[Fixture]] = {}
+    for fixture in fixtures:
+        if fixture.status == "active" and fixture.path is not None:
+            active_by_path.setdefault(fixture.path, []).append(fixture)
+    for rows in active_by_path.values():
+        rows.sort(key=lambda fixture: fixture.entry_id)
+
+    suites_by_path: dict[str, list[FixtureSuite]] = {}
+    for suite in sorted(suites, key=lambda item: item.entry_id):
+        matches = _fixture_suite_candidates(root, suite, errors)
+        if not matches:
+            if suite.resolved_root is not None and suite.resolved_root.is_dir():
+                errors.append(
+                    f"active fixture suite '{suite.entry_id}' glob '{suite.glob}' "
+                    "matches no files"
+                )
+            continue
+
+        for relative in matches:
+            suites_by_path.setdefault(relative, []).append(suite)
+            matching = [
+                fixture
+                for fixture in active_by_path.get(relative, [])
+                if fixture.kind == suite.kind
+            ]
+            if len(matching) == 1:
+                continue
+            if not matching:
+                wrong_kind = active_by_path.get(relative, [])
+                if wrong_kind:
+                    for fixture in wrong_kind:
+                        errors.append(
+                            f"fixture suite '{suite.entry_id}' matched file "
+                            f"'{relative}' with fixture '{fixture.entry_id}' kind "
+                            f"'{fixture.kind}'; expected '{suite.kind}'"
+                        )
+                else:
+                    errors.append(
+                        f"fixture suite '{suite.entry_id}' matched file "
+                        f"'{relative}' without exactly one active {suite.kind} "
+                        "fixture row"
+                    )
+            else:
+                errors.append(
+                    f"fixture suite '{suite.entry_id}' matched file '{relative}' "
+                    f"with {len(matching)} active {suite.kind} fixture rows"
+                )
+
+    for relative in sorted(suites_by_path):
+        matching_suites = suites_by_path[relative]
+        if len(matching_suites) > 1:
+            suite_ids = ", ".join(
+                f"'{suite.entry_id}'"
+                for suite in sorted(matching_suites, key=lambda item: item.entry_id)
+            )
+            errors.append(
+                f"fixture path '{relative}' is matched by more than one "
+                f"fixture suite: {suite_ids}"
+            )
+
+    for fixture in sorted(fixtures, key=lambda item: item.entry_id):
+        if (
+            fixture.status != "active"
+            or fixture.kind not in {"trybuild-fail", "trybuild-pass"}
+            or fixture.path is None
+        ):
+            continue
+        matching_suites = [
+            suite
+            for suite in suites_by_path.get(fixture.path, [])
+            if suite.kind == fixture.kind
+        ]
+        if len(matching_suites) != 1:
+            errors.append(
+                f"active trybuild fixture '{fixture.entry_id}' path "
+                f"'{fixture.path}' must be covered by exactly one matching "
+                f"fixture suite; found {len(matching_suites)}"
+            )
+
+
 def _manifest_rows(
     data: dict[str, Any], root: Path, errors: list[str]
 ) -> None:
@@ -596,7 +814,7 @@ def _manifest_rows(
         errors.append(f"manifest schema must be '{SCHEMA}'")
 
     arrays: dict[str, list[Any]] = {}
-    for key in ("fixtures", "source_scans", "source_inventory"):
+    for key in ("fixtures", "fixture_suites", "source_scans", "source_inventory"):
         value = data.get(key, [])
         if not isinstance(value, list):
             errors.append(f"manifest field '{key}' must be an array of tables")
@@ -605,7 +823,8 @@ def _manifest_rows(
             arrays[key] = value
 
     ids: dict[str, str] = {}
-    _fixture_rows(arrays["fixtures"], root, ids, errors)
+    fixtures = _fixture_rows(arrays["fixtures"], root, ids, errors)
+    suites = _fixture_suite_rows(arrays["fixture_suites"], root, ids, errors)
     scans = _scan_rows(arrays["source_scans"], root, ids, errors)
     inventories = _inventory_rows(
         arrays["source_inventory"],
@@ -614,6 +833,7 @@ def _manifest_rows(
         {scan.entry_id: scan for scan in scans},
         errors,
     )
+    _check_fixture_suites(root, fixtures, suites, errors)
     _scan_sources(root, scans, inventories, errors)
 
 

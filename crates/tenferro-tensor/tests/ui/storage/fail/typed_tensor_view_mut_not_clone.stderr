@@ -1,0 +1,13 @@
+error[E0277]: the trait bound `TypedTensorViewMut<'_, i32>: Clone` is not satisfied
+ --> tests/ui/storage/fail/typed_tensor_view_mut_not_clone.rs
+  |
+  |     require_clone(view);
+  |     ------------- ^^^^ the trait `Clone` is not implemented for `TypedTensorViewMut<'_, i32>`
+  |     |
+  |     required by a bound introduced by this call
+  |
+note: required by a bound in `require_clone`
+ --> tests/ui/storage/fail/typed_tensor_view_mut_not_clone.rs
+  |
+  | fn require_clone<T: Clone>(_: T) {}
+  |                     ^^^^^ required by this bound in `require_clone`

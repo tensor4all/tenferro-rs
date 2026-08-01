@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `tensor` as immutable because it is also borrowed as mutable
+ --> tests/ui/storage/fail/immutable_typed_view_while_mutable_used.rs
+  |
+  |     let mutable = tensor.as_view_mut();
+  |                   ------ mutable borrow occurs here
+  |     let immutable = tensor.as_view();
+  |                     ^^^^^^ immutable borrow occurs here
+  |     assert_eq!(mutable.shape(), immutable.shape());
+  |                ------- mutable borrow later used here

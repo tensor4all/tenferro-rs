@@ -4,6 +4,87 @@ schema = "tenferro.storage-ownership-contracts.v1"
 # phases' production fixtures or source baselines already exist. Active rows
 # and production source scans are added by the owning implementation phases.
 
+[[fixture_suites]]
+id = "g4-trybuild-fail-fixtures"
+kind = "trybuild-fail"
+root = "crates/tenferro-tensor/tests/ui/storage/fail"
+glob = "**/*.rs"
+owner_issue = 1557
+rationale = "The current Rust trybuild harness owns the active compile-fail storage fixtures in this root."
+
+[[fixture_suites]]
+id = "g4-trybuild-pass-fixtures"
+kind = "trybuild-pass"
+root = "crates/tenferro-tensor/tests/ui/storage/pass"
+glob = "**/*.rs"
+owner_issue = 1557
+rationale = "The current Rust trybuild harness owns the active compile-pass storage fixtures in this root."
+
+[[fixtures]]
+id = "g4-immutable-typed-view-while-mutable-used"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/fail/immutable_typed_view_while_mutable_used.rs"
+
+[[fixtures]]
+id = "g4-second-mutable-typed-view"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/fail/second_mutable_typed_view.rs"
+
+[[fixtures]]
+id = "g4-tensor-view-mut-not-clone"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/fail/tensor_view_mut_not_clone.rs"
+
+[[fixtures]]
+id = "g4-current-typed-tensor-owner-swap-exclusion"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_current_owner_swap.rs"
+rationale = "This is the legacy current-surface baseline and must be replaced by the deferred new-owner fixture in #1559; there is no Buffer compatibility promise."
+
+[[fixtures]]
+id = "g4-typed-tensor-view-mut-not-clone"
+gate = "G4"
+kind = "trybuild-fail"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_view_mut_not_clone.rs"
+
+[[fixtures]]
+id = "g2-disjoint-try-multi-slice-mut"
+gate = "G2"
+kind = "trybuild-pass"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/pass/disjoint_try_multi_slice_mut.rs"
+
+[[fixtures]]
+id = "g4-multiple-immutable-typed-views"
+gate = "G4"
+kind = "trybuild-pass"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/pass/multiple_immutable_typed_views.rs"
+
+[[fixtures]]
+id = "g4-sequential-mutable-typed-views"
+gate = "G4"
+kind = "trybuild-pass"
+status = "active"
+owner_issue = 1557
+path = "crates/tenferro-tensor/tests/ui/storage/pass/sequential_mutable_typed_views.rs"
+
 [[fixtures]]
 id = "g3-host-guard-across-submit"
 gate = "G3"
