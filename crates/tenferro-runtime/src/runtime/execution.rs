@@ -25,8 +25,8 @@ use crate::runtime::schedule::{
 };
 use crate::runtime::{
     CacheOwnerError, CacheStats, EventDomainRun, EventToken, InputSignature, PrepareError,
-    PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass,
-    SubmissionError, TransferError, TransferProvider, TransferProviderContractError,
+    PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, SubmissionError,
+    TransferEndpoint, TransferError, TransferProvider, TransferProviderContractError,
     TransferRequest,
 };
 use crate::{Error, Result};
@@ -707,7 +707,7 @@ struct PreparedExecutionEngines {
     root_location: ExecutionLocation,
     input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
-    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
+    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
 }
 
 #[derive(Debug)]
@@ -1504,21 +1504,16 @@ fn execute_scheduled_transfer<'input>(
     let destination = transfer.destination_location();
     let provider = execution
         .transfers
-        .get(&(
-            source.storage_class().clone(),
-            destination.storage_class().clone(),
-        ))
+        .get(&(source.endpoint().clone(), destination.endpoint().clone()))
         .ok_or_else(|| {
             Error::runtime_state_source(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 TransferError::MissingProvider {
-                    source_engine_id: source.engine_id().clone(),
+                    source_endpoint: source.endpoint().clone(),
                     source_event_domain_id: source.event_domain_id(),
-                    source_storage_class: source.storage_class().clone(),
-                    destination_engine_id: destination.engine_id().clone(),
+                    destination_endpoint: destination.endpoint().clone(),
                     destination_event_domain_id: destination.event_domain_id(),
-                    destination_storage_class: destination.storage_class().clone(),
                 },
             )
         })?;

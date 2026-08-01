@@ -6,7 +6,7 @@ use super::capability::{
     CoreCapabilityKind, PreparationKeySummary, PreparedOperationBinding, UnsupportedReason,
 };
 use super::identity::{EngineId, RuntimeEpoch, RuntimeId};
-use super::policy::{ProgramPlacementConstraint, StorageClass};
+use super::policy::{ProgramPlacementConstraint, StorageClass, TransferEndpoint};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_ops::ShapeGuardError;
@@ -141,12 +141,12 @@ pub enum RegistrationKey {
         /// Local cache owner.
         owner: CacheOwnerId,
     },
-    /// A transfer provider keyed by source and destination storage classes.
+    /// A transfer provider keyed by source and destination endpoints.
     TransferProvider {
-        /// Source storage class.
-        source: StorageClass,
-        /// Destination storage class.
-        destination: StorageClass,
+        /// Source endpoint.
+        source: TransferEndpoint,
+        /// Destination endpoint.
+        destination: TransferEndpoint,
     },
 }
 
@@ -255,6 +255,19 @@ pub enum RuntimeConfigError {
         engine_id: EngineId,
         /// Missing default storage class.
         default_storage_class: StorageClass,
+    },
+    /// A transfer endpoint references an engine that is absent from the
+    /// candidate configuration.
+    #[error("transfer endpoint {endpoint:?} references an unregistered engine")]
+    UnknownTransferEndpointEngine {
+        /// Endpoint that references the missing engine.
+        endpoint: TransferEndpoint,
+    },
+    /// A transfer endpoint names a storage class unsupported by its engine.
+    #[error("transfer endpoint {endpoint:?} uses storage unsupported by its engine")]
+    UnsupportedTransferEndpointStorage {
+        /// Endpoint whose storage class is unsupported by its engine.
+        endpoint: TransferEndpoint,
     },
     /// An execution bridge omitted the validators required for explicit input
     /// ingress and destination-buffer residency.
@@ -871,17 +884,17 @@ pub enum PrepareError {
     /// to the storage required by its consumer.
     #[error(
         "instruction {instruction_index} has no direct transfer provider for value slot \
-         {value_slot} from {available_storage_classes:?} to {destination_storage_class:?}"
+         {value_slot} from {available_source_endpoints:?} to {destination_endpoint:?}"
     )]
     MissingTransferProvider {
         /// Staged instruction whose input cannot be reached.
         instruction_index: usize,
         /// Value slot required by the instruction.
         value_slot: usize,
-        /// Storage class required by the instruction.
-        destination_storage_class: StorageClass,
-        /// Storage classes retaining an available copy.
-        available_storage_classes: Vec<StorageClass>,
+        /// Destination endpoint required by the instruction.
+        destination_endpoint: TransferEndpoint,
+        /// Endpoints retaining an available copy.
+        available_source_endpoints: Vec<TransferEndpoint>,
     },
     /// A resolved placement references an engine absent from its preparation snapshot.
     #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]

@@ -78,6 +78,101 @@ impl StorageClass {
     }
 }
 
+/// Immutable execution endpoint used to identify a transfer route.
+///
+/// An endpoint combines the logical runtime engine with the storage class that
+/// the engine exposes. Equality, ordering, and hashing are based on both
+/// values, so two engines that expose the same storage class remain distinct
+/// route endpoints.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use tenferro_runtime::{EngineId, StorageClass, TransferEndpoint};
+///
+/// let endpoint = TransferEndpoint::new(
+///     EngineId::new("tenferro.cpu")?,
+///     StorageClass::new("tenferro.storage.host")?,
+/// );
+/// assert_eq!(endpoint.engine_id().as_str(), "tenferro.cpu");
+/// assert_eq!(endpoint.storage_class().as_str(), "tenferro.storage.host");
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TransferEndpoint {
+    engine_id: EngineId,
+    storage_class: StorageClass,
+}
+
+impl TransferEndpoint {
+    /// Construct an endpoint from an engine and one of its storage classes.
+    ///
+    /// The runtime validates that the engine is registered and supports the
+    /// storage class when a transfer-provider candidate is frozen.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::{EngineId, StorageClass, TransferEndpoint};
+    ///
+    /// let endpoint = TransferEndpoint::new(
+    ///     EngineId::new("tenferro.cpu")?,
+    ///     StorageClass::new("tenferro.storage.host")?,
+    /// );
+    /// assert_eq!(endpoint.engine_id().as_str(), "tenferro.cpu");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new(engine_id: EngineId, storage_class: StorageClass) -> Self {
+        Self {
+            engine_id,
+            storage_class,
+        }
+    }
+
+    /// Return the logical engine that owns this endpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::{EngineId, StorageClass, TransferEndpoint};
+    ///
+    /// let engine = EngineId::new("tenferro.cpu")?;
+    /// let endpoint = TransferEndpoint::new(
+    ///     engine.clone(),
+    ///     StorageClass::new("tenferro.storage.host")?,
+    /// );
+    /// assert_eq!(endpoint.engine_id(), &engine);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    /// Return the storage class exposed at this endpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::{EngineId, StorageClass, TransferEndpoint};
+    ///
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let endpoint = TransferEndpoint::new(EngineId::new("tenferro.cpu")?, storage.clone());
+    /// assert_eq!(endpoint.storage_class(), &storage);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn storage_class(&self) -> &StorageClass {
+        &self.storage_class
+    }
+}
+
 /// Validated namespaced layout-class identity.
 ///
 /// # Examples

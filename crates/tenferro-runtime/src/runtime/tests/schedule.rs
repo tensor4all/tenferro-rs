@@ -61,10 +61,7 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
         source.clone(),
         std::slice::from_ref(&source),
         &[source.clone(), destination.clone(), source.clone()],
-        &TransferReachability::from([(
-            source.storage_class().clone(),
-            destination.storage_class().clone(),
-        )]),
+        &TransferReachability::from([(source.endpoint().clone(), destination.endpoint().clone())]),
     )
     .expect("schedule");
 
@@ -135,14 +132,8 @@ fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
         std::slice::from_ref(&first),
         &[first.clone(), reachable.clone(), destination.clone()],
         &TransferReachability::from([
-            (
-                first.storage_class().clone(),
-                reachable.storage_class().clone(),
-            ),
-            (
-                reachable.storage_class().clone(),
-                destination.storage_class().clone(),
-            ),
+            (first.endpoint().clone(), reachable.endpoint().clone()),
+            (reachable.endpoint().clone(), destination.endpoint().clone()),
         ]),
     )
     .expect("schedule");

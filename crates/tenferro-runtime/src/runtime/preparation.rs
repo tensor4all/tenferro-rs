@@ -736,10 +736,8 @@ fn source_reaches_all_consumers(
             continue;
         }
         if !available.iter().any(|location| {
-            transfer_reachability.contains(&(
-                location.storage_class().clone(),
-                destination.storage_class().clone(),
-            ))
+            transfer_reachability
+                .contains(&(location.endpoint().clone(), destination.endpoint().clone()))
         }) {
             return false;
         }
@@ -1013,13 +1011,13 @@ fn schedule_prepare_error(source: ScheduleBuildError) -> Arc<PrepareError> {
         ScheduleBuildError::MissingTransferProvider {
             instruction_index,
             slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         } => Arc::new(PrepareError::MissingTransferProvider {
             instruction_index,
             value_slot: slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         }),
         source => Arc::new(PrepareError::Engine {
             source: Arc::new(source),
@@ -1545,13 +1543,13 @@ fn root_for_key(
         ScheduleBuildError::MissingTransferProvider {
             instruction_index,
             slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         } => Arc::new(PrepareError::MissingTransferProvider {
             instruction_index,
             value_slot: slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         }),
         source => Arc::new(PrepareError::Engine {
             source: Arc::new(source),

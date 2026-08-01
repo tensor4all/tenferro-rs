@@ -3,13 +3,12 @@ use std::fmt;
 use tenferro_tensor::{AllocationDomainId, DType, Placement, Tensor, TensorRead};
 
 use super::schedule::{EventDomainId, ExecutionLocation};
-use super::{EngineId, StorageClass};
+use super::{EngineId, StorageClass, TransferEndpoint};
 
 /// Runtime-owned transfer provider between two execution locations.
 ///
-/// Providers remain registered by source and destination storage class. Each
-/// request also identifies the concrete engines and event domains at its
-/// endpoints.
+/// Providers are registered by source and destination endpoint. Each request
+/// also identifies the event domains assigned to those endpoints at freeze.
 pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
     /// Complete one blocking transfer into the destination execution location.
     ///
@@ -162,27 +161,22 @@ impl<'a> TransferRequest<'a> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TransferError {
-    /// No provider was registered for the storage-class pair required by two
+    /// No provider was registered for the endpoint pair required by two
     /// concrete execution locations.
     #[error(
-        "no transfer provider registered from {source_storage_class:?} on \
-         {source_engine_id:?}/{source_event_domain_id:?} to \
-         {destination_storage_class:?} on \
-         {destination_engine_id:?}/{destination_event_domain_id:?}"
+        "no transfer provider registered from source endpoint {source_endpoint:?} \
+         (event domain {source_event_domain_id:?}) to destination endpoint {destination_endpoint:?} \
+         (event domain {destination_event_domain_id:?})"
     )]
     MissingProvider {
-        /// Source engine.
-        source_engine_id: EngineId,
+        /// Source transfer endpoint.
+        source_endpoint: TransferEndpoint,
         /// Source event domain.
         source_event_domain_id: EventDomainId,
-        /// Source storage class.
-        source_storage_class: StorageClass,
-        /// Destination engine.
-        destination_engine_id: EngineId,
+        /// Destination transfer endpoint.
+        destination_endpoint: TransferEndpoint,
         /// Destination event domain.
         destination_event_domain_id: EventDomainId,
-        /// Destination storage class.
-        destination_storage_class: StorageClass,
     },
     /// A provider returned a tensor that violates the transfer request contract.
     #[error("transfer provider returned an invalid tensor")]

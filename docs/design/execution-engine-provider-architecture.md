@@ -35,8 +35,10 @@ XLA compiled-graph public boundary.
 crate-private `ScheduledGraph`, synchronous `Runtime::run_compiled*` walks that
 schedule, and each semantic operation runs on its selected same-storage engine
 bridge. #1471 extends that production path with `Runtime::submit`,
-`ExecutionHandle`, runtime-allocated engine event domains, and a storage-class
-keyed transfer provider registry. Scheduled operations, transfers, and explicit
+`ExecutionHandle`, runtime-allocated engine event domains, and an endpoint-pair
+keyed transfer provider registry. A transfer endpoint is the immutable logical
+pair `(EngineId, StorageClass)`; event-domain identity is assigned only when a
+candidate is frozen. Scheduled operations, transfers, and explicit
 barriers now execute through per-run event-domain drivers. CUDA and WebGPU
 registrations provide native stream/event and queue/submission-completion
 adapters respectively. Collectives, cancellation, admission control, real
@@ -312,9 +314,9 @@ keeping the compiler artifact backend-neutral:
   engine.
 - Cross-storage per-operation placement is supported for linear production
   execution when a transfer provider is registered for the source and
-  destination storage classes. The scheduled loop tracks each slot's current
-  storage class and calls the provider before dispatching an operation on a
-  different storage class. Missing providers remain typed runtime errors.
+  destination endpoints. The scheduled loop tracks each slot's current
+  execution endpoint and calls the provider before dispatching an operation on
+  a different endpoint. Missing providers remain typed runtime errors.
 - The previous `GraphExecutor<B>` facade is retired. Public execution goes
   through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
   prepare from the backend-neutral `CompiledGraph` and execute through the
@@ -706,9 +708,9 @@ workspace. All providers obey the engine-selected `ParallelMode`.
 metadata. The production CPU/runtime path currently stores this state in the
 crate-private prepared-program root. Same-storage `Operation` nodes are already
 the synchronous `Runtime::run_compiled*` execution source. The post-U3
-substrate additionally tracks per-slot storage classes and invokes registered
-transfer providers on the production scheduled path when a downstream operation
-uses a different storage class. First-class `Transfer` nodes, `Collective`,
+substrate additionally tracks per-slot execution endpoints and invokes
+registered transfer providers on the production scheduled path when a downstream
+operation uses a different endpoint. First-class `Transfer` nodes, Collective,
 cross-domain event scheduling, and full asynchronous admission remain reserved
 work. The schedule is shared by CPU, GPU, extension, transfer, and multi-device
 execution. Its nodes are conceptually:
@@ -743,15 +745,15 @@ unless benchmarks prove the safe check material; increasing fusion is the
 preferred way to amortize dispatch.
 
 `Transfer` and `Collective` are scheduler-owned node families, not arbitrary
-extension operations. A transfer has explicit source and destination storage
-domains and bridges their event domains by producing a destination-domain
-completion dependency; the scheduler understands its buffer lifetime,
-ordering, failure, and resource requirements. A collective similarly has
-explicit participants, ordering, event-domain behavior, and communication
+extension operations. A transfer has explicit source and destination execution
+endpoints, including their storage domains, and bridges their event domains by
+producing a destination-domain completion dependency; the scheduler understands
+its buffer lifetime, ordering, failure, and resource requirements. A collective
+similarly has explicit participants, ordering, event-domain behavior, and communication
 resources. Provider registries may supply their implementations, but cannot
 hide them inside an opaque extension op. The current post-U3 substrate registers
-transfer providers by storage-class pair and calls them from the scheduled
-execution loop; promoting these calls to explicit `ScheduledTransfer` nodes is
+transfer providers by endpoint pair and calls them from the scheduled execution
+loop; promoting these calls to explicit `ScheduledTransfer` nodes is
 the next scheduler step. Reserving the core collective node prevents a later
 sharding design from bypassing common scheduling and
 lifetime rules.

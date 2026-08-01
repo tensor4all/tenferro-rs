@@ -49,7 +49,7 @@ pub use identity::{
 pub use policy::{
     CacheInFlightBehavior, Determinism, ExecutionPolicy, LayoutClass, PrepareOptions,
     PrepareOptionsKey, ProgramPlacementConstraint, ResolvedPlanningConfig, ResolvedPlanningKey,
-    ResolvedProgramPlacement, StorageClass,
+    ResolvedProgramPlacement, StorageClass, TransferEndpoint,
 };
 pub use schedule::EventDomainId;
 pub use signature::{InputSignature, InputSignatureEntry};

@@ -11,9 +11,9 @@ use std::fmt;
 
 use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
-use crate::{EngineId, Error, StorageClass};
+use crate::{EngineId, Error, StorageClass, TransferEndpoint};
 
-pub(crate) type TransferReachability = BTreeSet<(StorageClass, StorageClass)>;
+pub(crate) type TransferReachability = BTreeSet<(TransferEndpoint, TransferEndpoint)>;
 
 /// Opaque runtime event-domain identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -32,9 +32,8 @@ impl EventDomainId {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ExecutionLocation {
-    engine_id: EngineId,
+    endpoint: TransferEndpoint,
     event_domain_id: EventDomainId,
-    storage_class: StorageClass,
 }
 
 impl ExecutionLocation {
@@ -44,14 +43,17 @@ impl ExecutionLocation {
         storage_class: StorageClass,
     ) -> Self {
         Self {
-            engine_id,
+            endpoint: TransferEndpoint::new(engine_id, storage_class),
             event_domain_id,
-            storage_class,
         }
     }
 
     pub(crate) fn engine_id(&self) -> &EngineId {
-        &self.engine_id
+        self.endpoint.engine_id()
+    }
+
+    pub(crate) fn endpoint(&self) -> &TransferEndpoint {
+        &self.endpoint
     }
 
     pub(crate) fn event_domain_id(&self) -> EventDomainId {
@@ -59,7 +61,7 @@ impl ExecutionLocation {
     }
 
     pub(crate) fn storage_class(&self) -> &StorageClass {
-        &self.storage_class
+        self.endpoint.storage_class()
     }
 
     #[cfg(test)]
@@ -451,8 +453,8 @@ impl ScheduledGraph {
                     .iter()
                     .find(|value| {
                         transfer_reachability.contains(&(
-                            value.location.storage_class().clone(),
-                            location.storage_class().clone(),
+                            value.location.endpoint().clone(),
+                            location.endpoint().clone(),
                         ))
                     })
                     .cloned()
@@ -466,10 +468,10 @@ impl ScheduledGraph {
                             ScheduleBuildError::MissingTransferProvider {
                                 instruction_index,
                                 slot,
-                                destination_storage_class: location.storage_class().clone(),
-                                available_storage_classes: values
+                                destination_endpoint: location.endpoint().clone(),
+                                available_source_endpoints: values
                                     .iter()
-                                    .map(|value| value.location.storage_class().clone())
+                                    .map(|value| value.location.endpoint().clone())
                                     .collect(),
                             }
                         }
@@ -698,13 +700,13 @@ pub(crate) enum ScheduleBuildError {
     },
     #[error(
         "instruction {instruction_index} has no direct transfer provider for value slot {slot} \
-         from {available_storage_classes:?} to {destination_storage_class:?}"
+         from {available_source_endpoints:?} to {destination_endpoint:?}"
     )]
     MissingTransferProvider {
         instruction_index: usize,
         slot: usize,
-        destination_storage_class: StorageClass,
-        available_storage_classes: Vec<StorageClass>,
+        destination_endpoint: TransferEndpoint,
+        available_source_endpoints: Vec<TransferEndpoint>,
     },
     #[error("value slot {slot} is outside schedule value count {value_count}")]
     ValueSlotOutOfBounds { slot: usize, value_count: usize },

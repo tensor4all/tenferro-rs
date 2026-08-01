@@ -25,7 +25,7 @@ use super::{
     ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
     InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
     RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
-    RuntimeStateError, StorageClass, TransferProvider,
+    RuntimeStateError, StorageClass, TransferEndpoint, TransferProvider,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -42,7 +42,7 @@ struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
     modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
-    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
+    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
 }
 
 impl CandidateConfig {
@@ -123,7 +123,7 @@ pub struct RuntimeConfigSnapshot {
     engines: Arc<[FrozenEngineSlot]>,
     engine_indices: BTreeMap<EngineId, usize>,
     extensions: FrozenExtensionSlots,
-    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
+    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
     cache_owners: Arc<[FrozenCacheOwner]>,
 }
 
@@ -196,13 +196,13 @@ impl RuntimeConfigSnapshot {
 
     pub(super) fn transfers_for_execution(
         &self,
-    ) -> BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>> {
+    ) -> BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>> {
         self.transfers.clone()
     }
 
     pub(super) fn transfer_reachability_for_preparation(
         &self,
-    ) -> BTreeSet<(StorageClass, StorageClass)> {
+    ) -> BTreeSet<(TransferEndpoint, TransferEndpoint)> {
         self.transfers.keys().cloned().collect()
     }
 
@@ -650,6 +650,10 @@ impl Runtime {
     ///
     /// Returns [`RuntimeReconfigureError`] when state access, edit validation,
     /// identity allocation, epoch advancement, or compare-and-publish fails.
+    /// Invalid transfer endpoints are reported as the typed
+    /// [`RuntimeConfigError::UnknownTransferEndpointEngine`] or
+    /// [`RuntimeConfigError::UnsupportedTransferEndpointStorage`] source of
+    /// [`RuntimeReconfigureError::Edit`].
     pub fn reconfigure(
         &self,
         edit: impl FnOnce(&mut RuntimeReconfiguration<'_>) -> Result<(), RuntimeConfigError>,
@@ -868,17 +872,17 @@ impl RuntimeConfigBuilder {
         Ok(self)
     }
 
-    /// Register a transfer provider keyed by source and destination storage
-    /// classes.
+    /// Register a transfer provider keyed by source and destination endpoints.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeConfigError::ConflictingRegistration`] if a different
-    /// provider is already registered for the same storage-class pair.
+    /// provider is already registered for the same endpoint pair. The complete
+    /// endpoint pair is validated when [`Self::build`] freezes the candidate.
     pub fn register_transfer_provider(
         &mut self,
-        source: StorageClass,
-        destination: StorageClass,
+        source: TransferEndpoint,
+        destination: TransferEndpoint,
         provider: Arc<dyn TransferProvider>,
     ) -> Result<&mut Self, RuntimeConfigError> {
         let mut changed = false;
@@ -927,7 +931,10 @@ impl RuntimeConfigBuilder {
     /// # Errors
     ///
     /// Returns [`RuntimeConfigError::IdentityExhausted`] if runtime or
-    /// registration identity allocation would wrap.
+    /// registration identity allocation would wrap, or
+    /// [`RuntimeConfigError::UnknownTransferEndpointEngine`] or
+    /// [`RuntimeConfigError::UnsupportedTransferEndpointStorage`] if a
+    /// registered transfer endpoint is invalid for the complete candidate.
     pub fn build(mut self) -> Result<Runtime, RuntimeConfigError> {
         validate_candidate(&self.candidate)?;
         let runtime_id = RuntimeId::from_nonzero(allocate_nonzero(&NEXT_RUNTIME_ID)?);
@@ -1032,16 +1039,17 @@ impl RuntimeReconfiguration<'_> {
         Ok(self)
     }
 
-    /// Register a transfer provider in this reconfiguration.
+    /// Register a transfer provider in this reconfiguration by endpoint pair.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeConfigError::ConflictingRegistration`] if a different
-    /// provider is already registered for the same storage-class pair.
+    /// provider is already registered for the same endpoint pair. The complete
+    /// endpoint pair is validated before this reconfiguration is published.
     pub fn register_transfer_provider(
         &mut self,
-        source: StorageClass,
-        destination: StorageClass,
+        source: TransferEndpoint,
+        destination: TransferEndpoint,
         provider: Arc<dyn TransferProvider>,
     ) -> Result<&mut Self, RuntimeConfigError> {
         register_transfer_provider_candidate(
@@ -1336,8 +1344,8 @@ fn remove_extension_module_candidate(
 
 fn register_transfer_provider_candidate(
     candidate: &mut CandidateConfig,
-    source: StorageClass,
-    destination: StorageClass,
+    source: TransferEndpoint,
+    destination: TransferEndpoint,
     provider: Arc<dyn TransferProvider>,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
@@ -1362,6 +1370,10 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
     for record in candidate.engines.values() {
         validate_engine_execution_contract(&record.registration)?;
     }
+    for (source, destination) in candidate.transfers.keys() {
+        validate_transfer_endpoint(candidate, source)?;
+        validate_transfer_endpoint(candidate, destination)?;
+    }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
         for family_engine in module.engines.keys() {
@@ -1380,6 +1392,27 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
                 });
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_transfer_endpoint(
+    candidate: &CandidateConfig,
+    endpoint: &TransferEndpoint,
+) -> Result<(), RuntimeConfigError> {
+    let Some(engine) = candidate.engines.get(endpoint.engine_id()) else {
+        return Err(RuntimeConfigError::UnknownTransferEndpointEngine {
+            endpoint: endpoint.clone(),
+        });
+    };
+    if !engine
+        .registration
+        .storage_classes()
+        .contains(endpoint.storage_class())
+    {
+        return Err(RuntimeConfigError::UnsupportedTransferEndpointStorage {
+            endpoint: endpoint.clone(),
+        });
     }
     Ok(())
 }

@@ -17,8 +17,8 @@ use crate::runtime::{
     InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
     PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TransferProvider,
-    TransferRequest,
+    SpecializationProjection, SpecializationRequirements, StorageClass, TransferEndpoint,
+    TransferProvider, TransferRequest,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
@@ -595,8 +595,8 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
     runtime
         .reconfigure(|edit| {
             edit.register_transfer_provider(
-                storage.clone(),
-                storage.clone(),
+                TransferEndpoint::new(engine_id("tenferro.engine.core"), storage.clone()),
+                TransferEndpoint::new(extension_engine_id.clone(), storage.clone()),
                 Arc::new(PreparationOnlyTransfer),
             )?;
             Ok(())
