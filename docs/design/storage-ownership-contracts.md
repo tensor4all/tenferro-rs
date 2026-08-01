@@ -227,7 +227,17 @@ The runner emits a candidate-bound receipt containing:
       "command_id": "...",
       "command_sha256": "...",
       "candidate_commit": "...",
-      "exit_code": 0
+      "exit_code": 0,
+      "argv": ["/resolved/python", "/resolved/marker.py", "/resolved/artifact"],
+      "cwd": "/resolved/repository",
+      "artifact_path": "/resolved/artifact",
+      "executable": {
+        "requested": "python3",
+        "resolved": "/resolved/python",
+        "sha256": "..."
+      },
+      "observation_nonce": "...",
+      "observation_challenge": "..."
     }
   ]
 }
@@ -237,8 +247,15 @@ The runner executes each active typed command exactly once, passes the exact
 artifact binding, and records one result per active obligation. Every
 execution must bind the manifest-derived `obligation_id`, `artifact_id`, and
 `command_id`, repeat the actual candidate commit, and carry the
-manifest-derived artifact and command digests. The receipt also carries the
-exact base/candidate manifest digests. It does not execute deferred commands.
+manifest-derived artifact and command digests. `argv` is the child's normalized
+observed process argv: its first element is the canonical resolved path chosen
+by `shutil.which(requested, path=current-PATH)`, with the requested executable
+separately recorded and its resolved path plus SHA-256 identity in
+`executable`; `cwd` and
+`artifact_path` are resolved absolute paths observed by the child.
+`observation_nonce` and `observation_challenge` bind that observation to its
+command, cwd, artifact, and bytes. The receipt also carries the exact
+base/candidate manifest digests. It does not execute deferred commands.
 The checker validates the receipt; it does not manufacture command results.
 Both tools resolve `candidate_commit` from `git rev-parse HEAD` and
 load the base manifest from the same repository-relative manifest path at the
@@ -262,6 +279,33 @@ machine-readable capability test is required before the symlink cases; an
 unsupported host is an explicit failure/event, never a skipped or optional
 green result. On capable hosts the checker must reject the changed resolved
 artifact bytes.
+
+Each fixture child writes one `tenferro.storage-ownership-observation.v1`
+JSON object under the temporary repository's observation directory. It records
+the raw child-visible process argv, the separately named interpreter/process
+image, a normalized argv for exact comparison, resolved cwd, resolved artifact
+path and bytes digest, executable identity, and a fresh nonce/challenge.
+Executable identity uses portable `shutil.which`/path resolution and a bytes
+SHA-256; it does not depend on Linux `/proc`. The RED
+suite requires exactly one observation for every active obligation, unique
+nonces/challenges, exact command/artifact/cwd matches, and no deferred
+observations. Missing, duplicate, forged, or swapped observations use the
+precise `E_RECEIPT_OBSERVATION_BINDING` fields `obligation_id`, `field`,
+`expected`, and `actual`. Receipt mutations of `argv`, `cwd`, executable
+identity, artifact path, nonce, or challenge use
+`E_RECEIPT_EXECUTION_BINDING` with the same exact field set.
+
+The generic runner path also exercises the existing canonical `cargo-test`
+obligation: a temporary repository provides an executable `bin/cargo` PATH shim
+only in the runner subprocess environment. The shim accepts and records the
+untouched canonical `cargo test -p tenferro-runtime --test
+execution_engine_identity` argv and emits the same child-observation schema;
+all other active fixture obligations remain Python markers. No fixture command
+kind, test mode, production shim path, or weakened production allowlist is
+introduced, and the checker must continue to reject Python argv or the shim
+path for that production cargo kind. The nonce/challenge demonstrates an
+independently emitted child observation under this test model; it is not a
+cryptographic defense against a malicious runner that forges child output.
 
 The structural shape is intentionally explicit. A production row has one
 artifact, one command, and one tagged state; the state is not split into
@@ -387,7 +431,8 @@ The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSIO
 `E_COMMAND_TARGET_BINDING`, `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`,
 `E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`,
 `E_RECEIPT_EXECUTION_BINDING`, `E_RECEIPT_INCOMPLETE`, and
-`E_TERMINAL_DECLARED`. Command kinds have an exact allow-listed `argv` vector:
+`E_RECEIPT_OBSERVATION_BINDING`, `E_TERMINAL_DECLARED`. Command kinds have an
+exact allow-listed `argv` vector:
 `E_COMMAND_ARGV_BINDING` has exactly `command_id`, `index`, `expected`, and
 `actual`; the RED suite exercises every index of every canonical command
 vector. `E_COMMAND_ARGV_LENGTH` has exactly `command_id`, `expected`, and

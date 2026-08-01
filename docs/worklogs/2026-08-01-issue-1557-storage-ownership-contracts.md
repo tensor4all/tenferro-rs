@@ -305,15 +305,32 @@ checker/suite/TOML/parser/shim surfaces produce exact path/token evidence. The
 atomic implementation commit must remove the frozen v1 hashes, quartet
 predicate, and `v2-atomic-migration-not-landed` event.
 
+Checkpoint 2A strengthens runner evidence without implementing the runner. Each
+marker child writes a structured observation containing raw and normalized
+process argv, a separately named interpreter image, portable PATH-resolved
+requested executable identity, resolved cwd, artifact path/digest, and a unique
+nonce/challenge. The positive receipt contract binds
+those exact child observations into `argv`, `cwd`, `artifact_path`,
+`executable`, `observation_nonce`, and `observation_challenge` fields. RED cases
+cover missing, duplicate, forged, and swapped observations, plus receipt argv/
+cwd/artifact/executable/nonce/challenge mutations, with precise binding
+diagnostics. The generic runner path uses the existing canonical `cargo-test`
+obligation with a temporary `bin/cargo` PATH shim injected only into the
+runner subprocess; it preserves the untouched production cargo argv and kind
+while avoiding real cargo/hardware work. Other active obligations remain
+Python markers. The nonce/challenge is evidence of independent child emission
+under the test model, not cryptographic resistance to a malicious runner
+forging child output.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 57 tests and
-  reports exactly 189 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 61 tests and
+  reports exactly 201 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (166
-  events), v2 runner absent (19 events), future production proof artifacts
+  skipped tests. The causes are machine-readable: v2 checker absent (167
+  events), v2 runner absent (30 events), future production proof artifacts
   absent (3 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
   subtest parameters as a multiset. The required symlink capability test

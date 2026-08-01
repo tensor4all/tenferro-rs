@@ -13,6 +13,8 @@ from __future__ import annotations
 from collections import Counter
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,40 @@ V2_RED_SUITE_RELATIVE = V2_RED_SUITE.relative_to(ROOT).as_posix()
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
 GATES = tuple(f"G{number}" for number in range(1, 8))
+OBSERVATION_SCHEMA = "tenferro.storage-ownership-observation.v1"
+OBSERVATION_FIELDS = frozenset(
+    {
+        "schema",
+        "command_id",
+        "process_argv",
+        "normalized_process_argv",
+        "cwd",
+        "artifact_path",
+        "artifact_sha256",
+        "executable",
+        "interpreter",
+        "nonce",
+        "challenge",
+    }
+)
+EXECUTABLE_IDENTITY_FIELDS = frozenset({"requested", "resolved", "sha256"})
+RECEIPT_EXECUTION_FIELDS = frozenset(
+    {
+        "obligation_id",
+        "artifact_id",
+        "command_id",
+        "candidate_commit",
+        "exit_code",
+        "artifact_sha256",
+        "command_sha256",
+        "argv",
+        "cwd",
+        "artifact_path",
+        "executable",
+        "observation_nonce",
+        "observation_challenge",
+    }
+)
 
 CLI_CONTRACT_SCHEMA = "tenferro.storage-ownership-cli-contract.v1"
 CLI_CONTRACT_PROBE = "--contract-schema"
@@ -797,6 +833,9 @@ DIAGNOSTIC_FIELDS = {
     "E_RECEIPT_EXECUTION_BINDING": frozenset(
         {"obligation_id", "field", "expected", "actual"}
     ),
+    "E_RECEIPT_OBSERVATION_BINDING": frozenset(
+        {"obligation_id", "field", "expected", "actual"}
+    ),
     "E_RECEIPT_INCOMPLETE": frozenset({"obligation_id"}),
     "E_TERMINAL_DECLARED": frozenset({"field"}),
 }
@@ -942,13 +981,34 @@ RED_EXPECTED_FAILURES = {
             {"field": "artifact_id"},
             {"field": "command_id"},
             {"field": "candidate_commit"},
+            {"field": "argv"},
+            {"field": "cwd"},
+            {"field": "artifact_path"},
+            {"field": "executable"},
+            {"field": "observation_nonce"},
+            {"field": "observation_challenge"},
         ],
     },
     "test_runner_cli_schema_probe_is_required": {
         "cause": "v2-runner-not-implemented",
     },
+    "test_checker_accepts_canonical_cargo_command_with_path_shim": {
+        "cause": "v2-checker-not-implemented",
+    },
     "test_runner_emits_exact_candidate_bound_receipt": {
         "cause": "v2-runner-not-implemented",
+    },
+    "test_runner_executes_canonical_cargo_command_with_path_shim": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_child_observation_mutations_are_rejected": {
+        "cause": "v2-runner-not-implemented",
+        "subtests": [
+            {"case": "missing"},
+            {"case": "duplicate"},
+            {"case": "forged"},
+            {"case": "swapped"},
+        ],
     },
     "test_runner_is_fail_closed_on_command_failure": {
         "cause": "v2-runner-not-implemented",
@@ -1118,6 +1178,7 @@ def valid_manifest(
     schema: str = SCHEMA,
     edges: tuple[tuple[str, str], ...] = EDGES,
     marker: bool = False,
+    marker_exclude: frozenset[str] = frozenset(),
     active_override: dict[str, str] | None = None,
     deferred_override: dict[str, str] | None = None,
     promote: frozenset[str] = frozenset(),
@@ -1141,7 +1202,7 @@ def valid_manifest(
                 argv=argv,
                 path_args=path_args,
                 deferred_unit=None,
-                marker=marker,
+                marker=marker and entry_id not in marker_exclude,
             )
         )
     for row in DEFERRED_OBLIGATIONS:
@@ -1160,7 +1221,7 @@ def valid_manifest(
                 argv=argv,
                 path_args=path_args,
                 deferred_unit=None if entry_id in promote else unit,
-                marker=marker,
+                marker=marker and entry_id not in marker_exclude,
             )
         )
     return "\n\n".join(rows) + "\n"
@@ -1179,15 +1240,68 @@ def repository_files() -> dict[str, str]:
     return files
 
 
-def marker_files() -> dict[str, str]:
+def marker_files(manifest: str | None = None) -> dict[str, str]:
     files = repository_files()
+    marker_manifest = tomllib.loads(manifest or valid_manifest(marker=True))
+    commands = {
+        row["command"]["id"]: row["command"]
+        for row in marker_manifest["obligations"]
+    }
     for row in ALL_OBLIGATIONS:
         command_id = row[6]
+        requested_executable = commands[command_id]["argv"][0]
         files[f"markers/{command_id}.py"] = textwrap.dedent(
             f'''\
+            import hashlib
+            import json
+            import secrets
+            import shutil
             import sys
             from pathlib import Path
-            Path(sys.argv[1]).read_bytes()
+
+            command_id = {command_id!r}
+            requested_executable = {requested_executable!r}
+            resolved_requested = shutil.which(requested_executable)
+            if resolved_requested is None:
+                raise SystemExit(127)
+            executable = Path(resolved_requested).resolve()
+            interpreter = Path(sys.executable).resolve()
+            artifact = Path(sys.argv[-1]).resolve()
+            cwd = Path.cwd().resolve()
+            artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            nonce = secrets.token_hex(16)
+            challenge = hashlib.sha256(
+                "\\0".join(
+                    (command_id, nonce, str(cwd), str(artifact), artifact_sha256)
+                ).encode("utf-8")
+            ).hexdigest()
+            observation = {{
+                "schema": {OBSERVATION_SCHEMA!r},
+                "command_id": command_id,
+                "process_argv": [str(interpreter), *sys.argv],
+                "normalized_process_argv": [
+                    str(executable),
+                    str(Path(sys.argv[0]).resolve()),
+                    *sys.argv[1:-1],
+                    str(artifact),
+                ],
+                "cwd": str(cwd),
+                "artifact_path": str(artifact),
+                "artifact_sha256": artifact_sha256,
+                "executable": {{
+                    "requested": requested_executable,
+                    "resolved": str(executable),
+                    "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                }},
+                "interpreter": str(interpreter),
+                "nonce": nonce,
+                "challenge": challenge,
+            }}
+            observation_dir = Path("observations")
+            observation_dir.mkdir(parents=True, exist_ok=True)
+            (observation_dir / f"{{command_id}}-{{nonce}}.json").write_text(
+                json.dumps(observation, sort_keys=True) + "\\n", encoding="utf-8"
+            )
             Path("runner.log").open("a", encoding="utf-8").write("{command_id}\\n")
             '''
         )
@@ -1216,6 +1330,75 @@ def _replace_in_obligation(source: str, obligation_id: str, old: str, new: str) 
     index = matches[0]
     blocks[index] = _replace_once(blocks[index], old, new)
     return "\n\n".join(blocks)
+
+
+def _cargo_path_shim_manifest() -> str:
+    """Markerize all fixtures except the existing canonical cargo obligation."""
+    return valid_manifest(
+        marker=True,
+        marker_exclude=frozenset({"p0-control-plane"}),
+    )
+
+
+def _cargo_path_shim_source() -> str:
+    row = next(row for row in BASE_ACTIVE_OBLIGATIONS if row[0] == "p0-control-plane")
+    command_id = row[6]
+    artifact_path = row[4]
+    expected_args = list(row[8][1:])
+    return textwrap.dedent(
+        f'''\
+        #!/usr/bin/env python3
+        import hashlib
+        import json
+        import secrets
+        import shutil
+        import sys
+        from pathlib import Path
+
+        command_id = {command_id!r}
+        requested_executable = {row[8][0]!r}
+        expected_args = {expected_args!r}
+        if sys.argv[1:] != expected_args:
+            raise SystemExit(64)
+        resolved_requested = shutil.which(requested_executable)
+        if resolved_requested is None:
+            raise SystemExit(127)
+        executable = Path(resolved_requested).resolve()
+        interpreter = Path(sys.executable).resolve()
+        artifact = Path({artifact_path!r}).resolve()
+        cwd = Path.cwd().resolve()
+        artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        nonce = secrets.token_hex(16)
+        challenge = hashlib.sha256(
+            "\\0".join(
+                (command_id, nonce, str(cwd), str(artifact), artifact_sha256)
+            ).encode("utf-8")
+        ).hexdigest()
+        observation = {{
+            "schema": {OBSERVATION_SCHEMA!r},
+            "command_id": command_id,
+            "process_argv": [str(interpreter), *sys.argv],
+            "normalized_process_argv": [str(executable), *sys.argv[1:]],
+            "cwd": str(cwd),
+            "artifact_path": str(artifact),
+            "artifact_sha256": artifact_sha256,
+            "executable": {{
+                "requested": requested_executable,
+                "resolved": str(executable),
+                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            }},
+            "interpreter": str(interpreter),
+            "nonce": nonce,
+            "challenge": challenge,
+        }}
+        observation_dir = Path("observations")
+        observation_dir.mkdir(parents=True, exist_ok=True)
+        (observation_dir / f"{{command_id}}-{{nonce}}.json").write_text(
+            json.dumps(observation, sort_keys=True) + "\\n", encoding="utf-8"
+        )
+        Path("runner.log").open("a", encoding="utf-8").write("{{command_id}}\\n")
+        '''
+    )
 
 
 def _command_argv_occurrences(
@@ -1308,6 +1491,70 @@ def _sha256_resolved_path(root: Path, relative_path: str) -> str:
 def _sha256_command(command: dict[str, object]) -> str:
     canonical = json.dumps(command, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return _sha256_bytes(canonical)
+
+
+def _resolve_executable_identity(
+    requested: str, search_path: str | None = None
+) -> dict[str, str]:
+    resolved = shutil.which(requested, path=search_path)
+    if resolved is None:
+        raise AssertionError(f"fixture executable is not resolvable: {requested}")
+    executable = Path(resolved).resolve()
+    return {
+        "requested": requested,
+        "resolved": str(executable),
+        "sha256": _sha256_bytes(executable.read_bytes()),
+    }
+
+
+def _resolve_manifest_path(root: Path, value: str) -> str:
+    path = Path(value)
+    return str((root / path).resolve() if not path.is_absolute() else path.resolve())
+
+
+def _expected_fixture_argv(
+    root: Path,
+    command: dict[str, object],
+    *,
+    executable_search_path: str | None = None,
+) -> list[str]:
+    argv = command["argv"]
+    path_args = set(command.get("path_args", []))
+    identity = _resolve_executable_identity(argv[0], executable_search_path)
+    return [
+        identity["resolved"],
+        *(
+            _resolve_manifest_path(root, value) if value in path_args else value
+            for value in argv[1:]
+        ),
+    ]
+
+
+def _observation_challenge(
+    command_id: str,
+    nonce: str,
+    cwd: str,
+    artifact_path: str,
+    artifact_sha256: str,
+) -> str:
+    return _sha256_bytes(
+        "\0".join(
+            (command_id, nonce, cwd, artifact_path, artifact_sha256)
+        ).encode("utf-8")
+    )
+
+
+def _child_observations(root: Path) -> list[tuple[Path, dict[str, object]]]:
+    directory = root / "observations"
+    if not directory.is_dir():
+        return []
+    observations: list[tuple[Path, dict[str, object]]] = []
+    for path in sorted(directory.glob("*.json"), key=lambda candidate: candidate.name):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise AssertionError(f"child observation must be an object: {path}")
+        observations.append((path, payload))
+    return observations
 
 
 def _probe_symlink_capability() -> dict[str, object]:
@@ -1494,6 +1741,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         receipt_path: Path,
         *,
         diagnostics: bool = False,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         _require_v2_runner()
         return subprocess.run(
@@ -1511,6 +1759,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 *(("--diagnostics-json",) if diagnostics else ()),
             ],
             cwd=ROOT,
+            env=env,
             text=True,
             capture_output=True,
             check=False,
@@ -1551,18 +1800,38 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         promote: frozenset[str] = frozenset(),
         message: str = "candidate",
         active_override: dict[str, str] | None = None,
+        manifest_override: str | None = None,
+        files_override: dict[str, str] | None = None,
+        runner_env: dict[str, str] | None = None,
+        executable_paths: tuple[str, ...] = (),
     ) -> tuple[str, str, str, Path, dict[str, object]]:
-        base = valid_manifest(marker=True, active_override=active_override)
-        base_commit = _init_git_repository(root, base, files=marker_files())
-        candidate = valid_manifest(
-            marker=True, active_override=active_override, promote=promote
+        if manifest_override is not None:
+            if promote or active_override:
+                raise AssertionError(
+                    "manifest_override cannot be combined with promotion overrides"
+                )
+            base = candidate = manifest_override
+        else:
+            base = valid_manifest(marker=True, active_override=active_override)
+            candidate = valid_manifest(
+                marker=True, active_override=active_override, promote=promote
+            )
+        base_commit = _init_git_repository(
+            root,
+            base,
+            files=files_override or marker_files(base),
         )
+        for relative in executable_paths:
+            executable = root / relative
+            executable.chmod(0o755)
         _materialize_active_artifacts(root, candidate)
         (root / "scripts/storage-ownership-contracts.toml").write_text(candidate, encoding="utf-8")
         (root / "candidate-note").write_text(f"{message}\n", encoding="utf-8")
         candidate_commit = _commit(root, message)
         receipt_path = root / "receipt.json"
-        runner = self.run_repository_runner(root, base_commit, receipt_path)
+        runner = self.run_repository_runner(
+            root, base_commit, receipt_path, env=runner_env
+        )
         self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         self.assertIsInstance(receipt, dict)
@@ -1635,6 +1904,57 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             self.assertEqual(set(item["fields"]), set(expected_fields), payload)
             for key, value in expected_fields.items():
                 self.assertEqual(item["fields"][key], value, payload)
+
+    def assert_child_observation(
+        self,
+        root: Path,
+        manifest_row: dict[str, object],
+        observation: dict[str, object],
+        *,
+        executable_search_path: str | None = None,
+    ) -> None:
+        self.assertEqual(set(observation), OBSERVATION_FIELDS)
+        self.assertEqual(observation["schema"], OBSERVATION_SCHEMA)
+        command = manifest_row["command"]
+        self.assertEqual(observation["command_id"], command["id"])
+        self.assertIsInstance(observation["process_argv"], list)
+        self.assertIsInstance(observation["normalized_process_argv"], list)
+        self.assertEqual(
+            observation["normalized_process_argv"],
+            _expected_fixture_argv(
+                root, command, executable_search_path=executable_search_path
+            ),
+        )
+        self.assertIsInstance(observation["executable"], dict)
+        executable = observation["executable"]
+        self.assertEqual(set(executable), EXECUTABLE_IDENTITY_FIELDS)
+        expected_executable = _resolve_executable_identity(
+            command["argv"][0], executable_search_path
+        )
+        self.assertEqual(executable, expected_executable)
+        process_argv = observation["process_argv"]
+        self.assertIsInstance(observation["interpreter"], str)
+        self.assertTrue(observation["interpreter"])
+        self.assertTrue(process_argv)
+        self.assertTrue(all(isinstance(value, str) for value in process_argv))
+        self.assertEqual(process_argv[0], observation["interpreter"])
+        self.assertEqual(observation["cwd"], str(root.resolve()))
+        artifact_path = _resolve_manifest_path(root, manifest_row["artifact"]["path"])
+        self.assertEqual(observation["artifact_path"], artifact_path)
+        artifact_sha256 = _sha256_resolved_path(root, manifest_row["artifact"]["path"])
+        self.assertEqual(observation["artifact_sha256"], artifact_sha256)
+        self.assertIsInstance(observation["nonce"], str)
+        self.assertTrue(observation["nonce"])
+        self.assertEqual(
+            observation["challenge"],
+            _observation_challenge(
+                command["id"],
+                observation["nonce"],
+                observation["cwd"],
+                observation["artifact_path"],
+                artifact_sha256,
+            ),
+        )
 
     def test_checked_in_production_manifest_tracks_the_v2_canonical_gate(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
@@ -1714,11 +2034,57 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 )
                 self.assertTrue(_probe_cli_contract(probe, expected))
 
+    def test_requested_executable_identity_uses_current_path_for_python_and_cargo(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            for requested in ("python3", "cargo"):
+                executable = bin_dir / requested
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o755)
+            search_path = str(bin_dir)
+            for requested in ("python3", "cargo"):
+                with self.subTest(requested=requested):
+                    expected_path = (bin_dir / requested).resolve()
+                    self.assertEqual(
+                        _resolve_executable_identity(requested, search_path),
+                        {
+                            "requested": requested,
+                            "resolved": str(expected_path),
+                            "sha256": _sha256_bytes(expected_path.read_bytes()),
+                        },
+                    )
+
     def test_checker_cli_schema_probe_is_required(self) -> None:
         _require_v2_checker()
 
     def test_runner_cli_schema_probe_is_required(self) -> None:
         _require_v2_runner()
+
+    def test_checker_accepts_canonical_cargo_command_with_path_shim(self) -> None:
+        production_rows = {
+            row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]
+        }
+        production_command = production_rows["p0-control-plane"]["command"]
+        self.assertEqual(production_command["kind"], "cargo-test")
+        self.assertEqual(production_command["argv"][0], "cargo")
+        self.assertNotIn("bin/cargo", production_command["argv"])
+        self.assertNotIn("python3", production_command["argv"])
+        fixture_rows = {
+            row["id"]: row
+            for row in tomllib.loads(_cargo_path_shim_manifest())["obligations"]
+        }
+        self.assertEqual(
+            fixture_rows["p0-control-plane"]["command"], production_command
+        )
+        result = self.run_checker(
+            _cargo_path_shim_manifest(),
+            files=marker_files(_cargo_path_shim_manifest()),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_v2_checker_rejects_legacy_production_manifest_until_migration(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
@@ -2690,10 +3056,41 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 Counter(row["obligation_id"] for row in executions),
                 Counter(row["id"] for row in active_rows),
             )
+            observations = _child_observations(root)
+            self.assertEqual(len(observations), len(active_rows))
+            self.assertEqual(
+                len({observation["nonce"] for _, observation in observations}),
+                len(observations),
+            )
+            self.assertEqual(
+                len({observation["challenge"] for _, observation in observations}),
+                len(observations),
+            )
+            observations_by_key = {}
+            for observation_path, observation in observations:
+                key = (observation["command_id"], observation["artifact_path"])
+                self.assertNotIn(key, observations_by_key)
+                observations_by_key[key] = (observation_path, observation)
+            active_observation_keys = {
+                (
+                    row["command"]["id"],
+                    _resolve_manifest_path(root, row["artifact"]["path"]),
+                )
+                for row in active_rows
+            }
+            self.assertEqual(set(observations_by_key), active_observation_keys)
             for execution in executions:
                 obligation_id = execution["obligation_id"]
                 self.assertIn(obligation_id, manifest_rows)
                 manifest_row = manifest_rows[obligation_id]
+                observation_key = (
+                    manifest_row["command"]["id"],
+                    _resolve_manifest_path(root, manifest_row["artifact"]["path"]),
+                )
+                self.assertIn(observation_key, observations_by_key)
+                _, observation = observations_by_key[observation_key]
+                self.assert_child_observation(root, manifest_row, observation)
+                self.assertEqual(set(execution), RECEIPT_EXECUTION_FIELDS)
                 self.assertEqual(obligation_id, manifest_row["id"])
                 self.assertEqual(execution["artifact_id"], manifest_row["artifact"]["id"])
                 self.assertEqual(execution["command_id"], manifest_row["command"]["id"])
@@ -2706,16 +3103,79 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 self.assertEqual(
                     execution["command_sha256"], _sha256_command(manifest_row["command"])
                 )
+                self.assertEqual(execution["argv"], observation["normalized_process_argv"])
+                self.assertEqual(execution["cwd"], observation["cwd"])
+                self.assertEqual(execution["artifact_path"], observation["artifact_path"])
+                self.assertEqual(execution["executable"], observation["executable"])
+                self.assertEqual(execution["observation_nonce"], observation["nonce"])
+                self.assertEqual(
+                    execution["observation_challenge"], observation["challenge"]
+                )
             for row in BASE_ACTIVE_OBLIGATIONS:
                 self.assertEqual(log.count(row[6]), 1)
+            observed_command_ids = {observation["command_id"] for _, observation in observations}
             for row in DEFERRED_OBLIGATIONS:
                 self.assertNotIn(row[6], log)
+                self.assertNotIn(row[6], observed_command_ids)
+
+    def test_runner_executes_canonical_cargo_command_with_path_shim(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _cargo_path_shim_manifest()
+            files = marker_files(manifest)
+            files["bin/cargo"] = _cargo_path_shim_source()
+            runner_env = dict(os.environ)
+            runner_env["PATH"] = os.pathsep.join(
+                (str(root / "bin"), runner_env.get("PATH", ""))
+            )
+            _, _, candidate, _, receipt = self.emit_runner_receipt(
+                root,
+                manifest_override=manifest,
+                files_override=files,
+                runner_env=runner_env,
+                executable_paths=("bin/cargo",),
+            )
+            rows = {row["id"]: row for row in tomllib.loads(candidate)["obligations"]}
+            cargo_row = rows["p0-control-plane"]
+            self.assertEqual(cargo_row["command"]["kind"], "cargo-test")
+            self.assertEqual(cargo_row["command"]["argv"][0], "cargo")
+            self.assertNotIn("bin/cargo", cargo_row["command"]["argv"])
+            observations = _child_observations(root)
+            cargo_observation = next(
+                observation
+                for _, observation in observations
+                if observation["command_id"] == cargo_row["command"]["id"]
+            )
+            self.assert_child_observation(
+                root,
+                cargo_row,
+                cargo_observation,
+                executable_search_path=runner_env["PATH"],
+            )
+            self.assertEqual(cargo_observation["executable"]["requested"], "cargo")
+            self.assertEqual(
+                cargo_observation["executable"]["resolved"],
+                str((root / "bin/cargo").resolve()),
+            )
+            execution = _receipt_execution(receipt, "p0-control-plane")
+            self.assertEqual(execution["argv"], cargo_observation["normalized_process_argv"])
+            self.assertEqual(execution["cwd"], cargo_observation["cwd"])
 
     def test_receipt_execution_identity_mutations_are_rejected(self) -> None:
         mutations = {
             "artifact_id": "artifact-contract-document",
             "command_id": "cmd-contract-document",
             "candidate_commit": "f" * 40,
+            "argv": ["forged-executable", "forged-argument"],
+            "cwd": "/tmp/forged-cwd",
+            "artifact_path": "/tmp/forged-artifact",
+            "executable": {
+                "requested": "python3",
+                "resolved": "/tmp/forged-python",
+                "sha256": "0" * 64,
+            },
+            "observation_nonce": "forged-observation-nonce",
+            "observation_challenge": "0" * 64,
         }
         for field, actual in mutations.items():
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
@@ -2723,19 +3183,9 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 base_commit, candidate_commit, candidate, receipt_path, receipt = (
                     self.emit_runner_receipt(root)
                 )
-                manifest_row = next(
-                    row
-                    for row in tomllib.loads(candidate)["obligations"]
-                    if row["id"] == "p0-control-plane"
-                )
-                expected = (
-                    manifest_row["artifact"]["id"]
-                    if field == "artifact_id"
-                    else manifest_row["command"]["id"]
-                    if field == "command_id"
-                    else candidate_commit
-                )
-                _receipt_execution(receipt, "p0-control-plane")[field] = actual
+                execution = _receipt_execution(receipt, "p0-control-plane")
+                expected = execution[field]
+                execution[field] = actual
                 receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
                 result = self.run_repository_checker(
                     root, base_commit, receipt_path, "--diagnostics-json"
@@ -2749,6 +3199,69 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                         "expected": expected,
                         "actual": actual,
                     },
+                )
+
+    def test_child_observation_mutations_are_rejected(self) -> None:
+        for case in ("missing", "duplicate", "forged", "swapped"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base_commit, _, candidate, receipt_path, receipt = self.emit_runner_receipt(
+                    root
+                )
+                rows = {row["id"]: row for row in tomllib.loads(candidate)["obligations"]}
+                p0_row = rows["p0-control-plane"]
+                p1_row = rows["p1-ledger"]
+                observations = {
+                    observation["command_id"]: (path, observation)
+                    for path, observation in _child_observations(root)
+                }
+                p0_path, p0_observation = observations[p0_row["command"]["id"]]
+                p1_path, p1_observation = observations[p1_row["command"]["id"]]
+                if case == "missing":
+                    p0_path.unlink()
+                    expected_fields = {
+                        "obligation_id": p0_row["id"],
+                        "field": "observation_count",
+                        "expected": 1,
+                        "actual": 0,
+                    }
+                elif case == "duplicate":
+                    p0_path.with_name(f"{p0_path.stem}-duplicate.json").write_text(
+                        json.dumps(p0_observation), encoding="utf-8"
+                    )
+                    expected_fields = {
+                        "obligation_id": p0_row["id"],
+                        "field": "observation_count",
+                        "expected": 1,
+                        "actual": 2,
+                    }
+                elif case == "forged":
+                    forged = dict(p0_observation)
+                    forged["artifact_sha256"] = "0" * 64
+                    p0_path.write_text(json.dumps(forged), encoding="utf-8")
+                    expected_fields = {
+                        "obligation_id": p0_row["id"],
+                        "field": "artifact_sha256",
+                        "expected": p0_observation["artifact_sha256"],
+                        "actual": "0" * 64,
+                    }
+                else:
+                    p0_path.write_text(json.dumps(p1_observation), encoding="utf-8")
+                    p1_path.write_text(json.dumps(p0_observation), encoding="utf-8")
+                    expected_fields = {
+                        "obligation_id": p0_row["id"],
+                        "field": "command_id",
+                        "expected": p0_row["command"]["id"],
+                        "actual": p1_row["command"]["id"],
+                    }
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                result = self.run_repository_checker(
+                    root, base_commit, receipt_path, "--diagnostics-json"
+                )
+                self.assert_result_diagnostic(
+                    result,
+                    "E_RECEIPT_OBSERVATION_BINDING",
+                    fields=expected_fields,
                 )
 
     def test_runner_is_fail_closed_on_command_failure(self) -> None:
