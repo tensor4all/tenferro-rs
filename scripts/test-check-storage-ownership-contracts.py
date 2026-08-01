@@ -71,7 +71,7 @@ def _inventory(
     symbol: str | None = None,
     scan: str | None = "raw-handle-scan",
     status: str = "active",
-    category: str = "raw-handle",
+    category: str = "raw-handle-extraction",
     rationale: str = "remove the legacy authority seam",
     disposition: str = "remove",
     removal_issue: int = 1559,
@@ -97,7 +97,10 @@ def _inventory(
 def _selector_lines(*, needle: str | None, symbol: str | None) -> str:
     lines: list[str] = []
     if needle is not None:
-        lines.append(f'needle = "{needle}"')
+        if "\n" in needle:
+            lines.append(f"needle = '''{needle}'''")
+        else:
+            lines.append(f'needle = "{needle}"')
     if symbol is not None:
         lines.append(f'symbol = "{symbol}"')
     return "\n".join(lines)
@@ -105,6 +108,7 @@ def _selector_lines(*, needle: str | None, symbol: str | None) -> str:
 
 def _scan(
     *,
+    entry_id: str = "raw-handle-scan",
     needle: str = "RAW_HANDLE",
     status: str | None = "active",
     kind: str | None = "source",
@@ -112,17 +116,20 @@ def _scan(
     rationale: str | None = "track every remaining raw-handle seam",
     root: str = "src",
     glob: str = "**/*.rs",
+    mode: str | None = "inventoried",
 ) -> str:
     lines = [
         "[[source_scans]]",
-        'id = "raw-handle-scan"',
+        f'id = "{entry_id}"',
         'gate = "G5"',
         f'root = "{root}"',
         f'glob = "{glob}"',
-        f'needle = "{needle}"',
+        *_selector_lines(needle=needle, symbol=None).splitlines(),
     ]
     if status is not None:
         lines.append(f'status = "{status}"')
+    if mode is not None:
+        lines.append(f'mode = "{mode}"')
     if kind is not None:
         lines.append(f'kind = "{kind}"')
     if owner_issue is not None:
@@ -564,6 +571,307 @@ class CheckerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_family_scan_two_occurrences_with_two_bound_rows_passes(self) -> None:
+        inventories = _inventory(
+            entry_id="family-first",
+            needle="fn first_member() { FAMILY_MEMBER(); }",
+            scan="family-scan",
+        ) + "\n\n" + _inventory(
+            entry_id="family-second",
+            needle="fn second_member() { FAMILY_MEMBER(); }",
+            scan="family-scan",
+        )
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                inventories,
+                _scan(entry_id="family-scan", needle="FAMILY_MEMBER"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": (
+                    "fn first_member() { FAMILY_MEMBER(); }\n"
+                    "fn second_member() { FAMILY_MEMBER(); }\n"
+                ),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_family_scan_extra_occurrence_fails_as_drift(self) -> None:
+        inventories = _inventory(
+            entry_id="family-first",
+            needle="fn first_member() { FAMILY_MEMBER(); }",
+            scan="family-scan",
+        ) + "\n\n" + _inventory(
+            entry_id="family-second",
+            needle="fn second_member() { FAMILY_MEMBER(); }",
+            scan="family-scan",
+        )
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                inventories,
+                _scan(entry_id="family-scan", needle="FAMILY_MEMBER"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": (
+                    "fn first_member() { FAMILY_MEMBER(); }\n"
+                    "fn second_member() { FAMILY_MEMBER(); }\n"
+                    "fn untracked_member() { FAMILY_MEMBER(); }\n"
+                ),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "source scan 'family-scan' path 'src/legacy.rs' needle "
+            "'FAMILY_MEMBER' occurs 3 times but has 2 bound inventory rows",
+            result.stderr,
+        )
+
+    def test_inventory_selector_must_contain_family_needle(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _inventory(
+                    entry_id="family-first",
+                    needle="fn first_member",
+                    scan="family-scan",
+                ),
+                _scan(entry_id="family-scan", needle="FAMILY_MEMBER"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "fn first_member() {}\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "source inventory 'family-first' selector 'fn first_member' must "
+            "contain source scan 'family-scan' needle 'FAMILY_MEMBER'",
+            result.stderr,
+        )
+
+    def test_moving_family_needle_between_scopes_breaks_exact_context(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _inventory(
+                    entry_id="family-first",
+                    needle="fn first_member() { FAMILY_MEMBER(); }",
+                    scan="family-scan",
+                ),
+                _scan(entry_id="family-scan", needle="FAMILY_MEMBER"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": (
+                    "fn first_member() {}\n"
+                    "fn second_member() { FAMILY_MEMBER(); }\n"
+                ),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "needle 'fn first_member() { FAMILY_MEMBER(); }' not found in "
+            "declared file 'src/legacy.rs'",
+            result.stderr,
+        )
+
+    def test_family_scan_orphan_occurrence_fails_as_untracked(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _inventory(
+                    entry_id="family-first",
+                    needle="fn first_member() { FAMILY_MEMBER(); }",
+                    scan="family-scan",
+                    path="src/legacy.rs",
+                ),
+                _scan(entry_id="family-scan", needle="FAMILY_MEMBER"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "fn first_member() { FAMILY_MEMBER(); }\n",
+                "src/orphan.rs": "fn orphan_member() { FAMILY_MEMBER(); }\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "scanned source seam 'src/orphan.rs' needle 'FAMILY_MEMBER' "
+            "is not inventoried",
+            result.stderr,
+        )
+
+    def test_forbidden_scan_with_zero_occurrences_and_no_inventory_passes(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _scan(
+                    entry_id="forbidden-scan",
+                    needle="FORBIDDEN_PATTERN",
+                    mode="forbidden",
+                ),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "fn allowed() {}\n",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_public_write_enum_rejects_an_added_variant(self) -> None:
+        current_enum = """pub enum TensorWrite<'a> {
+    Tensor(&'a mut Tensor),
+    View(TensorViewMut<'a>),
+}"""
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _inventory(
+                    entry_id="tensor-write-enum",
+                    needle=current_enum,
+                    scan="write-enum-shape",
+                ),
+                _scan(
+                    entry_id="write-enum-shape",
+                    needle=current_enum,
+                ),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": (
+                    "pub enum TensorWrite<'a> {\n"
+                    "    Tensor(&'a mut Tensor),\n"
+                    "    View(TensorViewMut<'a>),\n"
+                    "    External(ExternalWrite<'a>),\n"
+                    "}\n"
+                ),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "not found in declared file 'src/legacy.rs'",
+            result.stderr,
+        )
+
+    def test_source_scan_requires_explicit_mode(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _inventory(), _scan(mode=None)),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("source scan 'raw-handle-scan' must declare mode", result.stderr)
+
+    def test_source_scan_rejects_unknown_mode(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _inventory(), _scan(mode="optional")),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "source scan 'raw-handle-scan' mode 'optional' must be one of: "
+            "forbidden, inventoried",
+            result.stderr,
+        )
+
+    def test_inventoried_scan_requires_active_inventory(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _scan(mode="inventoried", needle="TRACKED_FAMILY"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "fn allowed() {}\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "inventoried source scan 'raw-handle-scan' must have at least one "
+            "active bound inventory row",
+            result.stderr,
+        )
+
+    def test_forbidden_scan_rejects_bound_inventory(self) -> None:
+        result = self.run_checker(
+            _manifest(_entry(), _inventory(), _scan(mode="forbidden")),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "forbidden source scan 'raw-handle-scan' must not have active bound "
+            "inventory rows",
+            result.stderr,
+        )
+
+    def test_forbidden_scan_rejects_occurrence_without_inventory(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _scan(mode="forbidden", needle="FORBIDDEN_PATTERN"),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "fn bad() { FORBIDDEN_PATTERN(); }\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "forbidden source scan 'raw-handle-scan' path 'src/legacy.rs' "
+            "needle 'FORBIDDEN_PATTERN' occurs 1 time",
+            result.stderr,
+        )
+
+    def test_map_write_context_move_is_detected(self) -> None:
+        context = "fn map_write(&self) { managed.resource().map_write(); }"
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _inventory(
+                    entry_id="map-write-authority",
+                    needle=context,
+                    scan="map-write-family",
+                    category="shared-to-mutable",
+                    disposition="replace",
+                    removal_issue=1560,
+                ),
+                _scan(
+                    entry_id="map-write-family",
+                    needle="managed.resource().map_write()",
+                ),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": (
+                    "fn map_write(&self) {}\n"
+                    "fn unrelated(&self) { managed.resource().map_write(); }\n"
+                ),
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            f"needle '{context}' not found in declared file 'src/legacy.rs'",
+            result.stderr,
+        )
+
     def test_new_scanned_source_seam_must_be_in_inventory(self) -> None:
         result = self.run_checker(
             _manifest(_entry(), _inventory(), _scan()),
@@ -576,6 +884,106 @@ class CheckerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "scanned source seam 'src/new.rs' needle 'RAW_HANDLE' is not inventoried",
+            result.stderr,
+        )
+
+    def test_each_storage_inventory_category_rejects_an_extra_source_seam(self) -> None:
+        cases = (
+            ("raw-handle-extraction", "raw-handle-scan", "RAW_HANDLE_DECL"),
+            (
+                "public-mutable-projection",
+                "public-mutable-projection-scan",
+                "MUTABLE_PROJECTION",
+            ),
+            ("shared-to-mutable", "shared-to-mutable-scan", "MUTABLE_TRANSITION"),
+            (
+                "temporary-migration-adapter",
+                "temporary-adapter-scan",
+                "TEMP_ADAPTER",
+            ),
+        )
+        for category, scan_id, needle in cases:
+            with self.subTest(category=category):
+                result = self.run_checker(
+                    _manifest(
+                        _entry(),
+                        _inventory(
+                            entry_id=f"{category}-source",
+                            needle=needle,
+                            scan=scan_id,
+                            category=category,
+                        ),
+                        _scan(entry_id=scan_id, needle=needle),
+                    ),
+                    files={
+                        "fixtures/ok.rs": "fn fixture() {}\n",
+                        "src/legacy.rs": f"{needle}\n",
+                        "src/extra.rs": f"{needle}\n",
+                    },
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"scanned source seam 'src/extra.rs' needle '{needle}' is not inventoried",
+                    result.stderr,
+                )
+
+    def test_each_storage_inventory_category_requires_its_selector_to_remain(self) -> None:
+        cases = (
+            ("raw-handle-extraction", "raw-handle-scan", "RAW_HANDLE_DECL"),
+            (
+                "public-mutable-projection",
+                "public-mutable-projection-scan",
+                "MUTABLE_PROJECTION",
+            ),
+            ("shared-to-mutable", "shared-to-mutable-scan", "MUTABLE_TRANSITION"),
+            (
+                "temporary-migration-adapter",
+                "temporary-adapter-scan",
+                "TEMP_ADAPTER",
+            ),
+        )
+        for category, scan_id, needle in cases:
+            with self.subTest(category=category):
+                result = self.run_checker(
+                    _manifest(
+                        _entry(),
+                        _inventory(
+                            entry_id=f"{category}-source",
+                            needle=needle,
+                            scan=scan_id,
+                            category=category,
+                        ),
+                        _scan(entry_id=scan_id, needle=needle),
+                    ),
+                    files={
+                        "fixtures/ok.rs": "fn fixture() {}\n",
+                        "src/legacy.rs": "fn renamed_source() {}\n",
+                    },
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"needle '{needle}' not found in declared file 'src/legacy.rs'",
+                    result.stderr,
+                )
+
+    def test_temporary_migration_adapter_must_be_removed(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _inventory(
+                    category="temporary-migration-adapter",
+                    disposition="replace",
+                ),
+                _scan(),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "temporary-migration-adapter disposition must be 'remove'",
             result.stderr,
         )
 
@@ -861,10 +1269,51 @@ class CheckerTests(unittest.TestCase):
                     result.stderr,
                 )
 
+    def test_inventory_rejects_unknown_category(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _inventory(category="raw-handle"),
+                _scan(),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "source inventory 'source-ok' category 'raw-handle' must be one of: "
+            "public-mutable-projection, raw-handle-extraction, shared-to-mutable, "
+            "temporary-migration-adapter",
+            result.stderr,
+        )
+
+    def test_inventory_rejects_unknown_disposition(self) -> None:
+        result = self.run_checker(
+            _manifest(
+                _entry(),
+                _suite(),
+                _inventory(disposition="keep"),
+                _scan(),
+            ),
+            files={
+                "fixtures/ok.rs": "fn fixture() {}\n",
+                "src/legacy.rs": "RAW_HANDLE\n",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "source inventory 'source-ok' disposition 'keep' must be one of: "
+            "narrow, remove, replace",
+            result.stderr,
+        )
+
 
 def _inventory_field_value(field: str) -> str:
     return {
-        "category": "raw-handle",
+        "category": "raw-handle-extraction",
         "rationale": "remove the legacy authority seam",
         "disposition": "remove",
     }[field]

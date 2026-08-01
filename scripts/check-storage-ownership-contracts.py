@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Validate the storage ownership contract verification ledger."""
+"""Validate the storage ownership contract verification ledger.
+
+Source scans are supplemental drift ledgers, not a Rust safety proof.  They
+intentionally use fail-closed lexical literal counts and do not parse Rust
+syntax or strip comments/strings; narrow production roots/globs and exact
+inventory selectors provide the structural precision.  Compile contracts,
+trybuild, later Miri/property lanes, and the final audit remain the layered
+safety checks.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +34,16 @@ KINDS = frozenset(
     }
 )
 STATUSES = frozenset({"active", "deferred"})
+SCAN_MODES = frozenset({"inventoried", "forbidden"})
+CATEGORIES = frozenset(
+    {
+        "public-mutable-projection",
+        "shared-to-mutable",
+        "raw-handle-extraction",
+        "temporary-migration-adapter",
+    }
+)
+DISPOSITIONS = frozenset({"remove", "replace", "narrow"})
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 LINE_NUMBER_KEYS = frozenset(
     {
@@ -56,6 +74,7 @@ SCAN_KEYS = frozenset(
         "root",
         "glob",
         "needle",
+        "mode",
         "status",
         "owner_issue",
         "kind",
@@ -101,6 +120,7 @@ class Scan:
     root: str
     glob: str
     needle: str
+    mode: str
     active: bool
     resolved_root: Path | None
 
@@ -443,6 +463,11 @@ def _scan_rows(
         )
         glob_value = _required_string(row, "glob", label, errors)
         needle = _required_string(row, "needle", label, errors)
+        mode = _required_string(row, "mode", label, errors)
+        if mode is not None and mode not in SCAN_MODES:
+            errors.append(
+                f"{label} mode '{mode}' must be one of: forbidden, inventoried"
+            )
         _required_string(row, "rationale", label, errors)
 
         if glob_value is not None:
@@ -462,13 +487,20 @@ def _scan_rows(
             errors.append(
                 f"active source scan '{entry_id}' root does not exist: '{root_value}'"
             )
-        if entry_id is not None and root_value is not None and glob_value and needle:
+        if (
+            entry_id is not None
+            and root_value is not None
+            and glob_value
+            and needle
+            and mode in SCAN_MODES
+        ):
             scans.append(
                 Scan(
                     entry_id=entry_id,
                     root=root_value,
                     glob=glob_value,
                     needle=needle,
+                    mode=mode,
                     active=active,
                     resolved_root=resolved_root,
                 )
@@ -558,8 +590,38 @@ def _inventory_rows(
             errors.append(f"{label} must declare exactly one of symbol or needle")
         selector = symbol if symbol is not None else needle
 
-        for field in ("category", "rationale", "disposition"):
-            _required_string(row, field, label, errors)
+        if (
+            scan_entry is not None
+            and scan_entry.mode == "inventoried"
+            and selector is not None
+            and scan_entry.needle not in selector
+        ):
+            errors.append(
+                f"{label} selector '{selector}' must contain source scan "
+                f"'{scan_entry.entry_id}' needle '{scan_entry.needle}'"
+            )
+
+        category = _required_string(row, "category", label, errors)
+        if category is not None and category not in CATEGORIES:
+            errors.append(
+                f"{label} category '{category}' must be one of: "
+                f"{', '.join(sorted(CATEGORIES))}"
+            )
+        _required_string(row, "rationale", label, errors)
+        disposition = _required_string(row, "disposition", label, errors)
+        if disposition is not None and disposition not in DISPOSITIONS:
+            errors.append(
+                f"{label} disposition '{disposition}' must be one of: "
+                f"{', '.join(sorted(DISPOSITIONS))}"
+            )
+        if (
+            category == "temporary-migration-adapter"
+            and disposition is not None
+            and disposition != "remove"
+        ):
+            errors.append(
+                f"{label} temporary-migration-adapter disposition must be 'remove'"
+            )
         if "removal_issue" not in row:
             errors.append(f"{label} must declare removal_issue")
         elif type(row["removal_issue"]) is not int or row["removal_issue"] <= 0:
@@ -633,14 +695,18 @@ def _scan_sources(
     inventories: list[Inventory],
     errors: list[str],
 ) -> None:
+    active_inventories = [
+        inventory
+        for inventory in inventories
+        if inventory.status == "active" and inventory.scan is not None
+    ]
+    all_bound_inventories = [
+        inventory for inventory in inventories if inventory.scan is not None
+    ]
     inventory_tuples = [
         (inventory.scan, inventory.path, inventory.selector)
-        for inventory in inventories
-        if inventory.status == "active"
-        and inventory.scan is not None
-        and inventory.selector is not None
+        for inventory in active_inventories
     ]
-    inventoried = set(inventory_tuples)
     seen_inventory_tuples: set[tuple[str, str, str]] = set()
     for item in sorted(inventory_tuples):
         if item in seen_inventory_tuples:
@@ -650,9 +716,40 @@ def _scan_sources(
             )
         seen_inventory_tuples.add(item)
 
+    inventories_by_scan_path: dict[tuple[str, str], list[Inventory]] = {}
+    for inventory in active_inventories:
+        inventories_by_scan_path.setdefault(
+            (inventory.scan, inventory.path), []
+        ).append(inventory)
+    all_inventories_by_scan_path: dict[tuple[str, str], list[Inventory]] = {}
+    for inventory in all_bound_inventories:
+        all_inventories_by_scan_path.setdefault(
+            (inventory.scan, inventory.path), []
+        ).append(inventory)
+
     for scan in sorted(scans, key=lambda item: item.entry_id):
         if not scan.active:
             continue
+        scan_bound_rows = [
+            inventory
+            for inventory in active_inventories
+            if inventory.scan == scan.entry_id
+        ]
+        if scan.mode == "inventoried" and not scan_bound_rows:
+            errors.append(
+                f"inventoried source scan '{scan.entry_id}' must have at least "
+                "one active bound inventory row"
+            )
+        forbidden_bound_rows = [
+            inventory
+            for inventory in all_bound_inventories
+            if inventory.scan == scan.entry_id
+        ]
+        if scan.mode == "forbidden" and forbidden_bound_rows:
+            errors.append(
+                f"forbidden source scan '{scan.entry_id}' must not have active "
+                "bound inventory rows"
+            )
         matches = _scan_candidates(root, scan, errors)
         if not matches:
             errors.append(
@@ -669,15 +766,33 @@ def _scan_sources(
                     f"'{relative}': {error}"
                 )
                 continue
-            if scan.needle in contents and (
-                scan.entry_id,
-                relative,
-                scan.needle,
-            ) not in inventoried:
+            occurrences = contents.count(scan.needle)
+            bound_rows = inventories_by_scan_path.get(
+                (scan.entry_id, relative), []
+            )
+            if scan.mode == "forbidden":
+                forbidden_path_rows = all_inventories_by_scan_path.get(
+                    (scan.entry_id, relative), []
+                )
+                if forbidden_path_rows:
+                    continue
+                if occurrences:
+                    errors.append(
+                        f"forbidden source scan '{scan.entry_id}' path '{relative}' "
+                        f"needle '{scan.needle}' occurs {occurrences} time"
+                        f"{'s' if occurrences != 1 else ''}"
+                    )
+            elif occurrences > 0 and not bound_rows:
                 errors.append(
                     f"scanned source seam '{relative}' needle '{scan.needle}' "
                     "is not inventoried "
                     f"(scan '{scan.entry_id}')"
+                )
+            elif bound_rows and occurrences != len(bound_rows):
+                errors.append(
+                    f"source scan '{scan.entry_id}' path '{relative}' needle "
+                    f"'{scan.needle}' occurs {occurrences} times but has "
+                    f"{len(bound_rows)} bound inventory rows"
                 )
 
 
