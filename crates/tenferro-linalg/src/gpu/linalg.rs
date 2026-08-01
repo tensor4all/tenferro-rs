@@ -39,7 +39,7 @@ trait LinalgScalar:
     const DATA_TYPE: CudaDataType;
     const NEEDS_RWORK: bool;
 
-    fn copy_svd_v_to_vt(
+    fn copy_matrix_adjoint(
         rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
@@ -53,13 +53,13 @@ impl LinalgScalar for f32 {
     const DATA_TYPE: CudaDataType = CudaDataType::F32;
     const NEEDS_RWORK: bool = false;
 
-    fn copy_svd_v_to_vt(
+    fn copy_matrix_adjoint(
         rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_svd_v_to_vt_real(rt, v, vt_shape, op)
+        copy_matrix_adjoint_real(rt, v, vt_shape, op)
     }
 }
 
@@ -69,13 +69,13 @@ impl LinalgScalar for f64 {
     const DATA_TYPE: CudaDataType = CudaDataType::F64;
     const NEEDS_RWORK: bool = false;
 
-    fn copy_svd_v_to_vt(
+    fn copy_matrix_adjoint(
         rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_svd_v_to_vt_real(rt, v, vt_shape, op)
+        copy_matrix_adjoint_real(rt, v, vt_shape, op)
     }
 }
 
@@ -85,13 +85,13 @@ impl LinalgScalar for Complex32 {
     const DATA_TYPE: CudaDataType = CudaDataType::Complex32;
     const NEEDS_RWORK: bool = true;
 
-    fn copy_svd_v_to_vt(
+    fn copy_matrix_adjoint(
         rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_svd_v_to_vt_complex(rt, v, vt_shape, op)
+        copy_matrix_adjoint_complex(rt, v, vt_shape, op)
     }
 }
 
@@ -101,13 +101,13 @@ impl LinalgScalar for Complex64 {
     const DATA_TYPE: CudaDataType = CudaDataType::Complex64;
     const NEEDS_RWORK: bool = true;
 
-    fn copy_svd_v_to_vt(
+    fn copy_matrix_adjoint(
         rt: &CudaRuntime,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_svd_v_to_vt_complex(rt, v, vt_shape, op)
+        copy_matrix_adjoint_complex(rt, v, vt_shape, op)
     }
 }
 
@@ -904,7 +904,7 @@ where
     }
 }
 
-fn copy_svd_v_to_vt_real<T>(
+fn copy_matrix_adjoint_real<T>(
     rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
@@ -914,11 +914,11 @@ where
     T: LinalgScalar,
 {
     let vt = alloc_output::<T>(rt, vt_shape)?;
-    launch_svd_v_to_vt_real(rt, v, &vt, op)?;
+    launch_matrix_adjoint_real(rt, v, &vt, op)?;
     Ok(vt)
 }
 
-fn copy_svd_v_to_vt_complex<T>(
+fn copy_matrix_adjoint_complex<T>(
     rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
@@ -928,11 +928,11 @@ where
     T: LinalgScalar + ComplexCore,
 {
     let vt = alloc_output::<T>(rt, vt_shape)?;
-    launch_svd_v_to_vt_complex(rt, v, &vt, op)?;
+    launch_matrix_adjoint_complex(rt, v, &vt, op)?;
     Ok(vt)
 }
 
-fn launch_svd_v_to_vt_real<T>(
+fn launch_matrix_adjoint_real<T>(
     rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
@@ -948,9 +948,9 @@ where
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers exactly the output domain for the V-to-VT copy kernel.
+    // covers exactly the output domain for the matrix-adjoint copy kernel.
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::svd_v_to_vt_real::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::matrix_adjoint_real::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -962,7 +962,7 @@ where
     flush_cubecl_client(rt, op)
 }
 
-fn launch_svd_v_to_vt_complex<T>(
+fn launch_matrix_adjoint_complex<T>(
     rt: &CudaRuntime,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
@@ -978,9 +978,9 @@ where
     let v_arg = typed_tensor_binding(v, op)?;
     let launch_count = cube_count_for_len(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers exactly the output domain for the conjugating V-to-VT copy kernel.
+    // covers exactly the output domain for the conjugating matrix-adjoint kernel.
     with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::svd_v_to_vt_complex::launch_unchecked::<T, CubeclCudaRuntime>(
+        cubecl_linalg::matrix_adjoint_complex::launch_unchecked::<T, CubeclCudaRuntime>(
             client,
             launch_count,
             cube_dim_1d(),
@@ -1024,20 +1024,15 @@ where
         ));
     }
 
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
     let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape)?;
-    let m_i32 = as_i32(m, OP, "m")?;
-    let n_i32 = as_i32(n, OP, "n")?;
-    let lda = as_i32(m, OP, "lda")?;
-    let ldu = as_i32(m, OP, "ldu")?;
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd input stride", m, n)?;
-    let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
         SvdDriver::Gesvdj => {
+            let work = clone_device_tensor(backend.runtime(), input, OP)?;
+            let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
             let v = alloc_output::<T>(backend.runtime(), &v_shape)?;
@@ -1050,6 +1045,10 @@ where
                 let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
                 let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
                 let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
+                let m_i32 = as_i32(m, OP, "m")?;
+                let n_i32 = as_i32(n, OP, "n")?;
+                let lda = as_i32(m, OP, "lda")?;
+                let ldu = as_i32(m, OP, "ldu")?;
                 let ldv = as_i32(n, OP, "ldv")?;
                 let params = handles.cusolver().create_gesvdj_info(OP)?;
                 let lwork = handles.cusolver().gesvdj_buffer_size(
@@ -1071,6 +1070,7 @@ where
                 let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
                 let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
                 let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+                let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
                 let v_stride = checked_mul_usize(OP, "svd v stride", n, k)?;
 
                 for batch in 0..batch_total {
@@ -1121,23 +1121,45 @@ where
                 }
                 check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvdj")?;
             }
-            let vt = T::copy_svd_v_to_vt(backend.runtime(), &v, &vt_shape, OP)?;
+            let vt = T::copy_matrix_adjoint(backend.runtime(), &v, &vt_shape, OP)?;
             Ok((u, s, vt))
         }
         SvdDriver::Gesvd => {
-            let vt = alloc_output::<T>(backend.runtime(), &vt_shape)?;
+            let transpose_for_gesvd = m < n;
+            let (work, gesvd_m, gesvd_n) = if transpose_for_gesvd {
+                let mut work_shape = vec![n, m];
+                work_shape.extend_from_slice(batch_shape);
+                (
+                    T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?,
+                    n,
+                    m,
+                )
+            } else {
+                (clone_device_tensor(backend.runtime(), input, OP)?, m, n)
+            };
+            let mut gesvd_u_shape = vec![gesvd_m, k];
+            gesvd_u_shape.extend_from_slice(batch_shape);
+            let mut gesvd_vt_shape = vec![k, gesvd_n];
+            gesvd_vt_shape.extend_from_slice(batch_shape);
+            let gesvd_u = alloc_output::<T>(backend.runtime(), &gesvd_u_shape)?;
+            let gesvd_vt = alloc_output::<T>(backend.runtime(), &gesvd_vt_shape)?;
             let handles = linalg_handles(backend)?;
             let stream = raw_stream(backend.runtime(), OP)?;
             handles.cusolver().set_stream(stream, OP)?;
 
             let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-            let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
+            let u_ptr = typed_device_ptr(backend.runtime(), &gesvd_u, OP)?;
             let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-            let vt_ptr = typed_device_ptr(backend.runtime(), &vt, OP)?;
+            let vt_ptr = typed_device_ptr(backend.runtime(), &gesvd_vt, OP)?;
+            let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
+            let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
+            let lda = gesvd_m_i32;
+            let ldu = gesvd_m_i32;
             let ldvt = as_i32(k, OP, "ldvt")?;
-            let lwork = handles
-                .cusolver()
-                .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
+            let lwork =
+                handles
+                    .cusolver()
+                    .gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)?;
             let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
             let rwork = if T::NEEDS_RWORK {
                 alloc_workspace_elems::<<T as LinalgScalar>::Real>(
@@ -1154,7 +1176,8 @@ where
             };
             let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
             let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let vt_stride = checked_mul_usize(OP, "svd vt stride", k, n)?;
+            let u_stride = checked_mul_usize(OP, "svd gesvd u stride", gesvd_m, k)?;
+            let vt_stride = checked_mul_usize(OP, "svd gesvd vt stride", k, gesvd_n)?;
             let job = b'S' as c_char;
 
             for batch in 0..batch_total {
@@ -1181,8 +1204,8 @@ where
                         T::DATA_TYPE,
                         job,
                         job,
-                        m_i32,
-                        n_i32,
+                        gesvd_m_i32,
+                        gesvd_n_i32,
                         batch_a,
                         lda,
                         batch_s,
@@ -1199,7 +1222,13 @@ where
                 }
             }
             check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
-            Ok((u, s, vt))
+            if transpose_for_gesvd {
+                let u = T::copy_matrix_adjoint(backend.runtime(), &gesvd_vt, &u_shape, OP)?;
+                let vt = T::copy_matrix_adjoint(backend.runtime(), &gesvd_u, &vt_shape, OP)?;
+                Ok((u, s, vt))
+            } else {
+                Ok((gesvd_u, s, gesvd_vt))
+            }
         }
     }
 }
@@ -1224,17 +1253,14 @@ where
         return Ok(alloc_output(backend.runtime(), &s_shape)?);
     }
 
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
     let s = alloc_output::<T::Real>(backend.runtime(), &s_shape)?;
-    let m_i32 = as_i32(m, OP, "m")?;
-    let n_i32 = as_i32(n, OP, "n")?;
-    let lda = as_i32(m, OP, "lda")?;
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
         SvdDriver::Gesvdj => {
+            let work = clone_device_tensor(backend.runtime(), input, OP)?;
             let mut u_shape = vec![m, k];
             u_shape.extend_from_slice(batch_shape);
             let mut v_shape = vec![n, k];
@@ -1249,6 +1275,9 @@ where
             let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
             let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
             let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
+            let m_i32 = as_i32(m, OP, "m")?;
+            let n_i32 = as_i32(n, OP, "n")?;
+            let lda = as_i32(m, OP, "lda")?;
             let params = handles.cusolver().create_gesvdj_info(OP)?;
             let lwork = handles.cusolver().gesvdj_buffer_size(
                 T::DATA_TYPE,
@@ -1324,15 +1353,30 @@ where
             Ok(s)
         }
         SvdDriver::Gesvd => {
+            let (work, gesvd_m, gesvd_n) = if m < n {
+                let mut work_shape = vec![n, m];
+                work_shape.extend_from_slice(batch_shape);
+                (
+                    T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?,
+                    n,
+                    m,
+                )
+            } else {
+                (clone_device_tensor(backend.runtime(), input, OP)?, m, n)
+            };
             let handles = linalg_handles(backend)?;
             let stream = raw_stream(backend.runtime(), OP)?;
             handles.cusolver().set_stream(stream, OP)?;
 
             let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
             let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-            let lwork = handles
-                .cusolver()
-                .gesvd_buffer_size(T::DATA_TYPE, m_i32, n_i32, OP)?;
+            let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
+            let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
+            let lda = gesvd_m_i32;
+            let lwork =
+                handles
+                    .cusolver()
+                    .gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)?;
             let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
             let rwork = if T::NEEDS_RWORK {
                 alloc_workspace_elems::<T::Real>(
@@ -1376,8 +1420,8 @@ where
                         T::DATA_TYPE,
                         job,
                         job,
-                        m_i32,
-                        n_i32,
+                        gesvd_m_i32,
+                        gesvd_n_i32,
                         batch_a,
                         lda,
                         batch_s,

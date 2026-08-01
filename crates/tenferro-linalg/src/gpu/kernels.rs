@@ -48,7 +48,7 @@ fn matching_work_offset<Work: CubePrimitive, Out: CubePrimitive>(
 }
 
 #[cube]
-fn svd_v_to_vt_offset<E: CubePrimitive>(
+fn matrix_adjoint_offset<E: CubePrimitive>(
     out: &Tensor<E>,
     v: &Tensor<E>,
     flat: usize,
@@ -74,26 +74,26 @@ pub fn fill_one_kernel<E: CubePrimitive>(out: &mut Tensor<E>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn svd_v_to_vt_real<E: CubePrimitive>(
+pub fn matrix_adjoint_real<E: CubePrimitive>(
     out: &mut Tensor<E>,
     v: &Tensor<E>,
     #[comptime] rank: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
-        out[pos] = v[svd_v_to_vt_offset(out, v, pos, rank)];
+        out[pos] = v[matrix_adjoint_offset(out, v, pos, rank)];
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn svd_v_to_vt_complex<C: ComplexCore>(
+pub fn matrix_adjoint_complex<C: ComplexCore>(
     out: &mut Tensor<C>,
     v: &Tensor<C>,
     #[comptime] rank: usize,
 ) {
     let pos = ABSOLUTE_POS as usize;
     if pos < out.len() {
-        out[pos] = v[svd_v_to_vt_offset(out, v, pos, rank)].conj();
+        out[pos] = v[matrix_adjoint_offset(out, v, pos, rank)].conj();
     }
 }
 
