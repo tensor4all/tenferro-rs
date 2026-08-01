@@ -37,8 +37,29 @@ MAX_FINDINGS_PER_CHUNK = 8
 # tiny leaf modules (Unit Test Organization).
 INLINE_TEST_EXEMPT_FILE_LINES = 150
 INLINE_TEST_EXEMPT_BLOCK_LINES = 60
-# Section routed for changed paths that match no other trigger.
+# Section routed for changed paths that match no other trigger or that live
+# outside the established top-level directories.
 FALLBACK_SECTION = "PR Content Hygiene"
+KNOWN_TOP_LEVEL_DIRS = frozenset(
+    {
+        "crates",
+        "docs",
+        "scripts",
+        "ext",
+        "samples",
+        "benches",
+        "benchmarks",
+        "ai",
+        "src",
+        "tests",
+        ".github",
+        ".claude",
+        ".agents",
+        ".opencode",
+        ".kimi",
+        ".cargo",
+    }
+)
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
 )
@@ -363,10 +384,14 @@ def select_rule_sections(files: list[str]) -> list[str]:
             if pattern.search(path):
                 selected.update(section_names)
                 matched = True
-        if not matched:
-            # Paths outside every routed area (for example `.superpowers/`)
-            # must still load the PR-content rules instead of being invisible
-            # to review.
+        # Paths outside every routed area or outside the established
+        # top-level directories (for example `.superpowers/` or a new
+        # `new-crate/src/lib.rs`) must load the PR-content rules even when
+        # another trigger such as `.rs$` already matched.
+        top_level = path.split("/", 1)[0] if "/" in path else None
+        if not matched or (
+            top_level is not None and top_level not in KNOWN_TOP_LEVEL_DIRS
+        ):
             selected.add(FALLBACK_SECTION)
     return sorted(selected)
 
@@ -1166,24 +1191,64 @@ MOD_DECLARATION = re.compile(
 )
 
 
-def module_publicly_reachable(
+def pub_use_exports(text: str, name: str) -> set[str] | str | None:
+    """Item names a declaring file re-exports from module `name` via `pub use`.
+
+    Returns None when no plain `pub use` references the module, the string
+    "all" for glob or whole-module re-exports, and otherwise the set of
+    re-exported source item names.
+    """
+    exports: set[str] = set()
+    found = False
+    for match in re.finditer(r"^\s*pub\s+use\s+([^;]+);", text, re.M):
+        clause = re.sub(r"\s+", " ", match.group(1)).strip()
+        clause = re.sub(r"^(crate::|self::|super::)+", "", clause)
+        if not re.match(re.escape(name) + r"(::|$)", clause):
+            continue
+        found = True
+        rest = clause[len(name) :]
+        if not rest.startswith("::"):
+            return "all"
+        rest = rest[2:].strip()
+        if rest == "*":
+            return "all"
+        if rest.startswith("{"):
+            for part in rest.strip("{} ").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if part == "*" or "::" in part:
+                    return "all"
+                exports.add(part.split(" as ")[0].strip())
+        else:
+            exports.add(rest.split(" as ")[0].strip())
+    if not found:
+        return None
+    return exports
+
+
+def module_public_item_filter(
     path: str,
     *,
     ref: str | None,
     worktree: bool,
     max_depth: int = 12,
-) -> bool:
+) -> tuple[bool, set[str] | None]:
     """Follow out-of-line `mod` declarations toward the crate root.
 
-    A `pub fn` in a file declared by a non-`pub` `mod foo;` is not part of the
-    crate's public API. When a declaration cannot be located (macro-generated
-    or `#[path]`-mapped modules), assume public so real gaps are not hidden.
+    Returns (reachable, item_filter). A `pub fn` in a file declared by a
+    non-`pub` `mod foo;` is not part of the crate's public API unless the
+    declaring file re-exports it via a plain `pub use`; a selective re-export
+    yields an item-name filter. When a declaration cannot be located
+    (macro-generated or `#[path]`-mapped modules), assume public so real gaps
+    are not hidden.
     """
+    item_filter: set[str] | None = None
     current = Path(path)
     for _ in range(max_depth):
         name = current.stem
         if name in ("lib", "main"):
-            return True
+            return True, item_filter
         parent = current.parent
         if name == "mod":
             name = parent.name
@@ -1208,21 +1273,39 @@ def module_publicly_reachable(
             if declaration:
                 break
         if declaration is None:
-            return True
+            return True, item_filter
         visibility = declaration.group(1) or ""
         if not visibility.startswith("pub") or visibility.startswith("pub("):
             # A private module can still expose items via a plain `pub use`
-            # re-export in the declaring file; treat that as reachable.
+            # re-export in the declaring file; a selective re-export exposes
+            # only the named items.
             declaring_text = changed_file_text(
                 declaring_file.as_posix(), ref=ref, worktree=worktree
             )
-            reexport = re.compile(
-                r"^\s*pub\s+use\b[^;]*\b" + re.escape(name) + r"\b", re.M
+            exports = (
+                pub_use_exports(declaring_text, name)
+                if declaring_text is not None
+                else None
             )
-            if declaring_text is None or not reexport.search(declaring_text):
-                return False
+            if exports is None:
+                return False, None
+            if exports != "all" and item_filter is None:
+                item_filter = set(exports)
         current = declaring_file
-    return True
+    return True, item_filter
+
+
+def module_publicly_reachable(
+    path: str,
+    *,
+    ref: str | None,
+    worktree: bool,
+    max_depth: int = 12,
+) -> bool:
+    reachable, _ = module_public_item_filter(
+        path, ref=ref, worktree=worktree, max_depth=max_depth
+    )
+    return reachable
 
 
 def missing_doc_example_findings(
@@ -1242,7 +1325,10 @@ def missing_doc_example_findings(
         text = changed_file_text(path, ref=ref, worktree=worktree)
         if text is None:
             continue
-        if not module_publicly_reachable(path, ref=ref, worktree=worktree):
+        reachable, item_filter = module_public_item_filter(
+            path, ref=ref, worktree=worktree
+        )
+        if not reachable:
             continue
         lines = text.splitlines()
         skip_spans = rust_inline_test_blocks(text) + rust_private_mod_spans(text)
@@ -1255,6 +1341,10 @@ def missing_doc_example_findings(
             if not match:
                 continue
             if any(start <= line_no <= end for start, end in skip_spans):
+                continue
+            if item_filter is not None and match.group(2) not in item_filter:
+                # The declaring module re-exports selectively and this item
+                # is not part of the public surface.
                 continue
             has_examples, hidden = doc_block_above(lines, line_no - 1)
             if has_examples or hidden:
@@ -1523,7 +1613,12 @@ def dependency_diagram_findings(
             if dep not in DIAGRAM_PROSE_TARGETS
         }
         if crate not in diagram:
-            if cargo_deps:
+            # A crate absent from the diagram block is acceptable only when
+            # the architecture doc covers it elsewhere (for example the
+            # internal-crate prose and layer diagram); a genuinely new crate
+            # must be added to the doc even when it has no tenferro
+            # dependencies.
+            if cargo_deps or crate not in doc_text:
                 findings.append(
                     Finding(
                         id="dependency-diagram-drift",
@@ -1533,11 +1628,15 @@ def dependency_diagram_findings(
                         line=None,
                         summary=f"{crate} is missing from the dependency diagram",
                         detail=(
-                            f"{path} declares tenferro dependencies but "
-                            f"{DEPENDENCY_DIAGRAM_DOC} has no diagram entry "
-                            f"for {crate}. Diagram Consistency requires the "
-                            "diagram to match the implementation in the same "
-                            "PR."
+                            f"{path} exists but {DEPENDENCY_DIAGRAM_DOC} has "
+                            f"no diagram entry for {crate}"
+                            + (
+                                " and does not mention the crate anywhere"
+                                if crate not in doc_text
+                                else ""
+                            )
+                            + ". Diagram Consistency requires the diagram to "
+                            "match the implementation in the same PR."
                         ),
                     )
                 )

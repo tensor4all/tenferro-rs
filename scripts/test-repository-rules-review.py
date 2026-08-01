@@ -1370,6 +1370,95 @@ def test_module_publicly_reachable_follows_pub_use_reexport() -> None:
     )
 
 
+def test_select_rule_sections_routes_hygiene_for_unknown_top_level_rust() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["new-crate/src/lib.rs"])
+    assert mod.FALLBACK_SECTION in sections
+    sections = mod.select_rule_sections([".audit/check.rs"])
+    assert mod.FALLBACK_SECTION in sections
+    sections = mod.select_rule_sections(["crates/tenferro-cpu/src/lib.rs"])
+    assert mod.FALLBACK_SECTION not in sections
+
+
+def test_dependency_diagram_findings_reports_new_leaf_crate() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+            "",
+            "Additional internal dependencies: `tenferro-core-ops` prose.",
+        ]
+    )
+    leaf_cargo = "[dependencies]\nserde.workspace = true\n"
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-newleaf/Cargo.toml": leaf_cargo,
+            "crates/tenferro-core-ops/Cargo.toml": leaf_cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-newleaf/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-newleaf" in findings[0].summary
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-core-ops/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_pub_use_exports_parses_selective_and_glob_forms() -> None:
+    mod = load_module()
+    assert mod.pub_use_exports("pub use concrete::{einsum, plan as p};", "concrete") == {
+        "einsum",
+        "plan",
+    }
+    assert mod.pub_use_exports("pub use concrete::*;", "concrete") == "all"
+    assert mod.pub_use_exports("pub use concrete::single;", "concrete") == {"single"}
+    assert mod.pub_use_exports("pub use other::thing;", "concrete") is None
+    assert (
+        mod.pub_use_exports("pub use concrete::{\n    a,\n    b,\n};", "concrete")
+        == {"a", "b"}
+    )
+
+
+def test_missing_doc_example_findings_respects_selective_reexport() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub fn exported() {}",
+            "",
+            "pub fn internal_only() {}",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": source,
+            "crates/x/src/lib.rs": "mod concrete;\npub use concrete::{exported};",
+        },
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/concrete.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/concrete.rs": {1, 3}},
+    )
+    assert len(findings) == 1
+    assert "exported" in findings[0].detail
+    assert "internal_only" not in findings[0].detail
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1436,6 +1525,10 @@ def main() -> int:
         test_rust_inline_test_blocks_handles_multiline_cfg_attribute,
         test_rust_inline_test_blocks_skips_multiline_non_cfg_attribute,
         test_module_publicly_reachable_follows_pub_use_reexport,
+        test_select_rule_sections_routes_hygiene_for_unknown_top_level_rust,
+        test_dependency_diagram_findings_reports_new_leaf_crate,
+        test_pub_use_exports_parses_selective_and_glob_forms,
+        test_missing_doc_example_findings_respects_selective_reexport,
     ]:
         test()
     return 0
