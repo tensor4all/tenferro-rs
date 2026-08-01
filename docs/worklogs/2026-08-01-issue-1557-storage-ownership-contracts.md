@@ -48,10 +48,38 @@ for the storage ownership redesign tracked by
   owners and capabilities, and gate 7 defines handles as read-only
   descriptor references. This resolves the apparent conflict between
   "remove shallow `Clone`" (#1559) and existing `EagerTensor` cloning.
-- Copy accounting has no retention reason variant at all; acceptance asserts
-  every copy in an AD scenario carries one of the enumerated reasons. This
-  encodes "retention performs no copy" structurally instead of comparing
-  aggregate counts.
+- Copy and allocation accounting use separate reason enums and ledgers.
+  Retention has no variant in either ledger, encoding that retention performs
+  neither a copy nor an allocation instead of relying on aggregate counts.
+- Follow-up contract review after #1570 merged separated a unique
+  `OwnedSpanClaim` from a non-authoritative shared provider-resource pin.
+  Child claims can only be produced by consuming and proving a split of the
+  parent (or at an audited unsafe import boundary), and root deallocation
+  waits for every claim and lease.
+- Scoped execution now has an exact hybrid result shape: borrowed
+  identity/metadata outputs remain `'env`-bounded slots, fresh outputs are
+  owned slots, and `wait` returns an outcome that is independent of the
+  scope lifetime `'s`. Borrowed slots reject extraction without copying.
+- The earlier `lease_unique` sketch was rejected. No transition from a
+  shared pin or handle to exclusive authority exists; the unsafe raw-write
+  binder consumes an already-proven `StorageMut` capability.
+- AD descriptor liveness covers tape, checkpoint, execution, and every
+  sibling public handle. Generational IDs prevent a stale handle from
+  resolving to a reused descriptor slot, and extraction requires the caller
+  to consume the last liveness root.
+- The architecture quality gate rejects ad hoc provider or legacy-API
+  exceptions. All backends and AD/runtime use one ownership kernel; each
+  implementation phase deletes the path it replaces, and every temporary
+  bridge has an explicit removal phase.
+- Scoped retirement failure is an explicit quarantine outcome. Before a
+  borrowed scope can end, the affected root is atomically poisoned so later
+  safe access fails and the quarantine registry retains the resource. This
+  avoids both hidden copies and unsound return of a borrow whose device use
+  has unknown completion.
+- `ValueId` is group-qualified and generational, with
+  `GenerationalDescriptors` as the only liveness registry. Root claims carry
+  private provenance linked to the same root-resource identity as their
+  non-authoritative pin.
 
 ## Alternatives rejected
 
@@ -68,6 +96,13 @@ for the storage ownership redesign tracked by
 - `python3 scripts/repository-rules-review.py --base origin/main --head HEAD`.
 - Manual cross-check of every contract clause against the #1555 body and the
   phase issues it cites; no contradiction found at authoring time.
+- Follow-up amendment: `bash scripts/check-pr-fast.sh` passed after the final
+  edits.
+- Follow-up amendment: `python3 scripts/ci/run_profile.py docs` passed,
+  including rustdoc and the rendered 84-page docs site. The optional
+  dependency graph was skipped because Graphviz `dot` is not installed.
+- Independent contract reviews were repeated after each amendment round;
+  blockers were incorporated before submission.
 
 ## Remaining risks
 
@@ -78,3 +113,5 @@ for the storage ownership redesign tracked by
 - The AD `ValueGuard`/`Gradients` sketches are the least implementation-
   tested part of the contract; Phase 3 and Phase 9 may need to refine them
   through the documented change-control path.
+- The five follow-up decisions above require executable enforcement in the
+  remaining #1557 harness before G1 through G7 are considered frozen.
