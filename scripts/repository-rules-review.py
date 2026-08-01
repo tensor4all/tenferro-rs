@@ -957,8 +957,22 @@ PUB_ITEM = re.compile(
 )
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
-# Matches #[cfg(test)] and #[cfg(all(test, ...))] but not #[cfg(not(test))].
-INLINE_CFG_TEST = re.compile(r"^#\[cfg\((?:all\()?\s*test\s*[,)]")
+CFG_ATTR = re.compile(r"^#\[cfg\((.*)\)\]\s*$")
+CFG_NOT_TEST = re.compile(r"not\s*\(\s*test\s*\)")
+
+
+def is_cfg_test_attr(line: str) -> bool:
+    """True for cfg attributes gated on `test` in any operand position.
+
+    Recognizes `#[cfg(test)]`, `#[cfg(all(test, ...))]`, and
+    `#[cfg(all(..., test))]` while ignoring `not(test)` operands.
+    """
+    match = CFG_ATTR.match(line)
+    if not match:
+        return False
+    expression = CFG_NOT_TEST.sub("", match.group(1))
+    expression = re.sub(r'"[^"]*"', "", expression)
+    return bool(re.search(r"\btest\b", expression))
 # A doc-example line that binds or names a path without calling anything.
 VACUOUS_EXAMPLE_LINE = re.compile(
     r"^(?:let\s+_\w*\s*(?::[^=]{0,120})?=\s*)?[A-Za-z_][\w:<>]*;$"
@@ -990,7 +1004,7 @@ def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
     blocks: list[tuple[int, int]] = []
     index = 0
     while index < total:
-        if INLINE_CFG_TEST.match(lines[index].strip()):
+        if is_cfg_test_attr(lines[index].strip()):
             probe = index + 1
             while probe < total and (
                 not lines[probe].strip() or lines[probe].strip().startswith("#[")
@@ -1121,6 +1135,61 @@ def doc_block_above(lines: list[str], item_index: int) -> tuple[bool, bool]:
     return has_examples, hidden
 
 
+MOD_DECLARATION = re.compile(
+    r"^\s*(pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;"
+)
+
+
+def module_publicly_reachable(
+    path: str,
+    *,
+    ref: str | None,
+    worktree: bool,
+    max_depth: int = 12,
+) -> bool:
+    """Follow out-of-line `mod` declarations toward the crate root.
+
+    A `pub fn` in a file declared by a non-`pub` `mod foo;` is not part of the
+    crate's public API. When a declaration cannot be located (macro-generated
+    or `#[path]`-mapped modules), assume public so real gaps are not hidden.
+    """
+    current = Path(path)
+    for _ in range(max_depth):
+        name = current.stem
+        if name in ("lib", "main"):
+            return True
+        parent = current.parent
+        if name == "mod":
+            name = parent.name
+            parent = parent.parent
+        candidates = [parent / "mod.rs", parent.with_suffix(".rs")]
+        if parent.name == "src":
+            candidates = [parent / "lib.rs", parent / "main.rs"]
+        declaration = None
+        declaring_file = None
+        for candidate in candidates:
+            text = changed_file_text(
+                candidate.as_posix(), ref=ref, worktree=worktree
+            )
+            if text is None:
+                continue
+            for line in text.splitlines():
+                match = MOD_DECLARATION.match(line)
+                if match and match.group(2) == name:
+                    declaration = match
+                    declaring_file = candidate
+                    break
+            if declaration:
+                break
+        if declaration is None:
+            return True
+        visibility = declaration.group(1) or ""
+        if not visibility.startswith("pub") or visibility.startswith("pub("):
+            return False
+        current = declaring_file
+    return True
+
+
 def missing_doc_example_findings(
     files: list[str],
     *,
@@ -1137,6 +1206,8 @@ def missing_doc_example_findings(
             continue
         text = changed_file_text(path, ref=ref, worktree=worktree)
         if text is None:
+            continue
+        if not module_publicly_reachable(path, ref=ref, worktree=worktree):
             continue
         lines = text.splitlines()
         skip_spans = rust_inline_test_blocks(text) + rust_private_mod_spans(text)
@@ -1384,6 +1455,27 @@ def dependency_diagram_findings(
         crate = crate_match.group(1)
         cargo_text = changed_file_text(path, ref=ref, worktree=worktree)
         if cargo_text is None:
+            if crate in diagram:
+                findings.append(
+                    Finding(
+                        id="dependency-diagram-drift",
+                        severity="warn",
+                        rule_section="Documentation Policy",
+                        file=DEPENDENCY_DIAGRAM_DOC,
+                        line=None,
+                        summary=(
+                            f"Deleted crate {crate} still has a dependency "
+                            "diagram entry"
+                        ),
+                        detail=(
+                            f"{path} is removed by this change but "
+                            f"{DEPENDENCY_DIAGRAM_DOC} still lists {crate} in "
+                            "the Dependency Direction diagram. Remove the "
+                            "stale entry in the same PR (Diagram "
+                            "Consistency)."
+                        ),
+                    )
+                )
             continue
         cargo_deps = {
             dep

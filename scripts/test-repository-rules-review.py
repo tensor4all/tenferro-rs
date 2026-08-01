@@ -1228,6 +1228,89 @@ def test_dependency_diagram_findings_checks_all_crates_on_doc_only_change() -> N
     assert "tenferro-cpu" in findings[0].detail
 
 
+def test_is_cfg_test_attr_matches_any_operand_order() -> None:
+    mod = load_module()
+    assert mod.is_cfg_test_attr("#[cfg(test)]")
+    assert mod.is_cfg_test_attr('#[cfg(all(test, feature = "cuda"))]')
+    assert mod.is_cfg_test_attr('#[cfg(all(feature = "cuda", test))]')
+    assert not mod.is_cfg_test_attr("#[cfg(not(test))]")
+    assert not mod.is_cfg_test_attr('#[cfg(all(feature = "cuda", not(test)))]')
+    assert not mod.is_cfg_test_attr('#[cfg(feature = "test-utils")]')
+
+
+def test_rust_inline_test_blocks_recognizes_trailing_test_operand() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            '#[cfg(all(feature = "cuda", test))]',
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 6)]
+
+
+def test_module_publicly_reachable_respects_private_parent_declaration() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/cubecl/memory.rs": "pub fn helper() {}",
+            "crates/x/src/cubecl/mod.rs": "mod memory;\npub fn api() {}",
+            "crates/x/src/lib.rs": "pub mod cubecl;",
+        },
+    )
+    assert not mod.module_publicly_reachable(
+        "crates/x/src/cubecl/memory.rs", ref="HEAD", worktree=False
+    )
+    assert mod.module_publicly_reachable(
+        "crates/x/src/cubecl/mod.rs", ref="HEAD", worktree=False
+    )
+
+
+def test_missing_doc_example_findings_skips_privately_declared_module() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/cubecl/memory.rs": "pub fn helper() {}",
+            "crates/x/src/cubecl/mod.rs": "mod memory;",
+            "crates/x/src/lib.rs": "pub mod cubecl;",
+        },
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/cubecl/memory.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/cubecl/memory.rs": {1}},
+    )
+    assert findings == []
+
+
+def test_dependency_diagram_findings_reports_deleted_crate_entry() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-foo              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    _with_fake_text(mod, {mod.DEPENDENCY_DIAGRAM_DOC: doc})
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-foo/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "Deleted crate" in findings[0].summary
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1286,6 +1369,11 @@ def main() -> int:
         test_rust_inline_test_blocks_recognizes_cfg_all_test,
         test_rust_inline_test_blocks_ignores_cfg_not_test,
         test_dependency_diagram_findings_checks_all_crates_on_doc_only_change,
+        test_is_cfg_test_attr_matches_any_operand_order,
+        test_rust_inline_test_blocks_recognizes_trailing_test_operand,
+        test_module_publicly_reachable_respects_private_parent_declaration,
+        test_missing_doc_example_findings_skips_privately_declared_module,
+        test_dependency_diagram_findings_reports_deleted_crate_entry,
     ]:
         test()
     return 0
