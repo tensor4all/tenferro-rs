@@ -30,6 +30,8 @@ use std::any::Any;
 #[cfg(feature = "cuda")]
 mod cubecl;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod event_retirement;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;

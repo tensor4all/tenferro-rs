@@ -1822,8 +1822,6 @@ fn freeze_candidate(
         let identity = record
             .identity
             .ok_or(RuntimeConfigError::IdentityExhausted)?;
-        let event_domain_index =
-            u32::try_from(index + 1).map_err(|_| RuntimeConfigError::IdentityExhausted)?;
         if let Some(owner) = record.registration.cache_owner.clone() {
             cache_owners.push(FrozenCacheOwner {
                 id: engine_cache_owner_id(&engine_id),
@@ -1839,7 +1837,7 @@ fn freeze_candidate(
             });
         }
         let provider_device_identity = record.registration.provider_device_identity().clone();
-        let event_domain_id = EventDomainId::runtime_allocated(event_domain_index);
+        let event_domain_id = EventDomainId::new(runtime_id, epoch, identity);
         engine_locations.insert(
             engine_id.clone(),
             (provider_device_identity, event_domain_id),

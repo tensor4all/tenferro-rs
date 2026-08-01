@@ -1751,19 +1751,43 @@ encapsulates runtime resources without that contract.
 ## Asynchronous Execution and Events
 
 Before input ingress or the first launch, the runtime scheduler preflights and
-starts one `EventDomainRun` for each event domain used by an execution. This
-prevents a missing driver or run-allocation failure from appearing after an
-earlier effect has executed. The scheduler resolves each dependency to the
-opaque `EventToken` returned by the dependency's run, then asks the completion
-domain's run to enqueue the node. The first scheduled use of an event domain
-fixes its position in the canonical per-execution drain order. A missing driver
-is a typed runtime execution error; there is no implicit synchronous fallback.
+starts one `EventDomainRun` for each event domain used by an execution, passing
+the exact provenance-qualified `EventDomainId` from the frozen snapshot. It
+validates that every returned run reports that same domain. This prevents a
+missing driver, run-allocation failure, or run-domain mismatch from appearing
+after an earlier effect has executed. Each completion token reports its origin
+domain; the scheduler validates that origin against the scheduled completion
+identity before retaining it. The first scheduled use of an event domain fixes
+its position in the canonical per-execution drain order. A missing driver is a
+typed runtime execution error; there is no implicit synchronous fallback.
 
-The CPU immediate driver waits every dependency before launching work. CUDA
-and WebGPU drivers preserve same-backend ordering with native stream/event or
-queue/submission primitives and use host waits only for foreign tokens. The
-scheduler holds no runtime, driver, backend, or provider lock while invoking
-`enqueue`, launching work, or draining runs.
+`ScheduledEventDomains` owns the host bridge. Operation, barrier, and collective
+nodes admit only dependency tokens whose origin is the destination completion
+domain. A transfer may have source-domain dependencies and waits on each such
+token repeatably on the host before enqueue, then passes only same-destination
+tokens to the destination run. Third-domain tokens, source or destination
+mismatches, and host-wait failures are typed rejections before the destination
+launch. A provider-returned completion is a distinct post-enqueue case:
+`enqueue` has already launched according to the run contract, so the scheduler
+validates its origin immediately after `enqueue` returns, before recording the
+completion or allowing any downstream node to launch. A malformed returned
+completion is never recorded and cannot undo the launch that produced it.
+Before dependency classification, the scheduler rechecks
+that the selected run still reports the expected domain; this prevents a
+changed run from host-waiting or forwarding a transfer dependency. After
+classification, it performs the same check immediately before every
+`EventDomainRun::enqueue`; this final check is required even for a stateful
+provider whose domain can change between observations. The source run retains
+ownership of its token through retirement. The CPU immediate driver, CUDA
+driver, and WebGPU driver each reject foreign origins directly as well; CUDA
+and WebGPU use native waits only for compatible same-origin tokens and report
+an incompatibility error for a token type or queue they cannot admit. Every
+typed event-domain error carries the closed public `EventDomainOperation`
+value (`BeginRun`, `Enqueue`, `Drain`, `TransferBridge`, or
+`ValidateCompletion`) rather than a provider function-name string. The scheduler
+holds no runtime, driver,
+backend, or provider lock while invoking `enqueue`, launching work, or
+draining runs.
 
 Native retirement has a wider exceptional fallback. If CUDA cannot recover the
 scheduled stream, it attempts a context-wide barrier; both stream and context
@@ -1778,11 +1802,28 @@ After the first enqueue or launch failure, the scheduler admits no later node
 and drains every run that was started. It also drains after successful output
 execution and collects outputs only after draining. Input, intermediate,
 transfer, and output storage remains retained until this drain completes.
-`EventDomainRun::drain` is a retirement boundary on both success and error; a
-driver may report completion failure only after work can no longer access
-retained resources. During panic unwinding, domain runs are dropped before
-value stores, so driver `Drop` cleanup drains outstanding work before tensor
-storage can be released. If execution and explicit cleanup both fail, the
+Every provider run is held behind a private runtime-owned wrapper. The wrapper
+takes ownership of the returned `Box<dyn EventDomainRun>` immediately after
+`begin_run`; its Drop path takes and attempts that Box exactly once inside a
+panic boundary, discarding a provider Drop panic without retrying it. Explicit
+drain similarly catches each individual public-provider `drain` panic, converts
+it to a typed `EventDomainError::DrainPanicked` carrying the domain and a safe
+panic message, continues retiring later runs, and returns the first cleanup
+error.
+`EventDomainRun::drain` observes work that is already progressing: it does not
+depend on another event-domain run being drained before this run can start.
+It is a retirement boundary on both success and error; a driver may report
+completion failure only after work can no longer access retained resources.
+If explicit drain is skipped, `Drop` performs the equivalent best-effort
+retirement, and neither explicit drain nor implicit retirement may unwind.
+During panic unwinding, domain runs are dropped before value stores, so driver
+cleanup retires outstanding work before tensor storage can be released. CUDA
+and WebGPU explicit drain paths preserve provider-specific typed errors,
+including provider panics, while their implicit run, submission-guard, and
+native-handle retirement bodies—including cleanup and diagnostic formatting—
+are contained by the single crate-private non-unwinding helper in
+`tenferro-gpu`. That helper is intentionally provider-neutral so Metal can
+reuse the same Drop contract. If execution and explicit cleanup both fail, the
 execution error remains the typed source and the cleanup failure is included in
 the diagnostic.
 

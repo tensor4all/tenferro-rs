@@ -8,28 +8,109 @@ use std::collections::HashSet;
 use std::error::Error as StdError;
 #[cfg(test)]
 use std::fmt;
+#[cfg(test)]
+use std::num::NonZeroU64;
 
-use super::{FrozenTransferRegistry, ResolvedTransferEndpoint, ResolvedTransferRoute};
+use super::{
+    FrozenTransferRegistry, RegistrationIdentity, ResolvedTransferEndpoint, ResolvedTransferRoute,
+    RuntimeEpoch, RuntimeId,
+};
 use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
 use crate::{EngineId, Error, StorageClass, TransferEndpoint};
 
-/// Opaque runtime event-domain identifier.
+/// Provenance-qualified identity of one frozen direct-engine event domain.
 ///
-/// A0.1 threads the current snapshot-local slot representation through
-/// resolved transfer endpoints. Full event provenance and native token
-/// bridging remain pending for A0.2.
+/// An event domain is identified by the runtime that owns it, the immutable
+/// configuration epoch that published it, and the frozen registration identity
+/// of the direct engine slot. It is not a reusable slot number.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::EventDomainId;
+///
+/// fn inspect(domain: EventDomainId) {
+///     let _runtime = domain.runtime_id();
+///     let _epoch = domain.epoch();
+///     let _registration = domain.registration_identity();
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct EventDomainId(u32);
+pub struct EventDomainId {
+    runtime_id: RuntimeId,
+    epoch: RuntimeEpoch,
+    registration_identity: RegistrationIdentity,
+}
 
 impl EventDomainId {
-    pub(crate) fn runtime_allocated(value: u32) -> Self {
-        Self(value)
+    pub(crate) const fn new(
+        runtime_id: RuntimeId,
+        epoch: RuntimeEpoch,
+        registration_identity: RegistrationIdentity,
+    ) -> Self {
+        Self {
+            runtime_id,
+            epoch,
+            registration_identity,
+        }
+    }
+
+    /// Return the runtime that owns this event domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::EventDomainId;
+    ///
+    /// fn inspect(domain: EventDomainId) {
+    ///     let _runtime = domain.runtime_id();
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn runtime_id(self) -> RuntimeId {
+        self.runtime_id
+    }
+
+    /// Return the immutable configuration epoch that published this domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::EventDomainId;
+    ///
+    /// fn inspect(domain: EventDomainId) {
+    ///     let _epoch = domain.epoch();
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn epoch(self) -> RuntimeEpoch {
+        self.epoch
+    }
+
+    /// Return the frozen direct-engine registration identity for this domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::EventDomainId;
+    ///
+    /// fn inspect(domain: EventDomainId) {
+    ///     let _registration = domain.registration_identity();
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn registration_identity(self) -> RegistrationIdentity {
+        self.registration_identity
     }
 
     #[cfg(test)]
-    pub(crate) fn runtime_created_for_test(value: u32) -> Self {
-        Self(value)
+    pub(crate) const fn runtime_created_for_test(
+        runtime_id: RuntimeId,
+        epoch: RuntimeEpoch,
+        registration_identity: RegistrationIdentity,
+    ) -> Self {
+        Self::new(runtime_id, epoch, registration_identity)
     }
 }
 
@@ -274,7 +355,6 @@ impl ScheduledTransfer {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn source_event_domain(&self) -> EventDomainId {
         self.source_location.event_domain_id()
     }
@@ -323,7 +403,14 @@ impl ScheduledCollective {
         Self {
             dependencies: Box::new([]),
             completion: EventCompletion::new(
-                EventDomainId::runtime_created_for_test(0),
+                EventDomainId::runtime_created_for_test(
+                    RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+                    RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+                    RegistrationIdentity::new(
+                        NonZeroU64::new(1).expect("registration issuer"),
+                        NonZeroU64::new(1).expect("registration ordinal"),
+                    ),
+                ),
                 EventSlotId::new(0),
                 0,
             ),
@@ -607,6 +694,8 @@ impl ScheduledGraph {
                     }
                     if transfer.dependencies().iter().any(|dependency| {
                         dependency.domain() != transfer.source_location().event_domain_id()
+                            && dependency.domain()
+                                != transfer.destination_location().event_domain_id()
                     }) {
                         return Err(ScheduleValidationError::DependencyEventDomainMismatch {
                             index,

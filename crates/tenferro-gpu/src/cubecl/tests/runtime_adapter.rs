@@ -2,6 +2,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
+use tenferro_runtime::{
+    CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
+    HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime, StorageClass,
+};
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
 use super::*;
@@ -13,11 +17,17 @@ struct TestCudaBuffer {
 }
 
 #[derive(Debug)]
-struct FailingEventToken;
+struct FailingEventToken {
+    origin: EventDomainId,
+}
 
 impl EventToken for FailingEventToken {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.origin
     }
 
     fn wait(&self) -> tenferro_runtime::Result<()> {
@@ -27,6 +37,37 @@ impl EventToken for FailingEventToken {
             "injected dependency failure",
         ))
     }
+}
+
+fn test_event_domain(suffix: &str) -> EventDomainId {
+    let engine_id = EngineId::new(format!("tenferro.test.cuda.event.{suffix}"))
+        .expect("CUDA event test engine id");
+    let storage = StorageClass::new(format!("tenferro.test.cuda.storage.{suffix}"))
+        .expect("CUDA event test storage class");
+    let registration = EngineRegistration::new(
+        engine_id.clone(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
+            format!("target:{suffix}"),
+        )
+        .expect("CUDA event test provider device"),
+        ExecutionContextIdentity::of::<()>(),
+        HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
+        Arc::from(vec![storage.clone()]),
+        storage,
+        CoreCapabilityBundle::default(),
+    )
+    .expect("CUDA event test registration");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(registration)
+        .expect("CUDA event test engine registration");
+    let runtime = builder.build().expect("CUDA event test runtime");
+    let snapshot = runtime.snapshot().expect("CUDA event test snapshot");
+    snapshot
+        .engine(&engine_id)
+        .expect("CUDA event test engine snapshot")
+        .event_domain_id()
 }
 
 impl BackendBuffer<f32> for TestCudaBuffer {
@@ -138,6 +179,15 @@ fn cuda_registration_installs_native_event_domain_driver() {
 }
 
 #[test]
+fn cuda_event_domain_has_no_generic_foreign_token_wait_fallback() {
+    let source = include_str!("../event_domain.rs");
+    assert!(
+        !source.contains("_ => dependency.wait()?"),
+        "CUDA event admission must reject foreign origins instead of host-waiting them"
+    );
+}
+
+#[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     if !gpu_available() {
@@ -149,7 +199,8 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host input");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");
     let driver = CudaEventDomainDriver::new(runtime.clone());
-    let run = driver.begin_run().expect("CUDA event-domain run");
+    let domain = test_event_domain("native");
+    let run = driver.begin_run(domain).expect("CUDA event-domain run");
 
     // A run may cross scheduler worker threads. Its captured CubeCL stream must
     // remain stable rather than following each worker's thread-local stream.
@@ -170,7 +221,6 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 Ok(())
             };
             let first_completion = run.enqueue(&[], &mut first).expect("first enqueue");
-            drop(first);
             (
                 run,
                 backend,
@@ -197,7 +247,6 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     let second_completion = run
         .enqueue(&[first_completion], &mut second)
         .expect("dependent enqueue");
-    drop(second);
     assert_eq!(second_launches, 1);
 
     second_completion.wait().expect("first completion wait");
@@ -209,9 +258,11 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         forbidden_launches += 1;
         Ok(())
     };
-    let dependency_error = run.enqueue(&[Arc::new(FailingEventToken)], &mut forbidden);
+    let dependency_error = run.enqueue(
+        &[Arc::new(FailingEventToken { origin: domain })],
+        &mut forbidden,
+    );
     assert!(dependency_error.is_err());
-    drop(forbidden);
     assert_eq!(forbidden_launches, 0);
 
     let mut panic_output = None;

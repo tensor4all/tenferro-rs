@@ -218,6 +218,15 @@ pub enum Error {
         source: BoxError,
     },
 
+    /// A runtime event-domain provenance or admission contract failed.
+    #[error("event-domain operation failed: {source}")]
+    EventDomain {
+        /// Structured event-domain failure with expected/actual provenance.
+        #[from]
+        #[source]
+        source: crate::runtime::EventDomainError,
+    },
+
     /// A `TracedTensor` passed to graph-executor input bindings is not a
     /// placeholder (has attached data).
     #[error(
@@ -636,7 +645,9 @@ impl Error {
             Self::AdRuleSource { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::TensorRuntime(error) => error.kind(),
             Self::Extension { kind, .. } => *kind,
-            Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,
+            Self::RuntimeState { .. }
+            | Self::RuntimeStateSource { .. }
+            | Self::EventDomain { .. } => ErrorKind::RuntimeState,
             Self::PlaceholderDtypeMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::DTypeMismatch)
             }
@@ -694,6 +705,7 @@ impl Error {
             | Self::UnexpectedBinding { .. }
             | Self::UnboundPlaceholder { .. }
             | Self::DuplicateBinding { .. } => Some(ErrorPhase::Execution),
+            Self::EventDomain { .. } => Some(ErrorPhase::Execution),
             Self::SymbolicShapeConversion { phase, .. } => Some(*phase),
             Self::ShapeExpressionEvaluation { .. } => Some(ErrorPhase::Execution),
             _ => None,

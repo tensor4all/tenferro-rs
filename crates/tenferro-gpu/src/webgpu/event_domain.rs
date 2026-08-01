@@ -1,12 +1,17 @@
 use std::any::Any;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use cubecl::stream_id::StreamId;
 use cubecl_wgpu::WgpuSubmission;
-use tenferro_runtime::runtime::{EventDomainDriver, EventDomainRun, EventToken};
+use tenferro_runtime::runtime::{
+    EventDomainDriver, EventDomainError, EventDomainId, EventDomainOperation, EventDomainRun,
+    EventToken,
+};
 use tenferro_runtime::Error as RuntimeError;
 
 use super::WebGpuRuntime;
+use crate::event_retirement::best_effort_retirement;
 
 const EVENT_OP: &str = "webgpu_event_domain";
 
@@ -26,9 +31,13 @@ impl WebGpuEventDomainDriver {
 }
 
 impl EventDomainDriver for WebGpuEventDomainDriver {
-    fn begin_run(&self) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
+    fn begin_run(
+        &self,
+        domain: EventDomainId,
+    ) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
         Ok(Box::new(WebGpuEventDomainRun {
             runtime: self.runtime.clone(),
+            domain,
             identity: Arc::clone(&self.identity),
             stream_id: StreamId::current(),
         }))
@@ -38,11 +47,16 @@ impl EventDomainDriver for WebGpuEventDomainDriver {
 #[derive(Debug)]
 struct WebGpuEventDomainRun {
     runtime: WebGpuRuntime,
+    domain: EventDomainId,
     identity: Arc<()>,
     stream_id: StreamId,
 }
 
 impl EventDomainRun for WebGpuEventDomainRun {
+    fn domain(&self) -> EventDomainId {
+        self.domain
+    }
+
     fn enqueue(
         &mut self,
         dependencies: &[Arc<dyn EventToken>],
@@ -53,8 +67,16 @@ impl EventDomainRun for WebGpuEventDomainRun {
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
-        self.stream_id
-            .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.stream_id
+                .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
+        })) {
+            Ok(result) => result,
+            Err(_) => Err(RuntimeError::from(crate::Error::backend_source(
+                EVENT_OP,
+                WebGpuEventDomainPanic,
+            ))),
+        }
     }
 }
 
@@ -65,12 +87,39 @@ impl WebGpuEventDomainRun {
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
         for dependency in dependencies {
-            match dependency.as_any().downcast_ref::<WebGpuEventToken>() {
-                Some(token) if Arc::ptr_eq(&token.identity, &self.identity) => {
-                    // WGPU preserves submission order on one queue. The completion
-                    // remains a scheduler dependency without a host-side wait.
-                }
-                _ => dependency.wait()?,
+            let actual = dependency.origin();
+            if actual != self.domain {
+                return Err(RuntimeError::from(
+                    EventDomainError::DependencyDomainMismatch {
+                        operation: EventDomainOperation::Enqueue,
+                        node_index: None,
+                        expected: self.domain,
+                        actual,
+                    },
+                ));
+            }
+            let token = dependency
+                .as_any()
+                .downcast_ref::<WebGpuEventToken>()
+                .ok_or_else(|| {
+                    RuntimeError::from(EventDomainError::IncompatibleTokenType {
+                        operation: EventDomainOperation::Enqueue,
+                        node_index: None,
+                        expected: self.domain,
+                        actual,
+                        token_type: "non-WebGPU event token",
+                    })
+                })?;
+            if !Arc::ptr_eq(&token.identity, &self.identity) {
+                return Err(RuntimeError::from(
+                    EventDomainError::IncompatibleTokenType {
+                        operation: EventDomainOperation::Enqueue,
+                        node_index: None,
+                        expected: self.domain,
+                        actual,
+                        token_type: "WebGPU event token from another queue",
+                    },
+                ));
             }
         }
 
@@ -84,6 +133,7 @@ impl WebGpuEventDomainRun {
         };
         cleanup.disarm();
         Ok(Arc::new(WebGpuEventToken {
+            domain: self.domain,
             identity: Arc::clone(&self.identity),
             submission,
         }))
@@ -92,12 +142,16 @@ impl WebGpuEventDomainRun {
 
 impl Drop for WebGpuEventDomainRun {
     fn drop(&mut self) {
-        if let Err(error) = self
-            .stream_id
-            .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
-        {
-            eprintln!("tenferro-gpu: failed to drain WebGPU event-domain run during Drop: {error}");
-        }
+        best_effort_retirement(|| {
+            if let Err(error) = self
+                .stream_id
+                .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
+            {
+                eprintln!(
+                    "tenferro-gpu: failed to drain WebGPU event-domain run during Drop: {error}"
+                );
+            }
+        });
     }
 }
 
@@ -136,17 +190,20 @@ impl<'a> SubmissionCleanupGuard<'a> {
 impl Drop for SubmissionCleanupGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            if let Err(error) = retire_webgpu_run(self.runtime, self.stream_id) {
-                eprintln!(
-                    "tenferro-gpu: failed to retire WebGPU work during submission unwind: {error}"
-                );
-            }
+            best_effort_retirement(|| {
+                if let Err(error) = retire_webgpu_run(self.runtime, self.stream_id) {
+                    eprintln!(
+                        "tenferro-gpu: failed to retire WebGPU work during submission unwind: {error}"
+                    );
+                }
+            });
         }
     }
 }
 
 #[derive(Debug)]
 struct WebGpuEventToken {
+    domain: EventDomainId,
     identity: Arc<()>,
     submission: WgpuSubmission,
 }
@@ -154,6 +211,10 @@ struct WebGpuEventToken {
 impl EventToken for WebGpuEventToken {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.domain
     }
 
     fn wait(&self) -> tenferro_runtime::Result<()> {
@@ -200,6 +261,10 @@ fn retire_webgpu_run(runtime: &WebGpuRuntime, stream_id: StreamId) -> tenferro_r
 fn webgpu_backend_error(source: impl std::error::Error + Send + Sync + 'static) -> RuntimeError {
     RuntimeError::from(crate::Error::backend_source(EVENT_OP, source))
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("WebGPU event-domain operation panicked")]
+struct WebGpuEventDomainPanic;
 
 #[derive(Debug, thiserror::Error)]
 #[error("the CubeCL WebGPU server is unavailable")]

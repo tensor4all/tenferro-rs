@@ -24,10 +24,10 @@ use crate::runtime::schedule::{
     EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
 };
 use crate::runtime::{
-    CacheOwnerError, CacheStats, EventDomainRun, EventToken, FrozenTransferRegistry,
-    InputSignature, PrepareError, PrepareOptions, PreparedOperationPlan, ResolvedTransferRoute,
-    Runtime, RuntimeCacheOwner, SubmissionError, TransferError, TransferProviderContractError,
-    TransferRequest,
+    CacheOwnerError, CacheStats, EventDomainError, EventDomainOperation, EventDomainRun,
+    EventToken, FrozenTransferRegistry, InputSignature, PrepareError, PrepareOptions,
+    PreparedOperationPlan, ResolvedTransferRoute, Runtime, RuntimeCacheOwner, SubmissionError,
+    TransferError, TransferProviderContractError, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -1102,7 +1102,7 @@ fn execute_scheduled_slots<'input>(
                 value,
             });
         }
-        for node in schedule.nodes() {
+        for (node_index, node) in schedule.nodes().iter().enumerate() {
             match node {
                 ScheduledNode::Operation(operation_node) => {
                     let mut launch = || {
@@ -1159,12 +1159,12 @@ fn execute_scheduled_slots<'input>(
                             &mut staged,
                         )
                     };
-                    event_domains.enqueue(node, &mut launch)?;
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Transfer(transfer) => {
                     let mut launch =
                         || execute_scheduled_transfer(execution, transfer, &mut located);
-                    event_domains.enqueue(node, &mut launch)?;
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Collective(_) => {
                     return Err(Error::runtime_state(
@@ -1175,7 +1175,7 @@ fn execute_scheduled_slots<'input>(
                 }
                 ScheduledNode::Barrier(_) => {
                     let mut launch = || Ok(());
-                    event_domains.enqueue(node, &mut launch)?;
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
             }
         }
@@ -1201,8 +1201,9 @@ fn execute_scheduled_slots<'input>(
     }
 }
 
-struct ScheduledEventDomains {
-    runs: Vec<(super::EventDomainId, Box<dyn EventDomainRun>)>,
+#[derive(Debug)]
+pub(crate) struct ScheduledEventDomains {
+    runs: Vec<RuntimeOwnedEventDomainRun>,
     completions: HashMap<EventDependency, Arc<dyn EventToken>>,
 }
 
@@ -1223,7 +1224,17 @@ impl ScheduledEventDomains {
         }
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, driver) in drivers {
-            runs.push((domain, driver.begin_run()?));
+            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+            let actual = run.domain(EventDomainOperation::BeginRun)?;
+            if actual != domain {
+                return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                    operation: EventDomainOperation::BeginRun,
+                    node_index: None,
+                    expected: domain,
+                    actual,
+                }));
+            }
+            runs.push(run);
         }
         Ok(Self {
             runs,
@@ -1231,27 +1242,70 @@ impl ScheduledEventDomains {
         })
     }
 
-    fn enqueue(
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        drivers: Vec<(super::EventDomainId, Arc<dyn super::EventDomainDriver>)>,
+    ) -> Result<Self> {
+        let mut runs = Vec::with_capacity(drivers.len());
+        for (domain, driver) in drivers {
+            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+            let actual = run.domain(EventDomainOperation::BeginRun)?;
+            if actual != domain {
+                return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                    operation: EventDomainOperation::BeginRun,
+                    node_index: None,
+                    expected: domain,
+                    actual,
+                }));
+            }
+            runs.push(run);
+        }
+        Ok(Self {
+            runs,
+            completions: HashMap::new(),
+        })
+    }
+
+    pub(crate) fn enqueue(
         &mut self,
+        node_index: usize,
         node: &ScheduledNode,
         launch: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
-        let dependencies = node
-            .dependencies()
-            .iter()
-            .map(|dependency| {
-                self.completions.get(dependency).cloned().ok_or_else(|| {
-                    Error::runtime_state(
-                        "Runtime::run_compiled",
-                        ErrorPhase::Execution,
-                        format!("scheduled dependency {dependency:?} has no completion token"),
-                    )
-                })
-            })
-            .collect::<Result<SmallVec<[Arc<dyn EventToken>; 4]>>>()?;
         let completion = node.completion();
+        let destination = completion.domain();
         let run_index = self.run_index(completion.domain())?;
-        let completion_event = self.runs[run_index].1.enqueue(&dependencies, launch)?;
+        let actual_preflight_domain = self.runs[run_index].domain(EventDomainOperation::Enqueue)?;
+        if actual_preflight_domain != destination {
+            return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                operation: EventDomainOperation::Enqueue,
+                node_index: Some(node_index),
+                expected: destination,
+                actual: actual_preflight_domain,
+            }));
+        }
+        let dependencies = self.classify_dependencies(node_index, node, destination)?;
+        let actual_run_domain = self.runs[run_index].domain(EventDomainOperation::Enqueue)?;
+        if actual_run_domain != destination {
+            return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                operation: EventDomainOperation::Enqueue,
+                node_index: Some(node_index),
+                expected: destination,
+                actual: actual_run_domain,
+            }));
+        }
+        let completion_event = self.runs[run_index].enqueue(&dependencies, launch)?;
+        let actual = completion_event.origin();
+        if actual != completion.domain() {
+            return Err(event_domain_error(
+                EventDomainError::CompletionTokenDomainMismatch {
+                    operation: EventDomainOperation::ValidateCompletion,
+                    node_index: Some(node_index),
+                    expected: completion.domain(),
+                    actual,
+                },
+            ));
+        }
         self.completions.insert(
             EventDependency::from_completion(completion),
             completion_event,
@@ -1259,25 +1313,182 @@ impl ScheduledEventDomains {
         Ok(())
     }
 
-    fn run_index(&mut self, domain: super::EventDomainId) -> Result<usize> {
+    fn classify_dependencies(
+        &self,
+        node_index: usize,
+        node: &ScheduledNode,
+        destination: super::EventDomainId,
+    ) -> Result<SmallVec<[Arc<dyn EventToken>; 4]>> {
+        let mut admitted = SmallVec::with_capacity(node.dependencies().len());
+        for dependency in node.dependencies() {
+            let dependency_completion =
+                self.completions.get(dependency).cloned().ok_or_else(|| {
+                    Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        format!("scheduled dependency {dependency:?} has no completion token"),
+                    )
+                })?;
+            let actual = dependency_completion.origin();
+            if actual != dependency.domain() {
+                return Err(event_domain_error(
+                    EventDomainError::DependencyDomainMismatch {
+                        operation: match node {
+                            ScheduledNode::Transfer(_) => EventDomainOperation::TransferBridge,
+                            ScheduledNode::Operation(_)
+                            | ScheduledNode::Collective(_)
+                            | ScheduledNode::Barrier(_) => EventDomainOperation::Enqueue,
+                        },
+                        node_index: Some(node_index),
+                        expected: dependency.domain(),
+                        actual,
+                    },
+                ));
+            }
+            match node {
+                ScheduledNode::Transfer(transfer) => {
+                    let source = transfer.source_event_domain();
+                    if actual == destination {
+                        admitted.push(dependency_completion);
+                    } else if actual == source {
+                        dependency_completion.wait().map_err(|source_error| {
+                            event_domain_error(EventDomainError::DependencyWaitFailed {
+                                operation: EventDomainOperation::TransferBridge,
+                                node_index: Some(node_index),
+                                expected: destination,
+                                actual,
+                                source: Box::new(source_error),
+                            })
+                        })?;
+                    } else {
+                        return Err(event_domain_error(
+                            EventDomainError::DependencyDomainMismatch {
+                                operation: EventDomainOperation::TransferBridge,
+                                node_index: Some(node_index),
+                                expected: source,
+                                actual,
+                            },
+                        ));
+                    }
+                }
+                ScheduledNode::Operation(_)
+                | ScheduledNode::Collective(_)
+                | ScheduledNode::Barrier(_) => {
+                    if actual != destination {
+                        return Err(event_domain_error(
+                            EventDomainError::DependencyDomainMismatch {
+                                operation: EventDomainOperation::Enqueue,
+                                node_index: Some(node_index),
+                                expected: destination,
+                                actual,
+                            },
+                        ));
+                    }
+                    admitted.push(dependency_completion);
+                }
+            }
+        }
+        Ok(admitted)
+    }
+
+    fn run_index(&self, domain: super::EventDomainId) -> Result<usize> {
         if let Some(index) = self
             .runs
             .iter()
-            .position(|(candidate, _)| *candidate == domain)
+            .position(|run| run.requested_domain() == domain)
         {
             return Ok(index);
         }
         Err(missing_event_domain_driver(domain))
     }
 
-    fn drain(&mut self) -> Result<()> {
+    pub(crate) fn drain(&mut self) -> Result<()> {
         let mut first_error = None;
-        for (_, run) in &mut self.runs {
-            if let Err(error) = run.drain() {
-                first_error.get_or_insert(error);
+        for run in &mut self.runs {
+            let domain = run.requested_domain();
+            match catch_unwind(AssertUnwindSafe(|| run.drain())) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                Err(payload) => {
+                    first_error.get_or_insert(event_domain_error(
+                        EventDomainError::DrainPanicked {
+                            operation: EventDomainOperation::Drain,
+                            domain,
+                            message: safe_event_domain_panic_message(payload),
+                        },
+                    ));
+                }
             }
         }
         first_error.map_or(Ok(()), Err)
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeOwnedEventDomainRun {
+    requested_domain: super::EventDomainId,
+    inner: Option<Box<dyn EventDomainRun>>,
+}
+
+impl RuntimeOwnedEventDomainRun {
+    fn new(requested_domain: super::EventDomainId, inner: Box<dyn EventDomainRun>) -> Self {
+        Self {
+            requested_domain,
+            inner: Some(inner),
+        }
+    }
+
+    fn requested_domain(&self) -> super::EventDomainId {
+        self.requested_domain
+    }
+
+    fn domain(&self, operation: EventDomainOperation) -> Result<super::EventDomainId> {
+        self.inner
+            .as_deref()
+            .map(EventDomainRun::domain)
+            .ok_or_else(|| event_domain_run_state_error(operation))
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Arc<dyn EventToken>> {
+        self.inner
+            .as_deref_mut()
+            .ok_or_else(|| event_domain_run_state_error(EventDomainOperation::Enqueue))?
+            .enqueue(dependencies, launch)
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        self.inner
+            .as_deref_mut()
+            .ok_or_else(|| event_domain_run_state_error(EventDomainOperation::Drain))?
+            .drain()
+    }
+}
+
+fn event_domain_run_state_error(operation: EventDomainOperation) -> Error {
+    Error::runtime_state(
+        "Runtime::run_compiled",
+        ErrorPhase::Execution,
+        format!("{operation} used an event-domain run after ownership was consumed"),
+    )
+}
+
+impl Drop for RuntimeOwnedEventDomainRun {
+    fn drop(&mut self) {
+        let Some(run) = self.inner.take() else {
+            return;
+        };
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(run))) {
+            // Do not run an arbitrary panic-payload destructor while
+            // containing the provider's Drop panic; the Box has already been
+            // consumed and must never be retried.
+            std::mem::forget(payload);
+        }
     }
 }
 
@@ -1287,6 +1498,26 @@ fn missing_event_domain_driver(domain: super::EventDomainId) -> Error {
         ErrorPhase::Execution,
         format!("event domain {domain:?} has no registered driver"),
     )
+}
+
+fn event_domain_error(source: EventDomainError) -> Error {
+    Error::from(source)
+}
+
+fn safe_event_domain_panic_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    match payload.downcast::<&'static str>() {
+        Ok(message) => (*message).to_owned(),
+        Err(payload) => match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => {
+                // An unknown provider-controlled payload may have a panicking
+                // destructor. Keep it from escaping while retaining only the
+                // bounded diagnostic category needed by the cleanup error.
+                std::mem::forget(payload);
+                "non-string panic payload".to_owned()
+            }
+        },
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

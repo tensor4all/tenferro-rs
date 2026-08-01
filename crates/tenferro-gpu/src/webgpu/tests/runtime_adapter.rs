@@ -4,10 +4,24 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 #[cfg(not(target_family = "wasm"))]
+use tenferro_runtime::{
+    CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
+    HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime, StorageClass,
+};
+#[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::TensorStructural;
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TypedTensor};
 
 use super::*;
+
+#[test]
+fn webgpu_event_domain_has_no_generic_foreign_token_wait_fallback() {
+    let source = include_str!("../event_domain.rs");
+    assert!(
+        !source.contains("_ => dependency.wait()?"),
+        "WebGPU event admission must reject foreign origins instead of host-waiting them"
+    );
+}
 use crate::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 
 #[derive(Debug)]
@@ -18,12 +32,18 @@ struct TestWebGpuBuffer {
 
 #[derive(Debug)]
 #[cfg(not(target_family = "wasm"))]
-struct FailingEventToken;
+struct FailingEventToken {
+    origin: EventDomainId,
+}
 
 #[cfg(not(target_family = "wasm"))]
 impl EventToken for FailingEventToken {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.origin
     }
 
     fn wait(&self) -> tenferro_runtime::Result<()> {
@@ -33,6 +53,38 @@ impl EventToken for FailingEventToken {
             "injected dependency failure",
         ))
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn test_event_domain(suffix: &str) -> EventDomainId {
+    let engine_id = EngineId::new(format!("tenferro.test.webgpu.event.{suffix}"))
+        .expect("WebGPU event test engine id");
+    let storage = StorageClass::new(format!("tenferro.test.webgpu.storage.{suffix}"))
+        .expect("WebGPU event test storage class");
+    let registration = EngineRegistration::new(
+        engine_id.clone(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.webgpu").expect("WebGPU event test provider"),
+            format!("target:{suffix}"),
+        )
+        .expect("WebGPU event test provider device"),
+        ExecutionContextIdentity::of::<()>(),
+        HardwareClassId::new("tenferro.test.webgpu").expect("WebGPU event test hardware class"),
+        Arc::from(vec![storage.clone()]),
+        storage,
+        CoreCapabilityBundle::default(),
+    )
+    .expect("WebGPU event test registration");
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(registration)
+        .expect("WebGPU event test engine registration");
+    let runtime = builder.build().expect("WebGPU event test runtime");
+    let snapshot = runtime.snapshot().expect("WebGPU event test snapshot");
+    snapshot
+        .engine(&engine_id)
+        .expect("WebGPU event test engine snapshot")
+        .event_domain_id()
 }
 
 impl BackendBuffer<f32> for TestWebGpuBuffer {
@@ -178,7 +230,8 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).expect("host input");
     let input = upload_webgpu_tensor(&runtime, &host).expect("WebGPU upload");
     let driver = WebGpuEventDomainDriver::new(runtime.clone());
-    let run = driver.begin_run().expect("WebGPU event-domain run");
+    let domain = test_event_domain("native");
+    let run = driver.begin_run(domain).expect("WebGPU event-domain run");
 
     // A run may cross scheduler worker threads. Its captured CubeCL stream must
     // remain stable rather than following each worker's thread-local stream.
@@ -198,7 +251,6 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 Ok(())
             };
             let first_completion = run.enqueue(&[], &mut first).expect("first enqueue");
-            drop(first);
             (
                 run,
                 backend,
@@ -225,7 +277,6 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     let second_completion = run
         .enqueue(&[first_completion], &mut second)
         .expect("dependent enqueue");
-    drop(second);
     assert_eq!(second_launches, 1);
 
     second_completion.wait().expect("first completion wait");
@@ -237,9 +288,11 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         forbidden_launches += 1;
         Ok(())
     };
-    let dependency_error = run.enqueue(&[Arc::new(FailingEventToken)], &mut forbidden);
+    let dependency_error = run.enqueue(
+        &[Arc::new(FailingEventToken { origin: domain })],
+        &mut forbidden,
+    );
     assert!(dependency_error.is_err());
-    drop(forbidden);
     assert_eq!(forbidden_launches, 0);
 
     let mut panic_output = None;

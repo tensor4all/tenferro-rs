@@ -452,6 +452,36 @@ fn fresh_builds_have_distinct_runtime_and_registration_identities() -> Result<()
 }
 
 #[test]
+fn unchanged_engine_gets_a_distinct_event_domain_in_the_next_epoch() -> Result<(), Box<dyn StdError>>
+{
+    let runtime = runtime_with("tenferro.engine.event-epoch", 1)?;
+    let before = runtime.snapshot()?;
+    let engine = engine_id("tenferro.engine.event-epoch");
+    let before_engine = before.engine(&engine).expect("initial event engine");
+    let before_domain = before_engine.event_domain_id();
+    let before_identity = before_engine.registration_identity();
+
+    runtime.reconfigure(|edit| {
+        edit.register_engine(registration("tenferro.engine.event-epoch-other", 2)?)?;
+        Ok(())
+    })?;
+
+    let after = runtime.snapshot()?;
+    let after_engine = after.engine(&engine).expect("next-epoch event engine");
+    let after_domain = after_engine.event_domain_id();
+    assert_eq!(before_identity, after_engine.registration_identity());
+    assert_ne!(before.epoch(), after.epoch());
+    assert_ne!(before_domain, after_domain);
+    assert_eq!(before_domain.runtime_id(), after_domain.runtime_id());
+    assert_eq!(after_domain.epoch(), after.epoch());
+    assert_eq!(
+        after_domain.registration_identity(),
+        after_engine.registration_identity()
+    );
+    Ok(())
+}
+
+#[test]
 fn fresh_build_epoch_matches_snapshot_epoch() -> Result<(), Box<dyn StdError>> {
     let runtime = runtime_with("tenferro.engine.epoch", 1)?;
     let snapshot = runtime.snapshot()?;

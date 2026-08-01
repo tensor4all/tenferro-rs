@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::super::schedule::{
@@ -6,13 +7,30 @@ use super::super::schedule::{
     ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer,
 };
 use super::super::{
-    EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, ResolvedTransferRoute,
-    StorageClass, TransferProvider, TransferRequest,
+    EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
+    ResolvedTransferRoute, RuntimeEpoch, RuntimeId, StorageClass, TransferProvider,
+    TransferRequest,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::DType;
 
-fn location(engine: &str, domain: u32, storage: &str) -> ExecutionLocation {
+fn qualified_domain(
+    runtime_value: u64,
+    epoch_value: u64,
+    issuer_value: u64,
+    ordinal_value: u64,
+) -> EventDomainId {
+    EventDomainId::runtime_created_for_test(
+        RuntimeId::from_nonzero(NonZeroU64::new(runtime_value).expect("runtime id")),
+        RuntimeEpoch::from_nonzero(NonZeroU64::new(epoch_value).expect("runtime epoch")),
+        RegistrationIdentity::new(
+            NonZeroU64::new(issuer_value).expect("registration issuer"),
+            NonZeroU64::new(ordinal_value).expect("registration ordinal"),
+        ),
+    )
+}
+
+fn location(engine: &str, domain: EventDomainId, storage: &str) -> ExecutionLocation {
     ExecutionLocation::new(
         EngineId::new(engine).expect("engine id"),
         ProviderDeviceIdentity::new(
@@ -20,7 +38,7 @@ fn location(engine: &str, domain: u32, storage: &str) -> ExecutionLocation {
             format!("target:{engine}"),
         )
         .expect("provider target"),
-        EventDomainId::runtime_created_for_test(domain),
+        domain,
         StorageClass::new(storage).expect("storage class"),
     )
 }
@@ -85,12 +103,12 @@ fn instruction(
 fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
     let source = location(
         "tenferro-test.engine.source",
-        1,
+        qualified_domain(1, 1, 1, 1),
         "tenferro-test.storage.shared",
     );
     let destination = location(
         "tenferro-test.engine.destination",
-        2,
+        qualified_domain(1, 1, 1, 2),
         "tenferro-test.storage.shared",
     );
     let program = ExecProgram {
@@ -150,17 +168,17 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
 fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
     let first = location(
         "tenferro-test.engine.first",
-        1,
+        qualified_domain(1, 1, 1, 1),
         "tenferro-test.storage.first",
     );
     let reachable = location(
         "tenferro-test.engine.reachable",
-        2,
+        qualified_domain(1, 1, 1, 2),
         "tenferro-test.storage.reachable",
     );
     let destination = location(
         "tenferro-test.engine.destination",
-        3,
+        qualified_domain(1, 1, 1, 3),
         "tenferro-test.storage.destination",
     );
     let program = ExecProgram {
@@ -194,7 +212,7 @@ fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
 fn operation_dependencies_follow_input_order_and_are_deduplicated() {
     let execution = location(
         "tenferro-test.engine.execution",
-        1,
+        qualified_domain(1, 1, 1, 1),
         "tenferro-test.storage.execution",
     );
     let program = ExecProgram {
@@ -233,32 +251,24 @@ fn operation_dependencies_follow_input_order_and_are_deduplicated() {
     assert_eq!(
         operation.dependencies(),
         &[
-            EventDependency::new(
-                EventDomainId::runtime_created_for_test(1),
-                EventSlotId::new(1),
-                0,
-            ),
-            EventDependency::new(
-                EventDomainId::runtime_created_for_test(1),
-                EventSlotId::new(0),
-                0,
-            ),
+            EventDependency::new(qualified_domain(1, 1, 1, 1), EventSlotId::new(1), 0,),
+            EventDependency::new(qualified_domain(1, 1, 1, 1), EventSlotId::new(0), 0,),
         ]
     );
 }
 
 #[test]
 fn schedule_validation_rejects_dependency_without_prior_completion() {
-    let source = EventDomainId::runtime_created_for_test(1);
-    let destination = EventDomainId::runtime_created_for_test(2);
+    let source = qualified_domain(1, 1, 1, 1);
+    let destination = qualified_domain(1, 1, 1, 2);
     let source_location = location(
         "tenferro-test.engine.source",
-        1,
+        source,
         "tenferro-test.storage.source",
     );
     let destination_location = location(
         "tenferro-test.engine.destination",
-        2,
+        destination,
         "tenferro-test.storage.destination",
     );
     let graph = ScheduledGraph::for_test(vec![ScheduledNode::Transfer(ScheduledTransfer::new(
@@ -274,7 +284,7 @@ fn schedule_validation_rejects_dependency_without_prior_completion() {
 
 #[test]
 fn schedule_validation_rejects_duplicate_completion_identity() {
-    let domain = EventDomainId::runtime_created_for_test(1);
+    let domain = qualified_domain(1, 1, 1, 1);
     let graph = ScheduledGraph::for_test(vec![
         ScheduledNode::Operation(ScheduledOperation::for_test(
             domain,
@@ -296,7 +306,7 @@ fn schedule_validation_rejects_duplicate_completion_identity() {
 fn retained_bytes_include_operation_dependencies() {
     let execution = location(
         "tenferro-test.engine.execution",
-        1,
+        qualified_domain(1, 1, 1, 1),
         "tenferro-test.storage.execution",
     );
     let program = ExecProgram {
@@ -327,8 +337,8 @@ fn retained_bytes_include_operation_dependencies() {
 
 #[test]
 fn transfer_node_bridges_distinct_event_domains() {
-    let source = EventDomainId::runtime_created_for_test(1);
-    let destination = EventDomainId::runtime_created_for_test(2);
+    let source = qualified_domain(1, 1, 1, 1);
+    let destination = qualified_domain(1, 1, 1, 2);
     let transfer = ScheduledTransfer::for_test(
         source,
         destination,
@@ -361,8 +371,8 @@ fn collective_node_is_representable_but_execution_is_unsupported() {
 
 #[test]
 fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() {
-    let source = EventDomainId::runtime_created_for_test(7);
-    let destination = EventDomainId::runtime_created_for_test(8);
+    let source = qualified_domain(1, 1, 1, 7);
+    let destination = qualified_domain(1, 1, 1, 8);
     let graph = ScheduledGraph::for_test(vec![
         ScheduledNode::Operation(ScheduledOperation::for_test(
             source,
@@ -378,7 +388,7 @@ fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() 
             1,
             location(
                 "tenferro-test.engine.destination",
-                8,
+                destination,
                 "tenferro-test.storage.destination",
             ),
             [],

@@ -55,12 +55,17 @@ fn test_provider_device_identity(
 #[derive(Debug)]
 struct RecordingEventToken {
     label: &'static str,
+    origin: EventDomainId,
     events: Arc<Mutex<Vec<String>>>,
 }
 
 impl EventToken for RecordingEventToken {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.origin
     }
 
     fn wait(&self) -> tenferro_runtime::Result<()> {
@@ -72,14 +77,26 @@ impl EventToken for RecordingEventToken {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DrainBehavior {
+    Success,
+    ReturnError,
+    Panic,
+}
+
 #[derive(Debug)]
 struct RecordingEventDomainRun {
     label: &'static str,
+    domain: EventDomainId,
     events: Arc<Mutex<Vec<String>>>,
-    fail_drain: bool,
+    drain_behavior: DrainBehavior,
 }
 
 impl EventDomainRun for RecordingEventDomainRun {
+    fn domain(&self) -> EventDomainId {
+        self.domain
+    }
+
     fn enqueue(
         &mut self,
         dependencies: &[Arc<dyn EventToken>],
@@ -96,6 +113,7 @@ impl EventDomainRun for RecordingEventDomainRun {
         launch()?;
         Ok(Arc::new(RecordingEventToken {
             label: self.label,
+            origin: self.domain,
             events: Arc::clone(&self.events),
         }))
     }
@@ -105,13 +123,13 @@ impl EventDomainRun for RecordingEventDomainRun {
             .lock()
             .expect("event log lock")
             .push(format!("{}:drain", self.label));
-        if self.fail_drain {
-            Err(Error::Internal(format!(
+        match self.drain_behavior {
+            DrainBehavior::Success => Ok(()),
+            DrainBehavior::ReturnError => Err(Error::Internal(format!(
                 "{} event-domain drain failure",
                 self.label
-            )))
-        } else {
-            Ok(())
+            ))),
+            DrainBehavior::Panic => panic!("{} event-domain drain panic", self.label),
         }
     }
 }
@@ -129,43 +147,51 @@ impl Drop for RecordingEventDomainRun {
 struct RecordingEventDomainDriver {
     label: &'static str,
     events: Arc<Mutex<Vec<String>>>,
-    fail_drain: bool,
+    drain_behavior: DrainBehavior,
 }
 
 impl EventDomainDriver for RecordingEventDomainDriver {
-    fn begin_run(&self) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
+    fn begin_run(
+        &self,
+        domain: EventDomainId,
+    ) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
         self.events
             .lock()
             .expect("event log lock")
             .push(format!("{}:begin", self.label));
         Ok(Box::new(RecordingEventDomainRun {
             label: self.label,
+            domain,
             events: Arc::clone(&self.events),
-            fail_drain: self.fail_drain,
+            drain_behavior: self.drain_behavior,
         }))
     }
+}
+
+fn event_domain_with_drain_behavior(
+    label: &'static str,
+    events: &Arc<Mutex<Vec<String>>>,
+    drain_behavior: DrainBehavior,
+) -> Arc<dyn EventDomainDriver> {
+    Arc::new(RecordingEventDomainDriver {
+        label,
+        events: Arc::clone(events),
+        drain_behavior,
+    })
 }
 
 fn recording_event_domain(
     label: &'static str,
     events: &Arc<Mutex<Vec<String>>>,
 ) -> Arc<dyn EventDomainDriver> {
-    Arc::new(RecordingEventDomainDriver {
-        label,
-        events: Arc::clone(events),
-        fail_drain: false,
-    })
+    event_domain_with_drain_behavior(label, events, DrainBehavior::Success)
 }
 
 fn failing_drain_event_domain(
     label: &'static str,
     events: &Arc<Mutex<Vec<String>>>,
 ) -> Arc<dyn EventDomainDriver> {
-    Arc::new(RecordingEventDomainDriver {
-        label,
-        events: Arc::clone(events),
-        fail_drain: true,
-    })
+    event_domain_with_drain_behavior(label, events, DrainBehavior::ReturnError)
 }
 
 fn cpu_registration(
@@ -3178,8 +3204,16 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
             .iter()
             .filter(|event| event.as_str() == "destination:enqueue:1")
             .count(),
-        2,
-        "transfer and destination operation must both consume dependencies: {events:?}"
+        1,
+        "only the same-destination operation dependency reaches the destination run: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "destination:enqueue:0")
+            .count(),
+        1,
+        "the transfer source dependency is host-bridged before destination enqueue: {events:?}"
     );
     assert!(events.contains(&"source:wait".to_owned()), "{events:?}");
     assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
@@ -3482,9 +3516,19 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     Ok(())
 }
 
-#[test]
-fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
-) -> Result<(), Box<dyn StdError>> {
+struct TransferDrainFailureObservation {
+    error: Error,
+    events: Vec<String>,
+    forward_calls: usize,
+    failing_calls: usize,
+    upstream_execute: usize,
+    downstream_execute: usize,
+    drops: usize,
+}
+
+fn run_transfer_and_drain_failure(
+    drain_behavior: DrainBehavior,
+) -> Result<TransferDrainFailureObservation, Box<dyn StdError>> {
     let core_backend = CpuBackend::new();
     let extension_domain = AllocationDomainId::fresh();
     let extension_backend =
@@ -3519,7 +3563,11 @@ fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
             true,
             true,
         )?
-        .with_event_domain_driver(failing_drain_event_domain("source", &event_log)),
+        .with_event_domain_driver(event_domain_with_drain_behavior(
+            "source",
+            &event_log,
+            drain_behavior,
+        )),
     )?;
     builder.register_engine(
         cpu_registration_with_storage_id(
@@ -3585,40 +3633,102 @@ fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
-    assert!(error.to_string().contains("intentional transfer failure"));
+    let events = event_log.lock().expect("event log lock").clone();
+    Ok(TransferDrainFailureObservation {
+        error,
+        events,
+        forward_calls: forward.calls(),
+        failing_calls: failing.calls.load(Ordering::SeqCst),
+        upstream_execute: upstream_counters.execute.load(Ordering::SeqCst),
+        downstream_execute: downstream_counters.execute.load(Ordering::SeqCst),
+        drops: drops.load(Ordering::SeqCst),
+    })
+}
+
+fn assert_transfer_and_drain_failure(
+    observation: &TransferDrainFailureObservation,
+    cleanup_message: &str,
+) {
+    assert!(observation
+        .error
+        .to_string()
+        .contains("intentional transfer failure"));
     assert!(
-        error
-            .to_string()
-            .contains("source event-domain drain failure"),
-        "combined execution and cleanup diagnostics must preserve both failures: {error}"
+        observation.error.to_string().contains(cleanup_message),
+        "combined execution and cleanup diagnostics must preserve both failures: {}",
+        observation.error
     );
-    assert_eq!(forward.calls(), 1);
-    assert_eq!(failing.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(upstream_counters.execute.load(Ordering::SeqCst), 1);
+    let cleanup = observation
+        .error
+        .source()
+        .expect("combined error must retain cleanup wrapper");
+    let primary = cleanup
+        .source()
+        .expect("cleanup wrapper must retain the primary execution error");
+    assert!(primary.to_string().contains("intentional transfer failure"));
+    assert_eq!(observation.forward_calls, 1);
+    assert_eq!(observation.failing_calls, 1);
+    assert_eq!(observation.upstream_execute, 1);
     assert_eq!(
-        downstream_counters.execute.load(Ordering::SeqCst),
-        0,
+        observation.downstream_execute, 0,
         "the downstream operation must not execute after its input transfer fails"
     );
     assert_eq!(
-        drops.load(Ordering::SeqCst),
-        1,
+        observation.drops, 1,
         "the extension output retained at its source location must be released on failure"
     );
-    let events = event_log.lock().expect("event log lock").clone();
     assert_eq!(
-        events
+        observation
+            .events
             .iter()
-            .filter(|event| event.as_str() == "source:enqueue:1")
+            .filter(|event| event.as_str() == "source:enqueue:0")
             .count(),
-        1,
-        "the failing reverse transfer is admitted, but the downstream operation is not: {events:?}"
+        2,
+        "the reverse transfer reaches the source run without its foreign token: {:?}",
+        observation.events
     );
-    assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
     assert!(
-        events.contains(&"destination:drain".to_owned()),
-        "{events:?}"
+        !observation
+            .events
+            .iter()
+            .any(|event| event == "source:enqueue:1"),
+        "the source run must not receive the foreign destination token: {:?}",
+        observation.events
     );
+    assert_eq!(
+        observation
+            .events
+            .iter()
+            .filter(|event| event.as_str() == "destination:wait")
+            .count(),
+        2,
+        "the scheduler host bridge and downstream operation each wait on destination work: {:?}",
+        observation.events
+    );
+    assert!(
+        observation.events.contains(&"source:drain".to_owned()),
+        "{:?}",
+        observation.events
+    );
+    assert!(
+        observation.events.contains(&"destination:drain".to_owned()),
+        "{:?}",
+        observation.events
+    );
+}
+
+#[test]
+fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
+) -> Result<(), Box<dyn StdError>> {
+    let observation = run_transfer_and_drain_failure(DrainBehavior::ReturnError)?;
+    assert_transfer_and_drain_failure(&observation, "source event-domain drain failure");
+    Ok(())
+}
+
+#[test]
+fn transfer_and_drain_panic_preserve_primary_and_cleanup_errors() -> Result<(), Box<dyn StdError>> {
+    let observation = run_transfer_and_drain_failure(DrainBehavior::Panic)?;
+    assert_transfer_and_drain_failure(&observation, "source event-domain drain panic");
     Ok(())
 }
 

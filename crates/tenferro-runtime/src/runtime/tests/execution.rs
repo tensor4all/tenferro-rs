@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
@@ -20,7 +21,8 @@ use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
     ExecutionContextIdentity, HardwareClassId, PreparedOperationPlan, ProviderDeviceIdentity,
-    ProviderId, Runtime, RuntimeConfigError, StorageClass, SubmissionError,
+    ProviderId, RegistrationIdentity, Runtime, RuntimeConfigError, RuntimeEpoch, RuntimeId,
+    StorageClass, SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -30,6 +32,17 @@ fn test_provider_device_identity(target: &str) -> ProviderDeviceIdentity {
         target,
     )
     .expect("provider target")
+}
+
+fn qualified_domain(ordinal: u64) -> EventDomainId {
+    EventDomainId::runtime_created_for_test(
+        RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+        RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+        RegistrationIdentity::new(
+            NonZeroU64::new(1).expect("registration issuer"),
+            NonZeroU64::new(ordinal).expect("registration ordinal"),
+        ),
+    )
 }
 
 #[derive(Debug)]
@@ -333,13 +346,13 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
     let root_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-root")?,
         test_provider_device_identity("output-root"),
-        EventDomainId::runtime_created_for_test(1),
+        qualified_domain(1),
         StorageClass::new("tenferro-test.output-root-storage")?,
     );
     let output_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-nonroot")?,
         test_provider_device_identity("output-nonroot"),
-        EventDomainId::runtime_created_for_test(2),
+        qualified_domain(2),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
     let domain = AllocationDomainId::fresh();
@@ -384,7 +397,7 @@ fn result_retention_preserves_output_that_reuses_last_input_slot() {
     let location = ExecutionLocation::new(
         EngineId::new("tenferro-test.same-slot-engine").expect("engine id"),
         test_provider_device_identity("same-slot"),
-        EventDomainId::runtime_created_for_test(1),
+        qualified_domain(1),
         StorageClass::new("tenferro-test.same-slot-storage").expect("storage class"),
     );
     let instruction = ExecInstruction {
