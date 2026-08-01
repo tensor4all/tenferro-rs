@@ -16,10 +16,14 @@ use tenferro_tensor::{
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
 pub(crate) fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
+    cube_count_for_len_for_op(len, "cube_count_for_len")
+}
+
+pub(crate) fn cube_count_for_len_for_op(len: usize, op: &'static str) -> crate::Result<CubeCount> {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
     let cubes = u32::try_from(cubes).map_err(|_| {
         crate::Error::invalid_argument(
-            "cube_count_for_len",
+            op,
             "length",
             format!(
                 "1D CubeCL launch for {len} elements requires {cubes} cubes, \
@@ -431,10 +435,18 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let len = checked_shape_product("cubecl_alloc_output", shape)?;
+    alloc_output_for_op(rt, shape, "cubecl_alloc_output")
+}
+
+pub(crate) fn alloc_output_for_op<T: CubeElement + Clone + Send + Sync + 'static>(
+    rt: &CudaRuntime,
+    shape: &[usize],
+    op: &'static str,
+) -> crate::Result<TypedTensor<T>> {
+    let len = checked_shape_product(op, shape)?;
     let byte_len = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
         crate::Error::invalid_argument(
-            "cubecl_alloc_output",
+            op,
             "shape",
             format!("output byte length overflow for shape {shape:?}"),
         )

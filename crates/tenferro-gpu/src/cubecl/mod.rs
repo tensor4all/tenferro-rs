@@ -131,9 +131,9 @@ mod runtime;
 mod runtime_adapter;
 
 use dispatch::{
-    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
-    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
-    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    alloc_bool_output, alloc_output, alloc_output_for_op, bool_tensor_array_arg, comptime_sequence,
+    cube_count_for_len, cube_count_for_len_for_op, cube_dim_1d, dtype_mismatch, ensure_axes_unique,
+    ensure_axis, ensure_rank, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
@@ -778,14 +778,8 @@ impl CudaBackend {
     /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
     /// bound to this backend's runtime.
     pub fn zeros_f64(&self, len: usize) -> crate::Result<Tensor> {
-        let stable_validation_op = |error| match error {
-            crate::Error::Validation { source, .. } => {
-                crate::Error::validation("zeros_f64", source)
-            }
-            error => error,
-        };
-        let count = cube_count_for_len(len).map_err(stable_validation_op)?;
-        let output = alloc_output::<f64>(self.runtime(), &[len]).map_err(stable_validation_op)?;
+        let count = cube_count_for_len_for_op(len, "zeros_f64")?;
+        let output = alloc_output_for_op::<f64>(self.runtime(), &[len], "zeros_f64")?;
         launch_nullary_into(
             self.runtime(),
             &output,
