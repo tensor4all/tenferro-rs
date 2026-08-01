@@ -127,8 +127,80 @@ and `ResidentOutputContract`, plus missing
 The test also exposed that its result type must carry snapshot and
 reconfiguration errors rather than erase them into `RuntimeConfigError`.
 
+The witness-propagation RED test was then added before refactoring frozen
+storage. It requires a frozen executable slot to expose one complete witness
+containing provider/device identity, execution context, executor, and event
+driver. The focused command still fails at this point because
+`EngineSnapshotView::executable_witness` and the remaining migrated test
+constructors were not yet implemented:
+
+```text
+cargo test -p tenferro-runtime --lib frozen_executable_selection_returns_one_complete_witness --no-fail-fast
+```
+
+The observed failures included the missing `executable_witness` method, old
+test-only `EngineRegistration::new` callsites, and the old
+`with_tensor_backend_executor` function-pointer reference. This is the honest
+RED boundary for the tagged frozen-witness redesign; no implementation claim
+is made from this run.
+
 The target state is a single immutable executable witness, a consuming
 `CandidateConfig -> BoundCandidateConfig -> freeze` pipeline, and typed
 preparation/execution failures before schedule admission. The existing
 runtime/epoch/registration-qualified event provenance and deliberate transfer
 host bridge remain valid and are not being replaced.
+
+## Checkpoint: provider binding, candidate validation, and frozen witness
+
+This checkpoint carries the preserved stack from parent `origin/main`
+`0ee2d0dc2f8d21ff62ea682f90f34e4319108ace`; the pre-checkpoint candidate was
+`1e7df44e` (`test(runtime): add RED witness and binding contracts`). The
+withdrawn accepted head remains only provenance:
+`5572bc9df73f5cfcf10ecd29120dbc714855e7ba`. The redesign is intentionally
+breaking: there are no compatibility constructors, setters, token APIs, or
+foreign-provider fallbacks.
+
+The executable witness is now assembled atomically as
+`ProviderExecutableBinding -> ExecutableEngineContract`. The contract owns the
+exact provider/device identity, execution-context identity, executor, event
+driver, named `InputIngressContract`, and capabilities. Preparation-only
+registrations use the separate `ProviderPreparationBinding` state. Runtime
+selection and frozen storage propagate the tagged witness as one
+`ExecutableEngineSnapshot`; execution and event-domain setup no longer split it
+into independently looked-up executor/driver options. Candidate validation
+consumes the private editor into `BoundCandidateConfig`, proving endpoint
+existence, storage, provider binding, and transfer routes before freeze. Freeze
+receives mandatory identities and bound routes and performs only total internal
+assembly, not stale-route semantic revalidation.
+
+### GREEN evidence
+
+- `cargo test -p tenferro-runtime --lib --no-fail-fast`: PASS (378 tests).
+- `cargo test -p tenferro-runtime --test integration --no-fail-fast`: PASS
+  (118 tests), including no-launch invalid configuration and production
+  snapshot-to-driver wiring behavior.
+- `cargo test -p tenferro-runtime --doc --no-fail-fast`: PASS (402 doctests).
+- `cargo test -p tenferro-cpu --lib --no-fail-fast`: PASS (502 tests).
+- `cargo test -p tenferro-ad --lib --no-fail-fast`: PASS (57 tests).
+- `cargo check -p tenferro-gpu --lib`: PASS.
+- `cargo check -p tenferro-gpu --features webgpu`: PASS.
+- `cargo fmt --all`: PASS.
+- `git diff --check`: PASS.
+
+The focused RED/GREEN evidence above supplements the earlier RED run in this
+worklog; it does not claim that the later typed-error or retirement redesign is
+complete. Hardware-only CUDA execution was not available in this environment;
+CUDA compilation without hardware remains a later verification gate.
+
+### Deliberately deferred audit items
+
+- Replace remaining stringly `runtime_state` execution/configuration failures
+  with typed variants and assert fields/source chains, including missing
+  executable contracts, completion tokens, duplicate destinations, unsupported
+  schedule nodes, and consumed runs.
+- Replace provider/runtime run booleans and `Option` lifecycle carriers with
+  typed retirement states, aggregate ordered cleanup diagnostics, and route
+  implicit Drop diagnostics through a panic-contained structured sink.
+- Remove the remaining raw `include_str!`/substring structural tests and finish
+  the repository-wide audit for stale provisional wording, CUDA registration
+  documentation, parallel-Option state, and compatibility paths.

@@ -30,7 +30,11 @@ pub use capability::{
     PreparedOperationHandle, PreparedOperationPlan, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
-pub use engine_registration::EngineRegistration;
+pub use engine_registration::{
+    EngineRegistration, ExecutableEngineContract, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, ProviderExecutableBinding, ProviderPreparationBinding,
+    ResidentOutputContract, RuntimeInputContract,
+};
 pub use error::{
     EngineExecutionContractError, ExecutionContextMismatch, ExecutionPolicyError,
     ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,

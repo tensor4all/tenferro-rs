@@ -20,9 +20,12 @@ use crate::runtime::execution::{
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, PreparedOperationPlan, ProviderDeviceIdentity,
-    ProviderId, RegistrationIdentity, Runtime, RuntimeConfigError, RuntimeEpoch, RuntimeId,
-    StorageClass, SubmissionError,
+    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
+    ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
+    ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
+    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, StorageClass,
+    SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -209,37 +212,48 @@ fn admission_test_registration(
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let storage = StorageClass::new("tenferro-test.admission-storage.v1")?;
     let engine_id = EngineId::new("tenferro-test.admission-engine.v1")?;
-    let mut registration = EngineRegistration::new(
+    let registration = EngineRegistration::executable(ProviderExecutableBinding::new(
         engine_id,
-        ProviderDeviceIdentity::new(
-            ProviderId::new("tenferro.test.admission").expect("provider id"),
-            "admission-engine",
-        )
-        .expect("provider target"),
-        ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
         HardwareClassId::new("tenferro-test.admission-hardware.v1")?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        CoreCapabilityBundle::builder().build(),
-    )?
-    .with_input_signature_validator({
-        let storage = storage.clone();
-        move |_, family, domain, candidate| {
-            candidate == &storage && family.is_none() && domain.is_none()
-        }
-    })
-    .with_input_ingress_validator(
-        {
-            let storage = storage.clone();
-            move |_, candidate| candidate == &storage
-        },
-        {
-            let storage = storage.clone();
-            move |input, candidate| candidate == &storage && input.backend_family().is_none()
-        },
-        move |input, candidate| candidate == &storage && input.backend_family().is_none(),
-    );
-    registration.execution_engine = Some(Arc::new(AdmissionTestExecutor { fail_materialize }));
+        ExecutableEngineContract::from_erased_for_test(
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.admission").expect("provider id"),
+                "admission-engine",
+            )
+            .expect("provider target"),
+            ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
+            CoreCapabilityBundle::builder().build(),
+            Arc::new(AdmissionTestExecutor { fail_materialize }),
+            Arc::new(ImmediateEventDomainDriver::new()),
+            InputIngressContract::new(
+                InputPlacementContract::new({
+                    let storage = storage.clone();
+                    move |_, candidate| candidate == &storage
+                }),
+                InputSignatureContract::new({
+                    let storage = storage.clone();
+                    move |_, family, domain, candidate| {
+                        candidate == &storage && family.is_none() && domain.is_none()
+                    }
+                }),
+                RuntimeInputContract::new({
+                    let storage = storage.clone();
+                    move |input, candidate| {
+                        candidate == &storage && input.backend_family().is_none()
+                    }
+                }),
+                ResidentOutputContract::new({
+                    let storage = storage.clone();
+                    move |input, candidate| {
+                        candidate == &storage && input.backend_family().is_none()
+                    }
+                }),
+            ),
+            None,
+        ),
+    )?);
     Ok(registration)
 }
 

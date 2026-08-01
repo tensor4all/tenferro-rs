@@ -6,13 +6,14 @@ use std::sync::Arc;
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken, ImmediateEventDomainDriver};
 use tenferro_runtime::{
     CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
-    HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime, StorageClass,
+    HardwareClassId, ProviderDeviceIdentity, ProviderId, ProviderPreparationBinding, Runtime,
+    StorageClass,
 };
 
 fn test_domain(suffix: &str) -> Result<EventDomainId, Box<dyn StdError>> {
     let engine_id = EngineId::new(format!("tenferro.test.event.engine.{suffix}"))?;
     let storage = StorageClass::new(format!("tenferro.test.event.storage.{suffix}"))?;
-    let registration = EngineRegistration::new(
+    let registration = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
         engine_id.clone(),
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.event")?,
@@ -23,7 +24,7 @@ fn test_domain(suffix: &str) -> Result<EventDomainId, Box<dyn StdError>> {
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
-    )?;
+    )?);
     let mut builder = Runtime::builder();
     builder.register_engine(registration)?;
     let runtime = builder.build()?;

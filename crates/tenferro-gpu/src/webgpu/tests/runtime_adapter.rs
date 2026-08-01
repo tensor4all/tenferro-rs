@@ -6,7 +6,8 @@ use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::{
     CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
-    HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime, StorageClass,
+    HardwareClassId, ProviderDeviceIdentity, ProviderId, ProviderPreparationBinding, Runtime,
+    StorageClass,
 };
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::TensorStructural;
@@ -61,20 +62,22 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .expect("WebGPU event test engine id");
     let storage = StorageClass::new(format!("tenferro.test.webgpu.storage.{suffix}"))
         .expect("WebGPU event test storage class");
-    let registration = EngineRegistration::new(
-        engine_id.clone(),
-        ProviderDeviceIdentity::new(
-            ProviderId::new("tenferro.test.webgpu").expect("WebGPU event test provider"),
-            format!("target:{suffix}"),
+    let registration = EngineRegistration::preparation_only(
+        ProviderPreparationBinding::new(
+            engine_id.clone(),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.webgpu").expect("WebGPU event test provider"),
+                format!("target:{suffix}"),
+            )
+            .expect("WebGPU event test provider device"),
+            ExecutionContextIdentity::of::<()>(),
+            HardwareClassId::new("tenferro.test.webgpu").expect("WebGPU event test hardware class"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            CoreCapabilityBundle::default(),
         )
-        .expect("WebGPU event test provider device"),
-        ExecutionContextIdentity::of::<()>(),
-        HardwareClassId::new("tenferro.test.webgpu").expect("WebGPU event test hardware class"),
-        Arc::from(vec![storage.clone()]),
-        storage,
-        CoreCapabilityBundle::default(),
-    )
-    .expect("WebGPU event test registration");
+        .expect("WebGPU event test registration"),
+    );
     let mut builder = Runtime::builder();
     builder
         .register_engine(registration)

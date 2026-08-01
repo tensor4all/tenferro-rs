@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 use tenferro_runtime::{
     CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
-    HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime, StorageClass,
+    HardwareClassId, ProviderDeviceIdentity, ProviderId, ProviderPreparationBinding, Runtime,
+    StorageClass,
 };
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
@@ -44,20 +45,22 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .expect("CUDA event test engine id");
     let storage = StorageClass::new(format!("tenferro.test.cuda.storage.{suffix}"))
         .expect("CUDA event test storage class");
-    let registration = EngineRegistration::new(
-        engine_id.clone(),
-        ProviderDeviceIdentity::new(
-            ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
-            format!("target:{suffix}"),
+    let registration = EngineRegistration::preparation_only(
+        ProviderPreparationBinding::new(
+            engine_id.clone(),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
+                format!("target:{suffix}"),
+            )
+            .expect("CUDA event test provider device"),
+            ExecutionContextIdentity::of::<()>(),
+            HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            CoreCapabilityBundle::default(),
         )
-        .expect("CUDA event test provider device"),
-        ExecutionContextIdentity::of::<()>(),
-        HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
-        Arc::from(vec![storage.clone()]),
-        storage,
-        CoreCapabilityBundle::default(),
-    )
-    .expect("CUDA event test registration");
+        .expect("CUDA event test registration"),
+    );
     let mut builder = Runtime::builder();
     builder
         .register_engine(registration)

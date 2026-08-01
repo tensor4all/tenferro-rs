@@ -6,6 +6,7 @@ use std::sync::{Arc, Barrier};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::*;
+use crate::runtime::engine_registration::EngineRegistrationState;
 
 #[derive(Debug)]
 struct TestContext;
@@ -51,7 +52,7 @@ fn registration_with_provider_target(
     target: &str,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let host = storage("tenferro.storage.host");
-    EngineRegistration::new(
+    ProviderPreparationBinding::new(
         engine_id(engine_name),
         provider_target(target),
         ExecutionContextIdentity::of::<TestContext>(),
@@ -60,6 +61,7 @@ fn registration_with_provider_target(
         host,
         capabilities(),
     )
+    .map(EngineRegistration::preparation_only)
 }
 
 fn capabilities() -> CoreCapabilityBundle {
@@ -73,7 +75,7 @@ fn registration(
     _candidate_nonce: u64,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let host = storage("tenferro.storage.host");
-    EngineRegistration::new(
+    ProviderPreparationBinding::new(
         engine_id(engine_name),
         provider_target(engine_name),
         ExecutionContextIdentity::of::<TestContext>(),
@@ -82,6 +84,37 @@ fn registration(
         host,
         capabilities(),
     )
+    .map(EngineRegistration::preparation_only)
+}
+
+fn executable_registration(
+    engine_name: &str,
+    driver: Arc<dyn EventDomainDriver>,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let host = storage("tenferro.storage.host");
+    let provider = provider_target(engine_name);
+    let ingress = InputIngressContract::new(
+        InputPlacementContract::new(|_, _| true),
+        InputSignatureContract::new(|_, _, _, _| true),
+        RuntimeInputContract::new(|_, _| true),
+        ResidentOutputContract::new(|_, _| true),
+    );
+    let contract = ExecutableEngineContract::new(
+        provider.clone(),
+        capabilities(),
+        tenferro_cpu::CpuBackend::new(),
+        driver,
+        ingress,
+        None,
+    );
+    ProviderExecutableBinding::new(
+        engine_id(engine_name),
+        hardware(),
+        Arc::from(vec![host.clone()]),
+        host,
+        contract,
+    )
+    .map(EngineRegistration::executable)
 }
 
 fn runtime_with(engine_name: &str, candidate_nonce: u64) -> Result<Runtime, RuntimeConfigError> {
@@ -114,7 +147,10 @@ fn single_identity(runtime: &Runtime, engine_name: &str) -> RegistrationIdentity
 #[test]
 fn engine_registration_has_no_implicit_event_domain_driver() {
     let registration = registration("tenferro.engine.no-event-driver", 1).unwrap();
-    assert!(registration.event_domain_driver().is_none());
+    assert!(matches!(
+        registration.execution_state(),
+        EngineRegistrationState::PreparationOnly { .. }
+    ));
 }
 
 #[test]
@@ -405,8 +441,8 @@ fn new_route_binding_ignores_pre_freeze_engine_edits() -> Result<(), Box<dyn Std
 fn custom_event_domain_driver_survives_snapshot_freeze() -> Result<(), Box<dyn StdError>> {
     let driver: Arc<dyn EventDomainDriver> = Arc::new(ImmediateEventDomainDriver::new());
     let weak_driver = Arc::downgrade(&driver);
-    let registration = registration("tenferro.engine.event-driver", 1)?
-        .with_event_domain_driver(Arc::clone(&driver));
+    let registration =
+        executable_registration("tenferro.engine.event-driver", Arc::clone(&driver))?;
     let mut builder = Runtime::builder();
     builder.register_engine(registration)?;
     let runtime = builder.build()?;
@@ -416,10 +452,10 @@ fn custom_event_domain_driver_survives_snapshot_freeze() -> Result<(), Box<dyn S
     let frozen = snapshot
         .engine(&engine_id("tenferro.engine.event-driver"))
         .expect("engine slot")
-        .event_domain_driver()
+        .executable_witness()
         .expect("explicit event-domain driver");
     assert!(Arc::ptr_eq(
-        frozen,
+        frozen.event_domain_driver(),
         &weak_driver.upgrade().expect("snapshot retains driver")
     ));
     Ok(())
@@ -529,7 +565,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
     let engine = engine_id("tenferro.engine.storage");
     let default = storage("tenferro.storage.host");
 
-    let empty = EngineRegistration::new(
+    let empty = ProviderPreparationBinding::new(
         engine.clone(),
         provider_target("validation-empty"),
         ExecutionContextIdentity::of::<TestContext>(),
@@ -544,7 +580,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
         RuntimeConfigError::EmptyStorageClasses { engine_id } if engine_id == engine
     ));
 
-    let duplicate = EngineRegistration::new(
+    let duplicate = ProviderPreparationBinding::new(
         engine.clone(),
         provider_target("validation-duplicate"),
         ExecutionContextIdentity::of::<TestContext>(),
@@ -564,7 +600,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
         } if engine_id == engine && storage_class == default
     ));
 
-    let missing_default = EngineRegistration::new(
+    let missing_default = ProviderPreparationBinding::new(
         engine.clone(),
         provider_target("validation-default"),
         ExecutionContextIdentity::of::<TestContext>(),
@@ -585,14 +621,14 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 
 #[test]
 fn engine_registration_records_tensor_backend_execution_bridge() -> Result<(), Box<dyn StdError>> {
-    let registration = registration("tenferro.engine.bridge", 1)?;
-    assert!(!registration.has_execution_engine());
-
-    let registration = registration
-        .with_tensor_backend_executor(tenferro_cpu::CpuBackend::new())
-        .with_input_signature_validator(|_, _, _, _| true)
-        .with_input_ingress_validator(|_, _| true, |_, _| true, |_, _| true);
-    assert!(registration.has_execution_engine());
+    let registration = executable_registration(
+        "tenferro.engine.bridge",
+        Arc::new(ImmediateEventDomainDriver::new()),
+    )?;
+    assert!(matches!(
+        registration.execution_state(),
+        EngineRegistrationState::Executable(_)
+    ));
 
     let mut builder = Runtime::builder();
     builder.register_engine(registration)?;

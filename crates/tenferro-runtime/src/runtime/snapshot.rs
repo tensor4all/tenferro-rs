@@ -11,11 +11,13 @@ use crate::program::FrozenProgram;
 
 use super::cache::{PreparedPlanCacheLimits, RuntimeCacheSet};
 use super::cache_owner::{FrozenCacheOwner, FrozenCacheOwnerKind};
+use super::engine_registration::{CandidateRegistrationToken, EngineRegistrationState};
 use super::execution;
 #[cfg(test)]
 use super::extension::ExtensionSlotFullForTest;
 use super::extension::{
-    configure_module, freeze_extension_slots, CandidateModuleRecord, ExtensionEngineSnapshotView,
+    bind_candidate_module, configure_module, freeze_extension_slots, BoundCandidateModuleRecord,
+    CandidateModuleRecord, CandidateRegistrationIdentity, ExtensionEngineSnapshotView,
     ExtensionFamilyId, FrozenExtensionSlots,
 };
 use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResult};
@@ -36,7 +38,13 @@ static NEXT_REGISTRATION_ISSUER: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Debug)]
 struct CandidateEngineRecord {
     registration: EngineRegistration,
-    identity: Option<RegistrationIdentity>,
+    identity: CandidateRegistrationIdentity,
+}
+
+#[derive(Clone, Debug)]
+struct BoundCandidateEngineRecord {
+    registration: EngineRegistration,
+    identity: RegistrationIdentity,
 }
 
 #[derive(Clone, Debug)]
@@ -48,11 +56,6 @@ enum CandidateTransferBinding {
         source: ProviderDeviceIdentity,
         destination: ProviderDeviceIdentity,
     },
-    /// A new or preserved route bound by complete-candidate validation.
-    Bound {
-        source: ProviderDeviceIdentity,
-        destination: ProviderDeviceIdentity,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -61,12 +64,25 @@ struct CandidateTransferRecord {
     binding: CandidateTransferBinding,
 }
 
+struct BoundCandidateTransferRecord {
+    provider: Arc<dyn TransferProvider>,
+    source: ProviderDeviceIdentity,
+    destination: ProviderDeviceIdentity,
+}
+
 #[derive(Clone, Debug)]
 struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
     modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
     transfers: BTreeMap<TransferRoute, CandidateTransferRecord>,
+}
+
+struct BoundCandidateConfig {
+    policy: ExecutionPolicy,
+    engines: BTreeMap<EngineId, BoundCandidateEngineRecord>,
+    modules: BTreeMap<ExtensionModuleId, BoundCandidateModuleRecord>,
+    transfers: BTreeMap<TransferRoute, BoundCandidateTransferRecord>,
 }
 
 impl CandidateConfig {
@@ -79,21 +95,24 @@ impl CandidateConfig {
         }
     }
 
-    fn from_snapshot(snapshot: &RuntimeConfigSnapshot) -> Self {
+    fn from_snapshot(snapshot: &RuntimeConfigSnapshot) -> Result<Self, RuntimeConfigError> {
         let engines = snapshot
             .engines
             .iter()
             .map(|slot| {
-                (
-                    slot.registration.engine_id().clone(),
+                let registration = slot.to_registration()?;
+                Ok((
+                    registration.engine_id().clone(),
                     CandidateEngineRecord {
-                        registration: slot.registration.clone(),
-                        identity: Some(slot.identity),
+                        registration,
+                        identity: CandidateRegistrationIdentity::Preserved(
+                            slot.metadata().identity,
+                        ),
                     },
-                )
+                ))
             })
-            .collect();
-        Self {
+            .collect::<Result<BTreeMap<_, _>, RuntimeConfigError>>()?;
+        Ok(Self {
             policy: snapshot.policy.clone(),
             engines,
             modules: snapshot.extensions.to_candidate_modules(),
@@ -119,26 +138,192 @@ impl CandidateConfig {
                     )
                 })
                 .collect(),
-        }
+        })
     }
 }
 
-#[derive(Clone)]
-struct FrozenEngineSlot {
-    registration: EngineRegistration,
+#[derive(Clone, Debug)]
+struct FrozenEngineMetadata {
+    engine_id: EngineId,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+    candidate_token: Arc<CandidateRegistrationToken>,
     identity: RegistrationIdentity,
     event_domain_id: EventDomainId,
 }
 
+#[derive(Clone)]
+struct PreparationOnlyEngineSnapshot {
+    metadata: FrozenEngineMetadata,
+    provider_device_identity: ProviderDeviceIdentity,
+    context_identity: ExecutionContextIdentity,
+    capabilities: CoreCapabilityBundle,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ExecutableEngineSnapshot {
+    metadata: FrozenEngineMetadata,
+    contract: super::ExecutableEngineContract,
+}
+
+#[derive(Clone)]
+enum FrozenEngineSlot {
+    PreparationOnly(PreparationOnlyEngineSnapshot),
+    Executable(ExecutableEngineSnapshot),
+}
+
+impl FrozenEngineSlot {
+    fn metadata(&self) -> &FrozenEngineMetadata {
+        match self {
+            Self::PreparationOnly(snapshot) => &snapshot.metadata,
+            Self::Executable(snapshot) => &snapshot.metadata,
+        }
+    }
+
+    fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        match self {
+            Self::PreparationOnly(snapshot) => &snapshot.provider_device_identity,
+            Self::Executable(snapshot) => snapshot.contract.provider_device_identity(),
+        }
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        match self {
+            Self::PreparationOnly(snapshot) => snapshot.context_identity,
+            Self::Executable(snapshot) => snapshot.contract.context_identity(),
+        }
+    }
+
+    fn capabilities(&self) -> &CoreCapabilityBundle {
+        match self {
+            Self::PreparationOnly(snapshot) => &snapshot.capabilities,
+            Self::Executable(snapshot) => snapshot.contract.capabilities(),
+        }
+    }
+
+    fn executable(&self) -> Option<&ExecutableEngineSnapshot> {
+        match self {
+            Self::PreparationOnly(_) => None,
+            Self::Executable(snapshot) => Some(snapshot),
+        }
+    }
+}
+
+impl ExecutableEngineSnapshot {
+    #[cfg(test)]
+    pub(super) fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        self.contract.provider_device_identity()
+    }
+
+    #[cfg(test)]
+    pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
+        self.contract.context_identity()
+    }
+
+    pub(super) fn executor(&self) -> &Arc<dyn super::execution::ErasedTensorBackendExecutor> {
+        self.contract.executor()
+    }
+
+    pub(super) fn event_domain_driver(&self) -> &Arc<dyn super::EventDomainDriver> {
+        self.contract.event_domain_driver()
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_executor(&self) -> bool {
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_event_domain_driver(&self) -> bool {
+        true
+    }
+
+    pub(super) fn accepts_input_placement(
+        &self,
+        placement: &tenferro_tensor::Placement,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.metadata.storage_classes.contains(storage_class)
+            && self
+                .contract
+                .accepts_input_placement(placement, storage_class)
+    }
+
+    pub(super) fn accepts_input_signature(
+        &self,
+        input: &super::InputSignatureEntry,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.metadata.storage_classes.contains(storage_class)
+            && self.contract.accepts_input_signature(input, storage_class)
+    }
+
+    pub(super) fn accepts_runtime_input(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.metadata.storage_classes.contains(storage_class)
+            && self.contract.accepts_runtime_input(input, storage_class)
+    }
+
+    pub(super) fn owns_resident_tensor(
+        &self,
+        input: &tenferro_tensor::TensorRead<'_>,
+        storage_class: &StorageClass,
+    ) -> bool {
+        self.metadata.storage_classes.contains(storage_class)
+            && self.contract.owns_resident_tensor(input, storage_class)
+    }
+}
+
+impl FrozenEngineSlot {
+    fn to_registration(&self) -> Result<EngineRegistration, RuntimeConfigError> {
+        let metadata = self.metadata();
+        let registration = match self {
+            Self::PreparationOnly(snapshot) => {
+                EngineRegistration::preparation_only(super::ProviderPreparationBinding::new(
+                    metadata.engine_id.clone(),
+                    snapshot.provider_device_identity.clone(),
+                    snapshot.context_identity,
+                    metadata.hardware_class.clone(),
+                    Arc::clone(&metadata.storage_classes),
+                    metadata.default_storage_class.clone(),
+                    snapshot.capabilities.clone(),
+                )?)
+            }
+            Self::Executable(snapshot) => {
+                EngineRegistration::executable(super::ProviderExecutableBinding::new(
+                    metadata.engine_id.clone(),
+                    metadata.hardware_class.clone(),
+                    Arc::clone(&metadata.storage_classes),
+                    metadata.default_storage_class.clone(),
+                    snapshot.contract.clone(),
+                )?)
+            }
+        };
+        Ok(registration.with_candidate_token(Arc::clone(&metadata.candidate_token)))
+    }
+}
+
 impl fmt::Debug for FrozenEngineSlot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = self.metadata();
         formatter
             .debug_struct("FrozenEngineSlot")
-            .field("engine_id", self.registration.engine_id())
-            .field("registration_identity", &self.identity)
-            .field("event_domain_id", &self.event_domain_id)
-            .field("context_identity", &self.registration.context_identity())
-            .field("hardware_class", self.registration.hardware_class())
+            .field("engine_id", &metadata.engine_id)
+            .field("registration_identity", &metadata.identity)
+            .field("event_domain_id", &metadata.event_domain_id)
+            .field("context_identity", &self.context_identity())
+            .field("hardware_class", &metadata.hardware_class)
+            .field(
+                "state",
+                &match self {
+                    Self::PreparationOnly(_) => "preparation-only",
+                    Self::Executable(_) => "executable",
+                },
+            )
             .finish_non_exhaustive()
     }
 }
@@ -220,9 +405,7 @@ impl RuntimeConfigSnapshot {
 
     #[cfg(test)]
     pub(crate) fn engine_ids_for_test(&self) -> impl Iterator<Item = &EngineId> {
-        self.engines
-            .iter()
-            .map(|slot| slot.registration.engine_id())
+        self.engines.iter().map(|slot| &slot.metadata().engine_id)
     }
 
     #[cfg(test)]
@@ -707,7 +890,8 @@ impl Runtime {
         let base = self
             .snapshot()
             .map_err(|source| RuntimeReconfigureError::State { source })?;
-        let mut candidate = CandidateConfig::from_snapshot(&base);
+        let mut candidate = CandidateConfig::from_snapshot(&base)
+            .map_err(|source| RuntimeReconfigureError::Edit { source })?;
         let mut changed = false;
         {
             let mut reconfiguration = RuntimeReconfiguration {
@@ -721,8 +905,15 @@ impl Runtime {
         if !changed {
             return Ok(base.epoch());
         }
-        validate_candidate(&mut candidate)
-            .map_err(|source| RuntimeReconfigureError::Edit { source })?;
+        let next_identity_ordinal = NonZeroU64::new(
+            self.0.next_registration_ordinal.load(Ordering::SeqCst),
+        )
+        .ok_or(RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::IdentityExhausted,
+        })?;
+        let (bound_candidate, post_ordinal) =
+            validate_candidate(candidate, self.0.issuer, next_identity_ordinal)
+                .map_err(|source| RuntimeReconfigureError::Edit { source })?;
 
         let next_epoch =
             base.epoch()
@@ -747,51 +938,19 @@ impl Runtime {
             });
         }
 
-        let missing_identities = candidate
-            .engines
-            .values()
-            .filter(|record| record.identity.is_none())
-            .count()
-            + candidate
-                .modules
-                .values()
-                .flat_map(|module| module.engines.values())
-                .filter(|record| record.identity.is_none())
-                .count();
-        let (new_identities, next_ordinal) = self
-            .plan_registration_identities(missing_identities)
-            .map_err(|source| RuntimeReconfigureError::Edit { source })?;
-        assign_new_identities(&mut candidate, new_identities);
         let next_snapshot = Arc::new(
-            freeze_candidate(self.0.runtime_id, next_epoch, candidate)
+            freeze_candidate(self.0.runtime_id, next_epoch, bound_candidate)
                 .map_err(|source| RuntimeReconfigureError::Edit { source })?,
         );
 
         self.0
             .next_registration_ordinal
-            .store(next_ordinal.get(), Ordering::SeqCst);
+            .store(post_ordinal.get(), Ordering::SeqCst);
         *guard = next_snapshot;
         self.0
             .published_epoch
             .store(next_epoch.get().get(), Ordering::Release);
         Ok(next_epoch)
-    }
-
-    fn plan_registration_identities(
-        &self,
-        count: usize,
-    ) -> Result<(Vec<RegistrationIdentity>, NonZeroU64), RuntimeConfigError> {
-        let mut next = self.0.next_registration_ordinal.load(Ordering::SeqCst);
-        let mut identities = Vec::with_capacity(count);
-        for _ in 0..count {
-            let ordinal = NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)?;
-            identities.push(RegistrationIdentity::new(self.0.issuer, ordinal));
-            next = next
-                .checked_add(1)
-                .ok_or(RuntimeConfigError::IdentityExhausted)?;
-        }
-        let next_ordinal = NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)?;
-        Ok((identities, next_ordinal))
     }
 
     #[cfg(test)]
@@ -927,8 +1086,8 @@ impl RuntimeConfigBuilder {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
     ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
-    ///     ExecutionContextIdentity, HardwareClassId, Runtime, StorageClass,
-    ///     TransferEndpoint, TransferProvider, TransferRequest,
+    ///     ExecutionContextIdentity, HardwareClassId, ProviderPreparationBinding,
+    ///     Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -946,7 +1105,7 @@ impl RuntimeConfigBuilder {
     /// let storage = StorageClass::new("example.storage.host")?;
     /// let source_id = EngineId::new("example.engine.source")?;
     /// let destination_id = EngineId::new("example.engine.destination")?;
-    /// let source = EngineRegistration::new(
+    /// let source = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
     ///     source_id.clone(),
     ///     tenferro_runtime::ProviderDeviceIdentity::new(
     ///         tenferro_runtime::ProviderId::new("example.provider")?,
@@ -957,8 +1116,8 @@ impl RuntimeConfigBuilder {
     ///     Arc::from(vec![storage.clone()]),
     ///     storage.clone(),
     ///     CoreCapabilityBundle::default(),
-    /// )?;
-    /// let destination = EngineRegistration::new(
+    /// )?);
+    /// let destination = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
     ///     destination_id.clone(),
     ///     tenferro_runtime::ProviderDeviceIdentity::new(
     ///         tenferro_runtime::ProviderId::new("example.provider")?,
@@ -969,7 +1128,7 @@ impl RuntimeConfigBuilder {
     ///     Arc::from(vec![storage.clone()]),
     ///     storage.clone(),
     ///     CoreCapabilityBundle::default(),
-    /// )?;
+    /// )?);
     /// let mut builder = Runtime::builder();
     /// builder.register_engine(source)?;
     /// builder.register_engine(destination)?;
@@ -1065,13 +1224,16 @@ impl RuntimeConfigBuilder {
     /// [`RuntimeConfigError::UnknownTransferEndpointEngine`] or
     /// [`RuntimeConfigError::UnsupportedTransferEndpointStorage`] if a
     /// registered transfer endpoint is invalid for the complete candidate.
-    pub fn build(mut self) -> Result<Runtime, RuntimeConfigError> {
-        validate_candidate(&mut self.candidate)?;
+    pub fn build(self) -> Result<Runtime, RuntimeConfigError> {
         let runtime_id = RuntimeId::from_nonzero(allocate_nonzero(&NEXT_RUNTIME_ID)?);
         let issuer = allocate_nonzero(&NEXT_REGISTRATION_ISSUER)?;
-        let post_ordinal = assign_initial_identities(&mut self.candidate, issuer)?;
+        let (bound_candidate, post_ordinal) = validate_candidate(
+            self.candidate,
+            issuer,
+            NonZeroU64::new(1).expect("one is non-zero"),
+        )?;
         let epoch = RuntimeEpoch::one();
-        let snapshot = Arc::new(freeze_candidate(runtime_id, epoch, self.candidate)?);
+        let snapshot = Arc::new(freeze_candidate(runtime_id, epoch, bound_candidate)?);
         let state = RuntimeState {
             runtime_id,
             issuer,
@@ -1178,8 +1340,8 @@ impl RuntimeReconfiguration<'_> {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
     ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
-    ///     ExecutionContextIdentity, HardwareClassId, Runtime, StorageClass,
-    ///     TransferEndpoint, TransferProvider, TransferRequest,
+    ///     ExecutionContextIdentity, HardwareClassId, ProviderPreparationBinding,
+    ///     Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -1198,7 +1360,7 @@ impl RuntimeReconfiguration<'_> {
     ///     id: &str,
     ///     storage: &StorageClass,
     /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
-    ///     Ok(EngineRegistration::new(
+    ///     Ok(EngineRegistration::preparation_only(ProviderPreparationBinding::new(
     ///         EngineId::new(id)?,
     ///         tenferro_runtime::ProviderDeviceIdentity::new(
     ///             tenferro_runtime::ProviderId::new("example.provider")?,
@@ -1209,7 +1371,7 @@ impl RuntimeReconfiguration<'_> {
     ///         Arc::from(vec![storage.clone()]),
     ///         storage.clone(),
     ///         CoreCapabilityBundle::default(),
-    ///     )?)
+    ///     )?))
     /// }
     ///
     /// let storage = StorageClass::new("example.storage.host")?;
@@ -1329,7 +1491,7 @@ pub struct EngineSnapshotView<'a> {
 impl<'a> EngineSnapshotView<'a> {
     /// Return the engine ID for this slot.
     pub fn engine_id(&self) -> &'a EngineId {
-        self.slot.registration.engine_id()
+        &self.slot.metadata().engine_id
     }
 
     /// Return the immutable provider/device binding for this engine slot.
@@ -1342,44 +1504,44 @@ impl<'a> EngineSnapshotView<'a> {
     /// # }
     /// ```
     pub fn provider_device_identity(&self) -> &'a super::ProviderDeviceIdentity {
-        self.slot.registration.provider_device_identity()
+        self.slot.provider_device_identity()
     }
 
     /// Return the runtime-local registration identity for this slot.
     pub fn registration_identity(&self) -> RegistrationIdentity {
-        self.slot.identity
+        self.slot.metadata().identity
     }
 
     /// Return the execution-context identity required by this slot.
     pub fn context_identity(&self) -> ExecutionContextIdentity {
-        self.slot.registration.context_identity()
+        self.slot.context_identity()
     }
 
     /// Return this engine's runtime event domain.
     pub fn event_domain_id(&self) -> EventDomainId {
-        self.slot.event_domain_id
+        self.slot.metadata().event_domain_id
     }
 
-    pub(crate) fn event_domain_driver(&self) -> Option<&'a Arc<dyn super::EventDomainDriver>> {
-        self.slot.registration.event_domain_driver()
+    pub(super) fn executable_witness(&self) -> Option<&'a ExecutableEngineSnapshot> {
+        self.slot.executable()
     }
 
     /// Return the hardware class for this slot.
     pub fn hardware_class(&self) -> &'a HardwareClassId {
-        self.slot.registration.hardware_class()
+        &self.slot.metadata().hardware_class
     }
 
     /// Return direct core capability slots for this engine.
     pub fn capabilities(&self) -> &'a CoreCapabilityBundle {
-        self.slot.registration.capabilities()
+        self.slot.capabilities()
     }
 
     pub(super) fn storage_classes(&self) -> &'a [StorageClass] {
-        self.slot.registration.storage_classes()
+        &self.slot.metadata().storage_classes
     }
 
     pub(super) fn default_storage_class(&self) -> &'a StorageClass {
-        self.slot.registration.default_storage_class()
+        &self.slot.metadata().default_storage_class
     }
 
     pub(super) fn accepts_input_placement(
@@ -1388,8 +1550,8 @@ impl<'a> EngineSnapshotView<'a> {
         storage_class: &StorageClass,
     ) -> bool {
         self.slot
-            .registration
-            .accepts_input_placement(placement, storage_class)
+            .executable()
+            .is_some_and(|snapshot| snapshot.accepts_input_placement(placement, storage_class))
     }
 
     pub(super) fn accepts_runtime_input(
@@ -1398,8 +1560,8 @@ impl<'a> EngineSnapshotView<'a> {
         storage_class: &StorageClass,
     ) -> bool {
         self.slot
-            .registration
-            .accepts_runtime_input(input, storage_class)
+            .executable()
+            .is_some_and(|snapshot| snapshot.accepts_runtime_input(input, storage_class))
     }
 
     pub(super) fn accepts_input_signature(
@@ -1408,8 +1570,8 @@ impl<'a> EngineSnapshotView<'a> {
         storage_class: &StorageClass,
     ) -> bool {
         self.slot
-            .registration
-            .accepts_input_signature(input, storage_class)
+            .executable()
+            .is_some_and(|snapshot| snapshot.accepts_input_signature(input, storage_class))
     }
 
     pub(super) fn owns_resident_tensor(
@@ -1418,19 +1580,13 @@ impl<'a> EngineSnapshotView<'a> {
         storage_class: &StorageClass,
     ) -> bool {
         self.slot
-            .registration
-            .owns_resident_tensor(input, storage_class)
-    }
-
-    pub(super) fn execution_engine(
-        &self,
-    ) -> Option<&'a Arc<dyn super::execution::ErasedTensorBackendExecutor>> {
-        self.slot.registration.execution_engine.as_ref()
+            .executable()
+            .is_some_and(|snapshot| snapshot.owns_resident_tensor(input, storage_class))
     }
 
     #[cfg(test)]
     pub(crate) fn has_execution_engine_for_test(&self) -> bool {
-        self.slot.registration.has_execution_engine()
+        self.slot.executable().is_some()
     }
 }
 
@@ -1456,7 +1612,6 @@ fn register_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
-    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     match candidate.engines.get(&engine_id) {
         Some(existing) if existing.registration.candidate_identical(&registration) => Ok(()),
@@ -1467,7 +1622,7 @@ fn register_engine_candidate(
                 engine_id,
                 CandidateEngineRecord {
                     registration,
-                    identity: None,
+                    identity: CandidateRegistrationIdentity::New,
                 },
             );
             *changed = true;
@@ -1481,7 +1636,6 @@ fn replace_engine_candidate(
     registration: EngineRegistration,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
-    validate_engine_execution_contract(&registration)?;
     let engine_id = registration.engine_id().clone();
     let Some(existing) = candidate.engines.get(&engine_id) else {
         return Err(RuntimeConfigError::MissingEngine { engine_id });
@@ -1501,7 +1655,7 @@ fn replace_engine_candidate(
         engine_id,
         CandidateEngineRecord {
             registration,
-            identity: None,
+            identity: CandidateRegistrationIdentity::New,
         },
     );
     *changed = true;
@@ -1647,11 +1801,11 @@ fn ensure_unique_provider_device_target_except(
     Ok(())
 }
 
-fn validate_candidate(candidate: &mut CandidateConfig) -> Result<(), RuntimeConfigError> {
-    for record in candidate.engines.values() {
-        validate_engine_execution_contract(&record.registration)?;
-    }
-
+fn validate_candidate(
+    candidate: CandidateConfig,
+    issuer: NonZeroU64,
+    next_ordinal: NonZeroU64,
+) -> Result<(BoundCandidateConfig, NonZeroU64), RuntimeConfigError> {
     let mut seen_targets = BTreeMap::<ProviderDeviceIdentity, EngineId>::new();
     for (engine_id, record) in &candidate.engines {
         if let Some(first_engine_id) = seen_targets.insert(
@@ -1666,17 +1820,13 @@ fn validate_candidate(candidate: &mut CandidateConfig) -> Result<(), RuntimeConf
         }
     }
 
-    let mut bindings_to_set = Vec::new();
+    let mut bound_transfers = BTreeMap::new();
     for (route, record) in &candidate.transfers {
-        let source_binding = validate_transfer_endpoint(candidate, route.source())?;
-        let destination_binding = validate_transfer_endpoint(candidate, route.destination())?;
+        let source_binding = validate_transfer_endpoint(&candidate, route.source())?;
+        let destination_binding = validate_transfer_endpoint(&candidate, route.destination())?;
         let preserved = match &record.binding {
             CandidateTransferBinding::New => None,
             CandidateTransferBinding::Preserved {
-                source,
-                destination,
-            }
-            | CandidateTransferBinding::Bound {
                 source,
                 destination,
             } => Some((source, destination)),
@@ -1701,7 +1851,14 @@ fn validate_candidate(candidate: &mut CandidateConfig) -> Result<(), RuntimeConf
                 });
             }
         }
-        bindings_to_set.push((route.clone(), source_binding, destination_binding));
+        bound_transfers.insert(
+            route.clone(),
+            BoundCandidateTransferRecord {
+                provider: Arc::clone(&record.provider),
+                source: source_binding,
+                destination: destination_binding,
+            },
+        );
     }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
@@ -1723,15 +1880,45 @@ fn validate_candidate(candidate: &mut CandidateConfig) -> Result<(), RuntimeConf
         }
     }
 
-    for (route, source_binding, destination_binding) in bindings_to_set {
-        if let Some(record) = candidate.transfers.get_mut(&route) {
-            record.binding = CandidateTransferBinding::Bound {
-                source: source_binding,
-                destination: destination_binding,
+    let CandidateConfig {
+        policy,
+        engines,
+        modules,
+        transfers: _,
+    } = candidate;
+    let mut allocator = RegistrationIdentityAllocator::new(issuer, next_ordinal);
+    let engines = engines
+        .into_iter()
+        .map(|(engine_id, record)| {
+            let identity = match record.identity {
+                CandidateRegistrationIdentity::New => allocator.allocate()?,
+                CandidateRegistrationIdentity::Preserved(identity) => identity,
             };
-        }
-    }
-    Ok(())
+            Ok((
+                engine_id,
+                BoundCandidateEngineRecord {
+                    registration: record.registration,
+                    identity,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, RuntimeConfigError>>()?;
+    let modules = modules
+        .into_iter()
+        .map(|(module_id, module)| {
+            let mut allocate = || allocator.allocate();
+            Ok((module_id, bind_candidate_module(module, &mut allocate)?))
+        })
+        .collect::<Result<BTreeMap<_, _>, RuntimeConfigError>>()?;
+    Ok((
+        BoundCandidateConfig {
+            policy,
+            engines,
+            modules,
+            transfers: bound_transfers,
+        },
+        allocator.next_ordinal(),
+    ))
 }
 
 fn validate_transfer_endpoint(
@@ -1755,99 +1942,89 @@ fn validate_transfer_endpoint(
     Ok(engine.registration.provider_device_identity().clone())
 }
 
-fn validate_engine_execution_contract(
-    registration: &EngineRegistration,
-) -> Result<(), RuntimeConfigError> {
-    if registration.has_execution_engine() && !registration.has_input_ingress_validator() {
-        return Err(RuntimeConfigError::MissingInputIngressValidator {
-            engine_id: registration.engine_id().clone(),
-        });
-    }
-    Ok(())
-}
-
-fn assign_initial_identities(
-    candidate: &mut CandidateConfig,
+struct RegistrationIdentityAllocator {
     issuer: NonZeroU64,
-) -> Result<NonZeroU64, RuntimeConfigError> {
-    let mut next = 1_u64;
-    for record in candidate.engines.values_mut() {
-        let ordinal = NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)?;
-        record.identity = Some(RegistrationIdentity::new(issuer, ordinal));
-        next = next
-            .checked_add(1)
-            .ok_or(RuntimeConfigError::IdentityExhausted)?;
-    }
-    for module in candidate.modules.values_mut() {
-        for record in module.engines.values_mut() {
-            let ordinal = NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)?;
-            record.identity = Some(RegistrationIdentity::new(issuer, ordinal));
-            next = next
-                .checked_add(1)
-                .ok_or(RuntimeConfigError::IdentityExhausted)?;
-        }
-    }
-    NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)
+    next: NonZeroU64,
 }
 
-fn assign_new_identities(
-    candidate: &mut CandidateConfig,
-    mut identities: Vec<RegistrationIdentity>,
-) {
-    identities.reverse();
-    for record in candidate.engines.values_mut() {
-        if record.identity.is_none() {
-            record.identity = identities.pop();
-        }
+impl RegistrationIdentityAllocator {
+    fn new(issuer: NonZeroU64, next: NonZeroU64) -> Self {
+        Self { issuer, next }
     }
-    for module in candidate.modules.values_mut() {
-        for record in module.engines.values_mut() {
-            if record.identity.is_none() {
-                record.identity = identities.pop();
-            }
-        }
+
+    fn allocate(&mut self) -> Result<RegistrationIdentity, RuntimeConfigError> {
+        let identity = RegistrationIdentity::new(self.issuer, self.next);
+        let next = self
+            .next
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .ok_or(RuntimeConfigError::IdentityExhausted)?;
+        self.next = next;
+        Ok(identity)
+    }
+
+    fn next_ordinal(&self) -> NonZeroU64 {
+        self.next
     }
 }
 
 fn freeze_candidate(
     runtime_id: RuntimeId,
     epoch: RuntimeEpoch,
-    candidate: CandidateConfig,
+    candidate: BoundCandidateConfig,
 ) -> Result<RuntimeConfigSnapshot, RuntimeConfigError> {
     let mut engines = Vec::with_capacity(candidate.engines.len());
     let mut engine_indices = BTreeMap::new();
     let mut engine_locations = BTreeMap::new();
     let mut cache_owners = Vec::new();
     for (index, (engine_id, record)) in candidate.engines.into_iter().enumerate() {
-        let identity = record
-            .identity
-            .ok_or(RuntimeConfigError::IdentityExhausted)?;
-        if let Some(owner) = record.registration.cache_owner.clone() {
-            cache_owners.push(FrozenCacheOwner {
-                id: engine_cache_owner_id(&engine_id),
-                kind: FrozenCacheOwnerKind::Engine,
-                owner,
-            });
-        }
-        if let Some(executor) = record.registration.execution_engine.clone() {
-            cache_owners.push(FrozenCacheOwner {
-                id: engine_extension_cache_owner_id(&engine_id),
-                kind: FrozenCacheOwnerKind::Extension,
-                owner: execution::extension_cache_owner(executor),
-            });
-        }
-        let provider_device_identity = record.registration.provider_device_identity().clone();
+        let BoundCandidateEngineRecord {
+            registration,
+            identity,
+        } = record;
         let event_domain_id = EventDomainId::new(runtime_id, epoch, identity);
+        let provider_device_identity = registration.provider_device_identity().clone();
+        let metadata = FrozenEngineMetadata {
+            engine_id: engine_id.clone(),
+            hardware_class: registration.hardware_class().clone(),
+            storage_classes: Arc::clone(&registration.storage_classes_arc()),
+            default_storage_class: registration.default_storage_class().clone(),
+            candidate_token: registration.candidate_token(),
+            identity,
+            event_domain_id,
+        };
+        let frozen = match registration.execution_state().clone() {
+            EngineRegistrationState::PreparationOnly { capabilities } => {
+                FrozenEngineSlot::PreparationOnly(PreparationOnlyEngineSnapshot {
+                    metadata,
+                    provider_device_identity: provider_device_identity.clone(),
+                    context_identity: registration.context_identity(),
+                    capabilities,
+                })
+            }
+            EngineRegistrationState::Executable(contract) => {
+                if let Some(owner) = contract.cache_owner().cloned() {
+                    cache_owners.push(FrozenCacheOwner {
+                        id: engine_cache_owner_id(&engine_id),
+                        kind: FrozenCacheOwnerKind::Engine,
+                        owner,
+                    });
+                }
+                cache_owners.push(FrozenCacheOwner {
+                    id: engine_extension_cache_owner_id(&engine_id),
+                    kind: FrozenCacheOwnerKind::Extension,
+                    owner: execution::extension_cache_owner(contract.executor().clone()),
+                });
+                FrozenEngineSlot::Executable(ExecutableEngineSnapshot { metadata, contract })
+            }
+        };
         engine_locations.insert(
             engine_id.clone(),
             (provider_device_identity, event_domain_id),
         );
         engine_indices.insert(engine_id, index);
-        engines.push(FrozenEngineSlot {
-            registration: record.registration,
-            identity,
-            event_domain_id,
-        });
+        engines.push(frozen);
     }
     let extensions = freeze_extension_slots(candidate.modules)?;
     for (id, owner) in extensions.cache_owner_records() {
@@ -1859,46 +2036,14 @@ fn freeze_candidate(
     }
     let mut transfers = BTreeMap::new();
     for (route, record) in candidate.transfers {
-        let (source_binding, destination_binding) = match record.binding {
-            CandidateTransferBinding::Bound {
-                source,
-                destination,
-            } => (source, destination),
-            CandidateTransferBinding::New | CandidateTransferBinding::Preserved { .. } => {
-                return Err(RuntimeConfigError::UnboundTransferRoute {
-                    source_endpoint: route.source().clone(),
-                    destination: route.destination().clone(),
-                });
-            }
-        };
-        let (source_current, source_event_domain_id) = engine_locations
-            .get(route.source().engine_id())
-            .ok_or_else(|| RuntimeConfigError::UnknownTransferEndpointEngine {
-                endpoint: route.source().clone(),
-            })?;
-        let (destination_current, destination_event_domain_id) = engine_locations
-            .get(route.destination().engine_id())
-            .ok_or_else(|| RuntimeConfigError::UnknownTransferEndpointEngine {
-                endpoint: route.destination().clone(),
-            })?;
-        if &source_binding != source_current {
-            return Err(RuntimeConfigError::StaleTransferRoute {
-                source_endpoint: route.source().clone(),
-                destination: route.destination().clone(),
-                endpoint: route.source().clone(),
-                registered: Box::new(source_binding),
-                current: Box::new(source_current.clone()),
-            });
-        }
-        if &destination_binding != destination_current {
-            return Err(RuntimeConfigError::StaleTransferRoute {
-                source_endpoint: route.source().clone(),
-                destination: route.destination().clone(),
-                endpoint: route.destination().clone(),
-                registered: Box::new(destination_binding),
-                current: Box::new(destination_current.clone()),
-            });
-        }
+        let BoundCandidateTransferRecord {
+            provider,
+            source: source_binding,
+            destination: destination_binding,
+        } = record;
+        let (_, source_event_domain_id) = bound_engine_location(&engine_locations, route.source())?;
+        let (_, destination_event_domain_id) =
+            bound_engine_location(&engine_locations, route.destination())?;
         let resolved_route = ResolvedTransferRoute::new(
             ResolvedTransferEndpoint::new(
                 route.source().clone(),
@@ -1911,7 +2056,7 @@ fn freeze_candidate(
                 *destination_event_domain_id,
             ),
         );
-        transfers.insert(resolved_route, record.provider);
+        transfers.insert(resolved_route, provider);
     }
     Ok(RuntimeConfigSnapshot {
         runtime_id,
@@ -1923,6 +2068,17 @@ fn freeze_candidate(
         transfers: FrozenTransferRegistry::new(transfers),
         cache_owners: cache_owners.into(),
     })
+}
+
+fn bound_engine_location<'a>(
+    locations: &'a BTreeMap<EngineId, (ProviderDeviceIdentity, EventDomainId)>,
+    endpoint: &TransferEndpoint,
+) -> Result<&'a (ProviderDeviceIdentity, EventDomainId), RuntimeConfigError> {
+    locations
+        .get(endpoint.engine_id())
+        .ok_or_else(|| RuntimeConfigError::BoundCandidateInvariant {
+            endpoint: endpoint.clone(),
+        })
 }
 
 fn engine_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
@@ -1975,21 +2131,23 @@ mod freeze_tests {
         let engine_id = EngineId::new(engine_id).map_err(RuntimeConfigError::from)?;
         let storage =
             StorageClass::new("tenferro.test.freeze.storage").map_err(RuntimeConfigError::from)?;
-        EngineRegistration::new(
-            engine_id,
-            ProviderDeviceIdentity::new(
-                ProviderId::new("tenferro.test.freeze.provider")
-                    .map_err(RuntimeConfigError::from)?,
-                target,
-            )
-            .map_err(RuntimeConfigError::from)?,
-            ExecutionContextIdentity::of::<FreezeTestContext>(),
-            HardwareClassId::new("tenferro.test.freeze.hardware")
+        Ok(EngineRegistration::preparation_only(
+            super::super::ProviderPreparationBinding::new(
+                engine_id,
+                ProviderDeviceIdentity::new(
+                    ProviderId::new("tenferro.test.freeze.provider")
+                        .map_err(RuntimeConfigError::from)?,
+                    target,
+                )
                 .map_err(RuntimeConfigError::from)?,
-            Arc::from(vec![storage.clone()]),
-            storage,
-            CoreCapabilityBundle::default(),
-        )
+                ExecutionContextIdentity::of::<FreezeTestContext>(),
+                HardwareClassId::new("tenferro.test.freeze.hardware")
+                    .map_err(RuntimeConfigError::from)?,
+                Arc::from(vec![storage.clone()]),
+                storage,
+                CoreCapabilityBundle::default(),
+            )?,
+        ))
     }
 
     fn candidate(binding: CandidateTransferBinding) -> Result<CandidateConfig, RuntimeConfigError> {
@@ -2025,38 +2183,49 @@ mod freeze_tests {
             .get_mut(&TransferRoute::new(source_endpoint, destination_endpoint))
             .expect("registered route")
             .binding = binding;
-        assign_initial_identities(&mut candidate, NonZeroU64::new(1).unwrap())?;
         Ok(candidate)
     }
 
     #[test]
-    fn freeze_rejects_new_and_preserved_route_bindings_without_validation() {
-        let bindings = [
-            CandidateTransferBinding::New,
-            CandidateTransferBinding::Preserved {
-                source: ProviderDeviceIdentity::new(
-                    ProviderId::new("tenferro.test.freeze.provider").unwrap(),
-                    "freeze-source",
-                )
-                .unwrap(),
-                destination: ProviderDeviceIdentity::new(
-                    ProviderId::new("tenferro.test.freeze.provider").unwrap(),
-                    "freeze-destination",
-                )
-                .unwrap(),
-            },
-        ];
-        for binding in bindings {
-            let error = freeze_candidate(
-                RuntimeId::from_nonzero(NonZeroU64::new(1).unwrap()),
-                RuntimeEpoch::one(),
-                candidate(binding).unwrap(),
+    fn validation_owns_stale_route_rejection_and_bound_freeze_is_total() {
+        let wrong_source = ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.freeze.provider").unwrap(),
+            "different-source",
+        )
+        .unwrap();
+        let preserved = CandidateTransferBinding::Preserved {
+            source: wrong_source,
+            destination: ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.freeze.provider").unwrap(),
+                "freeze-destination",
             )
-            .expect_err("freeze must require validation-produced Bound state");
-            assert!(matches!(
-                error,
-                RuntimeConfigError::UnboundTransferRoute { .. }
-            ));
-        }
+            .unwrap(),
+        };
+        let result = validate_candidate(
+            candidate(preserved).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+        );
+        let error = match result {
+            Ok(_) => panic!("candidate validation must reject stale preserved bindings"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RuntimeConfigError::StaleTransferRoute { .. }
+        ));
+
+        let (bound, _) = validate_candidate(
+            candidate(CandidateTransferBinding::New).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+            NonZeroU64::new(1).unwrap(),
+        )
+        .expect("validation must produce a complete bound candidate");
+        freeze_candidate(
+            RuntimeId::from_nonzero(NonZeroU64::new(1).unwrap()),
+            RuntimeEpoch::one(),
+            bound,
+        )
+        .expect("a bound candidate must freeze without semantic route revalidation");
     }
 }

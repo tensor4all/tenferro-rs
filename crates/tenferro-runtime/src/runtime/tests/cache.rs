@@ -5,6 +5,8 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
+use tenferro_cpu::CpuBackend;
+
 use super::super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedPlanCache, PreparedValue,
     RuntimeCacheSet, SharedRetention,
@@ -1166,17 +1168,28 @@ fn engine_with_owner(id: &str, owner: Arc<dyn RuntimeCacheOwner>) -> EngineRegis
         format!("engine:{id}"),
     )
     .unwrap();
-    EngineRegistration::new(
-        EngineId::new(id).unwrap(),
-        provider_device_identity,
-        ExecutionContextIdentity::of::<()>(),
-        HardwareClassId::new("tenferro.hardware.host").unwrap(),
-        Arc::from(vec![storage.clone()]),
-        storage,
-        CoreCapabilityBundle::builder().build(),
+    EngineRegistration::executable(
+        ProviderExecutableBinding::new(
+            EngineId::new(id).unwrap(),
+            HardwareClassId::new("tenferro.hardware.host").unwrap(),
+            Arc::from(vec![storage.clone()]),
+            storage.clone(),
+            ExecutableEngineContract::new(
+                provider_device_identity,
+                CoreCapabilityBundle::builder().build(),
+                CpuBackend::new(),
+                Arc::new(ImmediateEventDomainDriver::new()),
+                InputIngressContract::new(
+                    InputPlacementContract::new(|_, _| true),
+                    InputSignatureContract::new(|_, _, _, _| true),
+                    RuntimeInputContract::new(|_, _| true),
+                    ResidentOutputContract::new(|_, _| true),
+                ),
+                Some(owner),
+            ),
+        )
+        .unwrap(),
     )
-    .unwrap()
-    .with_cache_owner(owner)
 }
 
 fn cache_stats(

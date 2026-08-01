@@ -6,12 +6,14 @@ use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperation
 use tenferro_runtime::{
     CacheOwnerError, CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, ExecutionContextIdentity, HardwareClassId,
-    IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
+    EngineId, EngineRegistration, ExecutableEngineContract, HardwareClassId,
+    IndexingPrepareRequest, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
-    ProviderId, ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    ProviderExecutableBinding, ProviderId, ReductionPrepareRequest, ReductionRuntime,
+    ResidentOutputContract, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     UnsupportedReason,
 };
@@ -76,6 +78,7 @@ pub fn cuda_runtime_engine_registration(
         .layout(layout);
 
     let storage = cuda_runtime_storage_class()?;
+    let default_storage = storage.clone();
     let placement_storage = storage.clone();
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
@@ -85,39 +88,37 @@ pub fn cuda_runtime_engine_registration(
         ProviderId::new("tenferro.cuda")?,
         format!("device:{device_ordinal}"),
     )?;
-    EngineRegistration::new(
-        cuda_runtime_engine_id()?,
+    let ingress = InputIngressContract::new(
+        InputPlacementContract::new(move |placement, candidate| {
+            candidate == &placement_storage && cuda_input_placement(placement, device_ordinal)
+        }),
+        InputSignatureContract::new(move |placement, family, domain, candidate| {
+            candidate == &signature_storage
+                && cuda_input_signature(placement, family, domain, device_ordinal)
+        }),
+        RuntimeInputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &runtime_storage && cuda_input_tensor(input, device_ordinal)
+        }),
+        ResidentOutputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &resident_storage && cuda_input_tensor(input, device_ordinal)
+        }),
+    );
+    let contract = ExecutableEngineContract::new(
         provider_device_identity,
-        ExecutionContextIdentity::of::<CudaBackend>(),
-        cuda_runtime_hardware_class()?,
-        Arc::from(vec![storage.clone()]),
-        storage,
         capabilities.build(),
-    )
-    .map(|registration| {
-        registration
-            .with_event_domain_driver(Arc::new(CudaEventDomainDriver::new(
-                backend.runtime().clone(),
-            )))
-            .with_cache_owner(cache_owner)
-            .with_tensor_backend_executor(execution_backend)
-            .with_input_signature_validator(move |placement, family, domain, candidate| {
-                candidate == &signature_storage
-                    && cuda_input_signature(placement, family, domain, device_ordinal)
-            })
-            .with_input_ingress_validator(
-                move |placement, candidate| {
-                    candidate == &placement_storage
-                        && cuda_input_placement(placement, device_ordinal)
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &runtime_storage && cuda_input_tensor(input, device_ordinal)
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &resident_storage && cuda_input_tensor(input, device_ordinal)
-                },
-            )
-    })
+        execution_backend,
+        Arc::new(CudaEventDomainDriver::new(backend.runtime().clone())),
+        ingress,
+        Some(cache_owner),
+    );
+    let binding = ProviderExecutableBinding::new(
+        cuda_runtime_engine_id()?,
+        cuda_runtime_hardware_class()?,
+        Arc::from(vec![storage]),
+        default_storage,
+        contract,
+    )?;
+    Ok(EngineRegistration::executable(binding))
 }
 
 fn cuda_input_signature(

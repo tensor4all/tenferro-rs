@@ -4,8 +4,11 @@ use std::sync::{Arc, Mutex};
 use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, LayoutRuntime,
-    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RuntimeCacheOwner, StorageClass,
+    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
+    ImmediateEventDomainDriver, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, ProviderDeviceIdentity, ProviderExecutableBinding,
+    ProviderId, ProviderPreparationBinding, ReductionRuntime, ResidentOutputContract,
+    RuntimeCacheOwner, RuntimeInputContract, StorageClass,
 };
 use tenferro_tensor::{BackendSession, ErrorKind};
 
@@ -66,21 +69,47 @@ fn cpu_registration_with(
         tenferro_cpu::CpuBackendKind::Faer => "tenferro.cpu.faer",
         tenferro_cpu::CpuBackendKind::Blas => "tenferro.cpu.blas",
     };
-    EngineRegistration::new(
-        cpu_engine_id(),
-        ProviderDeviceIdentity::new(
-            ProviderId::new(provider_id).unwrap(),
-            format!("domain:{}", execution_info.domain_id().as_u64()),
-        )
-        .unwrap(),
-        context_identity,
-        cpu_hardware_class(),
-        Arc::from([storage.clone()]),
-        storage,
-        capabilities,
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new(provider_id).unwrap(),
+        format!("domain:{}", execution_info.domain_id().as_u64()),
     )
-    .unwrap()
-    .with_cache_owner(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>)
+    .unwrap();
+    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
+        return EngineRegistration::preparation_only(
+            ProviderPreparationBinding::new(
+                cpu_engine_id(),
+                provider_device_identity,
+                context_identity,
+                cpu_hardware_class(),
+                Arc::from([storage.clone()]),
+                storage,
+                capabilities,
+            )
+            .expect("preparation binding"),
+        );
+    }
+    EngineRegistration::executable(
+        ProviderExecutableBinding::new(
+            cpu_engine_id(),
+            cpu_hardware_class(),
+            Arc::from([storage.clone()]),
+            storage,
+            ExecutableEngineContract::new(
+                provider_device_identity,
+                capabilities,
+                backend.clone(),
+                Arc::new(ImmediateEventDomainDriver::new()),
+                InputIngressContract::new(
+                    InputPlacementContract::new(|_, _| true),
+                    InputSignatureContract::new(|_, _, _, _| true),
+                    RuntimeInputContract::new(|_, _| true),
+                    ResidentOutputContract::new(|_, _| true),
+                ),
+                Some(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>),
+            ),
+        )
+        .expect("executable binding"),
+    )
 }
 
 fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {

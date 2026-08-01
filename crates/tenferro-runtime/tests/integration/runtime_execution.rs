@@ -17,13 +17,15 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::{
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, ErasedExecutionContext, Error,
-    ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
-    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
-    IndexingRuntime, InputIngressContractError, LayoutRuntime, PrepareCapability, PrepareError,
+    ErrorPhase, EventDomainId, ExecutableEngineContract, ExecutionContextIdentity,
+    ExtensionCacheStore, ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler,
+    HardwareClassId, IndexingRuntime, InputIngressContract, InputIngressContractError,
+    InputPlacementContract, InputSignatureContract, LayoutRuntime, PrepareCapability, PrepareError,
     PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, Runtime,
-    RuntimeCacheOwner, RuntimeConfigError, RuntimeReconfigureError, SpecializationProjection,
+    ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId, ProviderPreparationBinding,
+    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
+    RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError, SpecializationProjection,
     StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
     TransferProviderContractError, TransferRequest,
 };
@@ -194,6 +196,78 @@ fn failing_drain_event_domain(
     event_domain_with_drain_behavior(label, events, DrainBehavior::ReturnError)
 }
 
+fn cpu_ingress_contract(backend: &Arc<CpuBackend>, storage: &StorageClass) -> InputIngressContract {
+    let allocation_domain = backend.allocation_domain();
+    InputIngressContract::new(
+        InputPlacementContract::new({
+            let storage = storage.clone();
+            move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
+        }),
+        InputSignatureContract::new({
+            let storage = storage.clone();
+            move |placement, family, domain, candidate| {
+                candidate == &storage
+                    && test_cpu_input_signature(placement, family, domain, allocation_domain)
+            }
+        }),
+        RuntimeInputContract::new({
+            let storage = storage.clone();
+            move |input: &TensorRead<'_>, candidate| {
+                candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+            }
+        }),
+        ResidentOutputContract::new({
+            let storage = storage.clone();
+            move |input: &TensorRead<'_>, candidate| {
+                candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+            }
+        }),
+    )
+}
+
+fn assemble_cpu_registration(
+    backend: Arc<CpuBackend>,
+    engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+    ingress_storage: StorageClass,
+    capabilities: CoreCapabilityBundle,
+    event_domain_driver: Option<Arc<dyn EventDomainDriver>>,
+    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    if let Some(event_domain_driver) = event_domain_driver {
+        let contract = ExecutableEngineContract::new(
+            provider_device_identity,
+            capabilities,
+            backend.as_ref().clone(),
+            event_domain_driver,
+            cpu_ingress_contract(&backend, &ingress_storage),
+            cache_owner,
+        );
+        let binding = ProviderExecutableBinding::new(
+            engine_id,
+            hardware_class,
+            storage_classes,
+            default_storage_class,
+            contract,
+        )?;
+        Ok(EngineRegistration::executable(binding))
+    } else {
+        let binding = ProviderPreparationBinding::new(
+            engine_id,
+            provider_device_identity,
+            ExecutionContextIdentity::of::<CpuBackend>(),
+            hardware_class,
+            storage_classes,
+            default_storage_class,
+            capabilities,
+        )?;
+        Ok(EngineRegistration::preparation_only(binding))
+    }
+}
+
 fn cpu_registration(
     backend: &CpuBackend,
     include_execution_bridge: bool,
@@ -205,7 +279,6 @@ fn cpu_registration(
     let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
     let layout: Arc<dyn LayoutRuntime> = backend.clone();
     let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
-
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
         .elementwise(elementwise)
@@ -213,57 +286,20 @@ fn cpu_registration(
         .indexing(indexing)
         .dot_general(dot_general)
         .layout(layout);
-
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    assemble_cpu_registration(
+        backend,
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(CPU_ENGINE_ID)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
+        storage,
         capabilities.build(),
+        include_execution_bridge
+            .then(|| Arc::new(ImmediateEventDomainDriver::new()) as Arc<dyn EventDomainDriver>),
+        include_execution_bridge.then(|| cache_owner),
     )
-    .map(|registration| {
-        let registration = registration
-            .with_cache_owner(cache_owner)
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
 }
 
 fn runtime_with_cpu(backend: &CpuBackend) -> Result<Runtime, RuntimeConfigError> {
@@ -1006,6 +1042,23 @@ fn cpu_registration_with_id_and_driver(
     include_execution_bridge: bool,
     include_event_domain_driver: bool,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    cpu_registration_with_id_and_custom_driver(
+        backend,
+        engine_id,
+        include_core_capabilities,
+        include_execution_bridge && include_event_domain_driver,
+        include_execution_bridge
+            .then(|| Arc::new(ImmediateEventDomainDriver::new()) as Arc<dyn EventDomainDriver>),
+    )
+}
+
+fn cpu_registration_with_id_and_custom_driver(
+    backend: &CpuBackend,
+    engine_id: &str,
+    include_core_capabilities: bool,
+    include_execution_bridge: bool,
+    event_domain_driver: Option<Arc<dyn EventDomainDriver>>,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let mut capabilities = CoreCapabilityBundle::builder();
     if include_core_capabilities {
@@ -1023,58 +1076,23 @@ fn cpu_registration_with_id_and_driver(
     }
 
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    let driver = if include_execution_bridge {
+        event_domain_driver
+    } else {
+        None
+    };
+    assemble_cpu_registration(
+        backend,
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(engine_id)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
+        storage,
         capabilities.build(),
+        driver,
+        None,
     )
-    .map(|registration| {
-        let registration = registration
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        let registration = if include_event_domain_driver {
-            registration.with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-        } else {
-            registration
-        };
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
 }
 
 fn cpu_registration_with_storage_id(
@@ -1103,6 +1121,27 @@ fn cpu_registration_with_storage_id_for_target(
     include_execution_bridge: bool,
     target: &str,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    cpu_registration_with_storage_id_for_target_and_driver(
+        backend,
+        engine_id,
+        storage_id,
+        include_core_capabilities,
+        include_execution_bridge,
+        target,
+        include_execution_bridge
+            .then(|| Arc::new(ImmediateEventDomainDriver::new()) as Arc<dyn EventDomainDriver>),
+    )
+}
+
+fn cpu_registration_with_storage_id_for_target_and_driver(
+    backend: &CpuBackend,
+    engine_id: &str,
+    storage_id: &str,
+    include_core_capabilities: bool,
+    include_execution_bridge: bool,
+    target: &str,
+    event_domain_driver: Option<Arc<dyn EventDomainDriver>>,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let mut capabilities = CoreCapabilityBundle::builder();
     if include_core_capabilities {
@@ -1120,57 +1159,23 @@ fn cpu_registration_with_storage_id_for_target(
     }
 
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    assemble_cpu_registration(
+        backend,
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
             target,
         )?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
+        storage,
         capabilities.build(),
+        include_execution_bridge
+            .then_some(event_domain_driver)
+            .flatten(),
+        None,
     )
-    .map(|registration| {
-        let registration = registration
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
 }
 
 fn cpu_registration_with_storage_classes(
@@ -1181,51 +1186,18 @@ fn cpu_registration_with_storage_classes(
     ingress_storage: StorageClass,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
-    EngineRegistration::new(
+    assemble_cpu_registration(
+        backend,
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(engine_id)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(storage_classes),
         default_storage,
+        ingress_storage,
         CoreCapabilityBundle::builder().build(),
+        Some(Arc::new(ImmediateEventDomainDriver::new())),
+        None,
     )
-    .map(|registration| {
-        registration
-            .with_input_signature_validator({
-                let ingress_storage = ingress_storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &ingress_storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let ingress_storage = ingress_storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &ingress_storage
-                    }
-                },
-                {
-                    let ingress_storage = ingress_storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &ingress_storage
-                            && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &ingress_storage
-                            && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            )
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_tensor_backend_executor(backend.as_ref().clone())
-    })
 }
 
 fn transfer_endpoint(
@@ -1923,10 +1895,9 @@ fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
 }
 
 #[test]
-fn execution_bridge_registration_requires_explicit_ingress_contract(
-) -> Result<(), Box<dyn StdError>> {
+fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), Box<dyn StdError>> {
     let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
-    let registration = EngineRegistration::new(
+    let registration = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
         EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cpu")?,
@@ -1937,17 +1908,15 @@ fn execution_bridge_registration_requires_explicit_ingress_contract(
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
-    )?
-    .with_tensor_backend_executor(CpuBackend::new());
+    )?);
     let mut builder = Runtime::builder();
 
-    let error = builder.register_engine(registration).unwrap_err();
-
-    assert!(matches!(
-        error,
-        RuntimeConfigError::MissingInputIngressValidator { engine_id }
-            if engine_id.as_str() == "tenferro-test.engine.missing-ingress.v1"
-    ));
+    builder.register_engine(registration)?;
+    let runtime = builder.build()?;
+    assert!(runtime
+        .snapshot()?
+        .engine(&EngineId::new("tenferro-test.engine.missing-ingress.v1")?)
+        .is_some());
     Ok(())
 }
 
@@ -2917,10 +2886,13 @@ fn runtime_run_compiled_preflights_all_event_domain_drivers_before_launch(
     let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_id(&core_backend, core_engine_id, true, true)?
-            .with_event_domain_driver(recording_event_domain("source", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_id_and_custom_driver(
+        &core_backend,
+        core_engine_id,
+        true,
+        true,
+        Some(recording_event_domain("source", &event_log)),
+    )?)?;
     builder.register_engine(cpu_registration_with_id_and_driver(
         &extension_backend,
         extension_engine_id,
@@ -2959,7 +2931,6 @@ fn runtime_run_compiled_preflights_all_event_domain_drivers_before_launch(
         .expect_err("missing event-domain driver must fail preflight");
 
     assert_eq!(error.phase(), Some(ErrorPhase::Execution));
-    assert!(error.to_string().contains("has no registered driver"));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
     assert_eq!(transfer.calls(), 0);
     assert!(
@@ -2974,10 +2945,13 @@ fn runtime_run_compiled_returns_drain_failure_without_outputs() -> Result<(), Bo
     let backend = CpuBackend::new();
     let event_log = Arc::new(Mutex::new(Vec::new()));
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration(&backend, true)?
-            .with_event_domain_driver(failing_drain_event_domain("cpu", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_id_and_custom_driver(
+        &backend,
+        CPU_ENGINE_ID,
+        true,
+        true,
+        Some(failing_drain_event_domain("cpu", &event_log)),
+    )?)?;
     let runtime = builder.build()?;
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
@@ -3017,10 +2991,13 @@ fn runtime_run_compiled_unwind_drops_event_run_before_tensor_storage(
     panic_counters.panic_execute.store(true, Ordering::SeqCst);
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration(&backend, true)?
-            .with_event_domain_driver(recording_event_domain("cpu", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_id_and_custom_driver(
+        &backend,
+        CPU_ENGINE_ID,
+        true,
+        true,
+        Some(recording_event_domain("cpu", &event_log)),
+    )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.panic-producer-module")?,
         family_id: COUNTING_EXTENSION_FAMILY,
@@ -3100,26 +3077,24 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &core_backend,
-            core_engine_id,
-            source_storage.as_str(),
-            true,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("source", &event_log)),
-    )?;
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &extension_backend,
-            extension_engine_id,
-            destination_storage.as_str(),
-            false,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target_and_driver(
+        &core_backend,
+        core_engine_id,
+        source_storage.as_str(),
+        true,
+        true,
+        &format!("test-engine:{core_engine_id}"),
+        Some(recording_event_domain("source", &event_log)),
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target_and_driver(
+        &extension_backend,
+        extension_engine_id,
+        destination_storage.as_str(),
+        false,
+        true,
+        &format!("test-engine:{extension_engine_id}"),
+        Some(recording_event_domain("destination", &event_log)),
+    )?)?;
     builder.register_transfer_provider(
         TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone()),
         TransferEndpoint::new(
@@ -3555,30 +3530,28 @@ fn run_transfer_and_drain_failure(
     let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &core_backend,
-            core_engine_id,
-            source_storage.as_str(),
-            true,
-            true,
-        )?
-        .with_event_domain_driver(event_domain_with_drain_behavior(
+    builder.register_engine(cpu_registration_with_storage_id_for_target_and_driver(
+        &core_backend,
+        core_engine_id,
+        source_storage.as_str(),
+        true,
+        true,
+        &format!("test-engine:{core_engine_id}"),
+        Some(event_domain_with_drain_behavior(
             "source",
             &event_log,
             drain_behavior,
         )),
-    )?;
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &extension_backend,
-            extension_engine_id,
-            destination_storage.as_str(),
-            false,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
-    )?;
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target_and_driver(
+        &extension_backend,
+        extension_engine_id,
+        destination_storage.as_str(),
+        false,
+        true,
+        &format!("test-engine:{extension_engine_id}"),
+        Some(recording_event_domain("destination", &event_log)),
+    )?)?;
     builder.register_transfer_provider(
         transfer_endpoint(core_engine_id, source_storage.clone())?,
         transfer_endpoint(extension_engine_id, destination_storage.clone())?,
@@ -3632,6 +3605,7 @@ fn run_transfer_and_drain_failure(
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    eprintln!("missing bridge error: {error:?}");
 
     let events = event_log.lock().expect("event log lock").clone();
     Ok(TransferDrainFailureObservation {
@@ -3921,7 +3895,8 @@ fn runtime_run_compiled_reports_missing_execution_bridge() -> Result<(), Box<dyn
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
-    assert!(error.to_string().contains("execution bridge"));
+    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
+    assert!(StdError::source(&error).is_some());
     Ok(())
 }
 

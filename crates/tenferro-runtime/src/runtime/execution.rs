@@ -703,7 +703,7 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
 #[derive(Debug)]
 struct PreparedExecutionEngines {
     snapshot: Arc<super::RuntimeConfigSnapshot>,
-    root: Arc<dyn ErasedTensorBackendExecutor>,
+    root: super::snapshot::ExecutableEngineSnapshot,
     root_location: ExecutionLocation,
     input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
@@ -712,7 +712,7 @@ struct PreparedExecutionEngines {
 
 #[derive(Debug)]
 struct PreparedOperationExecution {
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
+    witness: super::snapshot::ExecutableEngineSnapshot,
     location: ExecutionLocation,
 }
 
@@ -895,7 +895,7 @@ fn execution_engines(
         root_engine.event_domain_id(),
         storage_class.clone(),
     );
-    let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let root_witness = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
     let input_locations = root.input_locations();
     for location in input_locations {
         let engine = snapshot.engine(location.engine_id()).ok_or_else(|| {
@@ -953,7 +953,7 @@ fn execution_engines(
             ));
         }
         operation_executors.push(PreparedOperationExecution {
-            executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
+            witness: execution_engine_from_snapshot(&snapshot, engine_id)?,
             location: ExecutionLocation::new(
                 engine_id.clone(),
                 engine.provider_device_identity().clone(),
@@ -965,7 +965,7 @@ fn execution_engines(
     let transfers = snapshot.transfer_registry_for_execution();
     Ok(PreparedExecutionEngines {
         snapshot,
-        root: root_executor,
+        root: root_witness,
         root_location,
         input_locations: input_locations.to_vec().into_boxed_slice(),
         operations: operation_executors.into_boxed_slice(),
@@ -976,7 +976,7 @@ fn execution_engines(
 fn execution_engine_from_snapshot(
     snapshot: &super::RuntimeConfigSnapshot,
     engine_id: &super::EngineId,
-) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
+) -> Result<super::snapshot::ExecutableEngineSnapshot> {
     let engine = snapshot.engine(engine_id).ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run_compiled",
@@ -984,7 +984,7 @@ fn execution_engine_from_snapshot(
             format!("prepared engine {engine_id:?} is no longer registered"),
         )
     })?;
-    engine.execution_engine().cloned().ok_or_else(|| {
+    engine.executable_witness().cloned().ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
@@ -1018,6 +1018,7 @@ fn execute_scheduled_tensor_refs(
     .and_then(|mut slots| {
         collect_tensor_outputs_with(program, &mut slots, |location, slot| {
             execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .executor()
                 .materialize_slot(slot)
         })
     })
@@ -1048,6 +1049,7 @@ fn execute_scheduled_value_refs(
     .and_then(|mut slots| {
         collect_value_outputs_with(program, &mut slots, |location, slot| {
             execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
+                .executor()
                 .materialize_slot_value(slot)
         })
     })
@@ -1215,12 +1217,12 @@ impl ScheduledEventDomains {
             if drivers.iter().any(|(candidate, _)| *candidate == domain) {
                 continue;
             }
-            let driver = snapshot
+            let witness = snapshot
                 .engine_views_for_preparation()
                 .find(|engine| engine.event_domain_id() == domain)
-                .and_then(|engine| engine.event_domain_driver().cloned())
+                .and_then(|engine| engine.executable_witness().cloned())
                 .ok_or_else(|| missing_event_domain_driver(domain))?;
-            drivers.push((domain, driver));
+            drivers.push((domain, witness.event_domain_driver().clone()));
         }
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, driver) in drivers {
@@ -1534,7 +1536,7 @@ fn instruction_execution<'a>(
 ) -> Result<InstructionExecution<'a>> {
     let Some(operation_index) = instruction.semantic_operation_index else {
         return Ok(InstructionExecution {
-            executor: &execution.root,
+            witness: &execution.root,
             location: &execution.root_location,
         });
     };
@@ -1549,19 +1551,19 @@ fn instruction_execution<'a>(
             )
         })?;
     Ok(InstructionExecution {
-        executor: operation.executor(),
+        witness: operation.witness(),
         location: operation.location(),
     })
 }
 
 struct InstructionExecution<'a> {
-    executor: &'a Arc<dyn ErasedTensorBackendExecutor>,
+    witness: &'a super::snapshot::ExecutableEngineSnapshot,
     location: &'a ExecutionLocation,
 }
 
 impl InstructionExecution<'_> {
     fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
-        self.executor
+        self.witness.executor()
     }
 
     fn location(&self) -> &ExecutionLocation {
@@ -1570,8 +1572,8 @@ impl InstructionExecution<'_> {
 }
 
 impl PreparedOperationExecution {
-    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
-        &self.executor
+    fn witness(&self) -> &super::snapshot::ExecutableEngineSnapshot {
+        &self.witness
     }
 
     fn location(&self) -> &ExecutionLocation {
@@ -2136,10 +2138,11 @@ mod tests {
 
     use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
     use crate::runtime::{
-        EngineId, ErasedExecutionContext, ExecutionContextIdentity, HardwareClassId,
+        CoreCapabilityBundle, EngineId, ErasedExecutionContext, EventDomainDriver,
+        ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId, InputIngressContract,
         InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
-        PreparedOperationPlan, RegistrationIdentity, RuntimeEpoch, RuntimeId,
-        SpecializationProjection, SpecializationRequirements,
+        PreparedOperationPlan, ProviderDeviceIdentity, RegistrationIdentity, RuntimeCacheOwner,
+        RuntimeEpoch, RuntimeId, SpecializationProjection, SpecializationRequirements,
     };
     use crate::{Error, ErrorPhase, ExtensionCacheStore, Result};
 
@@ -2639,18 +2642,21 @@ mod tests {
                 super::erased_tensor_backend_executor::<B>;
         }
 
-        fn registration_accepts_backend_without_clone_bound<B>()
+        fn contract_accepts_backend_without_clone_bound<B>()
         where
             B: TensorBackend + Send + Sync + 'static,
         {
-            let _method: fn(
-                crate::runtime::EngineRegistration,
+            let _constructor: fn(
+                ProviderDeviceIdentity,
+                CoreCapabilityBundle,
                 B,
-            ) -> crate::runtime::EngineRegistration =
-                crate::runtime::EngineRegistration::with_tensor_backend_executor::<B>;
+                Arc<dyn EventDomainDriver>,
+                InputIngressContract,
+                Option<Arc<dyn RuntimeCacheOwner>>,
+            ) -> ExecutableEngineContract = ExecutableEngineContract::new::<B>;
         }
 
         factory_accepts_backend_without_clone_bound::<CpuBackend>();
-        registration_accepts_backend_without_clone_bound::<CpuBackend>();
+        contract_accepts_backend_without_clone_bound::<CpuBackend>();
     }
 }

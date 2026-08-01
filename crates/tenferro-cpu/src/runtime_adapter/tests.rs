@@ -34,13 +34,18 @@ fn cpu_backend_coerces_to_all_runtime_traits() {
 }
 
 #[test]
-fn public_cpu_runtime_registration_includes_execution_bridge() {
+fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
     let backend = CpuBackend::new();
 
     let registration = crate::runtime_engine_registration(&backend).expect("CPU registration");
 
     assert_eq!(registration.engine_id().as_str(), "tenferro-cpu.default.v1");
-    assert!(registration.has_execution_engine());
+    let capabilities = registration.capabilities();
+    assert!(capabilities.elementwise().is_some());
+    assert!(capabilities.reduction().is_some());
+    assert!(capabilities.indexing().is_some());
+    assert!(capabilities.dot_general().is_some());
+    assert!(capabilities.layout().is_some());
     let expected_provider_id = match backend.kind() {
         crate::CpuBackendKind::Faer => "tenferro.cpu.faer",
         crate::CpuBackendKind::Blas => "tenferro.cpu.blas",

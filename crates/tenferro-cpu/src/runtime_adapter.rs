@@ -7,12 +7,14 @@ use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
     CacheOwnerError, CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, ExecutionContextIdentity, HardwareClassId,
-    IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
+    EngineId, EngineRegistration, ExecutableEngineContract, ExecutionContextIdentity,
+    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
+    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
-    ProviderId, ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    ProviderExecutableBinding, ProviderId, ReductionPrepareRequest, ReductionRuntime,
+    ResidentOutputContract, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract,
     SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
     TensorRead, UnsupportedReason,
 };
@@ -107,6 +109,7 @@ pub fn runtime_engine_registration_with_id(
         .layout(layout);
 
     let storage = runtime_storage_class()?;
+    let default_storage = storage.clone();
     let placement_storage = storage.clone();
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
@@ -121,40 +124,37 @@ pub fn runtime_engine_registration_with_id(
         ProviderId::new(provider_id)?,
         format!("domain:{}", execution_info.domain_id().as_u64()),
     )?;
-    EngineRegistration::new(
-        engine_id,
+    let ingress = InputIngressContract::new(
+        InputPlacementContract::new(move |placement, candidate| {
+            cpu_input_placement(placement) && candidate == &placement_storage
+        }),
+        InputSignatureContract::new(move |placement, family, domain, candidate| {
+            candidate == &signature_storage
+                && cpu_input_signature(placement, family, domain, allocation_domain)
+        }),
+        RuntimeInputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &runtime_storage && cpu_runtime_input(input, allocation_domain)
+        }),
+        ResidentOutputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &resident_storage && cpu_runtime_input(input, allocation_domain)
+        }),
+    );
+    let contract = ExecutableEngineContract::new(
         provider_device_identity,
-        ExecutionContextIdentity::of::<CpuBackend>(),
-        runtime_hardware_class()?,
-        Arc::from(vec![storage.clone()]),
-        storage,
         capabilities.build(),
-    )
-    .map(|registration| {
-        registration
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_cache_owner(cache_owner)
-            .with_tensor_backend_executor(execution_backend)
-            .with_input_signature_validator(move |placement, family, domain, candidate| {
-                candidate == &signature_storage
-                    && cpu_input_signature(placement, family, domain, allocation_domain)
-            })
-            .with_input_ingress_validator(
-                // Runtime ingress is a routing boundary, not a CpuBackend op.
-                // Reject device residency here so the scheduler must select an
-                // explicit transfer provider. Direct CpuBackend operations keep
-                // their RuntimeState error with the "download to host" remedy.
-                move |placement, candidate| {
-                    cpu_input_placement(placement) && candidate == &placement_storage
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &runtime_storage && cpu_runtime_input(input, allocation_domain)
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &resident_storage && cpu_runtime_input(input, allocation_domain)
-                },
-            )
-    })
+        execution_backend,
+        Arc::new(ImmediateEventDomainDriver::new()),
+        ingress,
+        Some(cache_owner),
+    );
+    let binding = ProviderExecutableBinding::new(
+        engine_id,
+        runtime_hardware_class()?,
+        Arc::from(vec![storage]),
+        default_storage,
+        contract,
+    )?;
+    Ok(EngineRegistration::executable(binding))
 }
 
 fn cpu_input_signature(

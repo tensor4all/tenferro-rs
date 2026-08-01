@@ -1,3 +1,4 @@
+mod architectural_remediation;
 mod cache;
 mod cache_owner;
 mod capability;
@@ -11,4 +12,3 @@ mod schedule;
 mod signature;
 mod snapshot;
 mod specialization;
-mod architectural_remediation;

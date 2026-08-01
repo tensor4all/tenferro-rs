@@ -340,6 +340,13 @@ pub enum RuntimeConfigError {
         /// Destination endpoint of the unbound route.
         destination: TransferEndpoint,
     },
+    /// A bound candidate referenced an engine that disappeared before freeze;
+    /// this indicates runtime corruption rather than candidate validation.
+    #[error("bound candidate invariant failed for transfer endpoint {endpoint:?}")]
+    BoundCandidateInvariant {
+        /// Endpoint whose already-bound engine lookup failed.
+        endpoint: TransferEndpoint,
+    },
     /// An execution bridge omitted the validators required for explicit input
     /// ingress and destination-buffer residency.
     #[error("engine {engine_id:?} execution bridge has no complete input ingress validator")]
