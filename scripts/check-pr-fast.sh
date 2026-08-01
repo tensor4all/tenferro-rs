@@ -53,7 +53,7 @@ die() {
 has_ci_profile() {
   local wanted="$1"
   local profile
-  for profile in "${CI_PROFILES[@]}"; do
+  for profile in ${CI_PROFILES[@]+"${CI_PROFILES[@]}"}; do
     if [[ "$profile" == "$wanted" ]]; then
       return 0
     fi
