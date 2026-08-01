@@ -37,9 +37,11 @@ here.
   artifacts, and stale p3/p4 ownership rows are rejected by the RED contract.
 - Deferred-to-active promotion changes only the tagged state. Artifact and
   command identity, including path arguments and binding, remains identical
-  across base and candidate manifests. Candidate-bound receipts include the
-  manifest, artifact, command, and commit digests. Terminal status is derived
-  from obligations, cohort completion, and receipts.
+  across base and candidate manifests. Every canonical unit has required
+  obligations; an empty set is invalid rather than vacuously complete.
+  Candidate-bound runner receipts include successful results and the manifest,
+  artifact, command, and actual Git commit digests. Terminal status is derived
+  from obligations, cohort completion, and complete receipts.
 - Path validation is filesystem-aware. Repository-relative lexical checks are
   supplemented by canonical resolution so `..`, absolute paths, and real
   symlink escapes cannot become green. Existing deferred artifacts do not
@@ -57,12 +59,23 @@ here.
   construct `HostReadGuard`, `HostWriteGuard`, `RootBoundSpan`, claims, or
   `UseLease`. `import_owned_storage` is safe and fallible; rejection returns
   the same allocation box through `ImportRejected`.
-- `ResolvedWrite::backend_write_request` explicitly reborrows with
-  `let owner = &mut *self.capability.owner;` before borrowing disjoint pin and
-  claim fields. Device write failure returns the exact resolved exclusive
-  capability. Direct borrowed write is synchronous and retires before its
-  borrow ends; scoped execution is read-only. Detached asynchronous execution
-  owns `OwnedStorage`.
+- Read and write acquisition explicitly split owner fields. One private
+  `RootResourceState` method validates the binding, constructs the opaque
+  request, and dispatches to that same state's provider before the borrow can
+  escape. No request is returned and no owner/provider field is re-accessed
+  while it is live. Host and device write use
+  `let owner = &mut *self.capability.owner;`; device pre-admission failure ends
+  the inner borrow before returning the exact `ResolvedWrite`. Direct borrowed
+  write is synchronous and retires before its borrow ends; scoped execution is
+  read-only. Detached asynchronous execution owns `OwnedStorage`.
+- `BackendRawLease` and `UseLease` are explicitly `Send + !Sync` under the
+  thread-transfer clause of the one unsafe provider implementation contract.
+  Host raw mappings and guards are explicitly `!Send + !Sync`. Zero-sized
+  markers add no allocation. Release callback/context is taken before its
+  exactly-once invocation; panic is contained and quarantines the pinned root,
+  while a forgotten carrier keeps the pin and can only harm liveness. The RED
+  suite locks these signature clauses without introducing another unsafe proof
+  boundary.
 - AD retention is descriptor/group liveness, not shallow storage cloning.
   Retention has no copy/allocation reason; explicit duplication, transfers,
   operation outputs, and checkpoint recomputation are separately classified.
@@ -80,13 +93,42 @@ The executable specification covers:
 - command allowlist, empty argv, path-argument confinement, exact
   artifact-command binding, duplicate command identity, fail-closed execution,
   active-once/deferred-never runner behavior;
-- base-to-candidate immutable identity, candidate-bound receipt fields, and
-  derived terminal status;
+- actual-Git base-to-candidate immutable identity, candidate-bound runner
+  receipt output, non-vacuous P0/P5 CUTOVER proof, and both positive and
+  incomplete-receipt terminal derivation;
+- stable JSON diagnostic codes and identifying fields, with checked fixture
+  replacement helpers rather than unchecked text mutation;
 - rejection of the old fixture/source/ownership parallel tables.
 
 The temporary repository helpers are test-only. They do not replace the
 production-manifest test, and the symlink cases create actual filesystem
 symlinks rather than checking a string containing a symlink-like path.
+
+## Rejection of checkpoint 546f18be and remediation
+
+Concrete review rejected checkpoint `546f18be` for four contract defects:
+
+- the write request escaped a private binder and acquisition then reborrowed
+  the owner/provider while that request was live;
+- CUTOVER fixtures had no required P0/P5 obligations or receipt proof, allowing
+  prerequisite completion to be interpreted vacuously;
+- receipts used invented SHA strings, were handwritten, and lacked runner
+  output and a positive terminal case;
+- negative assertions depended on unstable prose and unchecked `str.replace`.
+
+This follow-up amends only the RED/design checkpoint. The provider binder is
+now a single dispatching kernel method; all canonical units own obligations;
+promotion fixtures use real base and HEAD commits; runner output and exact
+digest binding are executable requirements; P0/P5 omissions and incomplete
+terminal receipts are negative cases; and checker failures use the stable
+`tenferro.storage-ownership-diagnostics.v1` envelope. The checker and runner
+remain intentionally unimplemented.
+
+An additional coherence review required the worker/reaper auto-trait contract
+and release behavior to be explicit. The remediation therefore also fixes
+lease transfer to `Send + !Sync`, keeps host mappings thread-bound, and makes
+exactly-once panic-contained release/quarantine part of G1 and its RED
+signature assertions.
 
 ## Verification evidence for this checkpoint
 
@@ -94,15 +136,32 @@ Passing deterministic checks:
 
 - `python3.12 -m py_compile scripts/test-storage-ownership-contracts-v2.py`
 - generated v2 manifests parse with Python 3.12 `tomllib`, including promoted
-  active states;
+  CUTOVER and all-active terminal candidates, and cover every canonical unit;
+- the RED signature self-check for `Send + !Sync`, host thread binding,
+  take-before-call release, panic containment, and quarantine;
+- a standalone `rustc --edition=2021` borrow-shape check for the exact private
+  host/device write dispatch and `(ResolvedWrite, Error)` recovery pattern;
+- `python3.12 scripts/check-storage-ownership-contracts.py`;
+- `python3.12 scripts/test-check-storage-ownership-contracts.py` (65 tests);
+- `cargo doc --workspace --no-deps`;
+- `python3.12 scripts/check-docs-site.py` and
+  `python3.12 scripts/test-check-docs-site.py`;
+- `bash scripts/check-pr-fast.sh --coverage-reviewed ...` with py-compile and
+  the two implementation-independent RED self-checks (including all root and
+  extension-manifest fmt/clippy/doc-snippet checks);
+- deterministic `scripts/repository-rules-review.py --worktree --dry-run`
+  (pass; external LLM review explicitly skipped);
 - `git diff --check`.
 
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` fails because the
-  v2 checker/runner behavior is not implemented yet; the checked-in production
-  manifest is still v1 and therefore also fails the v2 production assertion.
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 27 tests and
+  reports 29 assertion/subtest failures. They are intentional: the v1 checker
+  lacks v2 structured diagnostics, base/HEAD receipt validation and summary
+  output; the runner is absent; and the checked-in production manifest remains
+  v1. There are no fixture parse errors, unchecked/no-op replacement failures,
+  or unexpected Python exceptions.
 
 No cargo implementation tests are claimed here because this checkpoint changes
 only design, ledger specification tests, and provenance. The next Phase 1

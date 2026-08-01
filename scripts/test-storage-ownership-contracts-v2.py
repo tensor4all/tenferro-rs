@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check-storage-ownership-contracts.py"
 RUNNER = ROOT / "scripts" / "run-storage-ownership-contracts.py"
 PRODUCTION_MANIFEST = ROOT / "scripts" / "storage-ownership-contracts.toml"
+DESIGN_CONTRACT = ROOT / "docs" / "design" / "storage-ownership-contracts.md"
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 GATES = tuple(f"G{number}" for number in range(1, 8))
@@ -74,7 +75,19 @@ CUTOVER = {
 
 # The obligation graph is keyed by unit and gate IDs.  There is deliberately
 # no second ownership/fixture/source table: the checker must reject one.
-ACTIVE_OBLIGATIONS = (
+PREREQUISITE_OBLIGATIONS = (
+    (
+        "p0-control-plane",
+        "P0",
+        ("G3",),
+        "artifact-control-plane",
+        "crates/tenferro-runtime/tests/execution_engine_identity.rs",
+        "rust-test",
+        "cmd-control-plane",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-runtime", "--test", "execution_engine_identity"),
+        (),
+    ),
     (
         "p1-ledger",
         "P1",
@@ -111,6 +124,42 @@ ACTIVE_OBLIGATIONS = (
         ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_api_parity"),
         (),
     ),
+    (
+        "p2-root-claims",
+        "P2",
+        ("G1",),
+        "artifact-root-claims",
+        "crates/tenferro-tensor/tests/storage_root_claims.rs",
+        "rust-test",
+        "cmd-root-claims",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_root_claims"),
+        (),
+    ),
+    (
+        "p4-access-retirement",
+        "P4",
+        ("G1", "G3"),
+        "artifact-corruption-map",
+        "crates/tenferro-tensor/src/storage/tests/corruption_map.rs",
+        "corruption-test",
+        "cmd-corruption-map",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"),
+        (),
+    ),
+    (
+        "p5-allocation-group",
+        "P5",
+        ("G2", "G5"),
+        "artifact-allocation-group",
+        "crates/tenferro-tensor/tests/storage_allocation_group.rs",
+        "rust-test",
+        "cmd-allocation-group",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_allocation_group"),
+        (),
+    ),
 )
 
 DEFERRED_OBLIGATIONS = (
@@ -127,18 +176,6 @@ DEFERRED_OBLIGATIONS = (
         (),
     ),
     (
-        "p4-access-retirement",
-        "P4",
-        ("G1",),
-        "artifact-corruption-map",
-        "crates/tenferro-tensor/src/storage/tests/corruption_map.rs",
-        "corruption-test",
-        "cmd-corruption-map",
-        "cargo-test",
-        ("cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"),
-        (),
-    ),
-    (
         "p9-submission",
         "P9",
         ("G3",),
@@ -150,7 +187,105 @@ DEFERRED_OBLIGATIONS = (
         ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"),
         (),
     ),
+    (
+        "p6-reinterpret",
+        "P6",
+        ("G4",),
+        "artifact-reinterpret",
+        "crates/tenferro-tensor/tests/storage_reinterpret.rs",
+        "rust-test",
+        "cmd-reinterpret",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret"),
+        (),
+    ),
+    (
+        "p7-cuda",
+        "P7",
+        ("G1", "G3"),
+        "artifact-cuda-provider",
+        "crates/tenferro-cuda/tests/storage_provider.rs",
+        "hardware-test",
+        "cmd-cuda-provider",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-cuda", "--test", "storage_provider"),
+        (),
+    ),
+    (
+        "p8-webgpu-metal",
+        "P8",
+        ("G1", "G3"),
+        "artifact-webgpu-metal-provider",
+        "crates/tenferro-wgpu/tests/storage_provider.rs",
+        "hardware-test",
+        "cmd-webgpu-metal-provider",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-wgpu", "--test", "storage_provider"),
+        (),
+    ),
+    (
+        "p10-api-normalization",
+        "P10",
+        ("G4",),
+        "artifact-api-normalization",
+        "crates/tenferro-tensor/tests/storage_public_api.rs",
+        "rust-test",
+        "cmd-api-normalization",
+        "cargo-test",
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_public_api"),
+        (),
+    ),
+    (
+        "p13-freeze",
+        "P13-A",
+        ("G1", "G2", "G3", "G4", "G5", "G6", "G7"),
+        "artifact-contract-freeze",
+        "docs/design/storage-contract-freeze.md",
+        "documentation",
+        "cmd-contract-freeze",
+        "doc-check",
+        ("python3", "scripts/check-storage-design-docs.py"),
+        ("scripts/check-storage-design-docs.py", "docs/design/storage-contract-freeze.md"),
+    ),
+    (
+        "p11-hardware",
+        "P11",
+        ("G1", "G3"),
+        "artifact-hardware-matrix",
+        "docs/testing/storage-hardware-matrix.md",
+        "documentation",
+        "cmd-hardware-matrix",
+        "doc-check",
+        ("python3", "scripts/check-storage-design-docs.py"),
+        ("scripts/check-storage-design-docs.py", "docs/testing/storage-hardware-matrix.md"),
+    ),
+    (
+        "p12-documentation",
+        "P12",
+        ("G6",),
+        "artifact-storage-guide",
+        "docs/storage-ownership.md",
+        "documentation",
+        "cmd-storage-guide",
+        "doc-check",
+        ("python3", "scripts/check-storage-design-docs.py"),
+        ("scripts/check-storage-design-docs.py", "docs/storage-ownership.md"),
+    ),
+    (
+        "p13-closure",
+        "P13-B",
+        ("G1", "G2", "G3", "G4", "G5", "G6", "G7"),
+        "artifact-storage-closure",
+        "docs/worklogs/storage-redesign-closure.md",
+        "documentation",
+        "cmd-storage-closure",
+        "doc-check",
+        ("python3", "scripts/check-storage-design-docs.py"),
+        ("scripts/check-storage-design-docs.py", "docs/worklogs/storage-redesign-closure.md"),
+    ),
 )
+
+ALL_OBLIGATIONS = PREREQUISITE_OBLIGATIONS + DEFERRED_OBLIGATIONS
 
 
 def _quote(value: str) -> str:
@@ -214,11 +349,12 @@ def _command(
     argv: tuple[str, ...],
     path_args: tuple[str, ...],
     artifact_id: str,
+    artifact_path: str,
     marker: bool,
 ) -> str:
     if marker:
-        argv = ("python3", f"markers/{command_id}.py")
-        path_args = (f"markers/{command_id}.py",)
+        argv = ("python3", f"markers/{command_id}.py", artifact_path)
+        path_args = (f"markers/{command_id}.py", artifact_path)
         kind = "python-test"
     return (
         "command = { "
@@ -263,7 +399,7 @@ def _obligation(
         unit = "{unit}"
         gates = {_array(gates)}
         artifact = {{ id = "{artifact_id}", kind = "{artifact_kind}", path = "{artifact_path}" }}
-        {_command(command_id=command_id, kind=command_kind, argv=argv, path_args=path_args, artifact_id=artifact_id, marker=marker)}
+        {_command(command_id=command_id, kind=command_kind, argv=argv, path_args=path_args, artifact_id=artifact_id, artifact_path=artifact_path, marker=marker)}
         {state}
         rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
         '''
@@ -282,7 +418,7 @@ def valid_manifest(
     active_override = active_override or {}
     deferred_override = deferred_override or {}
     rows = [f"schema = {_quote(schema)}", _registry(edges=edges)]
-    for row in ACTIVE_OBLIGATIONS:
+    for row in PREREQUISITE_OBLIGATIONS:
         entry_id, unit, gates, artifact_id, path, artifact_kind, command_id, command_kind, argv, path_args = row
         replacement = active_override.get(entry_id)
         rows.append(
@@ -331,18 +467,20 @@ def repository_files() -> dict[str, str]:
         "docs/design/storage-ownership-contracts.md": "# Storage ownership contracts\n",
         "crates/tenferro-tensor/tests/storage_api_parity.rs": "fn parity_contract() {}\n",
     }
-    for row in ACTIVE_OBLIGATIONS:
+    for row in PREREQUISITE_OBLIGATIONS:
         files[row[4]] = "fn active_contract() {}\n"
     return files
 
 
 def marker_files() -> dict[str, str]:
     files = repository_files()
-    for row in (*ACTIVE_OBLIGATIONS, *DEFERRED_OBLIGATIONS):
+    for row in ALL_OBLIGATIONS:
         command_id = row[6]
         files[f"markers/{command_id}.py"] = textwrap.dedent(
             f'''\
+            import sys
             from pathlib import Path
+            Path(sys.argv[1]).read_bytes()
             Path("runner.log").open("a", encoding="utf-8").write("{command_id}\\n")
             '''
         )
@@ -360,25 +498,102 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _receipt_promotions(root: Path, manifest: str, obligation_ids: tuple[str, ...]) -> list[dict[str, str]]:
+def _replace_once(source: str, old: str, new: str) -> str:
+    count = source.count(old)
+    if count != 1:
+        raise AssertionError(f"replacement target must occur exactly once, found {count}: {old!r}")
+    return source.replace(old, new, 1)
+
+
+def _replace_in_obligation(source: str, obligation_id: str, old: str, new: str) -> str:
+    blocks = source.split("\n\n")
+    matches = [index for index, block in enumerate(blocks) if f'id = "{obligation_id}"' in block]
+    if len(matches) != 1:
+        raise AssertionError(f"obligation block must occur exactly once: {obligation_id}")
+    index = matches[0]
+    blocks[index] = _replace_once(blocks[index], old, new)
+    return "\n\n".join(blocks)
+
+
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=root, text=True, capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return result.stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _init_git_repository(root: Path, manifest: str, *, files: dict[str, str]) -> str:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "ledger-red@example.invalid")
+    _git(root, "config", "user.name", "Ledger RED")
+    _write_files(root, files)
+    manifest_path = root / "scripts/storage-ownership-contracts.toml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(manifest, encoding="utf-8")
+    return _commit(root, "base ledger")
+
+
+def _receipt(
+    root: Path,
+    manifest: str,
+    *,
+    base_commit: str,
+    candidate_commit: str,
+    omit: frozenset[str] = frozenset(),
+    exit_codes: dict[str, int] | None = None,
+) -> dict[str, object]:
     parsed = tomllib.loads(manifest)
-    rows = {row["id"]: row for row in parsed["obligations"]}
-    promotions: list[dict[str, str]] = []
-    for obligation_id in obligation_ids:
-        row = rows[obligation_id]
+    executions: list[dict[str, object]] = []
+    for row in parsed["obligations"]:
+        obligation_id = row["id"]
+        if row["state"]["kind"] != "active" or obligation_id in omit:
+            continue
         command = row["command"]
         command_bytes = json.dumps(command, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        promotions.append(
+        executions.append(
             {
                 "obligation_id": obligation_id,
                 "artifact_id": row["artifact"]["id"],
                 "artifact_sha256": _sha256((root / row["artifact"]["path"]).read_bytes()),
                 "command_id": command["id"],
                 "command_sha256": _sha256(command_bytes),
-                "state": "active",
+                "candidate_commit": candidate_commit,
+                "exit_code": (exit_codes or {}).get(obligation_id, 0),
             }
         )
-    return promotions
+    manifest_path = root / "scripts/storage-ownership-contracts.toml"
+    base_bytes = subprocess.run(
+        ["git", "show", f"{base_commit}:scripts/storage-ownership-contracts.toml"],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    ).stdout
+    return {
+        "schema": "tenferro.storage-ownership-receipt.v1",
+        "base_commit": base_commit,
+        "candidate_commit": candidate_commit,
+        "base_manifest_sha256": _sha256(base_bytes),
+        "candidate_manifest_sha256": _sha256(manifest_path.read_bytes()),
+        "executions": executions,
+    }
+
+
+def _materialize_active_artifacts(root: Path, manifest: str) -> None:
+    for row in tomllib.loads(manifest)["obligations"]:
+        if row["state"]["kind"] != "active":
+            continue
+        path = root / row["artifact"]["path"]
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"artifact for {row['id']}\n", encoding="utf-8")
 
 
 class StorageOwnershipV2RedTests(unittest.TestCase):
@@ -403,7 +618,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     "--root",
                     str(root),
                     "--manifest",
-                    str(manifest_path),
+                    "ledger.toml",
                     *extra_args,
                 ],
                 cwd=ROOT,
@@ -420,7 +635,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 "--root",
                 str(ROOT),
                 "--manifest",
-                str(PRODUCTION_MANIFEST),
+                "scripts/storage-ownership-contracts.toml",
             ],
             cwd=ROOT,
             text=True,
@@ -428,38 +643,45 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             check=False,
         )
 
-    def run_runner(
+    def assert_checker_error(
         self,
         manifest: str,
+        code: str,
         *,
+        fields: dict[str, object] | None = None,
         files: dict[str, str] | None = None,
-    ) -> tuple[subprocess.CompletedProcess[str], str]:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            _write_files(root, files or marker_files())
-            manifest_path = root / "ledger.toml"
-            manifest_path.write_text(manifest, encoding="utf-8")
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(RUNNER),
-                    "--root",
-                    str(root),
-                    "--manifest",
-                    str(manifest_path),
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            log_path = root / "runner.log"
-            return result, log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-
-    def assert_checker_error(self, manifest: str, needle: str, *, files: dict[str, str] | None = None) -> None:
-        result = self.run_checker(manifest, files=files)
+    ) -> None:
+        result = self.run_checker(manifest, files=files, extra_args=("--diagnostics-json",))
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(needle, result.stderr)
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            self.fail(f"checker did not emit structured diagnostics: {result.stdout}{result.stderr}")
+        self.assertEqual(payload["schema"], "tenferro.storage-ownership-diagnostics.v1")
+        matching = [item for item in payload["diagnostics"] if item["code"] == code]
+        self.assertTrue(matching, payload)
+        for key, value in (fields or {}).items():
+            self.assertTrue(
+                any(item.get("fields", {}).get(key) == value for item in matching),
+                payload,
+            )
+
+    def assert_result_diagnostic(
+        self,
+        result: subprocess.CompletedProcess[str],
+        code: str,
+        *,
+        fields: dict[str, object] | None = None,
+    ) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            self.fail(f"tool did not emit structured diagnostics: {result.stdout}{result.stderr}")
+        matching = [item for item in payload["diagnostics"] if item["code"] == code]
+        self.assertTrue(matching, payload)
+        for key, value in (fields or {}).items():
+            self.assertTrue(any(item.get("fields", {}).get(key) == value for item in matching), payload)
 
     def test_checked_in_production_manifest_is_the_gate_input(self) -> None:
         self.assertTrue(PRODUCTION_MANIFEST.is_file())
@@ -475,20 +697,54 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
     def test_v1_is_rejected_without_compatibility_mode(self) -> None:
         self.assert_checker_error(
             valid_manifest(schema="tenferro.storage-ownership-contracts.v1"),
-            "manifest schema must be 'tenferro.storage-ownership-contracts.v2'",
+            "E_SCHEMA_VERSION",
+            fields={"actual": "tenferro.storage-ownership-contracts.v1"},
         )
 
     def test_one_tagged_obligation_table_replaces_parallel_status_tables(self) -> None:
-        malformed = valid_manifest().replace(
+        malformed = _replace_in_obligation(
+            valid_manifest(),
+            "p0-control-plane",
             'state = { kind = "active" }',
             'status = "active"',
-            1,
         )
-        self.assert_checker_error(malformed, "obligation 'p1-ledger' must declare tagged state")
+        self.assert_checker_error(
+            malformed, "E_OBLIGATION_TAGGED_STATE", fields={"obligation_id": "p0-control-plane"}
+        )
         self.assert_checker_error(
             valid_manifest() + '\n[[obligations.active]]\nid = "legacy-active"\n',
-            "manifest must use one canonical obligations table",
+            "E_SCHEMA_PARALLEL_TABLE",
+            fields={"table": "obligations.active"},
         )
+
+    def test_every_canonical_unit_has_required_obligations(self) -> None:
+        parsed = tomllib.loads(valid_manifest())
+        covered = {row["unit"] for row in parsed["obligations"]}
+        self.assertEqual(covered, {unit for unit, _, _ in UNITS})
+        missing_p0 = "\n\n".join(
+            block
+            for block in valid_manifest().strip().split("\n\n")
+            if 'id = "p0-control-plane"' not in block
+        ) + "\n"
+        self.assert_checker_error(
+            missing_p0, "E_UNIT_OBLIGATION_MISSING", fields={"unit": "P0"}
+        )
+
+    def test_lease_thread_transfer_and_release_signatures_are_normative(self) -> None:
+        design = DESIGN_CONTRACT.read_text(encoding="utf-8")
+        for signature in (
+            "unsafe impl Send for BackendRawLease {}",
+            "_not_sync: PhantomData<Cell<()>>",
+            "_thread_bound: PhantomData<Rc<()>>",
+            "assert_send::<UseLease>();",
+            "let Some(parts) = self.pending.take() else { return Ok(()) };",
+            "catch_unwind(AssertUnwindSafe",
+            "QuarantineReason::ProviderReleasePanic",
+        ):
+            with self.subTest(signature=signature):
+                self.assertIn(signature, design)
+        self.assertNotIn("unsafe impl Sync for BackendRawLease", design)
+        self.assertNotIn("unsafe impl Send for UseLease", design)
 
     def test_canonical_graph_keeps_p0_p1_roots_and_p2_only_depends_on_p1(self) -> None:
         parsed = _parse_registry(valid_manifest())
@@ -498,30 +754,39 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         self.assertEqual(CUTOVER["members"], ("P3", "P9"))
 
         wrong_root = valid_manifest(edges=EDGES + (("P0", "P2"),))
-        self.assert_checker_error(wrong_root, "P2 must have exactly one prerequisite: P1")
-        wrong_cutover = valid_manifest().replace(
+        self.assert_checker_error(
+            wrong_root, "E_GRAPH_P2_PREREQUISITE", fields={"unit": "P2"}
+        )
+        wrong_cutover = _replace_once(
+            valid_manifest(),
             'prerequisites = ["P0", "P5"]',
             'prerequisites = ["P1", "P5"]',
-            1,
         )
-        self.assert_checker_error(wrong_cutover, "cutover prerequisites must be exactly P0 and P5")
+        self.assert_checker_error(
+            wrong_cutover, "E_COHORT_DEFINITION", fields={"cohort_id": "cutover"}
+        )
 
     def test_graph_rejects_duplicate_and_unknown_target_links(self) -> None:
         duplicate = valid_manifest(edges=EDGES + (("P1", "P2"),))
-        self.assert_checker_error(duplicate, "duplicate graph edge P1 -> P2")
+        self.assert_checker_error(
+            duplicate, "E_GRAPH_DUPLICATE_EDGE", fields={"from": "P1", "to": "P2"}
+        )
         unknown = valid_manifest(edges=EDGES + (("P2", "P99"),))
-        self.assert_checker_error(unknown, "graph edge target 'P99' is not a registered unit")
+        self.assert_checker_error(
+            unknown, "E_GRAPH_UNKNOWN_UNIT", fields={"unit": "P99"}
+        )
 
     def test_cutover_is_atomic_and_partial_activation_is_rejected(self) -> None:
         partial = valid_manifest(
             promote=frozenset({"p9-submission"})
         )
         files = repository_files()
-        promoted_path = DEFERRED_OBLIGATIONS[2][4]
+        promoted_path = next(row[4] for row in DEFERRED_OBLIGATIONS if row[0] == "p9-submission")
         files[promoted_path] = "fn promoted_contract() {}\n"
         self.assert_checker_error(
             partial,
-            "cohort 'cutover' must activate all members atomically",
+            "E_COHORT_PARTIAL_PROMOTION",
+            fields={"cohort_id": "cutover"},
             files=files,
         )
 
@@ -539,39 +804,50 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             phase = "P4"
             '''
         )
-        self.assert_checker_error(stale, "registry.ownerships is obsolete; obligations refer to unit IDs")
+        self.assert_checker_error(
+            stale, "E_OBSOLETE_OWNERSHIP_TABLE", fields={"table": "registry.ownerships"}
+        )
 
     def test_synthetic_terminal_artifacts_and_terminal_flags_are_rejected(self) -> None:
-        synthetic = valid_manifest().replace(
+        synthetic = _replace_once(
+            valid_manifest(),
             'kind = "manifest", path = "scripts/storage-ownership-contracts.toml"',
             'kind = "synthetic-terminal", path = ".ledger-terminal"',
-            1,
         )
-        self.assert_checker_error(synthetic, "synthetic terminal artifacts are not allowed")
+        self.assert_checker_error(
+            synthetic, "E_ARTIFACT_SYNTHETIC_TERMINAL", fields={"artifact_id": "artifact-ledger"}
+        )
         self.assert_checker_error(
             valid_manifest() + '\nterminal = true\n',
-            "terminal status is derived and cannot be declared",
+            "E_TERMINAL_DECLARED",
+            fields={"field": "terminal"},
         )
 
     def test_terminal_state_is_derived_from_obligations_and_receipts(self) -> None:
         terminal = valid_manifest()
         self.assertNotIn("terminal", terminal)
-        result = self.run_checker(terminal, extra_args=("--json",))
+        result = self.run_checker(terminal, extra_args=("--summary-json",))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         summary = json.loads(result.stdout)
         self.assertFalse(summary["terminal"])
 
     def test_artifact_paths_are_unique_repository_relative_and_real(self) -> None:
-        duplicate = valid_manifest().replace(
+        duplicate = _replace_once(
+            valid_manifest(),
             'id = "artifact-api-parity", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_api_parity.rs"',
             'id = "artifact-api-parity", kind = "rust-test", path = "scripts/storage-ownership-contracts.toml"',
-            1,
         )
-        self.assert_checker_error(duplicate, "duplicate artifact target")
+        self.assert_checker_error(
+            duplicate, "E_ARTIFACT_DUPLICATE_TARGET", fields={"artifact_id": "artifact-api-parity"}
+        )
         escape = valid_manifest(active_override={"p1-ledger": "../outside.toml"})
-        self.assert_checker_error(escape, "artifact path must remain inside the repository")
+        self.assert_checker_error(
+            escape, "E_PATH_ESCAPE", fields={"obligation_id": "p1-ledger"}
+        )
         missing = valid_manifest(active_override={"p1-ledger": "scripts/missing.toml"})
-        self.assert_checker_error(missing, "active artifact path does not exist")
+        self.assert_checker_error(
+            missing, "E_ARTIFACT_MISSING", fields={"artifact_id": "artifact-ledger"}
+        )
 
     def test_real_symlink_escape_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -586,106 +862,106 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             manifest_path = root / "ledger.toml"
             manifest_path.write_text(manifest, encoding="utf-8")
             result = subprocess.run(
-                [sys.executable, str(CHECKER), "--root", str(root), "--manifest", str(manifest_path)],
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "ledger.toml",
+                    "--diagnostics-json",
+                ],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
                 check=False,
             )
             outside.unlink()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("artifact path resolves through a symlink outside the repository", result.stderr)
+        self.assert_result_diagnostic(
+            result, "E_PATH_SYMLINK_ESCAPE", fields={"obligation_id": "p1-ledger"}
+        )
 
     def test_deferred_artifact_cannot_be_promoted_by_existing_file_alone(self) -> None:
         files = repository_files()
-        deferred_path = DEFERRED_OBLIGATIONS[0][4]
+        deferred_path = next(row[4] for row in DEFERRED_OBLIGATIONS if row[0] == "p3-host-owner")
         files[deferred_path] = "fn future_contract() {}\n"
         self.assert_checker_error(
             valid_manifest(),
-            "deferred artifact exists but has not been promoted in the candidate manifest",
+            "E_DEFERRED_ARTIFACT_EXISTS",
+            fields={"obligation_id": "p3-host-owner"},
             files=files,
         )
 
     def test_command_allowlist_is_typed_and_fail_closed(self) -> None:
-        shell = valid_manifest().replace(
+        shell = _replace_once(
+            valid_manifest(),
             'kind = "python-test", argv = ["python3", "scripts/check-storage-ownership-contracts.py"]',
             'kind = "shell", argv = ["sh", "-c", "echo unsafe"]',
-            1,
         )
-        self.assert_checker_error(shell, "command kind 'shell' is not allow-listed")
-        empty = valid_manifest().replace(
+        self.assert_checker_error(shell, "E_COMMAND_KIND", fields={"kind": "shell"})
+        empty = _replace_once(
+            valid_manifest(),
             'argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_api_parity"]',
             "argv = []",
-            1,
         )
-        self.assert_checker_error(empty, "command argv must be a non-empty array")
-        path_escape = valid_manifest().replace(
+        self.assert_checker_error(empty, "E_COMMAND_ARGV", fields={"command_id": "cmd-api-parity"})
+        path_escape = _replace_once(
+            valid_manifest(),
             'path_args = ["scripts/check-storage-ownership-contracts.py", "scripts/storage-ownership-contracts.toml"]',
             'path_args = ["../outside.toml"]',
-            1,
         )
-        self.assert_checker_error(path_escape, "command path argument must remain inside the repository")
+        self.assert_checker_error(
+            path_escape, "E_COMMAND_PATH_ESCAPE", fields={"command_id": "cmd-ledger"}
+        )
 
     def test_command_must_bind_to_exact_artifact_and_target_links(self) -> None:
-        wrong_id = valid_manifest().replace(
+        wrong_id = _replace_once(
+            valid_manifest(),
             'artifact_id = "artifact-ledger"',
             'artifact_id = "artifact-contract-document"',
-            1,
         )
-        self.assert_checker_error(wrong_id, "command 'cmd-ledger' is not bound to its obligation artifact")
-        wrong_target = valid_manifest().replace(
+        self.assert_checker_error(
+            wrong_id, "E_COMMAND_ARTIFACT_BINDING", fields={"command_id": "cmd-ledger"}
+        )
+        wrong_target = _replace_once(
+            valid_manifest(),
             'path_args = ["scripts/check-storage-ownership-contracts.py", "scripts/storage-ownership-contracts.toml"]',
             'path_args = ["scripts/check-storage-design-docs.py"]',
-            1,
         )
-        self.assert_checker_error(wrong_target, "command target links do not match artifact binding")
-        duplicate_command = valid_manifest().replace(
+        self.assert_checker_error(
+            wrong_target, "E_COMMAND_TARGET_BINDING", fields={"command_id": "cmd-ledger"}
+        )
+        duplicate_command = _replace_once(
+            valid_manifest(),
             'id = "cmd-api-parity"',
             'id = "cmd-ledger"',
-            1,
         )
-        self.assert_checker_error(duplicate_command, "duplicate command identity has different artifact binding")
+        self.assert_checker_error(
+            duplicate_command, "E_COMMAND_ID_CONFLICT", fields={"command_id": "cmd-ledger"}
+        )
 
     def test_source_and_fixture_tables_cannot_reappear_as_parallel_authority(self) -> None:
         for table in ("fixtures", "fixture_suites", "source_scans", "source_inventory", "ownerships"):
             with self.subTest(table=table):
                 self.assert_checker_error(
                     valid_manifest() + f'\n[[{table}]]\nid = "legacy"\n',
-                    f"manifest table '{table}' is not part of v2",
+                    "E_SCHEMA_UNKNOWN_TABLE",
+                    fields={"table": table},
                 )
 
     def test_promotion_preserves_immutable_identity_and_binds_receipt_to_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            _write_files(root, repository_files())
-            base_path = root / "base.toml"
-            candidate_path = root / "candidate.toml"
-            receipt_path = root / "receipt.json"
             base = valid_manifest()
-            candidate = valid_manifest(
-                promote=frozenset({"p3-host-owner", "p9-submission"})
-            )
-            for row in DEFERRED_OBLIGATIONS:
-                if row[0] in {"p3-host-owner", "p9-submission"}:
-                    path = root / row[4]
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text("fn promoted_contract() {}\n", encoding="utf-8")
-            base_path.write_text(base, encoding="utf-8")
-            candidate_path.write_text(candidate, encoding="utf-8")
-            promotions = _receipt_promotions(
-                root, candidate, ("p3-host-owner", "p9-submission")
-            )
+            base_commit = _init_git_repository(root, base, files=repository_files())
+            candidate = valid_manifest(promote=frozenset({"p3-host-owner", "p9-submission"}))
+            _materialize_active_artifacts(root, candidate)
+            manifest_path = root / "scripts/storage-ownership-contracts.toml"
+            manifest_path.write_text(candidate, encoding="utf-8")
+            candidate_commit = _commit(root, "atomic cutover candidate")
+            receipt_path = root / "receipt.json"
             receipt_path.write_text(
-                json.dumps(
-                    {
-                        "schema": "tenferro.storage-ownership-receipt.v1",
-                        "base_commit": "base-sha",
-                        "candidate_commit": "candidate-sha",
-                        "base_manifest_sha256": _sha256(base.encode("utf-8")),
-                        "candidate_manifest_sha256": _sha256(candidate.encode("utf-8")),
-                        "promotions": promotions,
-                    }
-                ),
+                json.dumps(_receipt(root, candidate, base_commit=base_commit, candidate_commit=candidate_commit)),
                 encoding="utf-8",
             )
             result = subprocess.run(
@@ -694,15 +970,214 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     str(CHECKER),
                     "--root",
                     str(root),
-                    "--base-manifest",
-                    str(base_path),
                     "--manifest",
-                    str(candidate_path),
+                    "scripts/storage-ownership-contracts.toml",
                     "--base-commit",
-                    "base-sha",
-                    "--candidate-commit",
-                    "candidate-sha",
+                    base_commit,
                     "--receipt",
+                    str(receipt_path),
+                    "--summary-json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cutover_requires_non_vacuous_p0_and_p5_receipt_proof(self) -> None:
+        for unit, obligation_id, missing in (
+            ("P0", "p0-control-plane", True),
+            ("P5", "p5-allocation-group", False),
+        ):
+            with self.subTest(unit=unit), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base = valid_manifest()
+                base_commit = _init_git_repository(root, base, files=repository_files())
+                candidate = valid_manifest(promote=frozenset({"p3-host-owner", "p9-submission"}))
+                _materialize_active_artifacts(root, candidate)
+                (root / "scripts/storage-ownership-contracts.toml").write_text(candidate, encoding="utf-8")
+                candidate_commit = _commit(root, "cutover without complete prerequisite proof")
+                receipt_path = root / "receipt.json"
+                receipt_path.write_text(
+                    json.dumps(
+                        _receipt(
+                            root,
+                            candidate,
+                            base_commit=base_commit,
+                            candidate_commit=candidate_commit,
+                            omit=frozenset({obligation_id}) if missing else frozenset(),
+                            exit_codes={} if missing else {obligation_id: 9},
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CHECKER),
+                        "--root",
+                        str(root),
+                        "--manifest",
+                        "scripts/storage-ownership-contracts.toml",
+                        "--base-commit",
+                        base_commit,
+                        "--receipt",
+                        str(receipt_path),
+                        "--diagnostics-json",
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            self.assert_result_diagnostic(
+                result,
+                "E_COHORT_PREREQUISITE_INCOMPLETE",
+                fields={"unit": unit, "obligation_id": obligation_id},
+            )
+
+    def test_matching_fake_commit_ids_cannot_replace_git_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = valid_manifest()
+            actual_base = _init_git_repository(root, candidate, files=repository_files())
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            actual_candidate = _commit(root, "candidate")
+            fake = "f" * 40
+            receipt = _receipt(
+                root,
+                candidate,
+                base_commit=actual_base,
+                candidate_commit=actual_candidate,
+            )
+            receipt["base_commit"] = fake
+            receipt["candidate_commit"] = fake
+            for execution in receipt["executions"]:
+                execution["candidate_commit"] = fake
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    fake,
+                    "--receipt",
+                    str(receipt_path),
+                    "--diagnostics-json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assert_result_diagnostic(result, "E_RECEIPT_COMMIT", fields={"actual_head": actual_candidate})
+
+    def test_receipt_digests_bind_exact_manifest_artifact_and_command(self) -> None:
+        for digest_kind in ("manifest", "artifact", "command"):
+            with self.subTest(digest_kind=digest_kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = valid_manifest()
+                base_commit = _init_git_repository(root, manifest, files=repository_files())
+                (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+                candidate_commit = _commit(root, "candidate")
+                receipt = _receipt(
+                    root,
+                    manifest,
+                    base_commit=base_commit,
+                    candidate_commit=candidate_commit,
+                )
+                if digest_kind == "manifest":
+                    receipt["candidate_manifest_sha256"] = "0" * 64
+                elif digest_kind == "artifact":
+                    receipt["executions"][0]["artifact_sha256"] = "0" * 64
+                else:
+                    receipt["executions"][0]["command_sha256"] = "0" * 64
+                receipt_path = root / "receipt.json"
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CHECKER),
+                        "--root",
+                        str(root),
+                        "--manifest",
+                        "scripts/storage-ownership-contracts.toml",
+                        "--base-commit",
+                        base_commit,
+                        "--receipt",
+                        str(receipt_path),
+                        "--diagnostics-json",
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            self.assert_result_diagnostic(
+                result, "E_RECEIPT_DIGEST", fields={"digest_kind": digest_kind}
+            )
+
+    def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = valid_manifest()
+            base_commit = _init_git_repository(root, base, files=repository_files())
+            candidate = valid_manifest(
+                deferred_override={"p3-host-owner": "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"},
+                promote=frozenset({"p3-host-owner", "p9-submission"}),
+            )
+            _materialize_active_artifacts(root, candidate)
+            changed = root / "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"
+            changed.parent.mkdir(parents=True, exist_ok=True)
+            changed.write_text("fn changed_contract() {}\n", encoding="utf-8")
+            (root / "scripts/storage-ownership-contracts.toml").write_text(candidate, encoding="utf-8")
+            _commit(root, "changed immutable identity")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base_commit,
+                    "--diagnostics-json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assert_result_diagnostic(
+            result, "E_PROMOTION_IDENTITY", fields={"obligation_id": "p3-host-owner"}
+        )
+
+    def test_runner_emits_exact_candidate_bound_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = valid_manifest(marker=True)
+            base_commit = _init_git_repository(root, manifest, files=marker_files())
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            candidate_commit = _commit(root, "candidate")
+            receipt_path = root / "receipt.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base_commit,
+                    "--receipt-out",
                     str(receipt_path),
                 ],
                 cwd=ROOT,
@@ -710,60 +1185,106 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            log = (root / "runner.log").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(receipt["base_commit"], base_commit)
+        self.assertEqual(receipt["candidate_commit"], candidate_commit)
+        self.assertEqual(
+            {row["obligation_id"] for row in receipt["executions"]},
+            {row[0] for row in PREREQUISITE_OBLIGATIONS},
+        )
+        for row in PREREQUISITE_OBLIGATIONS:
+            self.assertEqual(log.count(row[6]), 1)
+        for row in DEFERRED_OBLIGATIONS:
+            self.assertNotIn(row[6], log)
 
-    def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
+    def test_runner_is_fail_closed_on_command_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            _write_files(root, repository_files())
-            base_path = root / "base.toml"
-            candidate_path = root / "candidate.toml"
-            base_path.write_text(valid_manifest(), encoding="utf-8")
-            candidate_path.write_text(
-                valid_manifest(
-                    deferred_override={"p3-host-owner": "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"}
-                ),
-                encoding="utf-8",
-            )
-            changed = root / "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"
-            changed.parent.mkdir(parents=True, exist_ok=True)
-            changed.write_text("fn changed_contract() {}\n", encoding="utf-8")
+            files = marker_files()
+            files["markers/cmd-ledger.py"] = "raise SystemExit(23)\n"
+            manifest = valid_manifest(marker=True)
+            base_commit = _init_git_repository(root, manifest, files=files)
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            _commit(root, "candidate")
             result = subprocess.run(
                 [
                     sys.executable,
-                    str(CHECKER),
+                    str(RUNNER),
                     "--root",
                     str(root),
-                    "--base-manifest",
-                    str(base_path),
                     "--manifest",
-                    str(candidate_path),
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base_commit,
+                    "--receipt-out",
+                    str(root / "receipt.json"),
+                    "--diagnostics-json",
                 ],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
                 check=False,
             )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("promotion changes immutable artifact or command identity", result.stderr)
-
-    def test_runner_executes_each_active_command_once_and_never_deferred(self) -> None:
-        result, log = self.run_runner(valid_manifest(marker=True))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        entries = log.splitlines()
-        self.assertEqual(entries.count("cmd-ledger"), 1)
-        self.assertEqual(entries.count("cmd-contract-document"), 1)
-        self.assertEqual(entries.count("cmd-api-parity"), 1)
-        self.assertNotIn("cmd-owner-compile", entries)
-        self.assertNotIn("cmd-corruption-map", entries)
-
-    def test_runner_is_fail_closed_on_command_failure(self) -> None:
-        files = marker_files()
-        files["markers/cmd-ledger.py"] = 'raise SystemExit(23)\n'
-        result, log = self.run_runner(valid_manifest(marker=True), files=files)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("cmd-ledger", result.stderr)
+            log_path = root / "runner.log"
+            log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        self.assert_result_diagnostic(result, "E_COMMAND_FAILED", fields={"command_id": "cmd-ledger"})
         self.assertNotIn("cmd-owner-compile", log)
+
+    def test_terminal_true_requires_zero_deferred_and_complete_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = valid_manifest()
+            base_commit = _init_git_repository(root, base, files=repository_files())
+            all_active = valid_manifest(promote=frozenset(row[0] for row in DEFERRED_OBLIGATIONS))
+            _materialize_active_artifacts(root, all_active)
+            (root / "scripts/storage-ownership-contracts.toml").write_text(all_active, encoding="utf-8")
+            candidate_commit = _commit(root, "terminal candidate")
+            receipt_path = root / "receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    _receipt(
+                        root,
+                        all_active,
+                        base_commit=base_commit,
+                        candidate_commit=candidate_commit,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            command = [
+                sys.executable,
+                str(CHECKER),
+                "--root",
+                str(root),
+                "--manifest",
+                "scripts/storage-ownership-contracts.toml",
+                "--base-commit",
+                base_commit,
+                "--receipt",
+                str(receipt_path),
+            ]
+            result = subprocess.run(
+                [*command, "--summary-json"], cwd=ROOT, text=True, capture_output=True, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(json.loads(result.stdout)["terminal"])
+
+            incomplete = _receipt(
+                root,
+                all_active,
+                base_commit=base_commit,
+                candidate_commit=candidate_commit,
+                omit=frozenset({"p13-closure"}),
+            )
+            receipt_path.write_text(json.dumps(incomplete), encoding="utf-8")
+            failed = subprocess.run(
+                [*command, "--diagnostics-json"], cwd=ROOT, text=True, capture_output=True, check=False
+            )
+        self.assert_result_diagnostic(
+            failed, "E_RECEIPT_INCOMPLETE", fields={"obligation_id": "p13-closure"}
+        )
 
     def test_json_summary_has_no_boolean_terminal_input(self) -> None:
         self.assertNotIn("terminal =", valid_manifest())

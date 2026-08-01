@@ -190,7 +190,14 @@ Every member obligation of an atomic cohort must make that transition in the
 same candidate; partial cohort activation is rejected. A changed artifact,
 command, ID, unit, or gate is a new obligation, not a promotion.
 
-The checker emits a candidate-bound receipt containing:
+Every registered unit owns at least one required obligation. A unit is
+complete only when all of its required obligations are active and the
+candidate-bound receipt contains a successful execution result for every one
+of them. An empty obligation set is invalid rather than vacuously complete.
+In particular, CUTOVER cannot activate until P0 and P5 are each complete by
+this rule; merely naming them as cohort prerequisites is not proof.
+
+The runner emits a candidate-bound receipt containing:
 
 ```json
 {
@@ -199,27 +206,33 @@ The checker emits a candidate-bound receipt containing:
   "candidate_commit": "...",
   "base_manifest_sha256": "...",
   "candidate_manifest_sha256": "...",
-  "promotions": [
+  "executions": [
     {
       "obligation_id": "...",
       "artifact_id": "...",
       "artifact_sha256": "...",
       "command_id": "...",
       "command_sha256": "...",
-      "state": "active"
+      "candidate_commit": "...",
+      "exit_code": 0
     }
   ]
 }
 ```
 
 The runner executes each active typed command exactly once, passes the exact
-artifact binding, and records the candidate/manifest/artifact/command
-digests. It does not execute deferred commands. The checker validates the
-receipt against the exact base and candidate bytes and resolves every path
-with filesystem-aware traversal and symlink checks. Terminal status is derived
-only from zero deferred obligations, complete atomic promotions, and complete
-candidate-bound receipts. No boolean terminal switch can make a manifest
-complete.
+artifact binding, and records one result per active obligation plus the
+candidate/manifest/artifact/command digests. It does not execute deferred
+commands. The checker validates the receipt; it does not manufacture command
+results. Both tools resolve `candidate_commit` from `git rev-parse HEAD` and
+load the base manifest from the same repository-relative manifest path at the
+actual `base_commit` Git object. The supplied base must be an ancestor of
+HEAD. Thus matching fake strings in the CLI and receipt cannot substitute for
+repository history. The checker resolves every artifact and command path with
+filesystem-aware traversal and symlink checks. Terminal status is derived
+only from zero deferred obligations, complete atomic promotions, and one
+successful candidate-bound receipt result for every required obligation. No
+boolean terminal switch can make a manifest complete.
 
 Digest canonicalization is part of the receipt contract: manifest digests are
 SHA-256 over the exact manifest bytes, artifact digests are SHA-256 over the
@@ -248,10 +261,52 @@ accepted as a promotion. The RED specification fixes the checker invocation
 for base/candidate comparison and the receipt fields so that a later checker
 cannot silently weaken this rule.
 
-The v2 checker accepts `--root`, `--manifest`, and, for promotion validation,
-`--base-manifest`, `--base-commit`, `--candidate-commit`, and `--receipt`.
-The runner accepts `--root` and `--manifest`; it is not permitted to infer a
-different manifest or command target from the current working directory.
+The v2 checker accepts `--root`, repository-relative `--manifest`, optional
+`--base-commit` plus `--receipt` for promotion/receipt validation,
+`--summary-json`, and `--diagnostics-json`. The runner accepts `--root`, the
+same repository-relative `--manifest`, `--base-commit`, `--receipt-out`, and
+`--diagnostics-json`.
+Neither tool accepts a caller-supplied candidate commit: candidate identity is
+HEAD. Neither tool may infer a different manifest or command target from the
+current working directory. A receipt written by the runner is the only
+execution proof consumed by the checker.
+
+Checker and runner failures have a stable machine-readable envelope when
+`--diagnostics-json` is selected:
+
+```json
+{
+  "schema": "tenferro.storage-ownership-diagnostics.v1",
+  "diagnostics": [
+    {
+      "code": "E_RECEIPT_INCOMPLETE",
+      "fields": {"unit": "P5", "obligation_id": "p5-allocation-group"},
+      "message": "supplemental human explanation"
+    }
+  ]
+}
+```
+
+`code` and the identifying `fields` are compatibility-stable within schema
+v1; human `message` text is not. The RED suite therefore asserts codes and
+relevant IDs/paths rather than prose.
+
+The v1 code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
+`E_SCHEMA_PARALLEL_TABLE`, `E_SCHEMA_UNKNOWN_TABLE`,
+`E_OBLIGATION_TAGGED_STATE`, `E_UNIT_OBLIGATION_MISSING`,
+`E_GRAPH_P2_PREREQUISITE`, `E_GRAPH_DUPLICATE_EDGE`,
+`E_GRAPH_UNKNOWN_UNIT`, `E_COHORT_DEFINITION`,
+`E_COHORT_PARTIAL_PROMOTION`, `E_COHORT_PREREQUISITE_INCOMPLETE`,
+`E_OBSOLETE_OWNERSHIP_TABLE`, `E_ARTIFACT_SYNTHETIC_TERMINAL`,
+`E_ARTIFACT_DUPLICATE_TARGET`, `E_ARTIFACT_MISSING`, `E_PATH_ESCAPE`,
+`E_PATH_SYMLINK_ESCAPE`, `E_DEFERRED_ARTIFACT_EXISTS`,
+`E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_PATH_ESCAPE`,
+`E_COMMAND_ARTIFACT_BINDING`, `E_COMMAND_TARGET_BINDING`,
+`E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`, `E_PROMOTION_IDENTITY`,
+`E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`, `E_RECEIPT_INCOMPLETE`, and
+`E_TERMINAL_DECLARED`. Adding a code is compatible; changing the meaning or
+required identifying fields of an existing code requires a diagnostic schema
+revision.
 
 The RED suite includes both a structured temporary repository for adversarial
 path, graph, promotion, and command-binding cases and an integration case that
@@ -269,8 +324,8 @@ is allowed to manufacture ownership proof from an allocation ID or a lock.
 ### Types and acquisition surface
 
 ```rust
-use core::{marker::PhantomData, ptr::NonNull};
-use std::ffi::c_void;
+use core::{cell::Cell, marker::PhantomData, ptr::NonNull};
+use std::{ffi::c_void, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
 
 pub struct AllocationKey {
     domain: AllocationDomainId,
@@ -348,7 +403,12 @@ pub struct BackendAccessRange {
 // implement this unsafe trait; the storage kernel alone constructs guards and
 // UseLease. The implementation must uphold root identity, checked
 // range/alignment, access ordering, lease retirement, and exactly-once
-// provider cleanup for the allocation represented by the request.
+// provider cleanup for the allocation represented by the request. Lease parts
+// and their release callback may be moved to an arbitrary retirement worker
+// and invoked there exactly once. Host mapping parts need not be transferable.
+// These thread-transfer clauses are part of this one unsafe implementation;
+// providers do not receive a second Send-proof API. Each successful method
+// returns exactly one carrier made from its request; no carrier escapes an Err.
 pub unsafe trait BackendAllocationAccess: Send + Sync + 'static {
     fn metadata(&self) -> BackendAllocationMetadata;
     fn map_host_read<'a>(
@@ -372,7 +432,7 @@ pub unsafe trait BackendAllocationAccess: Send + Sync + 'static {
 }
 
 // The request is opaque to provider code and can only be constructed by the
-// private RootResourceState binders below. It contains the exact pin/root
+// private RootResourceState dispatchers below. It contains the exact pin/root
 // witness, claim, and span selected by one ResolvedRead/ResolvedWrite.
 pub struct BackendReadRequest<'a> {
     _private: (
@@ -397,12 +457,27 @@ pub struct BackendWriteRequest<'a> {
 // request helpers; no carrier contains an owner, claim constructor, mutable
 // capability, or public guard/lease constructor.
 pub struct BackendRawMapping {
-    _private: ProviderMappingParts,
+    pin: RootResourcePin,
+    provider: Option<ProviderMappingParts>,
+    // Zero-sized: host pointers and guards never become Send or Sync merely
+    // because a particular pointer representation has permissive auto traits.
+    _thread_bound: PhantomData<Rc<()>>,
 }
 
 pub struct BackendRawLease {
-    _private: ProviderLeaseParts,
+    pin: RootResourcePin,
+    provider: Option<ProviderLeaseParts>,
+    // Cell is Send but not Sync. A lease may move to one worker/reaper, but
+    // shared concurrent access is not part of the provider contract.
+    _not_sync: PhantomData<Cell<()>>,
 }
+
+// SAFETY: this is a kernel implementation of the thread-transfer clause on
+// the single unsafe BackendAllocationAccess contract, not a provider-facing
+// proof boundary. make_raw_lease installs the exact root pin and accepts parts
+// only while servicing that provider's opaque request. ProviderLeaseParts is
+// intentionally not Send on its own.
+unsafe impl Send for BackendRawLease {}
 
 pub struct ProviderMappingParts {
     pointer: NonNull<u8>,
@@ -416,8 +491,12 @@ pub struct ProviderLeaseParts {
 }
 
 pub struct ProviderReleaseToken {
+    pending: Option<ProviderReleaseParts>,
+}
+
+struct ProviderReleaseParts {
     context: *mut c_void,
-    release: unsafe extern "C" fn(*mut c_void),
+    release: unsafe extern "C-unwind" fn(*mut c_void),
 }
 
 impl ProviderReleaseToken {
@@ -427,8 +506,18 @@ impl ProviderReleaseToken {
     // only; they do not establish ownership, uniqueness, or a root claim.
     pub unsafe fn from_raw_parts(
         context: *mut c_void,
-        release: unsafe extern "C" fn(*mut c_void),
+        release: unsafe extern "C-unwind" fn(*mut c_void),
     ) -> Self;
+
+    fn run_once(&mut self) -> Result<(), ProviderReleasePanic> {
+        // Take before calling. Success, panic, and outer unwinding therefore
+        // cannot invoke the provider callback a second time.
+        let Some(parts) = self.pending.take() else { return Ok(()) };
+        catch_unwind(AssertUnwindSafe(|| unsafe {
+            (parts.release)(parts.context)
+        }))
+        .map_err(|_| ProviderReleasePanic)
+    }
 }
 
 impl ProviderMappingParts {
@@ -447,15 +536,105 @@ impl ProviderLeaseParts {
 }
 
 impl<'a> BackendReadRequest<'a> {
+    fn new_private(
+        pin: &'a RootResourcePin,
+        claim: &'a OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+    ) -> Self {
+        Self {
+            _private: (pin, claim, span, PrivateToken::new()),
+        }
+    }
+
     pub fn range(&self) -> BackendAccessRange;
-    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping;
-    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease;
+    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping {
+        BackendRawMapping {
+            pin: self._private.0.clone(),
+            provider: Some(parts),
+            _thread_bound: PhantomData,
+        }
+    }
+    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease {
+        BackendRawLease {
+            pin: self._private.0.clone(),
+            provider: Some(parts),
+            _not_sync: PhantomData,
+        }
+    }
 }
 
 impl<'a> BackendWriteRequest<'a> {
+    fn new_private(
+        pin: &'a RootResourcePin,
+        claim: &'a mut OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+    ) -> Self {
+        Self {
+            _private: (pin, claim, span, PrivateToken::new()),
+        }
+    }
+
     pub fn range(&self) -> BackendAccessRange;
-    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping;
-    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease;
+    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping {
+        BackendRawMapping {
+            pin: self._private.0.clone(),
+            provider: Some(parts),
+            _thread_bound: PhantomData,
+        }
+    }
+    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease {
+        BackendRawLease {
+            pin: self._private.0.clone(),
+            provider: Some(parts),
+            _not_sync: PhantomData,
+        }
+    }
+}
+
+impl BackendRawMapping {
+    fn release_once(&mut self) -> ReleaseOutcome {
+        let Some(mut parts) = self.provider.take() else { return ReleaseOutcome::Retired };
+        match parts.release.run_once() {
+            Ok(()) => ReleaseOutcome::Retired,
+            Err(panic) => {
+                self.pin.quarantine(QuarantineReason::ProviderReleasePanic(panic));
+                ReleaseOutcome::Quarantined
+            }
+        }
+    }
+}
+
+impl Drop for BackendRawMapping {
+    fn drop(&mut self) {
+        // release_once contains provider panic. Dropping is a liveness fast
+        // path; forgetting the carrier retains its root pin and is still safe.
+        let _ = self.release_once();
+    }
+}
+
+impl BackendRawLease {
+    fn retire(mut self) -> ReleaseOutcome {
+        self.release_once()
+    }
+
+    fn release_once(&mut self) -> ReleaseOutcome {
+        let Some(mut parts) = self.provider.take() else { return ReleaseOutcome::Retired };
+        match parts.release.run_once() {
+            Ok(()) => ReleaseOutcome::Retired,
+            Err(panic) => {
+                self.pin.quarantine(QuarantineReason::ProviderReleasePanic(panic));
+                ReleaseOutcome::Quarantined
+            }
+        }
+    }
+}
+
+impl Drop for BackendRawLease {
+    fn drop(&mut self) {
+        // Retirement records normally call retire explicitly. This fallback is
+        // idempotent, panic-contained, and never retries an uncertain release.
+        let _ = self.release_once();
+    }
 }
 
 // Private kernel wrappers. Sibling provider crates cannot construct these
@@ -479,22 +658,56 @@ pub(crate) struct HostWriteGuard<'a> {
 }
 
 impl RootResourceState {
-    fn bind_read<'a>(
-        &self,
+    fn dispatch_host_read<'a>(
+        &'a self,
         pin: &'a RootResourcePin,
         claim: &'a OwnedSpanClaim,
         span: &'a RootBoundSpan,
-    ) -> Result<BackendReadRequest<'a>, AccessError>;
+    ) -> Result<BackendRawMapping, AccessError> {
+        self.validate_read_binding(pin, claim, span)?;
+        let request = BackendReadRequest::new_private(pin, claim, span);
+        self.allocation.map_host_read(&request)
+    }
 
-    fn bind_write<'a>(
-        &self,
+    fn dispatch_device_read<'a>(
+        &'a self,
+        pin: &'a RootResourcePin,
+        claim: &'a OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+        endpoint: AccessEndpoint,
+    ) -> Result<BackendRawLease, AccessError> {
+        self.validate_read_binding(pin, claim, span)?;
+        let request = BackendReadRequest::new_private(pin, claim, span);
+        self.allocation.acquire_device_read(&request, endpoint)
+    }
+
+    fn dispatch_host_write<'a>(
+        &'a self,
         pin: &'a RootResourcePin,
         claim: &'a mut OwnedSpanClaim,
         span: &'a RootBoundSpan,
-    ) -> Result<BackendWriteRequest<'a>, AccessError>;
-    // Both private binders revalidate state.root == pin.root == claim.root ==
-    // span.root and checked containment before returning an opaque request.
-    // They are not provider-facing or public APIs.
+    ) -> Result<BackendRawMapping, AccessError> {
+        self.validate_write_binding(pin, &*claim, span)?;
+        let request = BackendWriteRequest::new_private(pin, claim, span);
+        self.allocation.map_host_write(&request)
+    }
+
+    fn dispatch_device_write<'a>(
+        &'a self,
+        pin: &'a RootResourcePin,
+        claim: &'a mut OwnedSpanClaim,
+        span: &'a RootBoundSpan,
+        endpoint: AccessEndpoint,
+    ) -> Result<BackendRawLease, AccessError> {
+        self.validate_write_binding(pin, &*claim, span)?;
+        let request = BackendWriteRequest::new_private(pin, claim, span);
+        self.allocation.acquire_device_write(&request, endpoint)
+    }
+    // Each private dispatcher revalidates state.root == pin.root ==
+    // claim.root == span.root and checked containment, constructs the opaque
+    // request, and calls this state's provider before any borrow escapes.
+    // Provider code never receives a receiver selected independently from the
+    // request capability.
 }
 
 pub(crate) struct ResolvedRead<'a> {
@@ -510,11 +723,18 @@ pub(crate) struct ResolvedWrite<'a> {
 }
 
 pub(crate) struct UseLease {
-    pin: RootResourcePin,
     span: RootBoundSpan,
     mode: AccessMode,
     provider: BackendRawLease,
     // No StorageMut conversion, raw write authority, Clone, or public constructor.
+}
+
+fn auto_trait_contract() {
+    fn assert_send<T: Send>() {}
+    assert_send::<BackendRawLease>();
+    assert_send::<UseLease>();
+    // Compile-fail/static assertions additionally require BackendRawLease and
+    // UseLease to be !Sync and BackendRawMapping/host guards to be !Send+!Sync.
 }
 
 impl OwnedStorage {
@@ -535,26 +755,11 @@ impl<'a> StorageRef<'a> {
 }
 
 impl<'a> ResolvedRead<'a> {
-    fn backend_read_request(&self) -> Result<BackendReadRequest<'_>, AccessError> {
-        let owner = self.capability.owner;
-        // This private state lookup is reached only through this resolved
-        // value. It rechecks state root == claim root == span root before
-        // producing the opaque request.
-        owner
-            .pin
-            .state
-            .bind_read(&owner.pin, &owner.claim, &self.span)
-    }
-
     fn acquire_host_read(&self) -> Result<HostReadGuard<'_>, AccessError> {
-        let request = self.backend_read_request()?;
-        let raw = self
-            .capability
-            .owner
-            .pin
-            .state
-            .allocation
-            .map_host_read(&request)?;
+        let owner = self.capability.owner;
+        let (pin, claim) = (&owner.pin, &owner.claim);
+        let state = &*pin.state;
+        let raw = state.dispatch_host_read(pin, claim, &self.span)?;
         Ok(HostReadGuard {
             mapping: BackendReadMapping {
                 raw,
@@ -565,16 +770,11 @@ impl<'a> ResolvedRead<'a> {
 
     fn acquire_device_read(&self, endpoint: AccessEndpoint)
         -> Result<UseLease, AccessError> {
-        let request = self.backend_read_request()?;
-        let provider = self
-            .capability
-            .owner
-            .pin
-            .state
-            .allocation
-            .acquire_device_read(&request, endpoint)?;
+        let owner = self.capability.owner;
+        let (pin, claim) = (&owner.pin, &owner.claim);
+        let state = &*pin.state;
+        let provider = state.dispatch_device_read(pin, claim, &self.span, endpoint)?;
         Ok(UseLease {
-            pin: self.capability.owner.pin.clone(),
             span: self.span.clone(),
             mode: AccessMode::Read,
             provider,
@@ -590,24 +790,11 @@ impl<'a> StorageMut<'a> {
 }
 
 impl<'a> ResolvedWrite<'a> {
-    fn backend_write_request(&mut self) -> Result<BackendWriteRequest<'_>, AccessError> {
-        let owner = &mut *self.capability.owner;
-        // Borrow disjoint owner fields explicitly. The binder receives the
-        // exact pin/root witness and mutable claim; it never receives both
-        // `&mut OwnedStorage` and `&mut owner.claim`.
-        let (pin, claim) = (&owner.pin, &mut owner.claim);
-        pin.state.bind_write(pin, claim, &self.span)
-    }
-
     fn acquire_host_write(&mut self) -> Result<HostWriteGuard<'_>, AccessError> {
-        let request = self.backend_write_request()?;
-        let raw = self
-            .capability
-            .owner
-            .pin
-            .state
-            .allocation
-            .map_host_write(&request)?;
+        let owner = &mut *self.capability.owner;
+        let (pin, claim) = (&owner.pin, &mut owner.claim);
+        let state = &*pin.state;
+        let raw = state.dispatch_host_write(pin, claim, &self.span)?;
         Ok(HostWriteGuard {
             mapping: BackendWriteMapping {
                 raw,
@@ -618,24 +805,20 @@ impl<'a> ResolvedWrite<'a> {
 
     fn acquire_device_write(self, endpoint: AccessEndpoint)
         -> Result<WriteBinding<'a>, (Self, AccessError)> {
-        // A failed private bind or provider admission returns this exact
+        // A failed private dispatch or provider admission returns this exact
         // ResolvedWrite, preserving the exclusive capability for recovery.
-        let mut this = self;
-        let request = match this.backend_write_request() {
-            Ok(request) => request,
-            Err(error) => return Err((this, error)),
+        let this = self;
+        let admission = {
+            let owner = &mut *this.capability.owner;
+            let (pin, claim) = (&owner.pin, &mut owner.claim);
+            let state = &*pin.state;
+            state.dispatch_device_write(pin, claim, &this.span, endpoint)
         };
-        let provider = this
-            .capability
-            .owner
-            .pin
-            .state
-            .allocation
-            .acquire_device_write(&request, endpoint);
-        match provider {
+        // The inner borrow ended before this match. Validation or provider
+        // pre-admission failure therefore returns this exact ResolvedWrite.
+        match admission {
             Ok(provider) => {
                 let lease = UseLease {
-                    pin: this.capability.owner.pin.clone(),
                     span: this.span.clone(),
                     mode: AccessMode::Write,
                     provider,
@@ -701,7 +884,7 @@ Contract points:
   accept a separately supplied span, provider, dispatch object, or resolved
   capability. The method reaches only the vtable stored in
   `self.capability.owner.pin.state`, and that state constructs an opaque
-  request from this exact owner claim, pin, and span. The private binder
+  request from this exact owner claim, pin, and span. The private dispatcher
   rechecks dynamic root equality before dispatch. Thus no public or
   crate-facing safe API has an independently sourced receiver-plus-resolved
   pair to mismatch. Provider crates implement only the narrow unsafe
@@ -713,9 +896,27 @@ Contract points:
   allocation (`'a`), so the borrow checker excludes moves (consuming
   submission) and exclusive operations while a guard is alive.
 - `UseLease` is `'static`, provider-private, span- and access-mode-scoped. It
-  holds a root pin, not a Rust borrow, so it can move into runtime retirement
-  records. It is non-cloneable and non-forgeable, has no conversion to
+  holds a root pin inside its raw carrier, not a Rust borrow, so it can move
+  into runtime retirement records. `UseLease` and `BackendRawLease` are
+  `Send + !Sync`: one worker/reaper may own them, but concurrent shared use is
+  forbidden. This `Send` guarantee is implemented once by the kernel under the
+  thread-transfer clause of `BackendAllocationAccess`; it is not an authority
+  token or a second unsafe provider proof. `BackendRawMapping` and both host
+  guards are `!Send + !Sync` and remain borrow-bound even for a backend whose
+  current mapping happens to be transferable. All markers are zero-sized and
+  root-pin cloning is a refcount operation, so resolve/acquire performs no heap
+  allocation. A lease is non-cloneable and non-forgeable, has no conversion to
   `StorageMut`, and cannot authorize a raw write by itself.
+- Provider release is exactly once on every explicit-retirement or ordinary
+  drop path: the kernel removes the callback/context from its private `Option`
+  before invocation. A provider panic is caught, never retried, and changes the
+  pinned root to `Quarantined`; it cannot unwind through a guard, runtime
+  worker, or destructor. `mem::forget` keeps the root pin forever and degrades
+  liveness only. Consequently safety and reclamation never rely on `Drop`
+  running to completion. The kernel quarantine/report transition itself is
+  infallible and non-panicking. Foreign exceptions must not cross the callback;
+  a Rust provider that may panic uses the declared `C-unwind` ABI and is
+  contained by the kernel.
 - Write resolution and acquisition require the exclusive capability (`&mut`);
   read resolution requires shared. Device write acquisition consumes the
   `ResolvedWrite` into a `WriteBinding`, retaining the exclusive borrow or the
@@ -854,7 +1055,7 @@ if an internal invariant was violated upstream.
 | `StorageMut::resolve_write` | exclusive | consumes the `StorageMut` wrapper and retains its `&mut OwnedStorage` in `ResolvedWrite` | checked range, alignment, and write-injectivity validation | `(StorageMut, AccessError)` with the exact capability returned | no partial resolved capability is published | owner remains live |
 | `acquire_host_read` | shared | allocation for guard lifetime | wait: overlapping device writes (plus reads where provider requires) | no guard, no state change | guard drop unregisters host use | not while guard alive |
 | `acquire_host_write` | exclusive | allocation, exclusively, for guard lifetime | wait: all overlapping device uses | no guard, no state change | drop unregisters; writes made so far are visible bytes, no rollback | not while guard alive |
-| `acquire_device_read` | shared | none beyond the call (lease is a pin) | event dependency on last overlapping write | no lease, no state change | lease drop before submission releases pin | not while lease outstanding |
+| `acquire_device_read` | shared | none beyond the call (lease is a `Send + !Sync` pin/carrier) | event dependency on last overlapping write | no lease, no state change | lease drop before submission invokes release once; callback panic is contained and quarantines root | not while lease outstanding |
 | `acquire_device_write` | exclusive | consumes `ResolvedWrite`; `WriteBinding` retains the owner/`&mut` through enqueue and retirement | event dependencies for RAW/WAR/WAW | unchanged binding capability plus typed error | admitted binding moves to retirement even if its handle is dropped | after covering events retire |
 | direct write API returning an owner | owning | no early end of exclusive access is allowed | synchronous retirement before returning the owner | owner returned only after retirement; otherwise typed error retains it | panic retains/quarantines until retirement | after synchronous retirement |
 | lease submitted with work | owning (runtime owns inputs) | none (pins) | none at submit; retirement via events | enqueue prep failure releases only unsubmitted leases | admitted leases survive handle drop and panic until retirement | after all covering events complete |
@@ -865,6 +1066,7 @@ if an internal invariant was violated upstream.
 | owner drop, outstanding leases | owning | none | none | n/a | claim, deallocator pin, and leases move into a retirement record | claim releases after its events; root deallocates exactly once after the last claim and lease |
 | last root pin/claim release | owning/provider-internal | none | all covering events already retired | n/a | exactly-once deallocator runs or the resource remains quarantined | now, and only now |
 | retirement wait fails | n/a | none | attempted wait/poll | error reported on the runtime/provider error channel | resources quarantined: retained and reported | never speculatively; only if a later drain proves completion |
+| provider release callback panics | carrier has already consumed its one callback token | unchanged | no retry | structured provider-release failure | panic is caught; pinned root enters `Quarantined`; outer Drop/worker continues | never from the failed release proof |
 
 Persistent owner-claim splitting above is distinct from G2 `split_mut`.
 Claim splitting consumes one owner and changes the persistent ownership set;
