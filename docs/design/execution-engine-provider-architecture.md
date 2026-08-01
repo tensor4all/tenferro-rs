@@ -635,8 +635,8 @@ The core engine capability bundle has typed optional slots for:
 
 Metadata-only reshape, transpose, broadcast, and view slicing do not call a
 provider. Allocation and scheduling are runtime resources, not capabilities.
-Transfers use a separate registry keyed by source and destination storage
-class, and collectives use a separate registry. Neither may hide a host
+Transfers use a separate registry keyed by source and destination execution
+endpoints, and collectives use a separate registry. Neither may hide a host
 transfer.
 
 Providers may be implemented by faer, general BLAS/LAPACK, TBLIS, CubeCL,

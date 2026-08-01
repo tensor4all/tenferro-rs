@@ -36,7 +36,7 @@ use super::{
     ProviderContractError, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
     ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
     RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
-    UnsupportedReason,
+    TransferRoute, UnsupportedReason,
 };
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
@@ -736,8 +736,10 @@ fn source_reaches_all_consumers(
             continue;
         }
         if !available.iter().any(|location| {
-            transfer_reachability
-                .contains(&(location.endpoint().clone(), destination.endpoint().clone()))
+            transfer_reachability.contains(&TransferRoute::new(
+                location.endpoint().clone(),
+                destination.endpoint().clone(),
+            ))
         }) {
             return false;
         }

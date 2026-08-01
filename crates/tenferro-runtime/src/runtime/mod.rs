@@ -63,6 +63,7 @@ pub use specialization::{
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
 };
+pub(crate) use transfer::TransferRoute;
 pub use transfer::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };

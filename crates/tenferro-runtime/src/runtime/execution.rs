@@ -26,8 +26,7 @@ use crate::runtime::schedule::{
 use crate::runtime::{
     CacheOwnerError, CacheStats, EventDomainRun, EventToken, InputSignature, PrepareError,
     PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, SubmissionError,
-    TransferEndpoint, TransferError, TransferProvider, TransferProviderContractError,
-    TransferRequest,
+    TransferError, TransferProvider, TransferProviderContractError, TransferRequest, TransferRoute,
 };
 use crate::{Error, Result};
 
@@ -707,7 +706,7 @@ struct PreparedExecutionEngines {
     root_location: ExecutionLocation,
     input_locations: Box<[ExecutionLocation]>,
     operations: Box<[PreparedOperationExecution]>,
-    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
+    transfers: Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>>,
 }
 
 #[derive(Debug)]
@@ -1504,7 +1503,10 @@ fn execute_scheduled_transfer<'input>(
     let destination = transfer.destination_location();
     let provider = execution
         .transfers
-        .get(&(source.endpoint().clone(), destination.endpoint().clone()))
+        .get(&TransferRoute::new(
+            source.endpoint().clone(),
+            destination.endpoint().clone(),
+        ))
         .ok_or_else(|| {
             Error::runtime_state_source(
                 "Runtime::run_compiled",

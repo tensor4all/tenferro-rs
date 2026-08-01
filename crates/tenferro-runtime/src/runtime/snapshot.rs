@@ -25,7 +25,7 @@ use super::{
     ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
     InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
     RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
-    RuntimeStateError, StorageClass, TransferEndpoint, TransferProvider,
+    RuntimeStateError, StorageClass, TransferEndpoint, TransferProvider, TransferRoute,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -42,7 +42,7 @@ struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
     modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
-    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
+    transfers: BTreeMap<TransferRoute, Arc<dyn TransferProvider>>,
 }
 
 impl CandidateConfig {
@@ -73,7 +73,7 @@ impl CandidateConfig {
             policy: snapshot.policy.clone(),
             engines,
             modules: snapshot.extensions.to_candidate_modules(),
-            transfers: snapshot.transfers.clone(),
+            transfers: snapshot.transfers.as_ref().clone(),
         }
     }
 }
@@ -123,7 +123,7 @@ pub struct RuntimeConfigSnapshot {
     engines: Arc<[FrozenEngineSlot]>,
     engine_indices: BTreeMap<EngineId, usize>,
     extensions: FrozenExtensionSlots,
-    transfers: BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>>,
+    transfers: Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>>,
     cache_owners: Arc<[FrozenCacheOwner]>,
 }
 
@@ -196,13 +196,11 @@ impl RuntimeConfigSnapshot {
 
     pub(super) fn transfers_for_execution(
         &self,
-    ) -> BTreeMap<(TransferEndpoint, TransferEndpoint), Arc<dyn TransferProvider>> {
-        self.transfers.clone()
+    ) -> Arc<BTreeMap<TransferRoute, Arc<dyn TransferProvider>>> {
+        Arc::clone(&self.transfers)
     }
 
-    pub(super) fn transfer_reachability_for_preparation(
-        &self,
-    ) -> BTreeSet<(TransferEndpoint, TransferEndpoint)> {
+    pub(super) fn transfer_reachability_for_preparation(&self) -> BTreeSet<TransferRoute> {
         self.transfers.keys().cloned().collect()
     }
 
@@ -874,6 +872,62 @@ impl RuntimeConfigBuilder {
 
     /// Register a transfer provider keyed by source and destination endpoints.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
+    ///     ExecutionContextIdentity, HardwareClassId, Runtime, StorageClass,
+    ///     TransferEndpoint, TransferProvider, TransferRequest,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct ExampleProvider;
+    ///
+    /// impl TransferProvider for ExampleProvider {
+    ///     fn transfer_blocking(
+    ///         &self,
+    ///         _request: TransferRequest<'_>,
+    ///     ) -> tenferro_runtime::Result<tenferro_tensor::Tensor> {
+    ///         Err(Error::Internal("the example does not execute a transfer".into()))
+    ///     }
+    /// }
+    ///
+    /// let storage = StorageClass::new("example.storage.host")?;
+    /// let source_id = EngineId::new("example.engine.source")?;
+    /// let destination_id = EngineId::new("example.engine.destination")?;
+    /// let source = EngineRegistration::new(
+    ///     source_id.clone(),
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.hardware")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage.clone(),
+    ///     CoreCapabilityBundle::default(),
+    /// )?;
+    /// let destination = EngineRegistration::new(
+    ///     destination_id.clone(),
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("example.hardware")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage.clone(),
+    ///     CoreCapabilityBundle::default(),
+    /// )?;
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(source)?;
+    /// builder.register_engine(destination)?;
+    /// builder.register_transfer_provider(
+    ///     TransferEndpoint::new(source_id, storage.clone()),
+    ///     TransferEndpoint::new(destination_id, storage),
+    ///     Arc::new(ExampleProvider),
+    /// )?;
+    /// let runtime = builder.build()?;
+    /// assert_eq!(runtime.snapshot()?.transfer_provider_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`RuntimeConfigError::ConflictingRegistration`] if a different
@@ -1040,6 +1094,63 @@ impl RuntimeReconfiguration<'_> {
     }
 
     /// Register a transfer provider in this reconfiguration by endpoint pair.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
+    ///     ExecutionContextIdentity, HardwareClassId, Runtime, StorageClass,
+    ///     TransferEndpoint, TransferProvider, TransferRequest,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct ExampleProvider;
+    ///
+    /// impl TransferProvider for ExampleProvider {
+    ///     fn transfer_blocking(
+    ///         &self,
+    ///         _request: TransferRequest<'_>,
+    ///     ) -> tenferro_runtime::Result<tenferro_tensor::Tensor> {
+    ///         Err(Error::Internal("the example does not execute a transfer".into()))
+    ///     }
+    /// }
+    ///
+    /// fn registration(
+    ///     id: &str,
+    ///     storage: &StorageClass,
+    /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
+    ///     Ok(EngineRegistration::new(
+    ///         EngineId::new(id)?,
+    ///         ExecutionContextIdentity::of::<()>(),
+    ///         HardwareClassId::new("example.hardware")?,
+    ///         Arc::from(vec![storage.clone()]),
+    ///         storage.clone(),
+    ///         CoreCapabilityBundle::default(),
+    ///     )?)
+    /// }
+    ///
+    /// let storage = StorageClass::new("example.storage.host")?;
+    /// let source_id = EngineId::new("example.engine.source")?;
+    /// let destination_id = EngineId::new("example.engine.destination")?;
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(registration(source_id.as_str(), &storage)?)?;
+    /// builder.register_engine(registration(destination_id.as_str(), &storage)?)?;
+    /// let runtime = builder.build()?;
+    /// runtime.reconfigure(|edit| {
+    ///     edit.register_transfer_provider(
+    ///         TransferEndpoint::new(source_id, storage.clone()),
+    ///         TransferEndpoint::new(destination_id, storage),
+    ///         Arc::new(ExampleProvider),
+    ///     )?;
+    ///     Ok(())
+    /// })?;
+    /// assert_eq!(runtime.snapshot()?.transfer_provider_count(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
@@ -1349,13 +1460,13 @@ fn register_transfer_provider_candidate(
     provider: Arc<dyn TransferProvider>,
     changed: &mut bool,
 ) -> Result<(), RuntimeConfigError> {
-    let key = (source, destination);
+    let key = TransferRoute::new(source, destination);
     match candidate.transfers.get(&key) {
         Some(existing) if Arc::ptr_eq(existing, &provider) => Ok(()),
         Some(_) => Err(RuntimeConfigError::ConflictingRegistration {
             key: RegistrationKey::TransferProvider {
-                source: key.0,
-                destination: key.1,
+                source: key.source().clone(),
+                destination: key.destination().clone(),
             },
         }),
         None => {
@@ -1370,9 +1481,9 @@ fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigEr
     for record in candidate.engines.values() {
         validate_engine_execution_contract(&record.registration)?;
     }
-    for (source, destination) in candidate.transfers.keys() {
-        validate_transfer_endpoint(candidate, source)?;
-        validate_transfer_endpoint(candidate, destination)?;
+    for route in candidate.transfers.keys() {
+        validate_transfer_endpoint(candidate, route.source())?;
+        validate_transfer_endpoint(candidate, route.destination())?;
     }
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
@@ -1521,7 +1632,7 @@ fn freeze_candidate(
         engines: engines.into(),
         engine_indices,
         extensions,
-        transfers: candidate.transfers,
+        transfers: Arc::new(candidate.transfers),
         cache_owners: cache_owners.into(),
     })
 }

@@ -5,6 +5,29 @@ use tenferro_tensor::{AllocationDomainId, DType, Placement, Tensor, TensorRead};
 use super::schedule::{EventDomainId, ExecutionLocation};
 use super::{EngineId, StorageClass, TransferEndpoint};
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct TransferRoute {
+    source: TransferEndpoint,
+    destination: TransferEndpoint,
+}
+
+impl TransferRoute {
+    pub(crate) fn new(source: TransferEndpoint, destination: TransferEndpoint) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+
+    pub(crate) fn source(&self) -> &TransferEndpoint {
+        &self.source
+    }
+
+    pub(crate) fn destination(&self) -> &TransferEndpoint {
+        &self.destination
+    }
+}
+
 /// Runtime-owned transfer provider between two execution locations.
 ///
 /// Providers are registered by source and destination endpoint. Each request

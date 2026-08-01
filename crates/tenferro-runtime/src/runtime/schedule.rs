@@ -9,11 +9,12 @@ use std::error::Error as StdError;
 #[cfg(test)]
 use std::fmt;
 
+use super::TransferRoute;
 use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
 use crate::{EngineId, Error, StorageClass, TransferEndpoint};
 
-pub(crate) type TransferReachability = BTreeSet<(TransferEndpoint, TransferEndpoint)>;
+pub(crate) type TransferReachability = BTreeSet<TransferRoute>;
 
 /// Opaque runtime event-domain identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -452,7 +453,7 @@ impl ScheduledGraph {
                 let source = values
                     .iter()
                     .find(|value| {
-                        transfer_reachability.contains(&(
+                        transfer_reachability.contains(&TransferRoute::new(
                             value.location.endpoint().clone(),
                             location.endpoint().clone(),
                         ))

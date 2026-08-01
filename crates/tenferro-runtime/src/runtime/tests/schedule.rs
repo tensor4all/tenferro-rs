@@ -2,7 +2,7 @@ use super::super::schedule::{
     EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
     ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer, TransferReachability,
 };
-use super::super::{EngineId, StorageClass};
+use super::super::{EngineId, StorageClass, TransferRoute};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::DType;
 
@@ -61,7 +61,10 @@ fn schedule_emits_location_transfer_and_retains_source_for_split_use() {
         source.clone(),
         std::slice::from_ref(&source),
         &[source.clone(), destination.clone(), source.clone()],
-        &TransferReachability::from([(source.endpoint().clone(), destination.endpoint().clone())]),
+        &TransferReachability::from([TransferRoute::new(
+            source.endpoint().clone(),
+            destination.endpoint().clone(),
+        )]),
     )
     .expect("schedule");
 
@@ -132,8 +135,8 @@ fn schedule_uses_a_copy_with_a_direct_route_to_the_destination() {
         std::slice::from_ref(&first),
         &[first.clone(), reachable.clone(), destination.clone()],
         &TransferReachability::from([
-            (first.endpoint().clone(), reachable.endpoint().clone()),
-            (reachable.endpoint().clone(), destination.endpoint().clone()),
+            TransferRoute::new(first.endpoint().clone(), reachable.endpoint().clone()),
+            TransferRoute::new(reachable.endpoint().clone(), destination.endpoint().clone()),
         ]),
     )
     .expect("schedule");

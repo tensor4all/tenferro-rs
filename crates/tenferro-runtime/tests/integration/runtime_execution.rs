@@ -1171,6 +1171,127 @@ fn transfer_endpoint(
     ))
 }
 
+struct PublishedRouteFixture {
+    runtime: Runtime,
+    source_domain: AllocationDomainId,
+    source_endpoint: TransferEndpoint,
+    destination_endpoint: TransferEndpoint,
+    provider: Arc<RecordingTransferProvider>,
+    counters: Arc<ExtensionCounters>,
+}
+
+fn published_route_fixture(
+    affected_engine_id: EngineId,
+    route_storage: StorageClass,
+) -> Result<PublishedRouteFixture, RuntimeConfigError> {
+    let source_engine_id = EngineId::new("tenferro-test.engine.reconfigure-source.v1")
+        .map_err(RuntimeConfigError::from)?;
+    let source_endpoint = TransferEndpoint::new(source_engine_id.clone(), route_storage.clone());
+    let destination_endpoint =
+        TransferEndpoint::new(affected_engine_id.clone(), route_storage.clone());
+    let source_domain = AllocationDomainId::fresh();
+    let destination_domain = AllocationDomainId::fresh();
+    let source_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
+    let destination_backend = CpuBackend::new()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(destination_domain)));
+    let provider = Arc::new(RecordingTransferProvider::materializing(
+        route_storage.clone(),
+        route_storage.clone(),
+        destination_backend.clone(),
+    ));
+    let counters = Arc::new(ExtensionCounters::default());
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &source_backend,
+        source_engine_id.as_str(),
+        route_storage.as_str(),
+        true,
+        true,
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &destination_backend,
+        affected_engine_id.as_str(),
+        route_storage.as_str(),
+        false,
+        true,
+    )?)?;
+    builder.register_transfer_provider(
+        source_endpoint.clone(),
+        destination_endpoint.clone(),
+        Arc::clone(&provider) as Arc<dyn TransferProvider>,
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.reconfigure-published-route-module.v1")
+            .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: affected_engine_id,
+        counters: Arc::clone(&counters),
+    }))?;
+
+    Ok(PublishedRouteFixture {
+        runtime: builder.build()?,
+        source_domain,
+        source_endpoint,
+        destination_endpoint,
+        provider,
+        counters,
+    })
+}
+
+fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dyn StdError>> {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("published route extension has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = TestAllocationDomain(fixture.source_domain).allocate(DType::F64, &[2])?;
+    if let Tensor::F64(input) = &input {
+        if let Buffer::Backend(buffer) = input.buffer() {
+            buffer
+                .map_write()
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("published-route-input", source)
+                })?
+                .copy_from_slice(&[3.0, 5.0])
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("published-route-input", source)
+                })?;
+        }
+    }
+    let output = fixture.runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
+    assert_eq!(fixture.counters.prepare.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.calls(), 1);
+    let requests = fixture.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        &requests[0].source_engine_id,
+        fixture.source_endpoint.engine_id()
+    );
+    assert_eq!(
+        &requests[0].destination_engine_id,
+        fixture.destination_endpoint.engine_id()
+    );
+    assert_eq!(
+        &requests[0].source_storage_class,
+        fixture.source_endpoint.storage_class()
+    );
+    assert_eq!(
+        &requests[0].destination_storage_class,
+        fixture.destination_endpoint.storage_class()
+    );
+    Ok(())
+}
+
 #[test]
 fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
 ) -> Result<(), Box<dyn StdError>> {
@@ -1568,6 +1689,103 @@ fn reconfiguration_rejects_invalid_transfer_endpoint_without_publishing(
     let after = runtime.snapshot()?;
     assert_eq!(after.epoch(), before.epoch());
     assert_eq!(after.transfer_provider_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn reconfiguration_remove_engine_rejects_dangling_route_atomically_and_keeps_same_route_executable(
+) -> Result<(), Box<dyn StdError>> {
+    let removed_engine_id = EngineId::new("tenferro-test.engine.reconfigure-removed.v1")?;
+    let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let fixture = published_route_fixture(removed_engine_id.clone(), route_storage)?;
+    let before = fixture.runtime.snapshot()?;
+    let before_epoch = before.epoch();
+    let before_removed_registration = before
+        .engine(&removed_engine_id)
+        .expect("removed engine is initially published")
+        .registration_identity();
+    let before_route_count = before.transfer_provider_count();
+    assert_eq!(before_route_count, 1);
+
+    let error = fixture
+        .runtime
+        .reconfigure(|edit| {
+            edit.remove_engine(&removed_engine_id)?;
+            Ok(())
+        })
+        .expect_err("removing an engine referenced by a route must be rejected");
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::UnknownTransferEndpointEngine { endpoint },
+        } if endpoint == fixture.destination_endpoint
+    ));
+
+    let after = fixture.runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(fixture.runtime.epoch()?, before_epoch);
+    assert_eq!(after.engine_count(), before.engine_count());
+    assert_eq!(after.transfer_provider_count(), before_route_count);
+    assert_eq!(
+        after
+            .engine(&removed_engine_id)
+            .expect("pre-edit snapshot remains readable")
+            .registration_identity(),
+        before_removed_registration
+    );
+    execute_published_route(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_keeps_same_route_executable(
+) -> Result<(), Box<dyn StdError>> {
+    let dropped_storage = StorageClass::new("tenferro-test.storage.reconfigure-dropped.v1")?;
+    let replaced_engine_id = EngineId::new("tenferro-test.engine.reconfigure-replaced.v1")?;
+    let fixture = published_route_fixture(replaced_engine_id.clone(), dropped_storage)?;
+    let before = fixture.runtime.snapshot()?;
+    let before_epoch = before.epoch();
+    let before_replaced_registration = before
+        .engine(&replaced_engine_id)
+        .expect("replaced engine is initially published")
+        .registration_identity();
+    let before_route_count = before.transfer_provider_count();
+    assert_eq!(before_route_count, 1);
+    let replacement = cpu_registration_with_storage_id(
+        &CpuBackend::new(),
+        replaced_engine_id.as_str(),
+        CPU_STORAGE_CLASS_ID,
+        false,
+        true,
+    )?;
+
+    let error = fixture
+        .runtime
+        .reconfigure(|edit| {
+            edit.replace_engine(replacement)?;
+            Ok(())
+        })
+        .expect_err("dropping a route storage class must be rejected");
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::UnsupportedTransferEndpointStorage { endpoint },
+        } if endpoint == fixture.destination_endpoint
+    ));
+
+    let after = fixture.runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(fixture.runtime.epoch()?, before_epoch);
+    assert_eq!(after.engine_count(), before.engine_count());
+    assert_eq!(after.transfer_provider_count(), before_route_count);
+    assert_eq!(
+        after
+            .engine(&replaced_engine_id)
+            .expect("pre-edit snapshot remains readable")
+            .registration_identity(),
+        before_replaced_registration
+    );
+    execute_published_route(&fixture)?;
     Ok(())
 }
 
