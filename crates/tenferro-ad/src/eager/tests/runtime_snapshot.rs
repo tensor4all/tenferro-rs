@@ -1,18 +1,20 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_cpu::{CpuBackend, CpuPlacement, CpuProviderBundle};
 use tenferro_runtime::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
-    ImmediateEventDomainDriver, IndexingRuntime, InputIngressContract, InputPlacementContract,
-    InputSignatureContract, LayoutRuntime, ProviderDeviceIdentity, ProviderExecutableBinding,
-    ProviderId, ProviderPreparationBinding, ReductionRuntime, ResidentOutputContract,
-    RuntimeCacheOwner, RuntimeInputContract, StorageClass,
+    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, InputIngressContract,
+    InputPlacementContract, InputSignatureContract, LayoutRuntime, ProviderDeviceIdentity,
+    ProviderId, ReductionRuntime, ResidentOutputContract, RuntimeCacheOwner, RuntimeInputContract,
+    StorageClass,
 };
 use tenferro_tensor::{BackendSession, ErrorKind};
 
-use super::super::{CpuPlacementBoundEager, EagerRuntime, CPU_RUNTIME_SELECTION_REFRESHES};
+use super::super::{
+    CpuPlacementBoundEager, EagerBackend, EagerRuntime, CPU_RUNTIME_SELECTION_REFRESHES,
+};
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
@@ -75,41 +77,35 @@ fn cpu_registration_with(
     )
     .unwrap();
     if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
-        return EngineRegistration::preparation_only(
-            ProviderPreparationBinding::new(
-                cpu_engine_id(),
-                provider_device_identity,
-                context_identity,
-                cpu_hardware_class(),
-                Arc::from([storage.clone()]),
-                storage,
-                capabilities,
-            )
-            .expect("preparation binding"),
-        );
-    }
-    EngineRegistration::executable(
-        ProviderExecutableBinding::new(
+        return assemble_preparation_only_engine_registration(
             cpu_engine_id(),
+            provider_device_identity,
+            context_identity,
             cpu_hardware_class(),
             Arc::from([storage.clone()]),
             storage,
-            ExecutableEngineContract::new(
-                provider_device_identity,
-                capabilities,
-                backend.clone(),
-                Arc::new(ImmediateEventDomainDriver::new()),
-                InputIngressContract::new(
-                    InputPlacementContract::new(|_, _| true),
-                    InputSignatureContract::new(|_, _, _, _| true),
-                    RuntimeInputContract::new(|_, _| true),
-                    ResidentOutputContract::new(|_, _| true),
-                ),
-                Some(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>),
-            ),
+            capabilities,
         )
-        .expect("executable binding"),
+        .expect("preparation binding");
+    }
+    assemble_executable_engine_registration(
+        cpu_engine_id(),
+        cpu_hardware_class(),
+        Arc::from([storage.clone()]),
+        storage,
+        provider_device_identity,
+        capabilities,
+        backend.clone(),
+        Arc::new(tenferro_runtime::ImmediateEventDomainDriver::new()),
+        InputIngressContract::new(
+            InputPlacementContract::new(|_, _| true),
+            InputSignatureContract::new(|_, _, _, _| true),
+            RuntimeInputContract::new(|_, _| true),
+            ResidentOutputContract::new(|_, _| true),
+        ),
+        Some(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>),
     )
+    .expect("executable binding")
 }
 
 fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {
@@ -167,6 +163,58 @@ fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     assert_eq!(refreshes(), 1);
     assert_bound_matches_current_runtime(&cpu);
     assert_eq!(cpu.epoch, reconfigured_epoch);
+}
+
+#[test]
+fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_epoch = before.epoch();
+    let before_identity = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered")
+        .registration_identity();
+
+    runtime.with_backend_mut(|_| ()).unwrap();
+
+    let after = runtime.runtime.snapshot().unwrap();
+    assert_eq!(after.epoch(), before_epoch);
+    assert_eq!(
+        after
+            .engine(&cpu_engine_id())
+            .expect("CPU engine registered")
+            .registration_identity(),
+        before_identity
+    );
+}
+
+#[test]
+fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
+    let backend = CpuBackend::new();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let engine_id = cpu_engine_id();
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_engine = before.engine(&engine_id).expect("CPU engine registered");
+    let before_provider_device = before_engine.provider_device_identity().clone();
+    let before_registration = before_engine.registration_identity();
+    let before_epoch = before.epoch();
+
+    runtime
+        .with_backend_mut(|backend| *backend = EagerBackend::Cpu(replacement))
+        .unwrap();
+
+    let after = runtime.runtime.snapshot().unwrap();
+    let after_engine = after.engine(&engine_id).expect("CPU engine registered");
+    assert_eq!(
+        after_engine.provider_device_identity(),
+        &before_provider_device
+    );
+    assert_ne!(after_engine.registration_identity(), before_registration);
+    assert_ne!(after.epoch(), before_epoch);
 }
 
 #[test]

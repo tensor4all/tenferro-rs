@@ -41,8 +41,8 @@ mod webgpu;
 #[cfg(feature = "cuda")]
 pub use cubecl::{
     cuda_capabilities, cuda_runtime_engine_id, cuda_runtime_engine_registration,
-    cuda_runtime_hardware_class, device_ptr, download_tensor, gpu_available, upload_tensor,
-    CudaBackend, CudaRuntime,
+    cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class, device_ptr,
+    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaRuntime,
 };
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
@@ -50,8 +50,8 @@ pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 #[cfg(feature = "webgpu")]
 pub use webgpu::{
     download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
-    webgpu_runtime_engine_registration, webgpu_runtime_hardware_class, AppleContext,
-    AppleTransferStats, WebGpuBackend, WebGpuRuntime,
+    webgpu_runtime_engine_registration, webgpu_runtime_engine_registration_with_id,
+    webgpu_runtime_hardware_class, AppleContext, AppleTransferStats, WebGpuBackend, WebGpuRuntime,
 };
 
 /// Narrow owner-scoped WebGPU handle interop for extension crates.

@@ -5,18 +5,18 @@ use std::sync::Arc;
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
-    CacheOwnerError, CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext,
-    DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, ExecutableEngineContract, ExecutionContextIdentity,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
-    InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
-    LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
-    ProviderExecutableBinding, ProviderId, ReductionPrepareRequest, ReductionRuntime,
-    ResidentOutputContract, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract,
-    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
-    TensorRead, UnsupportedReason,
+    assemble_executable_engine_registration, CacheOwnerError, CoreCapabilityBundle,
+    CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
+    ElementwisePrepareRequest, ElementwiseRuntime, EngineId, EngineRegistration,
+    ExecutionContextIdentity, HardwareClassId, IndexingPrepareRequest, IndexingRuntime,
+    InputIngressContract, InputPlacementContract, InputSignature, InputSignatureContract,
+    InputSpecializationProjection, InputSpecializationRequirements, LayoutPrepareRequest,
+    LayoutProjection, LayoutRuntime, LayoutSpecialization, MemoryKind, PrepareCapability,
+    PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
+    ProviderContractError, ProviderDeviceIdentity, ProviderId, ReductionPrepareRequest,
+    ReductionRuntime, ResidentOutputContract, RuntimeCacheOwner, RuntimeConfigError,
+    RuntimeInputContract, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, TensorRead, UnsupportedReason,
 };
 
 use crate::CpuBackend;
@@ -139,22 +139,18 @@ pub fn runtime_engine_registration_with_id(
             candidate == &resident_storage && cpu_runtime_input(input, allocation_domain)
         }),
     );
-    let contract = ExecutableEngineContract::new(
+    assemble_executable_engine_registration(
+        engine_id,
+        runtime_hardware_class()?,
+        Arc::from(vec![storage]),
+        default_storage,
         provider_device_identity,
         capabilities.build(),
         execution_backend,
         Arc::new(ImmediateEventDomainDriver::new()),
         ingress,
         Some(cache_owner),
-    );
-    let binding = ProviderExecutableBinding::new(
-        engine_id,
-        runtime_hardware_class()?,
-        Arc::from(vec![storage]),
-        default_storage,
-        contract,
-    )?;
-    Ok(EngineRegistration::executable(binding))
+    )
 }
 
 fn cpu_input_signature(

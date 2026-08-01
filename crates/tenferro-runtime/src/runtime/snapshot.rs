@@ -144,10 +144,6 @@ impl CandidateConfig {
 
 #[derive(Clone, Debug)]
 struct FrozenEngineMetadata {
-    engine_id: EngineId,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
     candidate_token: Arc<CandidateRegistrationToken>,
     identity: RegistrationIdentity,
     event_domain_id: EventDomainId,
@@ -156,21 +152,19 @@ struct FrozenEngineMetadata {
 #[derive(Clone)]
 struct PreparationOnlyEngineSnapshot {
     metadata: FrozenEngineMetadata,
-    provider_device_identity: ProviderDeviceIdentity,
-    context_identity: ExecutionContextIdentity,
-    capabilities: CoreCapabilityBundle,
+    binding: super::ProviderPreparationBinding,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct ExecutableEngineSnapshot {
     metadata: FrozenEngineMetadata,
-    contract: super::ExecutableEngineContract,
+    binding: super::ProviderExecutableBinding,
 }
 
 #[derive(Clone)]
 enum FrozenEngineSlot {
     PreparationOnly(PreparationOnlyEngineSnapshot),
-    Executable(ExecutableEngineSnapshot),
+    Executable(Arc<ExecutableEngineSnapshot>),
 }
 
 impl FrozenEngineSlot {
@@ -183,26 +177,54 @@ impl FrozenEngineSlot {
 
     fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
         match self {
-            Self::PreparationOnly(snapshot) => &snapshot.provider_device_identity,
-            Self::Executable(snapshot) => snapshot.contract.provider_device_identity(),
+            Self::PreparationOnly(snapshot) => snapshot.binding.provider_device_identity(),
+            Self::Executable(snapshot) => snapshot.binding.contract().provider_device_identity(),
+        }
+    }
+
+    fn engine_id(&self) -> &EngineId {
+        match self {
+            Self::PreparationOnly(snapshot) => snapshot.binding.engine_id(),
+            Self::Executable(snapshot) => snapshot.binding.engine_id(),
+        }
+    }
+
+    fn hardware_class(&self) -> &HardwareClassId {
+        match self {
+            Self::PreparationOnly(snapshot) => snapshot.binding.hardware_class(),
+            Self::Executable(snapshot) => snapshot.binding.hardware_class(),
+        }
+    }
+
+    fn storage_classes(&self) -> &[StorageClass] {
+        match self {
+            Self::PreparationOnly(snapshot) => snapshot.binding.storage_classes(),
+            Self::Executable(snapshot) => snapshot.binding.storage_classes(),
+        }
+    }
+
+    fn default_storage_class(&self) -> &StorageClass {
+        match self {
+            Self::PreparationOnly(snapshot) => snapshot.binding.default_storage_class(),
+            Self::Executable(snapshot) => snapshot.binding.default_storage_class(),
         }
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
         match self {
-            Self::PreparationOnly(snapshot) => snapshot.context_identity,
-            Self::Executable(snapshot) => snapshot.contract.context_identity(),
+            Self::PreparationOnly(snapshot) => snapshot.binding.context_identity(),
+            Self::Executable(snapshot) => snapshot.binding.contract().context_identity(),
         }
     }
 
     fn capabilities(&self) -> &CoreCapabilityBundle {
         match self {
-            Self::PreparationOnly(snapshot) => &snapshot.capabilities,
-            Self::Executable(snapshot) => snapshot.contract.capabilities(),
+            Self::PreparationOnly(snapshot) => snapshot.binding.capabilities(),
+            Self::Executable(snapshot) => snapshot.binding.contract().capabilities(),
         }
     }
 
-    fn executable(&self) -> Option<&ExecutableEngineSnapshot> {
+    fn executable(&self) -> Option<&Arc<ExecutableEngineSnapshot>> {
         match self {
             Self::PreparationOnly(_) => None,
             Self::Executable(snapshot) => Some(snapshot),
@@ -211,22 +233,29 @@ impl FrozenEngineSlot {
 }
 
 impl ExecutableEngineSnapshot {
-    #[cfg(test)]
+    pub(super) fn engine_id(&self) -> &EngineId {
+        self.binding.engine_id()
+    }
+
+    pub(super) fn event_domain_id(&self) -> EventDomainId {
+        self.metadata.event_domain_id
+    }
+
     pub(super) fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
-        self.contract.provider_device_identity()
+        self.binding.contract().provider_device_identity()
     }
 
     #[cfg(test)]
     pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
-        self.contract.context_identity()
+        self.binding.contract().context_identity()
     }
 
     pub(super) fn executor(&self) -> &Arc<dyn super::execution::ErasedTensorBackendExecutor> {
-        self.contract.executor()
+        self.binding.contract().executor()
     }
 
     pub(super) fn event_domain_driver(&self) -> &Arc<dyn super::EventDomainDriver> {
-        self.contract.event_domain_driver()
+        self.binding.contract().event_domain_driver()
     }
 
     #[cfg(test)]
@@ -244,9 +273,10 @@ impl ExecutableEngineSnapshot {
         placement: &tenferro_tensor::Placement,
         storage_class: &StorageClass,
     ) -> bool {
-        self.metadata.storage_classes.contains(storage_class)
+        self.binding.storage_classes().contains(storage_class)
             && self
-                .contract
+                .binding
+                .contract()
                 .accepts_input_placement(placement, storage_class)
     }
 
@@ -255,8 +285,11 @@ impl ExecutableEngineSnapshot {
         input: &super::InputSignatureEntry,
         storage_class: &StorageClass,
     ) -> bool {
-        self.metadata.storage_classes.contains(storage_class)
-            && self.contract.accepts_input_signature(input, storage_class)
+        self.binding.storage_classes().contains(storage_class)
+            && self
+                .binding
+                .contract()
+                .accepts_input_signature(input, storage_class)
     }
 
     pub(super) fn accepts_runtime_input(
@@ -264,8 +297,11 @@ impl ExecutableEngineSnapshot {
         input: &tenferro_tensor::TensorRead<'_>,
         storage_class: &StorageClass,
     ) -> bool {
-        self.metadata.storage_classes.contains(storage_class)
-            && self.contract.accepts_runtime_input(input, storage_class)
+        self.binding.storage_classes().contains(storage_class)
+            && self
+                .binding
+                .contract()
+                .accepts_runtime_input(input, storage_class)
     }
 
     pub(super) fn owns_resident_tensor(
@@ -273,8 +309,50 @@ impl ExecutableEngineSnapshot {
         input: &tenferro_tensor::TensorRead<'_>,
         storage_class: &StorageClass,
     ) -> bool {
-        self.metadata.storage_classes.contains(storage_class)
-            && self.contract.owns_resident_tensor(input, storage_class)
+        self.binding.storage_classes().contains(storage_class)
+            && self
+                .binding
+                .contract()
+                .owns_resident_tensor(input, storage_class)
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test(
+        engine_id: EngineId,
+        provider_device_identity: ProviderDeviceIdentity,
+        event_domain_id: EventDomainId,
+        storage_class: StorageClass,
+    ) -> Arc<Self> {
+        let ingress = super::InputIngressContract::new(
+            super::InputPlacementContract::new(|_, _| true),
+            super::InputSignatureContract::new(|_, _, _, _| true),
+            super::RuntimeInputContract::new(|_, _| true),
+            super::ResidentOutputContract::new(|_, _| true),
+        );
+        let contract = super::ExecutableEngineContract::new(
+            provider_device_identity,
+            CoreCapabilityBundle::default(),
+            tenferro_cpu::CpuBackend::new(),
+            Arc::new(super::ImmediateEventDomainDriver::new()),
+            ingress,
+            None,
+        );
+        let binding = super::ProviderExecutableBinding::new(
+            engine_id,
+            HardwareClassId::new("tenferro.test.schedule.hardware").expect("test hardware class"),
+            Arc::from(vec![storage_class.clone()]),
+            storage_class,
+            contract,
+        )
+        .expect("test executable binding");
+        Arc::new(Self {
+            metadata: FrozenEngineMetadata {
+                candidate_token: Arc::new(CandidateRegistrationToken),
+                identity: event_domain_id.registration_identity(),
+                event_domain_id,
+            },
+            binding,
+        })
     }
 }
 
@@ -283,25 +361,13 @@ impl FrozenEngineSlot {
         let metadata = self.metadata();
         let registration = match self {
             Self::PreparationOnly(snapshot) => {
-                EngineRegistration::preparation_only(super::ProviderPreparationBinding::new(
-                    metadata.engine_id.clone(),
-                    snapshot.provider_device_identity.clone(),
-                    snapshot.context_identity,
-                    metadata.hardware_class.clone(),
-                    Arc::clone(&metadata.storage_classes),
-                    metadata.default_storage_class.clone(),
-                    snapshot.capabilities.clone(),
-                )?)
+                EngineRegistration::from_state(EngineRegistrationState::PreparationOnly {
+                    binding: snapshot.binding.clone(),
+                })
             }
-            Self::Executable(snapshot) => {
-                EngineRegistration::executable(super::ProviderExecutableBinding::new(
-                    metadata.engine_id.clone(),
-                    metadata.hardware_class.clone(),
-                    Arc::clone(&metadata.storage_classes),
-                    metadata.default_storage_class.clone(),
-                    snapshot.contract.clone(),
-                )?)
-            }
+            Self::Executable(snapshot) => EngineRegistration::from_state(
+                EngineRegistrationState::Executable(snapshot.binding.clone()),
+            ),
         };
         Ok(registration.with_candidate_token(Arc::clone(&metadata.candidate_token)))
     }
@@ -312,11 +378,11 @@ impl fmt::Debug for FrozenEngineSlot {
         let metadata = self.metadata();
         formatter
             .debug_struct("FrozenEngineSlot")
-            .field("engine_id", &metadata.engine_id)
+            .field("engine_id", self.engine_id())
             .field("registration_identity", &metadata.identity)
             .field("event_domain_id", &metadata.event_domain_id)
             .field("context_identity", &self.context_identity())
-            .field("hardware_class", &metadata.hardware_class)
+            .field("hardware_class", self.hardware_class())
             .field(
                 "state",
                 &match self {
@@ -405,7 +471,7 @@ impl RuntimeConfigSnapshot {
 
     #[cfg(test)]
     pub(crate) fn engine_ids_for_test(&self) -> impl Iterator<Item = &EngineId> {
-        self.engines.iter().map(|slot| &slot.metadata().engine_id)
+        self.engines.iter().map(FrozenEngineSlot::engine_id)
     }
 
     #[cfg(test)]
@@ -425,10 +491,6 @@ impl RuntimeConfigSnapshot {
         engine_id: &EngineId,
     ) -> Option<ExtensionEngineSnapshotView<'_>> {
         self.extensions.slot_for_preparation(family_id, engine_id)
-    }
-
-    pub(super) fn transfer_registry_for_execution(&self) -> FrozenTransferRegistry {
-        self.transfers.clone()
     }
 
     pub(super) fn transfer_registry_for_preparation(&self) -> FrozenTransferRegistry {
@@ -1085,9 +1147,9 @@ impl RuntimeConfigBuilder {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
-    ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
-    ///     ExecutionContextIdentity, HardwareClassId, ProviderPreparationBinding,
-    ///     Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
+    ///     assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
+    ///     Error, EngineRegistration, Runtime, StorageClass, TransferEndpoint, TransferProvider,
+    ///     TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -1105,30 +1167,30 @@ impl RuntimeConfigBuilder {
     /// let storage = StorageClass::new("example.storage.host")?;
     /// let source_id = EngineId::new("example.engine.source")?;
     /// let destination_id = EngineId::new("example.engine.destination")?;
-    /// let source = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
+    /// let source = assemble_preparation_only_engine_registration(
     ///     source_id.clone(),
     ///     tenferro_runtime::ProviderDeviceIdentity::new(
     ///         tenferro_runtime::ProviderId::new("example.provider")?,
     ///         "source-0",
     ///     )?,
-    ///     ExecutionContextIdentity::of::<()>(),
-    ///     HardwareClassId::new("example.hardware")?,
+    ///     tenferro_runtime::ExecutionContextIdentity::of::<()>(),
+    ///     tenferro_runtime::HardwareClassId::new("example.hardware")?,
     ///     Arc::from(vec![storage.clone()]),
     ///     storage.clone(),
     ///     CoreCapabilityBundle::default(),
-    /// )?);
-    /// let destination = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
+    /// )?;
+    /// let destination = assemble_preparation_only_engine_registration(
     ///     destination_id.clone(),
     ///     tenferro_runtime::ProviderDeviceIdentity::new(
     ///         tenferro_runtime::ProviderId::new("example.provider")?,
     ///         "destination-0",
     ///     )?,
-    ///     ExecutionContextIdentity::of::<()>(),
-    ///     HardwareClassId::new("example.hardware")?,
+    ///     tenferro_runtime::ExecutionContextIdentity::of::<()>(),
+    ///     tenferro_runtime::HardwareClassId::new("example.hardware")?,
     ///     Arc::from(vec![storage.clone()]),
     ///     storage.clone(),
     ///     CoreCapabilityBundle::default(),
-    /// )?);
+    /// )?;
     /// let mut builder = Runtime::builder();
     /// builder.register_engine(source)?;
     /// builder.register_engine(destination)?;
@@ -1339,9 +1401,9 @@ impl RuntimeReconfiguration<'_> {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
-    ///     CoreCapabilityBundle, EngineId, EngineRegistration, Error,
-    ///     ExecutionContextIdentity, HardwareClassId, ProviderPreparationBinding,
-    ///     Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
+    ///     assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
+    ///     EngineRegistration, Error, Runtime, StorageClass, TransferEndpoint, TransferProvider,
+    ///     TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -1360,18 +1422,18 @@ impl RuntimeReconfiguration<'_> {
     ///     id: &str,
     ///     storage: &StorageClass,
     /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
-    ///     Ok(EngineRegistration::preparation_only(ProviderPreparationBinding::new(
+    ///     Ok(assemble_preparation_only_engine_registration(
     ///         EngineId::new(id)?,
     ///         tenferro_runtime::ProviderDeviceIdentity::new(
     ///             tenferro_runtime::ProviderId::new("example.provider")?,
     ///             format!("engine:{id}"),
     ///         )?,
-    ///         ExecutionContextIdentity::of::<()>(),
-    ///         HardwareClassId::new("example.hardware")?,
+    ///         tenferro_runtime::ExecutionContextIdentity::of::<()>(),
+    ///         tenferro_runtime::HardwareClassId::new("example.hardware")?,
     ///         Arc::from(vec![storage.clone()]),
     ///         storage.clone(),
     ///         CoreCapabilityBundle::default(),
-    ///     )?))
+    ///     )?)
     /// }
     ///
     /// let storage = StorageClass::new("example.storage.host")?;
@@ -1484,6 +1546,7 @@ impl fmt::Debug for RuntimeReconfiguration<'_> {
 /// fn requires_debug<T: Debug>() {}
 /// requires_debug::<EngineSnapshotView<'_>>();
 /// ```
+#[derive(Clone, Copy)]
 pub struct EngineSnapshotView<'a> {
     slot: &'a FrozenEngineSlot,
 }
@@ -1491,7 +1554,7 @@ pub struct EngineSnapshotView<'a> {
 impl<'a> EngineSnapshotView<'a> {
     /// Return the engine ID for this slot.
     pub fn engine_id(&self) -> &'a EngineId {
-        &self.slot.metadata().engine_id
+        self.slot.engine_id()
     }
 
     /// Return the immutable provider/device binding for this engine slot.
@@ -1522,13 +1585,13 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot.metadata().event_domain_id
     }
 
-    pub(super) fn executable_witness(&self) -> Option<&'a ExecutableEngineSnapshot> {
+    pub(super) fn executable_witness(&self) -> Option<&'a Arc<ExecutableEngineSnapshot>> {
         self.slot.executable()
     }
 
     /// Return the hardware class for this slot.
     pub fn hardware_class(&self) -> &'a HardwareClassId {
-        &self.slot.metadata().hardware_class
+        self.slot.hardware_class()
     }
 
     /// Return direct core capability slots for this engine.
@@ -1537,31 +1600,11 @@ impl<'a> EngineSnapshotView<'a> {
     }
 
     pub(super) fn storage_classes(&self) -> &'a [StorageClass] {
-        &self.slot.metadata().storage_classes
+        self.slot.storage_classes()
     }
 
     pub(super) fn default_storage_class(&self) -> &'a StorageClass {
-        &self.slot.metadata().default_storage_class
-    }
-
-    pub(super) fn accepts_input_placement(
-        &self,
-        placement: &tenferro_tensor::Placement,
-        storage_class: &StorageClass,
-    ) -> bool {
-        self.slot
-            .executable()
-            .is_some_and(|snapshot| snapshot.accepts_input_placement(placement, storage_class))
-    }
-
-    pub(super) fn accepts_runtime_input(
-        &self,
-        input: &tenferro_tensor::TensorRead<'_>,
-        storage_class: &StorageClass,
-    ) -> bool {
-        self.slot
-            .executable()
-            .is_some_and(|snapshot| snapshot.accepts_runtime_input(input, storage_class))
+        self.slot.default_storage_class()
     }
 
     pub(super) fn accepts_input_signature(
@@ -1572,16 +1615,6 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot
             .executable()
             .is_some_and(|snapshot| snapshot.accepts_input_signature(input, storage_class))
-    }
-
-    pub(super) fn owns_resident_tensor(
-        &self,
-        input: &tenferro_tensor::TensorRead<'_>,
-        storage_class: &StorageClass,
-    ) -> bool {
-        self.slot
-            .executable()
-            .is_some_and(|snapshot| snapshot.owns_resident_tensor(input, storage_class))
     }
 
     #[cfg(test)]
@@ -1984,27 +2017,22 @@ fn freeze_candidate(
             identity,
         } = record;
         let event_domain_id = EventDomainId::new(runtime_id, epoch, identity);
-        let provider_device_identity = registration.provider_device_identity().clone();
+        let (state, candidate_token) = registration.into_state_and_token();
+        let provider_device_identity = state.provider_device_identity().clone();
         let metadata = FrozenEngineMetadata {
-            engine_id: engine_id.clone(),
-            hardware_class: registration.hardware_class().clone(),
-            storage_classes: Arc::clone(&registration.storage_classes_arc()),
-            default_storage_class: registration.default_storage_class().clone(),
-            candidate_token: registration.candidate_token(),
+            candidate_token,
             identity,
             event_domain_id,
         };
-        let frozen = match registration.execution_state().clone() {
-            EngineRegistrationState::PreparationOnly { capabilities } => {
+        let frozen = match state {
+            EngineRegistrationState::PreparationOnly { binding } => {
                 FrozenEngineSlot::PreparationOnly(PreparationOnlyEngineSnapshot {
                     metadata,
-                    provider_device_identity: provider_device_identity.clone(),
-                    context_identity: registration.context_identity(),
-                    capabilities,
+                    binding,
                 })
             }
-            EngineRegistrationState::Executable(contract) => {
-                if let Some(owner) = contract.cache_owner().cloned() {
+            EngineRegistrationState::Executable(binding) => {
+                if let Some(owner) = binding.contract().cache_owner().cloned() {
                     cache_owners.push(FrozenCacheOwner {
                         id: engine_cache_owner_id(&engine_id),
                         kind: FrozenCacheOwnerKind::Engine,
@@ -2014,9 +2042,12 @@ fn freeze_candidate(
                 cache_owners.push(FrozenCacheOwner {
                     id: engine_extension_cache_owner_id(&engine_id),
                     kind: FrozenCacheOwnerKind::Extension,
-                    owner: execution::extension_cache_owner(contract.executor().clone()),
+                    owner: execution::extension_cache_owner(binding.contract().executor().clone()),
                 });
-                FrozenEngineSlot::Executable(ExecutableEngineSnapshot { metadata, contract })
+                FrozenEngineSlot::Executable(Arc::new(ExecutableEngineSnapshot {
+                    metadata,
+                    binding,
+                }))
             }
         };
         engine_locations.insert(

@@ -147,7 +147,8 @@ pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime};
 pub use runtime_adapter::{
-    cuda_runtime_engine_id, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
+    cuda_runtime_engine_id, cuda_runtime_engine_registration,
+    cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class,
 };
 
 fn op_name(

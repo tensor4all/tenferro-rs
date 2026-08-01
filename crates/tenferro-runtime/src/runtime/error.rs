@@ -939,6 +939,15 @@ pub enum PrepareError {
         /// Placement constraint that could not be satisfied.
         constraint: ProgramPlacementConstraint,
     },
+    /// A preparation-only engine advertised the required capability but cannot
+    /// produce an executable prepared schedule.
+    #[error(
+        "engine {engine_id:?} has a matching preparation capability but no executable binding"
+    )]
+    NoExecutableEngine {
+        /// Engine whose preparation capability cannot be used for execution.
+        engine_id: EngineId,
+    },
     /// No eligible engine declared an ingress compatible with an input placement.
     #[error("no eligible input ingress for input {input_index} at placement {placement:?}")]
     NoInputIngress {

@@ -3,8 +3,8 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::super::schedule::{
-    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
-    ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer,
+    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, SchedulePreflightError,
+    ScheduledCollective, ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer,
 };
 use super::super::{
     EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
@@ -330,7 +330,8 @@ fn retained_bytes_include_operation_dependencies() {
         + std::mem::size_of::<EventDependency>()
         + std::mem::size_of::<usize>()
         + std::mem::size_of::<usize>()
-        + 3 * std::mem::size_of::<usize>();
+        + 3 * std::mem::size_of::<usize>()
+        + 3 * std::mem::size_of::<ExecutionLocation>();
 
     assert_eq!(graph.retained_bytes(), Some(expected));
 }
@@ -362,11 +363,10 @@ fn collective_node_is_representable_but_execution_is_unsupported() {
 
     assert!(graph.contains_collective());
     assert!(graph.validate().is_ok());
-    assert!(graph
-        .execute_for_test()
-        .unwrap_err()
-        .to_string()
-        .contains("collective"));
+    assert!(matches!(
+        graph.execute_for_test(),
+        Err(SchedulePreflightError::UnsupportedCollective { index: 0 })
+    ));
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -25,9 +25,9 @@ use crate::runtime::schedule::{
 };
 use crate::runtime::{
     CacheOwnerError, CacheStats, EventDomainError, EventDomainOperation, EventDomainRun,
-    EventToken, FrozenTransferRegistry, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationPlan, ResolvedTransferRoute, Runtime, RuntimeCacheOwner, SubmissionError,
-    TransferError, TransferProviderContractError, TransferRequest,
+    EventToken, InputSignature, PrepareError, PrepareOptions, PreparedOperationPlan, Runtime,
+    RuntimeCacheOwner, SubmissionError, TransferError, TransferProviderContractError,
+    TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -44,16 +44,15 @@ pub(super) enum RuntimeOutputMode {
 
 /// Runtime-prepared compiled graph execution handle.
 ///
-/// This handle keeps the prepared execution staging and selected engine bridge
-/// outside steady-state execution. It is tied to the runtime epoch that created
-/// it and becomes stale after runtime reconfiguration.
+/// This handle keeps the prepared execution staging and its direct provider
+/// witnesses inside the immutable schedule. It is tied to the runtime epoch
+/// that created it and becomes stale after runtime reconfiguration.
 #[derive(Clone)]
 pub struct PreparedCompiledGraph {
     runtime_id: super::RuntimeId,
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
     prepared: Arc<super::preparation::PreparedProgram>,
-    execution: Arc<PreparedExecutionEngines>,
 }
 
 /// Asynchronous runtime execution handle returned by [`Runtime::submit`].
@@ -700,22 +699,6 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
     }
 }
 
-#[derive(Debug)]
-struct PreparedExecutionEngines {
-    snapshot: Arc<super::RuntimeConfigSnapshot>,
-    root: super::snapshot::ExecutableEngineSnapshot,
-    root_location: ExecutionLocation,
-    input_locations: Box<[ExecutionLocation]>,
-    operations: Box<[PreparedOperationExecution]>,
-    transfers: FrozenTransferRegistry,
-}
-
-#[derive(Debug)]
-struct PreparedOperationExecution {
-    witness: super::snapshot::ExecutableEngineSnapshot,
-    location: ExecutionLocation,
-}
-
 pub(super) fn run_compiled(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -724,9 +707,8 @@ pub(super) fn run_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = execution_engines(runtime, &prepared)?;
+    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
     execute_scheduled_tensor_refs(
-        &execution,
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -742,13 +724,16 @@ pub(super) fn prepare_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = Arc::new(execution_engines(runtime, &prepared)?);
+    validate_prepared_epoch(
+        runtime,
+        prepared.root().epoch(),
+        "Runtime::prepare_compiled",
+    )?;
     Ok(PreparedCompiledGraph {
         runtime_id: runtime.id(),
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
-        execution,
     })
 }
 
@@ -784,7 +769,6 @@ pub(super) fn run_prepared(
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
-        &prepared.execution,
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -795,7 +779,6 @@ pub(super) fn run_prepared(
 fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
-        &prepared.execution,
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -811,9 +794,12 @@ pub(super) fn run_compiled_values(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = execution_engines(runtime, &prepared)?;
+    validate_prepared_epoch(
+        runtime,
+        prepared.root().epoch(),
+        "Runtime::run_compiled_values",
+    )?;
     execute_scheduled_value_refs(
-        &execution,
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -859,142 +845,28 @@ fn prepare(
         .map_err(prepare_error)
 }
 
-fn execution_engines(
+fn validate_prepared_epoch(
     runtime: &Runtime,
-    prepared: &Arc<super::preparation::PreparedProgram>,
-) -> Result<PreparedExecutionEngines> {
-    let snapshot = runtime.snapshot().map_err(|source| {
-        Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
-    })?;
-    let root = prepared.root();
-    if snapshot.epoch() != root.epoch() {
+    prepared_epoch: super::RuntimeEpoch,
+    caller: &'static str,
+) -> Result<()> {
+    let epoch = runtime
+        .epoch()
+        .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
+    if epoch != prepared_epoch {
         return Err(Error::runtime_state(
-            "Runtime::run_compiled",
+            caller,
             ErrorPhase::Execution,
             format!(
                 "prepared epoch {:?} does not match current epoch {:?}",
-                root.epoch(),
-                snapshot.epoch()
+                prepared_epoch, epoch
             ),
         ));
     }
-    let storage_class = root.resolved_placement().storage_class();
-    let root_engine = snapshot.engine(root.engine_id()).ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!(
-                "prepared root engine {:?} is no longer registered",
-                root.engine_id()
-            ),
-        )
-    })?;
-    let root_location = ExecutionLocation::new(
-        root.engine_id().clone(),
-        root_engine.provider_device_identity().clone(),
-        root_engine.event_domain_id(),
-        storage_class.clone(),
-    );
-    let root_witness = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
-    let input_locations = root.input_locations();
-    for location in input_locations {
-        let engine = snapshot.engine(location.engine_id()).ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared input ingress engine {:?} is no longer registered",
-                    location.engine_id()
-                ),
-            )
-        })?;
-        if !engine.storage_classes().contains(location.storage_class()) {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared input ingress engine {:?} does not support storage {:?}",
-                    location.engine_id(),
-                    location.storage_class()
-                ),
-            ));
-        }
-    }
-    let operation_placements = root.operation_placements();
-    if operation_placements.len() != prepared.operations().len() {
-        return Err(Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!(
-                "prepared root has {} operation placements for {} operations",
-                operation_placements.len(),
-                prepared.operations().len()
-            ),
-        ));
-    }
-    let mut operation_executors = Vec::with_capacity(prepared.operations().len());
-    for (operation, placement) in prepared.operations().iter().zip(operation_placements) {
-        let engine_id = operation.binding().engine_id();
-        let engine = snapshot.engine(engine_id).ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!("prepared operation engine {engine_id:?} is no longer registered"),
-            )
-        })?;
-        if !engine.storage_classes().contains(placement.storage_class()) {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared operation engine {engine_id:?} does not support selected storage {:?}",
-                    placement.storage_class().as_str()
-                ),
-            ));
-        }
-        operation_executors.push(PreparedOperationExecution {
-            witness: execution_engine_from_snapshot(&snapshot, engine_id)?,
-            location: ExecutionLocation::new(
-                engine_id.clone(),
-                engine.provider_device_identity().clone(),
-                engine.event_domain_id(),
-                placement.storage_class().clone(),
-            ),
-        });
-    }
-    let transfers = snapshot.transfer_registry_for_execution();
-    Ok(PreparedExecutionEngines {
-        snapshot,
-        root: root_witness,
-        root_location,
-        input_locations: input_locations.to_vec().into_boxed_slice(),
-        operations: operation_executors.into_boxed_slice(),
-        transfers,
-    })
-}
-
-fn execution_engine_from_snapshot(
-    snapshot: &super::RuntimeConfigSnapshot,
-    engine_id: &super::EngineId,
-) -> Result<super::snapshot::ExecutableEngineSnapshot> {
-    let engine = snapshot.engine(engine_id).ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!("prepared engine {engine_id:?} is no longer registered"),
-        )
-    })?;
-    engine.executable_witness().cloned().ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!("engine {engine_id:?} has no runtime execution bridge"),
-        )
-    })
+    Ok(())
 }
 
 fn execute_scheduled_tensor_refs(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1002,13 +874,11 @@ fn execute_scheduled_tensor_refs(
 ) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
-    schedule.validate_for_runtime()?;
     let inputs = inputs
         .iter()
         .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
         .collect();
     execute_scheduled_slots(
-        execution,
         program,
         schedule,
         operations,
@@ -1017,15 +887,12 @@ fn execute_scheduled_tensor_refs(
     )
     .and_then(|mut slots| {
         collect_tensor_outputs_with(program, &mut slots, |location, slot| {
-            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
-                .executor()
-                .materialize_slot(slot)
+            location.witness().executor().materialize_slot(slot)
         })
     })
 }
 
 fn execute_scheduled_value_refs(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1033,13 +900,11 @@ fn execute_scheduled_value_refs(
 ) -> Result<Vec<TensorValue>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    schedule.validate_for_runtime()?;
     let inputs = inputs
         .iter()
         .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
         .collect();
     execute_scheduled_slots(
-        execution,
         program,
         schedule,
         operations,
@@ -1048,15 +913,12 @@ fn execute_scheduled_value_refs(
     )
     .and_then(|mut slots| {
         collect_value_outputs_with(program, &mut slots, |location, slot| {
-            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
-                .executor()
-                .materialize_slot_value(slot)
+            location.witness().executor().materialize_slot_value(slot)
         })
     })
 }
 
 fn execute_scheduled_slots<'input>(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1072,33 +934,30 @@ fn execute_scheduled_slots<'input>(
     let mut located = (0..program.n_slots)
         .map(|_| Vec::new())
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
-    // INVARIANT: runs are declared after the value stores so unwinding drops
+    // INVARIANT: the immutable schedule was validated during preparation;
+    // runs are declared after the value stores so unwinding drops
     // and drains native domain work before any tensor storage is released.
     // Driver preflight completes before input ingress or any operation launch.
-    let mut event_domains = ScheduledEventDomains::new(&execution.snapshot, schedule)?;
+    let mut event_domains = ScheduledEventDomains::new(schedule)?;
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
-        if execution.input_locations.len() != program.input_slots.len() {
+        if schedule.input_locations().len() != program.input_slots.len() {
             return Err(Error::runtime_state(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 format!(
-                    "prepared execution has {} input locations for {} inputs",
-                    execution.input_locations.len(),
+                    "prepared schedule has {} input locations for {} inputs",
+                    schedule.input_locations().len(),
                     program.input_slots.len()
                 ),
             ));
         }
-        for (&slot, location) in program
-            .input_slots
-            .iter()
-            .zip(execution.input_locations.iter())
-        {
+        for (&slot, location) in program.input_slots.iter().zip(schedule.input_locations()) {
             let value = staged
                 .get_mut(slot)
                 .and_then(Option::take)
                 .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            validate_runtime_input_ingress(execution, location, &value.as_read(), slot)?;
+            validate_runtime_input_ingress(location, &value.as_read(), slot)?;
             located[slot].push(LocatedExecSlot {
                 location: location.clone(),
                 value,
@@ -1122,7 +981,7 @@ fn execute_scheduled_slots<'input>(
                                     ),
                                 )
                             })?;
-                        let operation = instruction_execution(execution, instruction)?;
+                        let operation = instruction_execution(schedule, instruction)?;
                         if operation.location() != operation_node.location() {
                             return Err(Error::runtime_state(
                                 "Runtime::run_compiled",
@@ -1148,7 +1007,6 @@ fn execute_scheduled_slots<'input>(
                             &terminal_slots,
                         )?;
                         validate_instruction_outputs(
-                            execution,
                             instruction_index,
                             instruction,
                             operation.location(),
@@ -1164,8 +1022,7 @@ fn execute_scheduled_slots<'input>(
                     event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Transfer(transfer) => {
-                    let mut launch =
-                        || execute_scheduled_transfer(execution, transfer, &mut located);
+                    let mut launch = || execute_scheduled_transfer(transfer, &mut located);
                     event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Collective(_) => {
@@ -1210,18 +1067,19 @@ pub(crate) struct ScheduledEventDomains {
 }
 
 impl ScheduledEventDomains {
-    fn new(snapshot: &super::RuntimeConfigSnapshot, schedule: &ScheduledGraph) -> Result<Self> {
+    fn new(schedule: &ScheduledGraph) -> Result<Self> {
+        schedule.preflight().map_err(|source| {
+            Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
+        })?;
         let mut drivers = Vec::new();
+        let mut seen_domains = HashSet::new();
         for node in schedule.nodes() {
             let domain = node.completion().domain();
-            if drivers.iter().any(|(candidate, _)| *candidate == domain) {
+            if !seen_domains.insert(domain) {
                 continue;
             }
-            let witness = snapshot
-                .engine_views_for_preparation()
-                .find(|engine| engine.event_domain_id() == domain)
-                .and_then(|engine| engine.executable_witness().cloned())
-                .ok_or_else(|| missing_event_domain_driver(domain))?;
+            let witness = node.event_domain_witness();
+            debug_assert_eq!(witness.event_domain_id(), domain);
             drivers.push((domain, witness.event_domain_driver().clone()));
         }
         let mut runs = Vec::with_capacity(drivers.len());
@@ -1531,28 +1389,32 @@ struct ScheduledExecutionCleanupError {
 }
 
 fn instruction_execution<'a>(
-    execution: &'a PreparedExecutionEngines,
+    schedule: &'a ScheduledGraph,
     instruction: &ExecInstruction,
 ) -> Result<InstructionExecution<'a>> {
     let Some(operation_index) = instruction.semantic_operation_index else {
+        let location = schedule.root_location();
         return Ok(InstructionExecution {
-            witness: &execution.root,
-            location: &execution.root_location,
+            witness: location.witness(),
+            location,
         });
     };
-    let operation = execution.operations.get(operation_index).ok_or_else(|| {
+    let location = schedule
+        .operation_locations()
+        .get(operation_index)
+        .ok_or_else(|| {
             Error::runtime_state(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 format!(
-                    "instruction references semantic operation {operation_index}, but prepared program has {} operations",
-                    execution.operations.len()
+                    "instruction references semantic operation {operation_index}, but prepared schedule has {} operations",
+                    schedule.operation_locations().len()
                 ),
             )
         })?;
     Ok(InstructionExecution {
-        witness: operation.witness(),
-        location: operation.location(),
+        witness: location.witness(),
+        location,
     })
 }
 
@@ -1568,16 +1430,6 @@ impl InstructionExecution<'_> {
 
     fn location(&self) -> &ExecutionLocation {
         self.location
-    }
-}
-
-impl PreparedOperationExecution {
-    fn witness(&self) -> &super::snapshot::ExecutableEngineSnapshot {
-        &self.witness
-    }
-
-    fn location(&self) -> &ExecutionLocation {
-        &self.location
     }
 }
 
@@ -1613,32 +1465,21 @@ fn stage_instruction_inputs<'input>(
 }
 
 fn validate_instruction_outputs(
-    execution: &PreparedExecutionEngines,
     instruction_index: usize,
     instruction: &ExecInstruction,
     location: &ExecutionLocation,
     staged: &[Option<ExecSlot<'_>>],
 ) -> Result<()> {
-    let engine = execution
-        .snapshot
-        .engine(location.engine_id())
-        .ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "scheduled output engine {:?} is no longer registered",
-                    location.engine_id()
-                ),
-            )
-        })?;
     for &output_slot in &instruction.output_slots {
         let output = staged
             .get(output_slot)
             .and_then(Option::as_ref)
             .ok_or(tenferro_tensor::Error::MissingValue { slot: output_slot })?;
         let output = output.as_read();
-        if !engine.owns_resident_tensor(&output, location.storage_class()) {
+        if !location
+            .witness()
+            .owns_resident_tensor(&output, location.storage_class())
+        {
             return Err(Error::runtime_state_source(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
@@ -1704,15 +1545,13 @@ pub(crate) fn retain_instruction_results<'input>(
 }
 
 fn validate_runtime_input_ingress(
-    execution: &PreparedExecutionEngines,
     location: &ExecutionLocation,
     input: &TensorRead<'_>,
     slot: usize,
 ) -> Result<()> {
-    let accepted = execution
-        .snapshot
-        .engine(location.engine_id())
-        .is_some_and(|engine| engine.accepts_runtime_input(input, location.storage_class()));
+    let accepted = location
+        .witness()
+        .accepts_runtime_input(input, location.storage_class());
     if accepted {
         return Ok(());
     }
@@ -1731,30 +1570,12 @@ fn validate_runtime_input_ingress(
 }
 
 fn execute_scheduled_transfer<'input>(
-    execution: &PreparedExecutionEngines,
     transfer: &ScheduledTransfer,
     located: &mut [Vec<LocatedExecSlot<'input>>],
 ) -> Result<()> {
     let source = transfer.source_location();
     let destination = transfer.destination_location();
-    let provider = execution
-        .transfers
-        .get(&ResolvedTransferRoute::new(
-            source.resolved_endpoint().clone(),
-            destination.resolved_endpoint().clone(),
-        ))
-        .ok_or_else(|| {
-            Error::runtime_state_source(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                TransferError::MissingProvider {
-                    source_endpoint: source.endpoint().clone(),
-                    source_event_domain_id: source.event_domain_id(),
-                    destination_endpoint: destination.endpoint().clone(),
-                    destination_event_domain_id: destination.event_domain_id(),
-                },
-            )
-        })?;
+    let provider = transfer.provider();
     let values =
         located
             .get_mut(transfer.value_slot())
@@ -1783,13 +1604,7 @@ fn execute_scheduled_transfer<'input>(
         let expected_shape = source_read.shape().to_vec();
         let transferred =
             provider.transfer_blocking(TransferRequest::new(source, destination, source_read))?;
-        validate_transfer_output(
-            execution,
-            destination,
-            expected_dtype,
-            &expected_shape,
-            &transferred,
-        )?;
+        validate_transfer_output(destination, expected_dtype, &expected_shape, &transferred)?;
         transferred
     };
     values.push(LocatedExecSlot {
@@ -1800,7 +1615,6 @@ fn execute_scheduled_transfer<'input>(
 }
 
 fn validate_transfer_output(
-    execution: &PreparedExecutionEngines,
     destination: &ExecutionLocation,
     expected_dtype: tenferro_tensor::DType,
     expected_shape: &[usize],
@@ -1828,12 +1642,9 @@ fn validate_transfer_output(
             expected: expected_elements,
             actual: tensor_buffer_len(output),
         })
-    } else if !execution
-        .snapshot
-        .engine(destination.engine_id())
-        .is_some_and(|engine| {
-            engine.accepts_input_placement(output.placement(), destination.storage_class())
-        })
+    } else if !destination
+        .witness()
+        .accepts_input_placement(output.placement(), destination.storage_class())
     {
         Some(
             TransferProviderContractError::DestinationPlacementMismatch {
@@ -1842,16 +1653,10 @@ fn validate_transfer_output(
                 actual: output.placement().clone(),
             },
         )
-    } else if !execution
-        .snapshot
-        .engine(destination.engine_id())
-        .is_some_and(|engine| {
-            engine.owns_resident_tensor(
-                &TensorRead::from_tensor(output),
-                destination.storage_class(),
-            )
-        })
-    {
+    } else if !destination.witness().owns_resident_tensor(
+        &TensorRead::from_tensor(output),
+        destination.storage_class(),
+    ) {
         Some(
             TransferProviderContractError::DestinationResidencyMismatch {
                 destination_engine_id: destination.engine_id().clone(),

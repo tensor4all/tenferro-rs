@@ -30,11 +30,14 @@ pub use capability::{
     PreparedOperationHandle, PreparedOperationPlan, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
+#[cfg(test)]
+pub(crate) use engine_registration::ExecutableEngineContract;
 pub use engine_registration::{
-    EngineRegistration, ExecutableEngineContract, InputIngressContract, InputPlacementContract,
-    InputSignatureContract, ProviderExecutableBinding, ProviderPreparationBinding,
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
+    EngineRegistration, InputIngressContract, InputPlacementContract, InputSignatureContract,
     ResidentOutputContract, RuntimeInputContract,
 };
+pub(crate) use engine_registration::{ProviderExecutableBinding, ProviderPreparationBinding};
 pub use error::{
     EngineExecutionContractError, ExecutionContextMismatch, ExecutionPolicyError,
     ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,

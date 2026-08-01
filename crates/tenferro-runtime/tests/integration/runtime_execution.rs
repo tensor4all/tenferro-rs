@@ -15,19 +15,19 @@ use tenferro_runtime::runtime::{
     EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver,
 };
 use tenferro_runtime::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, ErasedExecutionContext, Error,
-    ErrorPhase, EventDomainId, ExecutableEngineContract, ExecutionContextIdentity,
-    ExtensionCacheStore, ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler,
-    HardwareClassId, IndexingRuntime, InputIngressContract, InputIngressContractError,
-    InputPlacementContract, InputSignatureContract, LayoutRuntime, PrepareCapability, PrepareError,
-    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId, ProviderPreparationBinding,
-    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
-    RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError, SpecializationProjection,
-    StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
-    TransferProviderContractError, TransferRequest,
+    ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
+    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
+    IndexingRuntime, InputIngressContract, InputIngressContractError, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, ResidentOutputContract,
+    Runtime, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError,
+    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
+    TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -238,24 +238,20 @@ fn assemble_cpu_registration(
     cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     if let Some(event_domain_driver) = event_domain_driver {
-        let contract = ExecutableEngineContract::new(
+        assemble_executable_engine_registration(
+            engine_id,
+            hardware_class,
+            storage_classes,
+            default_storage_class,
             provider_device_identity,
             capabilities,
             backend.as_ref().clone(),
             event_domain_driver,
             cpu_ingress_contract(&backend, &ingress_storage),
             cache_owner,
-        );
-        let binding = ProviderExecutableBinding::new(
-            engine_id,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            contract,
-        )?;
-        Ok(EngineRegistration::executable(binding))
+        )
     } else {
-        let binding = ProviderPreparationBinding::new(
+        assemble_preparation_only_engine_registration(
             engine_id,
             provider_device_identity,
             ExecutionContextIdentity::of::<CpuBackend>(),
@@ -263,8 +259,7 @@ fn assemble_cpu_registration(
             storage_classes,
             default_storage_class,
             capabilities,
-        )?;
-        Ok(EngineRegistration::preparation_only(binding))
+        )
     }
 }
 
@@ -1897,7 +1892,7 @@ fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
 #[test]
 fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), Box<dyn StdError>> {
     let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
-    let registration = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
+    let registration = assemble_preparation_only_engine_registration(
         EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cpu")?,
@@ -1908,7 +1903,7 @@ fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), B
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
-    )?);
+    )?;
     let mut builder = Runtime::builder();
 
     builder.register_engine(registration)?;

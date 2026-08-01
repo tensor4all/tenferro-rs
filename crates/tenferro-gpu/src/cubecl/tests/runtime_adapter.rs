@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 use tenferro_runtime::{
-    CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId, ExecutionContextIdentity,
-    HardwareClassId, ProviderDeviceIdentity, ProviderId, ProviderPreparationBinding, Runtime,
+    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId, EventDomainId,
+    ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime,
     StorageClass,
 };
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
@@ -45,22 +45,20 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .expect("CUDA event test engine id");
     let storage = StorageClass::new(format!("tenferro.test.cuda.storage.{suffix}"))
         .expect("CUDA event test storage class");
-    let registration = EngineRegistration::preparation_only(
-        ProviderPreparationBinding::new(
-            engine_id.clone(),
-            ProviderDeviceIdentity::new(
-                ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
-                format!("target:{suffix}"),
-            )
-            .expect("CUDA event test provider device"),
-            ExecutionContextIdentity::of::<()>(),
-            HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
-            Arc::from(vec![storage.clone()]),
-            storage,
-            CoreCapabilityBundle::default(),
+    let registration = assemble_preparation_only_engine_registration(
+        engine_id.clone(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
+            format!("target:{suffix}"),
         )
-        .expect("CUDA event test registration"),
-    );
+        .expect("CUDA event test provider device"),
+        ExecutionContextIdentity::of::<()>(),
+        HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
+        Arc::from(vec![storage.clone()]),
+        storage,
+        CoreCapabilityBundle::default(),
+    )
+    .expect("CUDA event test registration");
     let mut builder = Runtime::builder();
     builder
         .register_engine(registration)
@@ -175,9 +173,30 @@ fn sum_squares_routes_through_runtime_reduction_preparation() {
 fn cuda_registration_installs_native_event_domain_driver() {
     let source = include_str!("../runtime_adapter.rs");
     assert!(
-        source.contains(".with_event_domain_driver(Arc::new(CudaEventDomainDriver::new(")
+        source.contains("assemble_executable_engine_registration(")
+            && source.contains("CudaEventDomainDriver::new(")
             && source.contains("backend.runtime().clone(),"),
-        "CUDA registration must install its native event-domain driver"
+        "CUDA registration must use the shared executable assembly with its native driver"
+    );
+    assert!(!source.contains("ExecutableEngineContract::new("));
+    assert!(!source.contains("ProviderExecutableBinding::new("));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_registration_preserves_a_caller_selected_engine_id() {
+    if !gpu_available() {
+        return;
+    }
+    let backend = CudaBackend::new(0).expect("CUDA backend");
+    let engine_id =
+        EngineId::new("tenferro-cuda.test.selected.v1").expect("selected CUDA engine ID");
+    let registration = cuda_runtime_engine_registration_with_id(&backend, engine_id.clone())
+        .expect("selected CUDA registration");
+    assert_eq!(registration.engine_id(), &engine_id);
+    assert_eq!(
+        registration.hardware_class(),
+        &cuda_runtime_hardware_class().expect("CUDA hardware class")
     );
 }
 

@@ -1924,6 +1924,22 @@ impl CpuBackend {
         &self.provider_bundle
     }
 
+    /// Return whether two backend handles retain the same runtime registration
+    /// identity.
+    ///
+    /// Clones of one backend share the execution domain, selected engine, and
+    /// immutable provider bundle. Replacing any of those resources requires a
+    /// fresh runtime registration even when the public provider/device target
+    /// remains unchanged.
+    pub fn shares_runtime_identity_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
+            && Arc::ptr_eq(&self.engine, &other.engine)
+            && self
+                .provider_bundle
+                .shares_identity_with(&other.provider_bundle)
+            && self.allocation_domain() == other.allocation_domain()
+    }
+
     /// Return this backend with an immutable construction-time provider bundle.
     ///
     /// Existing clones retain their original bundle identity.

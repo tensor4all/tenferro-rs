@@ -234,7 +234,7 @@ impl InputIngressContract {
 
 /// The complete execution witness stored by an executable provider binding.
 #[derive(Clone)]
-pub struct ExecutableEngineContract {
+pub(crate) struct ExecutableEngineContract {
     provider_device_identity: ProviderDeviceIdentity,
     context_identity: ExecutionContextIdentity,
     capabilities: CoreCapabilityBundle,
@@ -245,38 +245,10 @@ pub struct ExecutableEngineContract {
 }
 
 impl ExecutableEngineContract {
-    /// Assemble an executable provider witness atomically.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{
-    ///     CoreCapabilityBundle, ExecutableEngineContract, ImmediateEventDomainDriver,
-    ///     InputIngressContract, InputPlacementContract, InputSignatureContract,
-    ///     ProviderDeviceIdentity, ProviderId, ResidentOutputContract,
-    ///     RuntimeInputContract,
-    /// };
-    ///
-    /// let ingress = InputIngressContract::new(
-    ///     InputPlacementContract::new(|_, _| true),
-    ///     InputSignatureContract::new(|_, _, _, _| true),
-    ///     RuntimeInputContract::new(|_, _| true),
-    ///     ResidentOutputContract::new(|_, _| true),
-    /// );
-    /// let contract = ExecutableEngineContract::new(
-    ///     ProviderDeviceIdentity::new(ProviderId::new("example.provider")?, "device:0")?,
-    ///     CoreCapabilityBundle::default(),
-    ///     CpuBackend::new(),
-    ///     Arc::new(ImmediateEventDomainDriver::new()),
-    ///     ingress,
-    ///     None,
-    /// );
-    /// let _ = contract;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn new<B>(
+    // This constructor is intentionally limited to the runtime assembly
+    // boundary. Providers use assemble_executable_engine_registration instead
+    // of manufacturing a partial contract and binding independently.
+    pub(super) fn new<B>(
         provider_device_identity: ProviderDeviceIdentity,
         capabilities: CoreCapabilityBundle,
         backend: B,
@@ -392,7 +364,7 @@ impl fmt::Debug for ExecutableEngineContract {
 }
 
 /// Provider-owned metadata plus one complete executable witness.
-pub struct ProviderExecutableBinding {
+pub(crate) struct ProviderExecutableBinding {
     engine_id: EngineId,
     hardware_class: HardwareClassId,
     storage_classes: Arc<[StorageClass]>,
@@ -401,56 +373,9 @@ pub struct ProviderExecutableBinding {
 }
 
 impl ProviderExecutableBinding {
-    /// Construct a provider-owned executable binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeConfigError::EmptyStorageClasses`],
-    /// [`RuntimeConfigError::DuplicateStorageClass`], or
-    /// [`RuntimeConfigError::DefaultStorageClassNotListed`] when the provider
-    /// metadata is inconsistent.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{
-    ///     CoreCapabilityBundle, EngineId, ExecutableEngineContract,
-    ///     HardwareClassId, ImmediateEventDomainDriver,
-    ///     InputIngressContract, InputPlacementContract, InputSignatureContract,
-    ///     ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId,
-    ///     ResidentOutputContract, RuntimeInputContract, StorageClass,
-    /// };
-    ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let storage = StorageClass::new("example.storage.host")?;
-    /// let ingress = InputIngressContract::new(
-    ///     InputPlacementContract::new(|_, _| true),
-    ///     InputSignatureContract::new(|_, _, _, _| true),
-    ///     RuntimeInputContract::new(|_, _| true),
-    ///     ResidentOutputContract::new(|_, _| true),
-    /// );
-    /// let contract = ExecutableEngineContract::new(
-    ///     ProviderDeviceIdentity::new(ProviderId::new("example.provider")?, "device:0")?,
-    ///     CoreCapabilityBundle::default(),
-    ///     CpuBackend::new(),
-    ///     Arc::new(ImmediateEventDomainDriver::new()),
-    ///     ingress,
-    ///     None,
-    /// );
-    /// let binding = ProviderExecutableBinding::new(
-    ///     EngineId::new("example.engine")?,
-    ///     HardwareClassId::new("example.hardware")?,
-    ///     Arc::from(vec![storage.clone()]),
-    ///     storage,
-    ///     contract,
-    /// )?;
-    /// let _ = binding;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(
+    // Storage metadata is validated as part of the runtime-owned executable
+    // assembly; this partial constructor is not a public provider API.
+    pub(super) fn new(
         engine_id: EngineId,
         hardware_class: HardwareClassId,
         storage_classes: Arc<[StorageClass]>,
@@ -465,6 +390,26 @@ impl ProviderExecutableBinding {
             default_storage_class,
             contract,
         })
+    }
+
+    pub(super) fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    pub(super) fn hardware_class(&self) -> &HardwareClassId {
+        &self.hardware_class
+    }
+
+    pub(super) fn storage_classes(&self) -> &[StorageClass] {
+        &self.storage_classes
+    }
+
+    pub(super) fn default_storage_class(&self) -> &StorageClass {
+        &self.default_storage_class
+    }
+
+    pub(super) fn contract(&self) -> &ExecutableEngineContract {
+        &self.contract
     }
 }
 
@@ -493,7 +438,7 @@ impl Clone for ProviderExecutableBinding {
 }
 
 /// Provider-owned metadata plus preparation capabilities without execution.
-pub struct ProviderPreparationBinding {
+pub(crate) struct ProviderPreparationBinding {
     engine_id: EngineId,
     provider_device_identity: ProviderDeviceIdentity,
     context_identity: ExecutionContextIdentity,
@@ -504,37 +449,9 @@ pub struct ProviderPreparationBinding {
 }
 
 impl ProviderPreparationBinding {
-    /// Construct a provider-owned preparation-only binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`RuntimeConfigError`] when the storage metadata is invalid.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use std::sync::Arc;
-    /// use tenferro_runtime::{
-    ///     CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
-    ///     ProviderDeviceIdentity, ProviderId, ProviderPreparationBinding, StorageClass,
-    /// };
-    ///
-    /// let storage = StorageClass::new("example.storage.host")?;
-    /// let binding = ProviderPreparationBinding::new(
-    ///     EngineId::new("example.engine")?,
-    ///     ProviderDeviceIdentity::new(ProviderId::new("example.provider")?, "device:0")?,
-    ///     ExecutionContextIdentity::of::<()>(),
-    ///     HardwareClassId::new("example.hardware")?,
-    ///     Arc::from(vec![storage.clone()]),
-    ///     storage,
-    ///     CoreCapabilityBundle::default(),
-    /// )?;
-    /// let _ = binding;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(
+    // Preparation-only metadata follows the same runtime-owned assembly
+    // boundary and cannot be promoted to an executable binding.
+    pub(super) fn new(
         engine_id: EngineId,
         provider_device_identity: ProviderDeviceIdentity,
         context_identity: ExecutionContextIdentity,
@@ -553,6 +470,34 @@ impl ProviderPreparationBinding {
             default_storage_class,
             capabilities,
         })
+    }
+
+    pub(super) fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    pub(super) fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        &self.provider_device_identity
+    }
+
+    pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
+        self.context_identity
+    }
+
+    pub(super) fn hardware_class(&self) -> &HardwareClassId {
+        &self.hardware_class
+    }
+
+    pub(super) fn storage_classes(&self) -> &[StorageClass] {
+        &self.storage_classes
+    }
+
+    pub(super) fn default_storage_class(&self) -> &StorageClass {
+        &self.default_storage_class
+    }
+
+    pub(super) fn capabilities(&self) -> &CoreCapabilityBundle {
+        &self.capabilities
     }
 }
 
@@ -589,16 +534,58 @@ impl fmt::Debug for ProviderPreparationBinding {
 pub(crate) enum EngineRegistrationState {
     /// Capabilities are available to planning, but this registration cannot
     /// admit runtime inputs or execute a schedule.
-    PreparationOnly { capabilities: CoreCapabilityBundle },
+    PreparationOnly { binding: ProviderPreparationBinding },
     /// A complete provider execution witness.
-    Executable(ExecutableEngineContract),
+    Executable(ProviderExecutableBinding),
 }
 
 impl EngineRegistrationState {
     pub(super) fn capabilities(&self) -> &CoreCapabilityBundle {
         match self {
-            Self::PreparationOnly { capabilities } => capabilities,
-            Self::Executable(contract) => contract.capabilities(),
+            Self::PreparationOnly { binding } => binding.capabilities(),
+            Self::Executable(binding) => binding.contract().capabilities(),
+        }
+    }
+
+    pub(super) fn engine_id(&self) -> &EngineId {
+        match self {
+            Self::PreparationOnly { binding } => binding.engine_id(),
+            Self::Executable(binding) => binding.engine_id(),
+        }
+    }
+
+    pub(super) fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        match self {
+            Self::PreparationOnly { binding } => binding.provider_device_identity(),
+            Self::Executable(binding) => binding.contract().provider_device_identity(),
+        }
+    }
+
+    pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
+        match self {
+            Self::PreparationOnly { binding } => binding.context_identity(),
+            Self::Executable(binding) => binding.contract().context_identity(),
+        }
+    }
+
+    pub(super) fn hardware_class(&self) -> &HardwareClassId {
+        match self {
+            Self::PreparationOnly { binding } => binding.hardware_class(),
+            Self::Executable(binding) => binding.hardware_class(),
+        }
+    }
+
+    pub(super) fn storage_classes(&self) -> &[StorageClass] {
+        match self {
+            Self::PreparationOnly { binding } => binding.storage_classes(),
+            Self::Executable(binding) => binding.storage_classes(),
+        }
+    }
+
+    pub(super) fn default_storage_class(&self) -> &StorageClass {
+        match self {
+            Self::PreparationOnly { binding } => binding.default_storage_class(),
+            Self::Executable(binding) => binding.default_storage_class(),
         }
     }
 }
@@ -606,99 +593,63 @@ impl EngineRegistrationState {
 /// Immutable direct engine registration candidate.
 #[derive(Clone)]
 pub struct EngineRegistration {
-    engine_id: EngineId,
-    provider_device_identity: ProviderDeviceIdentity,
-    context_identity: ExecutionContextIdentity,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
     state: EngineRegistrationState,
     candidate_token: Arc<CandidateRegistrationToken>,
 }
 
 impl EngineRegistration {
     /// Consume one provider-owned preparation binding.
-    pub fn preparation_only(binding: ProviderPreparationBinding) -> Self {
-        let ProviderPreparationBinding {
-            engine_id,
-            provider_device_identity,
-            context_identity,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            capabilities,
-        } = binding;
+    pub(super) fn preparation_only(binding: ProviderPreparationBinding) -> Self {
         Self {
-            engine_id,
-            provider_device_identity,
-            context_identity,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            state: EngineRegistrationState::PreparationOnly { capabilities },
+            state: EngineRegistrationState::PreparationOnly { binding },
             candidate_token: Arc::new(CandidateRegistrationToken),
         }
     }
 
     /// Consume one provider-owned complete executable binding.
-    pub fn executable(binding: ProviderExecutableBinding) -> Self {
-        let ProviderExecutableBinding {
-            engine_id,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            contract,
-        } = binding;
-        let provider_device_identity = contract.provider_device_identity.clone();
-        let context_identity = contract.context_identity;
+    pub(super) fn executable(binding: ProviderExecutableBinding) -> Self {
         Self {
-            engine_id,
-            provider_device_identity,
-            context_identity,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            state: EngineRegistrationState::Executable(contract),
+            state: EngineRegistrationState::Executable(binding),
+            candidate_token: Arc::new(CandidateRegistrationToken),
+        }
+    }
+
+    pub(super) fn from_state(state: EngineRegistrationState) -> Self {
+        Self {
+            state,
             candidate_token: Arc::new(CandidateRegistrationToken),
         }
     }
 
     /// Return the immutable registration state witness.
+    #[cfg(test)]
     pub(crate) fn execution_state(&self) -> &EngineRegistrationState {
         &self.state
     }
 
     /// Return the engine identifier.
     pub fn engine_id(&self) -> &EngineId {
-        &self.engine_id
+        self.state.engine_id()
     }
 
     /// Return the immutable provider/device binding for this engine.
     pub fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
-        &self.provider_device_identity
+        self.state.provider_device_identity()
     }
 
     /// Return the execution-context type identity accepted by the engine.
     pub fn context_identity(&self) -> ExecutionContextIdentity {
-        self.context_identity
+        self.state.context_identity()
     }
 
     /// Return the hardware class exposed by this engine.
     pub fn hardware_class(&self) -> &HardwareClassId {
-        &self.hardware_class
+        self.state.hardware_class()
     }
 
     /// Return the supported storage classes in registration order.
     pub fn storage_classes(&self) -> &[StorageClass] {
-        &self.storage_classes
-    }
-
-    pub(super) fn storage_classes_arc(&self) -> Arc<[StorageClass]> {
-        Arc::clone(&self.storage_classes)
-    }
-
-    pub(super) fn candidate_token(&self) -> Arc<CandidateRegistrationToken> {
-        Arc::clone(&self.candidate_token)
+        self.state.storage_classes()
     }
 
     pub(super) fn with_candidate_token(
@@ -709,9 +660,15 @@ impl EngineRegistration {
         self
     }
 
+    pub(super) fn into_state_and_token(
+        self,
+    ) -> (EngineRegistrationState, Arc<CandidateRegistrationToken>) {
+        (self.state, self.candidate_token)
+    }
+
     /// Return the default storage class.
     pub fn default_storage_class(&self) -> &StorageClass {
-        &self.default_storage_class
+        self.state.default_storage_class()
     }
 
     /// Return direct core capability slots.
@@ -720,21 +677,86 @@ impl EngineRegistration {
     }
 
     pub(super) fn candidate_identical(&self, other: &Self) -> bool {
-        self.engine_id == other.engine_id
+        self.engine_id() == other.engine_id()
             && Arc::ptr_eq(&self.candidate_token, &other.candidate_token)
     }
+}
+
+/// Assemble one complete executable provider registration.
+///
+/// Provider adapters supply only provider-owned identity, capability, ingress,
+/// event-driver, and cache-owner values.  The runtime owns the assembly of the
+/// executable witness and its storage metadata so every executable engine
+/// enters the runtime through the same invariant-preserving path.
+pub fn assemble_executable_engine_registration<B>(
+    engine_id: EngineId,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+    provider_device_identity: ProviderDeviceIdentity,
+    capabilities: CoreCapabilityBundle,
+    backend: B,
+    event_domain_driver: Arc<dyn EventDomainDriver>,
+    ingress: InputIngressContract,
+    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+) -> Result<EngineRegistration, RuntimeConfigError>
+where
+    B: TensorBackend + Send + Sync + 'static,
+{
+    let contract = ExecutableEngineContract::new(
+        provider_device_identity,
+        capabilities,
+        backend,
+        event_domain_driver,
+        ingress,
+        cache_owner,
+    );
+    let binding = ProviderExecutableBinding::new(
+        engine_id,
+        hardware_class,
+        storage_classes,
+        default_storage_class,
+        contract,
+    )?;
+    Ok(EngineRegistration::executable(binding))
+}
+
+/// Assemble one preparation-only provider registration.
+///
+/// This is the preparation counterpart of
+/// [`assemble_executable_engine_registration`].  It deliberately cannot
+/// manufacture an execution bridge or a scheduled witness.
+pub fn assemble_preparation_only_engine_registration(
+    engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
+    context_identity: ExecutionContextIdentity,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+    capabilities: CoreCapabilityBundle,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let binding = ProviderPreparationBinding::new(
+        engine_id,
+        provider_device_identity,
+        context_identity,
+        hardware_class,
+        storage_classes,
+        default_storage_class,
+        capabilities,
+    )?;
+    Ok(EngineRegistration::preparation_only(binding))
 }
 
 impl fmt::Debug for EngineRegistration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EngineRegistration")
-            .field("engine_id", &self.engine_id)
-            .field("provider_device_identity", &self.provider_device_identity)
-            .field("context_identity", &self.context_identity)
-            .field("hardware_class", &self.hardware_class)
-            .field("storage_class_count", &self.storage_classes.len())
-            .field("default_storage_class", &self.default_storage_class)
+            .field("engine_id", self.engine_id())
+            .field("provider_device_identity", self.provider_device_identity())
+            .field("context_identity", &self.context_identity())
+            .field("hardware_class", self.hardware_class())
+            .field("storage_class_count", &self.storage_classes().len())
+            .field("default_storage_class", self.default_storage_class())
             .field("state", &self.state)
             .finish_non_exhaustive()
     }

@@ -548,6 +548,7 @@ pub struct EagerRuntime {
     id: ContextId,
     runtime: Runtime,
     pub(crate) backend: Mutex<EagerBackend>,
+    registered_cpu_backend: Mutex<Option<CpuBackend>>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -646,6 +647,16 @@ impl EagerRuntime {
         })
     }
 
+    fn lock_registered_cpu_backend(&self) -> Result<MutexGuard<'_, Option<CpuBackend>>> {
+        self.registered_cpu_backend.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_registered_cpu_backend",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
+    }
+
     fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {
         self.extension_caches.lock().map_err(|_| {
             Error::runtime_state(
@@ -721,8 +732,16 @@ impl EagerRuntime {
             .snapshot()
             .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
         let has_cpu_engine = snapshot.engine(&engine_id).is_some();
+        let mut registered_cpu_backend = self.lock_registered_cpu_backend()?;
         match backend.cpu_snapshot() {
             Some(backend) => {
+                if has_cpu_engine
+                    && registered_cpu_backend
+                        .as_ref()
+                        .is_some_and(|registered| registered.shares_runtime_identity_with(&backend))
+                {
+                    return Ok(());
+                }
                 let registration = cpu_runtime_engine_registration(&backend).map_err(|source| {
                     runtime_config_error("EagerRuntime::cpu_runtime_engine_registration", source)
                 })?;
@@ -738,19 +757,26 @@ impl EagerRuntime {
                     .map(|_| ())
                     .map_err(|source| {
                         runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
-                    })
+                    })?;
+                *registered_cpu_backend = Some(backend);
+                Ok(())
             }
-            None if has_cpu_engine => self
-                .runtime
-                .reconfigure(|edit| {
-                    edit.remove_engine(&engine_id)?;
-                    Ok(())
-                })
-                .map(|_| ())
-                .map_err(|source| {
-                    runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
-                }),
-            None => Ok(()),
+            None if has_cpu_engine => {
+                self.runtime
+                    .reconfigure(|edit| {
+                        edit.remove_engine(&engine_id)?;
+                        Ok(())
+                    })
+                    .map_err(|source| {
+                        runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
+                    })?;
+                *registered_cpu_backend = None;
+                Ok(())
+            }
+            None => {
+                *registered_cpu_backend = None;
+                Ok(())
+            }
         }
     }
 
@@ -768,10 +794,12 @@ impl EagerRuntime {
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
         let runtime = build_eager_runtime_for_backend(&backend);
+        let registered_cpu_backend = backend.cpu_snapshot();
         Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
+            registered_cpu_backend: Mutex::new(registered_cpu_backend),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,

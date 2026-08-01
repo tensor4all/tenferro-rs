@@ -4,20 +4,18 @@
 //! GPU/XLA dispatch and asynchronous completion to the same node families.
 
 use std::collections::HashSet;
-#[cfg(test)]
-use std::error::Error as StdError;
-#[cfg(test)]
-use std::fmt;
+use std::hash::{Hash, Hasher};
 #[cfg(test)]
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
+use super::snapshot::ExecutableEngineSnapshot;
 use super::{
     FrozenTransferRegistry, RegistrationIdentity, ResolvedTransferEndpoint, ResolvedTransferRoute,
     RuntimeEpoch, RuntimeId,
 };
-use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
-use crate::{EngineId, Error, StorageClass, TransferEndpoint};
+use crate::{EngineId, StorageClass, TransferEndpoint};
 
 /// Provenance-qualified identity of one frozen direct-engine event domain.
 ///
@@ -114,25 +112,43 @@ impl EventDomainId {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExecutionLocation {
     resolved_endpoint: ResolvedTransferEndpoint,
+    witness: Arc<ExecutableEngineSnapshot>,
 }
 
 impl ExecutionLocation {
+    pub(super) fn from_witness(
+        witness: Arc<ExecutableEngineSnapshot>,
+        storage_class: StorageClass,
+    ) -> Self {
+        Self {
+            resolved_endpoint: ResolvedTransferEndpoint::new(
+                TransferEndpoint::new(witness.engine_id().clone(), storage_class),
+                witness.provider_device_identity().clone(),
+                witness.event_domain_id(),
+            ),
+            witness,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(
         engine_id: EngineId,
         provider_device_identity: super::ProviderDeviceIdentity,
         event_domain_id: EventDomainId,
         storage_class: StorageClass,
     ) -> Self {
-        Self {
-            resolved_endpoint: ResolvedTransferEndpoint::new(
-                TransferEndpoint::new(engine_id, storage_class),
+        Self::from_witness(
+            super::snapshot::ExecutableEngineSnapshot::for_test(
+                engine_id,
                 provider_device_identity,
                 event_domain_id,
+                storage_class.clone(),
             ),
-        }
+            storage_class,
+        )
     }
 
     pub(crate) fn engine_id(&self) -> &EngineId {
@@ -159,6 +175,10 @@ impl ExecutionLocation {
         self.resolved_endpoint.logical().storage_class()
     }
 
+    pub(super) fn witness(&self) -> &Arc<ExecutableEngineSnapshot> {
+        &self.witness
+    }
+
     #[cfg(test)]
     fn for_test(
         domain: EventDomainId,
@@ -170,6 +190,20 @@ impl ExecutionLocation {
             domain,
             StorageClass::new("tenferro-test.schedule-storage").expect("test storage class"),
         )
+    }
+}
+
+impl PartialEq for ExecutionLocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.resolved_endpoint == other.resolved_endpoint
+    }
+}
+
+impl Eq for ExecutionLocation {}
+
+impl Hash for ExecutionLocation {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.resolved_endpoint.hash(state);
     }
 }
 
@@ -303,20 +337,22 @@ impl ScheduledOperation {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct ScheduledTransfer {
     value_slot: usize,
     source_location: ExecutionLocation,
     destination_location: ExecutionLocation,
+    provider: Arc<dyn super::TransferProvider>,
     dependencies: Box<[EventDependency]>,
     completion: EventCompletion,
 }
 
 impl ScheduledTransfer {
-    pub(crate) fn new(
+    pub(crate) fn with_provider(
         value_slot: usize,
         source_location: ExecutionLocation,
         destination_location: ExecutionLocation,
+        provider: Arc<dyn super::TransferProvider>,
         dependencies: impl Into<Box<[EventDependency]>>,
         completion: EventCompletion,
     ) -> Self {
@@ -324,9 +360,28 @@ impl ScheduledTransfer {
             value_slot,
             source_location,
             destination_location,
+            provider,
             dependencies: dependencies.into(),
             completion,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(
+        value_slot: usize,
+        source_location: ExecutionLocation,
+        destination_location: ExecutionLocation,
+        dependencies: impl Into<Box<[EventDependency]>>,
+        completion: EventCompletion,
+    ) -> Self {
+        Self::with_provider(
+            value_slot,
+            source_location,
+            destination_location,
+            Arc::new(TestScheduledTransferProvider),
+            dependencies,
+            completion,
+        )
     }
 
     #[cfg(test)]
@@ -376,6 +431,10 @@ impl ScheduledTransfer {
         &self.destination_location
     }
 
+    pub(crate) fn provider(&self) -> &Arc<dyn super::TransferProvider> {
+        &self.provider
+    }
+
     pub(crate) fn dependencies(&self) -> &[EventDependency] {
         &self.dependencies
     }
@@ -391,8 +450,22 @@ impl ScheduledTransfer {
     }
 }
 
+impl std::fmt::Debug for ScheduledTransfer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ScheduledTransfer")
+            .field("value_slot", &self.value_slot)
+            .field("source_location", &self.source_location)
+            .field("destination_location", &self.destination_location)
+            .field("dependencies", &self.dependencies)
+            .field("completion", &self.completion)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ScheduledCollective {
+    location: ExecutionLocation,
     dependencies: Box<[EventDependency]>,
     completion: EventCompletion,
 }
@@ -400,21 +473,31 @@ pub(crate) struct ScheduledCollective {
 impl ScheduledCollective {
     #[cfg(test)]
     pub(crate) fn unsupported_for_test() -> Self {
-        Self {
-            dependencies: Box::new([]),
-            completion: EventCompletion::new(
-                EventDomainId::runtime_created_for_test(
-                    RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
-                    RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
-                    RegistrationIdentity::new(
-                        NonZeroU64::new(1).expect("registration issuer"),
-                        NonZeroU64::new(1).expect("registration ordinal"),
-                    ),
-                ),
-                EventSlotId::new(0),
-                0,
+        let domain = EventDomainId::runtime_created_for_test(
+            RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+            RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+            RegistrationIdentity::new(
+                NonZeroU64::new(1).expect("registration issuer"),
+                NonZeroU64::new(1).expect("registration ordinal"),
             ),
+        );
+        let location = ExecutionLocation::for_test(
+            domain,
+            super::ProviderDeviceIdentity::new(
+                super::ProviderId::new("tenferro.test.schedule").expect("test provider id"),
+                "collective",
+            )
+            .expect("test provider target"),
+        );
+        Self {
+            location,
+            dependencies: Box::new([]),
+            completion: EventCompletion::new(domain, EventSlotId::new(0), 0),
         }
+    }
+
+    pub(crate) fn location(&self) -> &ExecutionLocation {
+        &self.location
     }
 
     pub(crate) fn completion(&self) -> EventCompletion {
@@ -434,11 +517,16 @@ impl ScheduledCollective {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ScheduledBarrier {
+    location: ExecutionLocation,
     dependencies: Box<[EventDependency]>,
     completion: EventCompletion,
 }
 
 impl ScheduledBarrier {
+    pub(crate) fn location(&self) -> &ExecutionLocation {
+        &self.location
+    }
+
     fn dependencies(&self) -> &[EventDependency] {
         &self.dependencies
     }
@@ -493,6 +581,15 @@ impl ScheduledNode {
         }
     }
 
+    pub(super) fn event_domain_witness(&self) -> &Arc<ExecutableEngineSnapshot> {
+        match self {
+            Self::Operation(node) => node.location().witness(),
+            Self::Transfer(node) => node.destination_location().witness(),
+            Self::Collective(node) => node.location().witness(),
+            Self::Barrier(node) => node.location().witness(),
+        }
+    }
+
     fn retained_bytes(&self) -> Option<usize> {
         match self {
             Self::Operation(node) => node.retained_bytes(),
@@ -509,6 +606,9 @@ pub(crate) struct ScheduledGraph {
     input_slots: Box<[usize]>,
     output_slots: Box<[usize]>,
     value_count: usize,
+    root_location: ExecutionLocation,
+    input_locations: Box<[ExecutionLocation]>,
+    operation_locations: Box<[ExecutionLocation]>,
 }
 
 impl ScheduledGraph {
@@ -565,13 +665,15 @@ impl ScheduledGraph {
                 }
                 let source = values
                     .iter()
-                    .find(|value| {
-                        transfer_registry.contains(&ResolvedTransferRoute::new(
+                    .find_map(|value| {
+                        let route = ResolvedTransferRoute::new(
                             value.location.resolved_endpoint().clone(),
                             location.resolved_endpoint().clone(),
-                        ))
+                        );
+                        transfer_registry
+                            .get(&route)
+                            .map(|provider| (value.clone(), Arc::clone(provider)))
                     })
-                    .cloned()
                     .ok_or_else(|| {
                         if values.is_empty() {
                             ScheduleBuildError::ValueUnavailable {
@@ -592,14 +694,16 @@ impl ScheduledGraph {
                     })?;
                 let completion = event_completion(&nodes, location.event_domain_id())?;
                 let dependencies = source
+                    .0
                     .completion
                     .map(EventDependency::from_completion)
                     .into_iter()
                     .collect::<Vec<_>>();
-                nodes.push(ScheduledNode::Transfer(ScheduledTransfer::new(
+                nodes.push(ScheduledNode::Transfer(ScheduledTransfer::with_provider(
                     slot,
-                    source.location,
+                    source.0.location,
                     location.clone(),
+                    source.1,
                     dependencies,
                     completion,
                 )));
@@ -651,22 +755,60 @@ impl ScheduledGraph {
             }
         }
 
-        Ok(Self {
+        let graph = Self {
             nodes: nodes.into_boxed_slice(),
             input_slots: program.input_slots.clone().into_boxed_slice(),
             output_slots: program.output_slots.clone().into_boxed_slice(),
             value_count: program.n_slots,
-        })
+            root_location,
+            input_locations: input_locations.to_vec().into_boxed_slice(),
+            operation_locations: operation_locations.to_vec().into_boxed_slice(),
+        };
+        graph
+            .validate()
+            .map_err(|source| ScheduleBuildError::InvalidSchedule { source })?;
+        Ok(graph)
     }
 
     #[cfg(test)]
     pub(crate) fn for_test(nodes: Vec<ScheduledNode>) -> Self {
         let value_count = nodes.len();
+        let root_location = nodes
+            .iter()
+            .find_map(|node| match node {
+                ScheduledNode::Operation(operation) => Some(operation.location().clone()),
+                ScheduledNode::Transfer(transfer) => Some(transfer.destination_location().clone()),
+                ScheduledNode::Collective(_) | ScheduledNode::Barrier(_) => None,
+            })
+            .unwrap_or_else(|| {
+                ExecutionLocation::new(
+                    EngineId::new("tenferro-test.schedule-fallback-engine")
+                        .expect("test engine id"),
+                    super::ProviderDeviceIdentity::new(
+                        super::ProviderId::new("tenferro.test.schedule").expect("test provider id"),
+                        "fallback",
+                    )
+                    .expect("test provider target"),
+                    EventDomainId::runtime_created_for_test(
+                        RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+                        RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+                        RegistrationIdentity::new(
+                            NonZeroU64::new(1).expect("registration issuer"),
+                            NonZeroU64::new(1).expect("registration ordinal"),
+                        ),
+                    ),
+                    StorageClass::new("tenferro-test.schedule-fallback-storage")
+                        .expect("test storage class"),
+                )
+            });
         Self {
             nodes: nodes.into_boxed_slice(),
             input_slots: Box::new([]),
             output_slots: Box::new([]),
             value_count,
+            root_location,
+            input_locations: Box::new([]),
+            operation_locations: Box::new([]),
         }
     }
 
@@ -703,10 +845,18 @@ impl ScheduledGraph {
                     }
                 }
                 ScheduledNode::Collective(collective) => {
-                    let _ = collective.completion().domain();
+                    if collective.completion().domain() != collective.location().event_domain_id() {
+                        return Err(ScheduleValidationError::CompletionEventDomainMismatch {
+                            index,
+                        });
+                    }
                 }
                 ScheduledNode::Barrier(barrier) => {
-                    let _ = barrier.completion().domain();
+                    if barrier.completion().domain() != barrier.location().event_domain_id() {
+                        return Err(ScheduleValidationError::CompletionEventDomainMismatch {
+                            index,
+                        });
+                    }
                 }
             }
             if node
@@ -723,12 +873,6 @@ impl ScheduledGraph {
         Ok(())
     }
 
-    pub(crate) fn validate_for_runtime(&self) -> crate::Result<()> {
-        self.validate().map_err(|source| {
-            Error::runtime_state_source("ScheduledGraph::validate", ErrorPhase::Execution, source)
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn contains_collective(&self) -> bool {
         self.nodes
@@ -738,6 +882,32 @@ impl ScheduledGraph {
 
     pub(crate) fn nodes(&self) -> &[ScheduledNode] {
         &self.nodes
+    }
+
+    pub(crate) fn root_location(&self) -> &ExecutionLocation {
+        &self.root_location
+    }
+
+    pub(crate) fn input_locations(&self) -> &[ExecutionLocation] {
+        &self.input_locations
+    }
+
+    pub(crate) fn operation_locations(&self) -> &[ExecutionLocation] {
+        &self.operation_locations
+    }
+
+    /// Reject non-executable node kinds before any provider event-domain run
+    /// is acquired. Preparation currently emits operations, transfers, and
+    /// no-op barriers; collective execution remains unsupported.
+    pub(crate) fn preflight(&self) -> Result<(), SchedulePreflightError> {
+        if let Some(index) = self
+            .nodes
+            .iter()
+            .position(|node| matches!(node, ScheduledNode::Collective(_)))
+        {
+            return Err(SchedulePreflightError::UnsupportedCollective { index });
+        }
+        Ok(())
     }
 
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
@@ -758,15 +928,18 @@ impl ScheduledGraph {
                 .len()
                 .checked_mul(std::mem::size_of::<usize>())?,
             self.value_count.checked_mul(std::mem::size_of::<usize>())?,
+            self.input_locations
+                .len()
+                .checked_mul(std::mem::size_of::<ExecutionLocation>())?,
+            self.operation_locations
+                .len()
+                .checked_mul(std::mem::size_of::<ExecutionLocation>())?,
         ])
     }
 
     #[cfg(test)]
     pub(crate) fn execute_for_test(&self) -> Result<(), ScheduleExecutionError> {
-        if self.contains_collective() {
-            return Err(ScheduleExecutionError::UnsupportedCollective);
-        }
-        Ok(())
+        self.preflight()
     }
 
     #[cfg(test)]
@@ -799,6 +972,11 @@ pub(crate) enum ScheduleValidationError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScheduleBuildError {
+    #[error("schedule construction produced an invalid immutable schedule")]
+    InvalidSchedule {
+        #[source]
+        source: ScheduleValidationError,
+    },
     #[error("schedule has {actual} input locations for {expected} program inputs")]
     InputLocationCountMismatch { expected: usize, actual: usize },
     #[error(
@@ -830,23 +1008,30 @@ pub(crate) enum ScheduleBuildError {
     EventSlotExhausted,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchedulePreflightError {
+    #[error("scheduled node {index} is a collective, but collective execution is unsupported")]
+    UnsupportedCollective { index: usize },
+}
+
+#[cfg(test)]
+type ScheduleExecutionError = SchedulePreflightError;
+
 #[cfg(test)]
 #[derive(Debug)]
-pub(crate) enum ScheduleExecutionError {
-    UnsupportedCollective,
-}
+struct TestScheduledTransferProvider;
 
 #[cfg(test)]
-impl fmt::Display for ScheduleExecutionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedCollective => formatter.write_str("collective execution unsupported"),
-        }
+impl super::TransferProvider for TestScheduledTransferProvider {
+    fn transfer_blocking(
+        &self,
+        _request: super::TransferRequest<'_>,
+    ) -> crate::Result<tenferro_tensor::Tensor> {
+        Err(crate::Error::Internal(
+            "scheduled test transfer provider".into(),
+        ))
     }
 }
-
-#[cfg(test)]
-impl StdError for ScheduleExecutionError {}
 
 fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
     values
