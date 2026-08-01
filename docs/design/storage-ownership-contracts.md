@@ -243,6 +243,15 @@ The runner emits a candidate-bound receipt containing:
 }
 ```
 
+The receipt top-level key set is exactly `schema`, `base_commit`,
+`candidate_commit`, `base_manifest_sha256`, `candidate_manifest_sha256`, and
+`executions`. None is optional, and no `terminal`, status, or other parallel
+state field is permitted. The RED suite removes each required field in turn
+and adds one `terminal` field; every mutation requires `E_RECEIPT_SHAPE` with
+exactly string fields `field`, `expected`, and `actual` plus a non-empty human
+message. Missing fields report `expected = "present"`, `actual = "missing"`;
+the extra field reports `expected = "absent"`, `actual = "present"`.
+
 The runner executes each active typed command exactly once, passes the exact
 artifact binding, and records one result per active obligation. Every
 execution must bind the manifest-derived `obligation_id`, `artifact_id`, and
@@ -430,7 +439,8 @@ The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSIO
 `E_COMMAND_ARGV_PATH_ESCAPE`, `E_COMMAND_CWD_SYMLINK_ESCAPE`,
 `E_COMMAND_ARGV_SYMLINK_ESCAPE`, `E_COMMAND_ARTIFACT_BINDING`,
 `E_COMMAND_TARGET_BINDING`, `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`,
-`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_MANIFEST_DIGEST`,
+`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_SHAPE`,
+`E_RECEIPT_MANIFEST_DIGEST`,
 `E_RECEIPT_DIGEST`, `E_RECEIPT_PATH_IDENTITY`, `E_RECEIPT_EXECUTION_BINDING`,
 `E_RECEIPT_INCOMPLETE`, and
 `E_RECEIPT_OBSERVATION_BINDING`, `E_TERMINAL_DECLARED`. Command kinds have an
@@ -483,22 +493,37 @@ coordinate and length-case coverage sets and multiplicities.
 
 After the frozen legacy predicate is false, the atomic migration assertion
 lexically inventories every regular `scripts/**/*.py` and `scripts/**/*.toml`
-file, including renamed or moved tooling. It rejects the v1 schema, parser
-models/functions, table keys, compatibility flags/modes, and old checker/test
-suite paths. This inventory is text-only deletion-debt evidence: it does not
-parse, load, or execute a v1 manifest and is not a v1 compatibility parser.
+file, including renamed or moved tooling. Exact storage-v1 schema signatures
+remain forbidden wherever found. Generic words such as `fixtures`, `legacy`,
+`v1`, or compatibility flags are examined only when the file path or source
+also carries a storage-ownership tooling anchor; they are not global filename
+or vocabulary bans. Old parser/model/table/suite signatures use the same
+storage-specific co-occurrence rule. The exact old suite path is always
+forbidden, while the canonical checker path is required and its v2 identity is
+proved by the exact CLI schema probe rather than source spelling. This
+inventory is text-only deletion-debt evidence: it does not parse, load, or
+execute a v1 manifest and is not a v1 compatibility parser.
+
 The only allowances are exact path+token entries for the schema-only negative
 fixture, the canonical checker path, and explicitly enumerated legacy
 rejection constants/test strings in this v2 RED suite. Each allowance has a
 purpose and frozen occurrence count; a new occurrence or missing occurrence
-is an allowlist-drift failure. Temporary-tree tests cover clean v2 tooling and
-renamed checker, suite, TOML, parser, and compatibility-shim surfaces.
+is an allowlist-drift failure. Temporary-tree tests cover clean v2 tooling,
+renamed checker/suite/TOML/parser/shim surfaces with explicit storage anchors,
+and unrelated tooling that legitimately uses fixture, legacy, v1, and
+compatibility vocabulary without producing a violation.
 
 The exact-legacy branch raises the typed migration RED before this inventory
 runs. Any partial migration therefore enters the post-migration assertions and
 is an unexpected failure. The atomic implementation commit must delete the
-four frozen v1 SHA-256 values, their exact-quartet predicate, and the
-`v2-atomic-migration-not-landed` expected event; none is a compatibility path.
+four frozen v1 SHA-256 values, `LEGACY_V1_QUARTET_SHA256`,
+`_legacy_tooling_is_current`, `MIGRATION_CAUSE`, the literal migration-cause
+slug, and its `RED_EXPECTED_FAILURES` event; none is a compatibility path. An
+independent post-migration source assertion constructs the string/hash removal
+targets from split pieces so it does not preserve them itself. A separate exact
+runtime membership assertion rejects the migration test's registry event
+regardless of source spelling. Mutation self-tests prove that retaining any
+one source target or the registry event is detected.
 
 The RED command emits a machine-readable
 `tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
@@ -510,7 +535,18 @@ duplicate event, wrong exception/cause, skipped required test, or missing
 expected event makes the RED harness itself fail, so an implementation cannot
 relabel an unexpected regression as intentional.
 
-The base RED snapshot has completed P0, P1, and P2. P4 and P5 remain deferred;
+The base RED snapshot has completed P0, P1, and P2. All 15 entries in the
+canonical deferred-obligation tuple remain deferred. For every entry the RED
+suite verifies exact obligation ID, unit, gates, artifact ID/path/kind,
+deferred owner/activation phase and in-place promotion identity, plus command
+ID/kind/argv/cwd/path arguments and artifact binding before considering
+execution. The expected artifact-missing subtest registry is derived directly
+from that tuple. If an artifact exists, only the already-validated canonical
+argv is executed from its exact canonical cwd; a fabricated file alone cannot
+promote the obligation, and changed artifact or command identity is rejected.
+No command from a noncanonical manifest is executed.
+
+P4 and P5 remain deferred;
 the CUTOVER candidate activates every required P4/P5 obligation and obtains
 successful runner evidence before atomically activating all P3/P9 obligations.
 In particular, the canonical obligation set includes:

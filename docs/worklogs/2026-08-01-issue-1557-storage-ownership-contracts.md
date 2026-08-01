@@ -350,16 +350,53 @@ recorded receipt claim as `actual`; path-identity diagnostics use the
 receipt-time resolved path as `expected` and the post-receipt resolved path as
 `actual`.
 
+The final Phase 1 RED remediation closes four spec-review gaps. The atomic
+migration branch now inventories the v2 suite itself for every temporary
+migration sentinel: all four frozen SHA-256 values, the quartet constant and
+predicate, the migration-cause constant and literal slug, and its expected RED
+registry event. The independent source assertion and its mutation self-tests
+build string/hash targets from split pieces, so the proof does not retain a
+forbidden literal merely by naming it. Exact runtime dictionary membership
+separately detects the registry event regardless of source spelling. The
+atomic implementation commit must delete all of these sentinels together;
+current exact-quartet behavior remains the sole typed migration RED.
+
+The tooling inventory now distinguishes storage-specific evidence from
+ordinary vocabulary. Exact retired storage signatures and the old suite path
+remain forbidden, while generic fixture/legacy/v1/compatibility terms require
+a storage-ownership path or source anchor. Temporary trees prove renamed and
+moved storage checker/suite/parser/TOML/shim evidence is rejected with exact
+path/token records, the canonical checker path is required, and unrelated
+scripts using the same generic words and flags remain clean. The canonical
+checker is proved v2 by its exact CLI probe, not by a source-spelling rule. The
+inventory remains a lexical deletion-debt scanner, never a v1 parser or
+compatibility mode.
+
+The receipt envelope is frozen to exactly `schema`, `base_commit`,
+`candidate_commit`, `base_manifest_sha256`, `candidate_manifest_sha256`, and
+`executions`. Each required field has its own `{case, field}` missing-field RED
+subtest, and one extra `terminal` case rejects a second status authority.
+`E_RECEIPT_SHAPE` carries exact string `field`, `expected`, and `actual` values
+plus a non-empty message; self-tests reject missing or wrong diagnostic fields.
+
+Finally, future proof coverage is derived from all 15 canonical
+`DEFERRED_OBLIGATIONS`, not a second three-item list. Every subtest validates
+the complete unit/gate/artifact/state/command contract before reporting the
+exact future-artifact cause or executing an existing artifact's canonical
+command from its canonical cwd. Existing-file-only promotion remains rejected,
+and promotion identity now has separate artifact and command mutation cases,
+so a noncanonical manifest cannot supply an arbitrary command for execution.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 63 tests and
-  reports exactly 202 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 68 tests and
+  reports exactly 222 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (167
-  events), v2 runner absent (31 events), future production proof artifacts
-  absent (3 events), and atomic v2 migration not landed (1 event). The event
+  skipped tests. The causes are machine-readable: v2 checker absent (168
+  events), v2 runner absent (38 events), future production proof artifacts
+  absent (15 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
   subtest parameters as a multiset. The required symlink capability test
   passes on this host; an unsupported host would add an unexpected capability
@@ -378,9 +415,11 @@ inventory, trybuild, parity, docs, and repository quality gates.
   registry, delete/replace the v1 checker parser and test suite, and reduce
   the legacy fixture to schema-only rejection. Do not add a v1 compatibility
   parser or retain the old tooling as a supported path. It must also delete
-  the frozen quartet hashes/predicate and the
-  `v2-atomic-migration-not-landed` expected event; those are temporary RED-only
-  sentinels, not a compatibility surface.
+  all four frozen quartet hashes, `LEGACY_V1_QUARTET_SHA256`,
+  `_legacy_tooling_is_current`, `MIGRATION_CAUSE`, its literal cause slug, and
+  the corresponding expected RED event. The post-migration assertions prove
+  their absence; these are temporary RED-only sentinels, not a compatibility
+  surface.
 - Keep the production-manifest equality assertion coupled to the sole machine
   registry and the independent `UNITS`/`EDGES`/obligation verifier
   expectations; do not weaken it to schema or checker-exit checks.

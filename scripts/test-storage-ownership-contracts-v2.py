@@ -36,6 +36,7 @@ V1_TEST_SUITE = ROOT / "scripts" / "test-check-storage-ownership-contracts.py"
 V2_RED_SUITE = ROOT / "scripts" / "test-storage-ownership-contracts-v2.py"
 CHECKER_RELATIVE = CHECKER.relative_to(ROOT).as_posix()
 LEGACY_FIXTURE_RELATIVE = LEGACY_V1_MANIFEST_FIXTURE.relative_to(ROOT).as_posix()
+V1_TEST_SUITE_RELATIVE = V1_TEST_SUITE.relative_to(ROOT).as_posix()
 V2_RED_SUITE_RELATIVE = V2_RED_SUITE.relative_to(ROOT).as_posix()
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
@@ -58,6 +59,16 @@ OBSERVATION_FIELDS = frozenset(
     }
 )
 EXECUTABLE_IDENTITY_FIELDS = frozenset({"requested", "resolved", "sha256"})
+RECEIPT_FIELDS = frozenset(
+    {
+        "schema",
+        "base_commit",
+        "candidate_commit",
+        "base_manifest_sha256",
+        "candidate_manifest_sha256",
+        "executions",
+    }
+)
 RECEIPT_EXECUTION_FIELDS = frozenset(
     {
         "obligation_id",
@@ -213,42 +224,42 @@ STORAGE_TOOLING_INVENTORY_ALLOWLIST = (
         V2_RED_SUITE_RELATIVE,
         '"fixtures"',
         "v2 RED enumerates and tests the removed fixtures table",
-        6,
+        7,
     ),
     _InventoryAllowlistEntry(
         "content",
         V2_RED_SUITE_RELATIVE,
         '"fixture_suites"',
         "v2 RED enumerates and tests the removed fixture_suites table",
-        5,
+        6,
     ),
     _InventoryAllowlistEntry(
         "content",
         V2_RED_SUITE_RELATIVE,
         '"source_scans"',
         "v2 RED enumerates and tests the removed source_scans table",
-        4,
+        5,
     ),
     _InventoryAllowlistEntry(
         "content",
         V2_RED_SUITE_RELATIVE,
         '"source_inventory"',
         "v2 RED enumerates and tests the removed source_inventory table",
-        4,
+        5,
     ),
     _InventoryAllowlistEntry(
         "content",
         V2_RED_SUITE_RELATIVE,
         "compatibility_mode",
         "v2 RED proves and tests the legacy compatibility mode is absent",
-        4,
+        5,
     ),
     _InventoryAllowlistEntry(
         "content",
         V2_RED_SUITE_RELATIVE,
         "test-check-storage-ownership-contracts.py",
         "v2 RED names and rejects the old suite as a migration-removal target",
-        3,
+        2,
     ),
     _InventoryAllowlistEntry(
         "content",
@@ -273,8 +284,10 @@ STORAGE_TOOLING_INVENTORY_ALLOWLIST = (
     ),
 )
 
-STORAGE_TOOLING_INVENTORY_CONTENT_RULES = (
+STORAGE_TOOLING_SPECIFIC_CONTENT_RULES = (
     (LEGACY_SCHEMA, "legacy manifest schema"),
+)
+STORAGE_TOOLING_ANCHORED_CONTENT_RULES = (
     ("TOP_LEVEL_KEYS = frozenset", "legacy top-level parser key set"),
     ("class FixtureSuite", "legacy fixture-suite model"),
     ("def _fixture_rows(", "legacy fixture parser"),
@@ -300,17 +313,10 @@ STORAGE_TOOLING_INVENTORY_CONTENT_RULES = (
     ("v1_compat", "legacy compatibility variable"),
     ("class CheckerTests(unittest.TestCase)", "legacy v1 test suite"),
 )
-STORAGE_TOOLING_INVENTORY_PATH_RULES = (
-    ("v1", "legacy versioned tooling path"),
-    ("legacy", "legacy-named tooling path"),
-    (
-        "test-check-storage-ownership-contracts.py",
-        "legacy v1 test-suite path",
-    ),
-    (
-        "check-storage-ownership-contracts.py",
-        "canonical checker path requiring v2 content",
-    ),
+STORAGE_TOOLING_SOURCE_ANCHORS = (
+    "storage-ownership-contracts",
+    "storage_ownership_contracts",
+    "tenferro.storage-ownership",
 )
 
 
@@ -388,6 +394,28 @@ def _legacy_tooling_is_current() -> bool:
     return True
 
 
+def _post_migration_sentinel_violations(source: str) -> list[str]:
+    """Return RED-only migration sentinels still present in the v2 suite."""
+    targets = (
+        "7694da2a07fb702c" + "dc0e2003eeff6b2610d1b8714cd19f78a04b07e4c9082fcf",
+        "91ab78217adbb74f" + "8f6bf55a48ec6bb0c6c7eea17b9c51251dcdc092627dc718",
+        "e4dbf32d274f7671" + "430a7a1e474016337b60fcab555087e2d111d093acccbdfe",
+        "fed8c80e0e5b8969" + "f18a46f729644bad267adeb8a137499638d3a4926ed1b2ec",
+        "LEGACY_V1_" + "QUARTET_SHA256",
+        "_legacy_tooling_" + "is_current",
+        "MIGRATION_" + "CAUSE",
+        "v2-atomic-migration-" + "not-landed",
+    )
+    return [target for target in targets if target in source]
+
+
+def _post_migration_red_event_violations(
+    registry: dict[str, object], atomic_test_name: str
+) -> list[str]:
+    """Return the atomic migration test if its temporary RED event remains."""
+    return [atomic_test_name] if atomic_test_name in registry else []
+
+
 def _inventory_allowlisted(kind: str, relative_path: str, token: str) -> bool:
     return any(
         entry.kind == kind
@@ -401,27 +429,48 @@ def _storage_tooling_inventory(root: Path) -> list[tuple[str, str]]:
     """Lexically inventory removed storage tooling; never parse or execute it."""
     scripts_root = root / "scripts"
     violations: list[tuple[str, str]] = []
+    checker_path = root / CHECKER_RELATIVE
+    if not checker_path.is_file():
+        violations.append((CHECKER_RELATIVE, "<missing-canonical-v2-checker>"))
     if not scripts_root.is_dir():
         return violations
     for path in sorted(scripts_root.rglob("*"), key=lambda candidate: candidate.as_posix()):
         if not path.is_file() or path.suffix not in {".py", ".toml"}:
             continue
         relative_path = path.relative_to(root).as_posix()
-        for token, _purpose in STORAGE_TOOLING_INVENTORY_PATH_RULES:
-            if token in relative_path and not _inventory_allowlisted(
-                "path", relative_path, token
-            ):
-                violations.append((relative_path, token))
+        if relative_path == V1_TEST_SUITE_RELATIVE:
+            violations.append((relative_path, relative_path))
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             violations.append((relative_path, "<unreadable>"))
             continue
-        for token, _purpose in STORAGE_TOOLING_INVENTORY_CONTENT_RULES:
+        is_schema_only_negative_fixture = (
+            relative_path == LEGACY_FIXTURE_RELATIVE
+            and source.strip() == f'schema = "{LEGACY_SCHEMA}"'
+        )
+        storage_anchored = any(
+            anchor in relative_path or anchor in source
+            for anchor in STORAGE_TOOLING_SOURCE_ANCHORS
+        )
+        for token, _purpose in STORAGE_TOOLING_SPECIFIC_CONTENT_RULES:
+            if is_schema_only_negative_fixture and token == LEGACY_SCHEMA:
+                continue
             if token in source and not _inventory_allowlisted(
                 "content", relative_path, token
             ):
                 violations.append((relative_path, token))
+        if storage_anchored:
+            for token, _purpose in STORAGE_TOOLING_ANCHORED_CONTENT_RULES:
+                if token in source and not _inventory_allowlisted(
+                    "content", relative_path, token
+                ):
+                    violations.append((relative_path, token))
+            for token in ("v1", "legacy"):
+                if token in relative_path and not _inventory_allowlisted(
+                    "path", relative_path, token
+                ):
+                    violations.append((relative_path, token))
     return violations
 
 
@@ -829,6 +878,7 @@ DIAGNOSTIC_FIELDS = {
     "E_COMMAND_FAILED": frozenset({"command_id", "exit_code"}),
     "E_PROMOTION_IDENTITY": frozenset({"obligation_id"}),
     "E_RECEIPT_COMMIT": frozenset({"actual_head"}),
+    "E_RECEIPT_SHAPE": frozenset({"field", "expected", "actual"}),
     "E_RECEIPT_MANIFEST_DIGEST": frozenset({"field", "expected", "actual"}),
     "E_RECEIPT_DIGEST": frozenset(
         {"obligation_id", "field", "expected", "actual"}
@@ -852,6 +902,11 @@ DIAGNOSTIC_FIELD_TYPES = {
         "actual": int,
     },
     "E_RECEIPT_MANIFEST_DIGEST": {
+        "field": str,
+        "expected": str,
+        "actual": str,
+    },
+    "E_RECEIPT_SHAPE": {
         "field": str,
         "expected": str,
         "actual": str,
@@ -891,9 +946,7 @@ RED_EXPECTED_FAILURES = {
     "test_canonical_future_lifecycle_proof_commands_execute": {
         "cause": "future-production-proof-artifact-not-landed",
         "subtests": [
-            {"obligation_id": "p4-production-borrow-contract"},
-            {"obligation_id": "p3-auto-trait-contract"},
-            {"obligation_id": "p4-provider-release-lifecycle"},
+            {"obligation_id": row[0]} for row in DEFERRED_OBLIGATIONS
         ],
     },
     "test_canonical_graph_keeps_p0_p1_roots_and_p2_only_depends_on_p1": {
@@ -989,6 +1042,7 @@ RED_EXPECTED_FAILURES = {
     },
     "test_promotion_rejects_artifact_or_command_identity_change": {
         "cause": "v2-checker-not-implemented",
+        "subtests": [{"case": "artifact"}, {"case": "command"}],
     },
     "test_real_symlink_escape_is_rejected": {
         "cause": "v2-checker-not-implemented",
@@ -1014,6 +1068,14 @@ RED_EXPECTED_FAILURES = {
             {"field": "observation_nonce"},
             {"field": "observation_challenge"},
         ],
+    },
+    "test_receipt_envelope_missing_and_extra_fields_are_rejected": {
+        "cause": "v2-runner-not-implemented",
+        "subtests": [
+            {"case": "missing-field", "field": field}
+            for field in sorted(RECEIPT_FIELDS)
+        ]
+        + [{"case": "extra-field", "field": "terminal"}],
     },
     "test_runner_cli_schema_probe_is_required": {
         "cause": "v2-runner-not-implemented",
@@ -1861,6 +1923,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         self.assertIsInstance(receipt, dict)
+        self.assertEqual(set(receipt), RECEIPT_FIELDS)
         self.assertEqual(receipt.get("schema"), "tenferro.storage-ownership-receipt.v1")
         _receipt_executions(receipt)
         return base_commit, candidate_commit, candidate, receipt_path, receipt
@@ -2135,6 +2198,24 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         if _legacy_tooling_is_current():
             raise RedExpectedFailure(MIGRATION_CAUSE)
 
+        self.assertTrue(V2_RED_SUITE.is_file())
+        event_violations = _post_migration_red_event_violations(
+            RED_EXPECTED_FAILURES, self._testMethodName
+        )
+        self.assertEqual(
+            event_violations,
+            [],
+            f"temporary migration RED event retained: {event_violations}",
+        )
+        sentinel_violations = _post_migration_sentinel_violations(
+            V2_RED_SUITE.read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            sentinel_violations,
+            [],
+            f"temporary RED migration sentinels retained: {sentinel_violations}",
+        )
+
         _require_v2_checker()
         _require_v2_runner()
 
@@ -2152,7 +2233,6 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             f"intentional inventory allowlist drift: {allowlist_drift}",
         )
 
-        self.assertTrue(V2_RED_SUITE.is_file())
         self.assertFalse(V1_TEST_SUITE.exists())
 
         self.assertTrue(LEGACY_V1_MANIFEST_FIXTURE.is_file())
@@ -2177,16 +2257,19 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             ),
             (
                 "scripts/renamed_suite.py",
+                "# storage-ownership-contracts retired suite\n"
                 "class CheckerTests(unittest.TestCase):\n    pass\n",
                 "class CheckerTests(unittest.TestCase)",
             ),
             (
                 "scripts/hidden_compatibility_shim.py",
+                "# storage-ownership-contracts compatibility shim\n"
                 'parser.add_argument("--compatibility-mode", action="store_true")\n',
                 "--compatibility-mode",
             ),
             (
                 "scripts/moved_table_parser.py",
+                "# storage-ownership-contracts table parser\n"
                 'TOP_LEVEL_KEYS = frozenset({"fixtures", "fixture_suites"})\n',
                 "TOP_LEVEL_KEYS = frozenset",
             ),
@@ -2194,6 +2277,11 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 "scripts/moved_manifest.toml",
                 f'schema = "{LEGACY_SCHEMA}"\n[[fixtures]]\nid = "old"\n',
                 "[[fixtures]]",
+            ),
+            (
+                V1_TEST_SUITE_RELATIVE,
+                "# retired storage suite path\n",
+                V1_TEST_SUITE_RELATIVE,
             ),
         )
         for relative_path, source, token in cases:
@@ -2203,6 +2291,17 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     _write_files(root, {relative_path: source})
                     violations = _storage_tooling_inventory(root)
                     self.assertIn((relative_path, token), violations)
+
+    def test_post_migration_inventory_requires_canonical_checker_path(self) -> None:
+        for case in ("empty-tree", "unrelated-script"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                if case == "unrelated-script":
+                    _write_files(root, {"scripts/unrelated.py": "value = 1\n"})
+                self.assertIn(
+                    (CHECKER_RELATIVE, "<missing-canonical-v2-checker>"),
+                    _storage_tooling_inventory(root),
+                )
 
     def test_post_migration_inventory_accepts_clean_v2_only_tooling(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2228,6 +2327,67 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 },
             )
             self.assertEqual(_storage_tooling_inventory(root), [])
+
+    def test_post_migration_inventory_ignores_unrelated_generic_legacy_vocabulary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_files(
+                root,
+                {
+                    "scripts/check-storage-ownership-contracts.py": (
+                        f'SCHEMA = "{SCHEMA}"\n'
+                    ),
+                    "scripts/legacy/v1_fixture_report.py": (
+                        'report = {"fixtures": ["sample"], '
+                        '"fixture_suites": ["unit"], '
+                        '"source_scans": ["docs"], '
+                        '"source_inventory": ["assets"]}\n'
+                        'flags = ("--legacy", "--compatibility-mode", "--v1")\n'
+                        "v1_compat = allow_legacy = compatibility_mode = False\n"
+                    ),
+                    "scripts/unrelated-fixtures.toml": (
+                        'schema = "example.v1"\n'
+                        '[[fixtures]]\nname = "sample"\n'
+                        '[[fixture_suites]]\nname = "unit"\n'
+                        '[[source_scans]]\nname = "docs"\n'
+                        '[[source_inventory]]\nname = "assets"\n'
+                    ),
+                },
+            )
+            self.assertEqual(_storage_tooling_inventory(root), [])
+
+    def test_post_migration_sentinel_inventory_detects_each_retained_target(
+        self,
+    ) -> None:
+        hashes = (
+            "7694da2a07fb702c" + "dc0e2003eeff6b2610d1b8714cd19f78a04b07e4c9082fcf",
+            "91ab78217adbb74f" + "8f6bf55a48ec6bb0c6c7eea17b9c51251dcdc092627dc718",
+            "e4dbf32d274f7671" + "430a7a1e474016337b60fcab555087e2d111d093acccbdfe",
+            "fed8c80e0e5b8969" + "f18a46f729644bad267adeb8a137499638d3a4926ed1b2ec",
+        )
+        targets = (
+            *hashes,
+            "LEGACY_V1_" + "QUARTET_SHA256",
+            "_legacy_tooling_" + "is_current",
+            "MIGRATION_" + "CAUSE",
+            "v2-atomic-migration-" + "not-landed",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertEqual(
+                    _post_migration_sentinel_violations(f"prefix\n{target}\nsuffix\n"),
+                    [target],
+                )
+        event_name = "test_atomic_v2_migration_" + "removes_legacy_surface"
+        self.assertEqual(
+            _post_migration_red_event_violations(
+                {event_name: {"cause": "temporary"}}, event_name
+            ),
+            [event_name],
+        )
+        self.assertEqual(_post_migration_red_event_violations({}, event_name), [])
 
     def test_storage_tooling_inventory_allowlist_has_no_repository_drift(self) -> None:
         self.assertEqual(_storage_tooling_allowlist_drift(ROOT), [])
@@ -2312,6 +2472,44 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                         fields=expected_fields,
                     )
 
+    def test_receipt_shape_diagnostic_requires_exact_fields(self) -> None:
+        expected_fields = {
+            "field": "base_commit",
+            "expected": "present",
+            "actual": "missing",
+        }
+        payload = {
+            "schema": "tenferro.storage-ownership-diagnostics.v1",
+            "diagnostics": [
+                {
+                    "code": "E_RECEIPT_SHAPE",
+                    "fields": dict(expected_fields),
+                    "message": "receipt field is missing",
+                }
+            ],
+        }
+        valid = subprocess.CompletedProcess(
+            [], 1, stdout=json.dumps(payload), stderr=""
+        )
+        self.assert_result_diagnostic(
+            valid, "E_RECEIPT_SHAPE", fields=expected_fields
+        )
+        for case in ("missing-field", "wrong-field"):
+            with self.subTest(case=case):
+                candidate = json.loads(json.dumps(payload))
+                if case == "missing-field":
+                    del candidate["diagnostics"][0]["fields"]["actual"]
+                else:
+                    candidate["diagnostics"][0]["fields"]["field"] = "terminal"
+                with self.assertRaises(AssertionError):
+                    self.assert_result_diagnostic(
+                        subprocess.CompletedProcess(
+                            [], 1, stdout=json.dumps(candidate), stderr=""
+                        ),
+                        "E_RECEIPT_SHAPE",
+                        fields=expected_fields,
+                    )
+
     def test_nominal_v2_manifest_is_green(self) -> None:
         result = self.run_checker(valid_manifest())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2393,20 +2591,62 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
 
     def test_canonical_future_lifecycle_proof_commands_execute(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
-        for obligation_id in (
-            "p4-production-borrow-contract",
-            "p3-auto-trait-contract",
-            "p4-provider-release-lifecycle",
-        ):
+        deferred_ids = tuple(row[0] for row in DEFERRED_OBLIGATIONS)
+        deferred_id_set = frozenset(deferred_ids)
+        self.assertEqual(
+            tuple(row_id for row_id in rows if row_id in deferred_id_set),
+            deferred_ids,
+        )
+        for canonical in DEFERRED_OBLIGATIONS:
+            (
+                obligation_id,
+                unit,
+                gates,
+                artifact_id,
+                artifact_path,
+                artifact_kind,
+                command_id,
+                command_kind,
+                command_argv,
+                command_path_args,
+            ) = canonical
             with self.subTest(obligation_id=obligation_id):
                 row = rows[obligation_id]
-                artifact = ROOT / row["artifact"]["path"]
+                self.assertEqual(row["unit"], unit)
+                self.assertEqual(row["gates"], list(gates))
+                self.assertEqual(
+                    row["artifact"],
+                    {
+                        "id": artifact_id,
+                        "kind": artifact_kind,
+                        "path": artifact_path,
+                    },
+                )
+                self.assertEqual(
+                    row["state"],
+                    {
+                        "kind": "deferred",
+                        "activation_unit": unit,
+                        "promotion": {"mode": "activate-in-place"},
+                    },
+                )
+                self.assertEqual(
+                    row["command"],
+                    {
+                        "id": command_id,
+                        "kind": command_kind,
+                        "argv": list(command_argv),
+                        "cwd": ".",
+                        "path_args": list(command_path_args),
+                        "artifact_id": artifact_id,
+                    },
+                )
+                artifact = ROOT / artifact_path
                 if not artifact.is_file():
                     raise RedExpectedFailure(FUTURE_ARTIFACT_CAUSE)
-                command = row["command"]
                 result = subprocess.run(
-                    command["argv"],
-                    cwd=ROOT / command["cwd"],
+                    list(command_argv),
+                    cwd=ROOT / row["command"]["cwd"],
                     text=True,
                     capture_output=True,
                     check=False,
@@ -3179,46 +3419,64 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             )
 
     def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
-        _require_v2_checker()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            base = valid_manifest()
-            base_commit = _init_git_repository(root, base, files=repository_files())
-            candidate = valid_manifest(
-                deferred_override={"p3-host-owner": "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"},
-                promote=CUTOVER_CANDIDATE_OBLIGATIONS,
-            )
-            _materialize_active_artifacts(root, candidate)
-            changed = root / "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"
-            changed.parent.mkdir(parents=True, exist_ok=True)
-            changed.write_text("fn changed_contract() {}\n", encoding="utf-8")
-            (root / "scripts/storage-ownership-contracts.toml").write_text(candidate, encoding="utf-8")
-            _commit(root, "changed immutable identity")
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(CHECKER),
-                    "--root",
-                    str(root),
-                    "--manifest",
-                    "scripts/storage-ownership-contracts.toml",
-                    "--base-commit",
-                    base_commit,
-                    "--diagnostics-json",
-                ],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-        self.assert_result_diagnostic(
-            result, "E_PROMOTION_IDENTITY", fields={"obligation_id": "p3-host-owner"}
-        )
+        for case in ("artifact", "command"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                _require_v2_checker()
+                root = Path(temporary)
+                base = valid_manifest()
+                base_commit = _init_git_repository(root, base, files=repository_files())
+                candidate = valid_manifest(
+                    deferred_override=(
+                        {
+                            "p3-host-owner": (
+                                "crates/tenferro-tensor/tests/ui/storage/fail/changed.rs"
+                            )
+                        }
+                        if case == "artifact"
+                        else None
+                    ),
+                    promote=CUTOVER_CANDIDATE_OBLIGATIONS,
+                )
+                if case == "command":
+                    candidate = _replace_in_obligation(
+                        candidate,
+                        "p3-host-owner",
+                        '"storage_compile_contract"]',
+                        '"forged_storage_compile_contract"]',
+                    )
+                _materialize_active_artifacts(root, candidate)
+                (root / "scripts/storage-ownership-contracts.toml").write_text(
+                    candidate, encoding="utf-8"
+                )
+                _commit(root, "changed immutable identity")
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(CHECKER),
+                        "--root",
+                        str(root),
+                        "--manifest",
+                        "scripts/storage-ownership-contracts.toml",
+                        "--base-commit",
+                        base_commit,
+                        "--diagnostics-json",
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assert_result_diagnostic(
+                    result,
+                    "E_PROMOTION_IDENTITY",
+                    fields={"obligation_id": "p3-host-owner"},
+                )
 
     def test_runner_emits_exact_candidate_bound_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base_commit, candidate_commit, candidate, _, receipt = self.emit_runner_receipt(root)
+            self.assertEqual(set(receipt), RECEIPT_FIELDS)
             log = (root / "runner.log").read_text(encoding="utf-8").splitlines()
             self.assertEqual(receipt["base_commit"], base_commit)
             self.assertEqual(receipt["candidate_commit"], candidate_commit)
@@ -3305,6 +3563,37 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             for row in DEFERRED_OBLIGATIONS:
                 self.assertNotIn(row[6], log)
                 self.assertNotIn(row[6], observed_command_ids)
+
+    def test_receipt_envelope_missing_and_extra_fields_are_rejected(self) -> None:
+        cases = tuple(
+            ("missing-field", field, "present", "missing")
+            for field in sorted(RECEIPT_FIELDS)
+        ) + (("extra-field", "terminal", "absent", "present"),)
+        for case, field, expected, actual in cases:
+            with self.subTest(
+                case=case, field=field
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base_commit, _, _, receipt_path, receipt = self.emit_runner_receipt(
+                    root
+                )
+                if case == "missing-field":
+                    del receipt[field]
+                else:
+                    receipt[field] = True
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                result = self.run_repository_checker(
+                    root, base_commit, receipt_path, "--diagnostics-json"
+                )
+                self.assert_result_diagnostic(
+                    result,
+                    "E_RECEIPT_SHAPE",
+                    fields={
+                        "field": field,
+                        "expected": expected,
+                        "actual": actual,
+                    },
+                )
 
     def test_runner_executes_canonical_cargo_command_with_path_shim(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
