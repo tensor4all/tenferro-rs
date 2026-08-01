@@ -27,13 +27,18 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "REPOSITORY_RULES.md"
 PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
 MAX_DIFF_CHARS = 120_000
 MAX_FILE_DIFF_CHARS = 40_000
 MAX_FINDINGS_PER_CHUNK = 8
-MAX_ROUTED_SECTION_LINES = 100
+# Inline `#[cfg(test)] mod ... { ... }` blocks are exempt only for genuinely
+# tiny leaf modules (Unit Test Organization).
+INLINE_TEST_EXEMPT_FILE_LINES = 150
+INLINE_TEST_EXEMPT_BLOCK_LINES = 60
+# Section routed for changed paths that match no other trigger.
+FALLBACK_SECTION = "PR Content Hygiene"
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
 )
@@ -215,6 +220,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
                 "Public Surface Drift",
                 "Documentation Policy",
                 "Naming Style",
+                "PR Content Hygiene",
             }
         ),
     ),
@@ -225,6 +231,13 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
                 "File Organization",
                 "Public API Convention",
                 "Generic Over Scalar Type",
+                # Inline `#[cfg(test)]` violations happen in normal src
+                # files, so the unit-test rule must load for every Rust
+                # change, not only for tests paths.
+                "Unit Test Organization",
+                # The doc-example mandate applies to Rust public items, not
+                # only to Markdown changes.
+                "Documentation Policy",
             }
         ),
     ),
@@ -345,9 +358,16 @@ def parse_repository_rules_sections(path: Path = RULES_PATH) -> dict[str, str]:
 def select_rule_sections(files: list[str]) -> list[str]:
     selected = set(ALWAYS_SECTIONS)
     for path in files:
+        matched = False
         for pattern, section_names in SECTION_TRIGGERS:
             if pattern.search(path):
                 selected.update(section_names)
+                matched = True
+        if not matched:
+            # Paths outside every routed area (for example `.superpowers/`)
+            # must still load the PR-content rules instead of being invisible
+            # to review.
+            selected.add(FALLBACK_SECTION)
     return sorted(selected)
 
 
@@ -929,6 +949,477 @@ def runtime_ad_boundary_violations(
     return violations
 
 
+RUST_TEST_PATH = re.compile(r"(^|/)tests(/|\.rs$)|_tests\.rs$|(^|/)benches/|(^|/)examples/")
+INLINE_TEST_MOD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+PUB_ITEM = re.compile(
+    r"^\s*pub\s+(?:async\s+|unsafe\s+|const\s+|extern\s+\"[^\"]*\"\s+)*"
+    r"(fn|struct|enum|trait|type)\s+([A-Za-z_]\w*)"
+)
+AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
+RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# A doc-example line that binds or names a path without calling anything.
+VACUOUS_EXAMPLE_LINE = re.compile(
+    r"^(?:let\s+_\w*\s*(?::[^=]{0,120})?=\s*)?[A-Za-z_][\w:<>]*;$"
+)
+# Boilerplate lines that neither prove nor disprove real usage.
+VACUOUS_IGNORE_LINE = re.compile(r"^(?:use\s|#)")
+CRATE_CARGO_TOML = re.compile(r"^crates/(tenferro-[\w-]+)/Cargo\.toml$")
+DEPENDENCY_DIAGRAM_DOC = "docs/architecture/tenferro-crates.md"
+# Edges to these targets are documented in the "Additional internal
+# dependencies" prose of the architecture doc rather than in the diagram
+# block, so the diagram-sync check skips them.
+DIAGRAM_PROSE_TARGETS = frozenset(
+    {"tenferro-core-ops", "tenferro-internal-extension-macros"}
+)
+
+
+def changed_file_text(path: str, *, ref: str | None, worktree: bool) -> str | None:
+    try:
+        return runtime_boundary_text(path, ref=ref, worktree=worktree)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        # Deleted or unreadable at this ref; nothing to scan.
+        return None
+
+
+def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
+    """Return 1-based (start, end) line spans of inline `#[cfg(test)] mod` blocks."""
+    lines = text.splitlines()
+    total = len(lines)
+    blocks: list[tuple[int, int]] = []
+    index = 0
+    while index < total:
+        if lines[index].strip().startswith("#[cfg(test)]"):
+            probe = index + 1
+            while probe < total and (
+                not lines[probe].strip() or lines[probe].strip().startswith("#[")
+            ):
+                probe += 1
+            if probe < total and INLINE_TEST_MOD.match(lines[probe].strip()):
+                depth = 0
+                end = total - 1
+                in_block_comment = False
+                for cursor in range(probe, total):
+                    code, in_block_comment = strip_code_comments(
+                        lines[cursor], in_block_comment
+                    )
+                    depth += code.count("{") - code.count("}")
+                    if cursor >= probe and depth <= 0:
+                        end = cursor
+                        break
+                blocks.append((index + 1, end + 1))
+                index = end
+        index += 1
+    return blocks
+
+
+def inline_test_module_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs") or RUST_TEST_PATH.search(path):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        file_lines = len(text.splitlines())
+        for start, end in rust_inline_test_blocks(text):
+            block_lines = end - start + 1
+            if not any(start <= line <= end for line in touched):
+                continue
+            if (
+                file_lines < INLINE_TEST_EXEMPT_FILE_LINES
+                and block_lines <= INLINE_TEST_EXEMPT_BLOCK_LINES
+            ):
+                continue
+            findings.append(
+                Finding(
+                    id="inline-test-module",
+                    severity="warn",
+                    rule_section="Unit Test Organization",
+                    file=path,
+                    line=start,
+                    summary=(
+                        "Inline #[cfg(test)] module added or grown in a "
+                        "non-tiny production file"
+                    ),
+                    detail=(
+                        f"{path}:{start} carries an inline test block of "
+                        f"~{block_lines} lines in a {file_lines}-line file. "
+                        "Unit Test Organization requires module-local "
+                        "src/<module>/tests/*.rs files with only "
+                        "`#[cfg(test)] mod tests;` left in the source."
+                    ),
+                )
+            )
+    return findings
+
+
+def rust_private_mod_spans(text: str) -> list[tuple[int, int]]:
+    """Return 1-based line spans of inline modules that are not plain-`pub`.
+
+    Items inside `mod x { ... }` or `pub(crate) mod x { ... }` are not part of
+    the public API even when declared `pub` (the sealed-trait pattern), so the
+    doc-example mandate does not apply to them.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    spans: list[tuple[int, int]] = []
+    for index, raw in enumerate(lines):
+        stripped = raw.strip()
+        match = RUST_MOD_OPEN.match(stripped)
+        if not match:
+            continue
+        if stripped.startswith("pub ") and not stripped.startswith("pub("):
+            continue
+        depth = 0
+        end = total - 1
+        in_block_comment = False
+        for cursor in range(index, total):
+            code, in_block_comment = strip_code_comments(
+                lines[cursor], in_block_comment
+            )
+            depth += code.count("{") - code.count("}")
+            if cursor >= index and depth <= 0:
+                end = cursor
+                break
+        spans.append((index + 1, end + 1))
+    return spans
+
+
+def doc_block_above(lines: list[str], item_index: int) -> tuple[bool, bool]:
+    """Return (has_examples, is_doc_hidden) for the doc/attr block above an item."""
+    has_examples = False
+    hidden = False
+    cursor = item_index - 1
+    while cursor >= 0:
+        stripped = lines[cursor].strip()
+        if stripped.startswith("///"):
+            if "# Examples" in stripped:
+                has_examples = True
+        elif stripped.startswith("#["):
+            if "doc(hidden)" in stripped:
+                hidden = True
+        elif stripped.startswith("//"):
+            # Plain comments may sit between the doc block and the item.
+            pass
+        elif stripped.endswith("]") or stripped.endswith(")]"):
+            # Continuation tail of a multi-line attribute.
+            pass
+        else:
+            break
+        cursor -= 1
+    return has_examples, hidden
+
+
+def missing_doc_example_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs") or RUST_TEST_PATH.search(path):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        skip_spans = rust_inline_test_blocks(text) + rust_private_mod_spans(text)
+        missing: list[str] = []
+        first_line: int | None = None
+        for line_no in sorted(touched):
+            if line_no > len(lines):
+                continue
+            match = PUB_ITEM.match(lines[line_no - 1])
+            if not match:
+                continue
+            if any(start <= line_no <= end for start, end in skip_spans):
+                continue
+            has_examples, hidden = doc_block_above(lines, line_no - 1)
+            if has_examples or hidden:
+                continue
+            missing.append(f"{match.group(1)} {match.group(2)} (line {line_no})")
+            if first_line is None:
+                first_line = line_no
+        if missing:
+            shown = ", ".join(missing[:10])
+            extra = f", +{len(missing) - 10} more" if len(missing) > 10 else ""
+            findings.append(
+                Finding(
+                    id="missing-doc-examples",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=path,
+                    line=first_line,
+                    summary=(
+                        "New public items lack the mandatory /// # Examples "
+                        "doctest"
+                    ),
+                    detail=(
+                        f"{path} adds public items without a `# Examples` "
+                        f"doc section: {shown}{extra}. Every public type, "
+                        "trait, and function must include a runnable doc "
+                        "example."
+                    ),
+                )
+            )
+    return findings
+
+
+def vacuous_doc_example_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs"):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        in_fence = False
+        fence_start = 0
+        fence_code: list[str] = []
+        reported: list[int] = []
+        for line_no, raw in enumerate(lines, start=1):
+            stripped = raw.strip()
+            if not stripped.startswith("///"):
+                in_fence = False
+                fence_code = []
+                continue
+            body = stripped[3:].strip()
+            if body.startswith("```"):
+                if in_fence:
+                    code = [
+                        item
+                        for item in fence_code
+                        if item and not VACUOUS_IGNORE_LINE.match(item)
+                    ]
+                    fenced_span = range(fence_start, line_no + 1)
+                    if (
+                        code
+                        and all(VACUOUS_EXAMPLE_LINE.match(item) for item in code)
+                        and any(line in touched for line in fenced_span)
+                    ):
+                        reported.append(fence_start)
+                    in_fence = False
+                    fence_code = []
+                else:
+                    in_fence = True
+                    fence_start = line_no
+            elif in_fence:
+                fence_code.append(body)
+        for start in reported:
+            findings.append(
+                Finding(
+                    id="vacuous-doc-example",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=path,
+                    line=start,
+                    summary="Doc example demonstrates no usage",
+                    detail=(
+                        f"{path}:{start} contains a doc example consisting "
+                        "only of path/assignment statements (no calls). It "
+                        "satisfies the doctest gate without showing how to "
+                        "use the API; replace it with a real usage example."
+                    ),
+                )
+            )
+    return findings
+
+
+def ai_report_file_findings(files: list[str]) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not AI_REPORT_PATH.search(path):
+            continue
+        if path.startswith("docs/worklogs/"):
+            continue
+        findings.append(
+            Finding(
+                id="ai-report-file",
+                severity="warn",
+                rule_section="PR Content Hygiene",
+                file=path,
+                line=None,
+                summary="Standalone AI-generated report file in the PR",
+                detail=(
+                    f"{path} looks like an AI-generated analysis or task "
+                    "report committed as a standalone file. Fold durable "
+                    "content into docs/worklogs/ and drop the report file."
+                ),
+            )
+        )
+    return findings
+
+
+def parse_cargo_tenferro_dependencies(text: str) -> set[str]:
+    deps: set[str] = set()
+    section = ""
+    table_name: str | None = None
+    table_optional = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        header = re.match(r"^\[(.+)\]$", line)
+        if header:
+            if table_name and not table_optional:
+                deps.add(table_name)
+            table_name = None
+            table_optional = False
+            section = header.group(1)
+            table = re.match(r"^dependencies\.(tenferro-[\w-]+)$", section)
+            if table:
+                table_name = table.group(1)
+            continue
+        if section == "dependencies":
+            entry = re.match(r"^(tenferro-[\w-]+)(?:\.[\w-]+)?\s*=", line)
+            if entry and "optional = true" not in line:
+                deps.add(entry.group(1))
+        elif table_name is not None and re.match(r"^optional\s*=\s*true", line):
+            table_optional = True
+    if table_name and not table_optional:
+        deps.add(table_name)
+    return deps
+
+
+def parse_dependency_diagram(doc_text: str) -> dict[str, set[str]] | None:
+    heading = doc_text.find("Dependency Direction")
+    if heading == -1:
+        return None
+    fence_start = doc_text.find("```", heading)
+    if fence_start == -1:
+        return None
+    fence_end = doc_text.find("```", fence_start + 3)
+    if fence_end == -1:
+        return None
+    block = doc_text[fence_start:fence_end].splitlines()[1:]
+    edges: dict[str, set[str]] = {}
+    current: str | None = None
+    for raw in block:
+        entry = re.match(r"^(tenferro-[\w-]+)\s*(?:->\s*(.*))?$", raw)
+        if entry:
+            current = entry.group(1)
+            edges.setdefault(current, set())
+            targets = entry.group(2) or ""
+        elif raw.startswith((" ", "\t")) and current is not None:
+            targets = raw.strip().removeprefix("->").strip()
+        else:
+            current = None
+            continue
+        for target in targets.split(","):
+            target = target.strip()
+            if target.startswith("tenferro-"):
+                edges[current].add(target)
+    return edges
+
+
+def dependency_diagram_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+) -> list[Finding]:
+    relevant = [
+        path
+        for path in files
+        if CRATE_CARGO_TOML.match(path) or path == DEPENDENCY_DIAGRAM_DOC
+    ]
+    if not relevant:
+        return []
+    doc_text = changed_file_text(DEPENDENCY_DIAGRAM_DOC, ref=ref, worktree=worktree)
+    if doc_text is None:
+        return []
+    diagram = parse_dependency_diagram(doc_text)
+    if diagram is None:
+        return []
+    findings: list[Finding] = []
+    for path in sorted(files):
+        crate_match = CRATE_CARGO_TOML.match(path)
+        if not crate_match:
+            continue
+        crate = crate_match.group(1)
+        cargo_text = changed_file_text(path, ref=ref, worktree=worktree)
+        if cargo_text is None:
+            continue
+        cargo_deps = {
+            dep
+            for dep in parse_cargo_tenferro_dependencies(cargo_text)
+            if dep not in DIAGRAM_PROSE_TARGETS
+        }
+        diagram_deps = {
+            dep
+            for dep in diagram.get(crate, set())
+            if dep not in DIAGRAM_PROSE_TARGETS
+        }
+        if crate not in diagram:
+            if cargo_deps:
+                findings.append(
+                    Finding(
+                        id="dependency-diagram-drift",
+                        severity="warn",
+                        rule_section="Documentation Policy",
+                        file=DEPENDENCY_DIAGRAM_DOC,
+                        line=None,
+                        summary=f"{crate} is missing from the dependency diagram",
+                        detail=(
+                            f"{path} declares tenferro dependencies but "
+                            f"{DEPENDENCY_DIAGRAM_DOC} has no diagram entry "
+                            f"for {crate}. Diagram Consistency requires the "
+                            "diagram to match the implementation in the same "
+                            "PR."
+                        ),
+                    )
+                )
+            continue
+        missing = sorted(cargo_deps - diagram_deps)
+        stale = sorted(diagram_deps - cargo_deps)
+        if missing or stale:
+            parts = []
+            if missing:
+                parts.append(f"missing from the diagram: {', '.join(missing)}")
+            if stale:
+                parts.append(f"stale in the diagram: {', '.join(stale)}")
+            findings.append(
+                Finding(
+                    id="dependency-diagram-drift",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=DEPENDENCY_DIAGRAM_DOC,
+                    line=None,
+                    summary=f"Dependency diagram is out of sync for {crate}",
+                    detail=(
+                        f"{crate} production dependencies disagree with the "
+                        f"Dependency Direction diagram in "
+                        f"{DEPENDENCY_DIAGRAM_DOC}: {'; '.join(parts)}. "
+                        "Update the diagram in the same PR (Diagram "
+                        "Consistency)."
+                    ),
+                )
+            )
+    return findings
+
+
 def deterministic_checks(
     files: list[str],
     *,
@@ -937,6 +1428,26 @@ def deterministic_checks(
     added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
+    findings.extend(ai_report_file_findings(files))
+    if added_lines is not None:
+        findings.extend(
+            inline_test_module_findings(
+                files, ref=head, worktree=worktree, added_lines=added_lines
+            )
+        )
+        findings.extend(
+            missing_doc_example_findings(
+                files, ref=head, worktree=worktree, added_lines=added_lines
+            )
+        )
+        findings.extend(
+            vacuous_doc_example_findings(
+                files, ref=head, worktree=worktree, added_lines=added_lines
+            )
+        )
+    findings.extend(
+        dependency_diagram_findings(files, ref=head, worktree=worktree)
+    )
     runtime_touched = any(path.startswith("crates/tenferro-runtime/") for path in files)
     if runtime_touched:
         violations = runtime_ad_boundary_violations(

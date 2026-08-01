@@ -794,6 +794,353 @@ def test_format_report_omits_llm_summary_when_absent() -> None:
     assert "LLM review:" not in report
 
 
+INLINE_TEST_SOURCE = "\n".join(
+    ["fn production() {}"]
+    + [f"fn helper_{i}() {{}}" for i in range(160)]
+    + [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    #[test]",
+        "    fn works() {",
+        "        assert!(true);",
+        "    }",
+        "}",
+    ]
+)
+
+
+def test_rust_inline_test_blocks_reports_span() -> None:
+    mod = load_module()
+    blocks = mod.rust_inline_test_blocks(INLINE_TEST_SOURCE)
+    assert len(blocks) == 1
+    start, end = blocks[0]
+    assert start == 162
+    assert end == 168
+
+
+def test_rust_inline_test_blocks_ignores_mod_declaration() -> None:
+    mod = load_module()
+    text = "fn production() {}\n#[cfg(test)]\nmod tests;\n"
+    assert mod.rust_inline_test_blocks(text) == []
+
+
+def _with_fake_text(mod, mapping):
+    def fake(path, *, ref, worktree):
+        return mapping.get(path)
+
+    mod.changed_file_text = fake
+
+
+def test_inline_test_module_findings_flags_grown_block() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/error.rs": INLINE_TEST_SOURCE})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+    assert findings[0].severity == "warn"
+    assert findings[0].rule_section == "Unit Test Organization"
+    assert findings[0].line == 162
+
+
+def test_inline_test_module_findings_exempts_tiny_leaf_module() -> None:
+    mod = load_module()
+    tiny = "\n".join(
+        [
+            "fn leaf() {}",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/leaf.rs": tiny})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/leaf.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/leaf.rs": {4}},
+    )
+    assert findings == []
+
+
+def test_inline_test_module_findings_skips_untouched_block() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/error.rs": INLINE_TEST_SOURCE})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {1}},
+    )
+    assert findings == []
+
+
+DOC_EXAMPLE_SOURCE = "\n".join(
+    [
+        "/// Summary.",
+        "///",
+        "/// # Examples",
+        "///",
+        "/// ```",
+        "/// documented::call();",
+        "/// ```",
+        "pub fn documented() {}",
+        "",
+        "/// Only errors.",
+        "///",
+        "/// # Errors",
+        "///",
+        "/// Never.",
+        "pub fn undocumented() {}",
+        "",
+        "#[doc(hidden)]",
+        "pub fn hidden_hook() {}",
+        "",
+        "mod private {",
+        "    pub trait Sealed {}",
+        "}",
+    ]
+)
+
+
+def test_missing_doc_example_findings_flags_only_real_gaps() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/lib.rs": DOC_EXAMPLE_SOURCE})
+    total = len(DOC_EXAMPLE_SOURCE.splitlines())
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": set(range(1, total + 1))},
+    )
+    assert len(findings) == 1
+    assert findings[0].id == "missing-doc-examples"
+    assert "fn undocumented" in findings[0].detail
+    assert "hidden_hook" not in findings[0].detail
+    assert "Sealed" not in findings[0].detail
+    assert "fn documented" not in findings[0].detail
+
+
+def test_missing_doc_example_findings_ignores_unchanged_items() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/lib.rs": DOC_EXAMPLE_SOURCE})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {1}},
+    )
+    assert findings == []
+
+
+def test_vacuous_doc_example_findings_flags_path_only_example() -> None:
+    mod = load_module()
+    vacuous = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// let _method = Widget::spin;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": vacuous})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {5}},
+    )
+    assert [item.id for item in findings] == ["vacuous-doc-example"]
+
+
+def test_vacuous_doc_example_findings_accepts_real_usage() -> None:
+    mod = load_module()
+    real = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// let widget = Widget::new();",
+            "/// assert!(widget.spin().is_ok());",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": real})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {5}},
+    )
+    assert findings == []
+
+
+def test_ai_report_file_findings_flags_reports_outside_worklogs() -> None:
+    mod = load_module()
+    findings = mod.ai_report_file_findings(
+        [
+            ".superpowers/sdd/task-1-report.md",
+            "notes/session-report.md",
+            "docs/worklogs/2026-08-01-task-report.md",
+            "crates/x/src/lib.rs",
+        ]
+    )
+    flagged = sorted(item.file for item in findings)
+    assert flagged == [
+        ".superpowers/sdd/task-1-report.md",
+        "notes/session-report.md",
+    ]
+    assert all(item.rule_section == "PR Content Hygiene" for item in findings)
+
+
+def test_parse_cargo_tenferro_dependencies_skips_optional_and_dev() -> None:
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[package]",
+            'name = "tenferro-demo"',
+            "",
+            "[dependencies]",
+            "tenferro-tensor.workspace = true",
+            'tenferro-runtime = { workspace = true }',
+            'tenferro-ad = { workspace = true, optional = true }',
+            "serde.workspace = true",
+            "",
+            "[dependencies.tenferro-cpu]",
+            "workspace = true",
+            "",
+            "[dependencies.tenferro-gpu]",
+            "workspace = true",
+            "optional = true",
+            "",
+            "[dev-dependencies]",
+            "tenferro-fft.workspace = true",
+        ]
+    )
+    deps = mod.parse_cargo_tenferro_dependencies(cargo)
+    assert deps == {"tenferro-tensor", "tenferro-runtime", "tenferro-cpu"}
+
+
+def test_parse_dependency_diagram_handles_continuation_lines() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops",
+            "tenferro-runtime          -> tenferro-tensor,",
+            "                              tenferro-internal-ops",
+            "tenferro-internal-cpu-kernels",
+            "                           -> tenferro-tensor",
+            "```",
+        ]
+    )
+    edges = mod.parse_dependency_diagram(doc)
+    assert edges is not None
+    assert edges["tenferro-tensor"] == {"tenferro-tensor-core", "tenferro-core-ops"}
+    assert edges["tenferro-runtime"] == {"tenferro-tensor", "tenferro-internal-ops"}
+    assert edges["tenferro-internal-cpu-kernels"] == {"tenferro-tensor"}
+
+
+def test_dependency_diagram_findings_reports_missing_edge() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-fft/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-cpu" in findings[0].detail
+
+
+def test_dependency_diagram_findings_accepts_matching_edges() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime, tenferro-cpu",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+            "tenferro-core-ops.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-fft/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_select_rule_sections_routes_unit_test_rules_for_src_rust() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-cpu/src/lib.rs"])
+    assert "Unit Test Organization" in sections
+    assert "Documentation Policy" in sections
+
+
+def test_select_rule_sections_falls_back_for_unrouted_paths() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections([".superpowers/sdd/plan.md"])
+    assert mod.FALLBACK_SECTION in sections
+
+
+def test_pr_content_hygiene_section_is_parseable() -> None:
+    mod = load_module()
+    sections = mod.parse_repository_rules_sections()
+    assert "PR Content Hygiene" in sections
+    assert "AI-generated" in sections["PR Content Hygiene"]
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -831,6 +1178,23 @@ def main() -> int:
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
+        test_rust_inline_test_blocks_reports_span,
+        test_rust_inline_test_blocks_ignores_mod_declaration,
+        test_inline_test_module_findings_flags_grown_block,
+        test_inline_test_module_findings_exempts_tiny_leaf_module,
+        test_inline_test_module_findings_skips_untouched_block,
+        test_missing_doc_example_findings_flags_only_real_gaps,
+        test_missing_doc_example_findings_ignores_unchanged_items,
+        test_vacuous_doc_example_findings_flags_path_only_example,
+        test_vacuous_doc_example_findings_accepts_real_usage,
+        test_ai_report_file_findings_flags_reports_outside_worklogs,
+        test_parse_cargo_tenferro_dependencies_skips_optional_and_dev,
+        test_parse_dependency_diagram_handles_continuation_lines,
+        test_dependency_diagram_findings_reports_missing_edge,
+        test_dependency_diagram_findings_accepts_matching_edges,
+        test_select_rule_sections_routes_unit_test_rules_for_src_rust,
+        test_select_rule_sections_falls_back_for_unrouted_paths,
+        test_pr_content_hygiene_section_is_parseable,
     ]:
         test()
     return 0
