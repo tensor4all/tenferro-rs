@@ -829,7 +829,13 @@ DIAGNOSTIC_FIELDS = {
     "E_COMMAND_FAILED": frozenset({"command_id", "exit_code"}),
     "E_PROMOTION_IDENTITY": frozenset({"obligation_id"}),
     "E_RECEIPT_COMMIT": frozenset({"actual_head"}),
-    "E_RECEIPT_DIGEST": frozenset({"digest_kind"}),
+    "E_RECEIPT_MANIFEST_DIGEST": frozenset({"field", "expected", "actual"}),
+    "E_RECEIPT_DIGEST": frozenset(
+        {"obligation_id", "field", "expected", "actual"}
+    ),
+    "E_RECEIPT_PATH_IDENTITY": frozenset(
+        {"obligation_id", "field", "expected", "actual"}
+    ),
     "E_RECEIPT_EXECUTION_BINDING": frozenset(
         {"obligation_id", "field", "expected", "actual"}
     ),
@@ -844,6 +850,23 @@ DIAGNOSTIC_FIELD_TYPES = {
         "command_id": str,
         "expected": int,
         "actual": int,
+    },
+    "E_RECEIPT_MANIFEST_DIGEST": {
+        "field": str,
+        "expected": str,
+        "actual": str,
+    },
+    "E_RECEIPT_DIGEST": {
+        "obligation_id": str,
+        "field": str,
+        "expected": str,
+        "actual": str,
+    },
+    "E_RECEIPT_PATH_IDENTITY": {
+        "obligation_id": str,
+        "field": str,
+        "expected": str,
+        "actual": str,
     },
 }
 
@@ -955,7 +978,10 @@ RED_EXPECTED_FAILURES = {
     "test_post_receipt_command_path_symlink_retarget_is_rejected": {
         "cause": "v2-runner-not-implemented",
     },
-    "test_post_receipt_symlink_retarget_is_rejected": {
+    "test_post_receipt_artifact_symlink_retarget_with_identical_external_bytes_is_rejected": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_post_receipt_cwd_symlink_retarget_is_rejected": {
         "cause": "v2-runner-not-implemented",
     },
     "test_promotion_preserves_immutable_identity_and_binds_receipt_to_candidate": {
@@ -1865,6 +1891,7 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             for field, field_type in DIAGNOSTIC_FIELD_TYPES.get(code, {}).items():
                 self.assertIs(type(fields[field]), field_type)
             self.assertIsInstance(diagnostic.get("message"), str)
+            self.assertTrue(diagnostic["message"].strip(), diagnostic)
             codes.append(code)
         self.assertEqual(len(codes), len(set(codes)), payload)
         return payload
@@ -2247,6 +2274,43 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     subprocess.CompletedProcess([], 1, stdout=json.dumps(payload), stderr=""),
                     "E_X",
                 )
+
+    def test_result_diagnostic_requires_obligation_identity_and_message(self) -> None:
+        expected_fields = {
+            "obligation_id": "p0-control-plane",
+            "field": "artifact_sha256",
+            "expected": "a" * 64,
+            "actual": "b" * 64,
+        }
+        payload = {
+            "schema": "tenferro.storage-ownership-diagnostics.v1",
+            "diagnostics": [
+                {
+                    "code": "E_RECEIPT_DIGEST",
+                    "fields": dict(expected_fields),
+                    "message": "artifact digest changed",
+                }
+            ],
+        }
+        for case in ("missing-obligation", "wrong-obligation", "empty-message"):
+            with self.subTest(case=case):
+                candidate = json.loads(json.dumps(payload))
+                if case == "missing-obligation":
+                    del candidate["diagnostics"][0]["fields"]["obligation_id"]
+                elif case == "wrong-obligation":
+                    candidate["diagnostics"][0]["fields"]["obligation_id"] = (
+                        "p1-ledger"
+                    )
+                else:
+                    candidate["diagnostics"][0]["message"] = "   "
+                with self.assertRaises(AssertionError):
+                    self.assert_result_diagnostic(
+                        subprocess.CompletedProcess(
+                            [], 1, stdout=json.dumps(candidate), stderr=""
+                        ),
+                        "E_RECEIPT_DIGEST",
+                        fields=expected_fields,
+                    )
 
     def test_nominal_v2_manifest_is_green(self) -> None:
         result = self.run_checker(valid_manifest())
@@ -2829,15 +2893,29 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     manifest_path.write_bytes(
                         manifest_path.read_bytes() + b"\npost-receipt manifest mutation\n"
                     )
+                    diagnostic_code = "E_RECEIPT_MANIFEST_DIGEST"
+                    expected_fields = {
+                        "field": "candidate_manifest_sha256",
+                        "expected": _sha256_bytes(manifest_path.read_bytes()),
+                        "actual": receipt["candidate_manifest_sha256"],
+                    }
                 elif digest_kind == "artifact":
                     row = next(
                         row for row in tomllib.loads(candidate)["obligations"]
                         if row["id"] == "p0-control-plane"
                     )
-                    _receipt_execution(receipt, "p0-control-plane")["artifact_sha256"] = _sha256_bytes(
-                        (root / row["artifact"]["path"]).resolve().read_bytes()
-                        + b"\npost-receipt mutation\n"
+                    execution = _receipt_execution(receipt, "p0-control-plane")
+                    artifact = root / row["artifact"]["path"]
+                    execution["artifact_sha256"] = _sha256_bytes(
+                        artifact.resolve().read_bytes() + b"\npost-receipt mutation\n"
                     )
+                    diagnostic_code = "E_RECEIPT_DIGEST"
+                    expected_fields = {
+                        "obligation_id": "p0-control-plane",
+                        "field": "artifact_sha256",
+                        "expected": _sha256_resolved_path(root, row["artifact"]["path"]),
+                        "actual": execution["artifact_sha256"],
+                    }
                 else:
                     row = next(
                         row for row in tomllib.loads(candidate)["obligations"]
@@ -2846,31 +2924,51 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                     command_bytes = json.dumps(
                         row["command"], sort_keys=True, separators=(",", ":")
                     ).encode("utf-8")
-                    _receipt_execution(receipt, "p0-control-plane")["command_sha256"] = _sha256_bytes(
+                    execution = _receipt_execution(receipt, "p0-control-plane")
+                    execution["command_sha256"] = _sha256_bytes(
                         command_bytes + b"post-receipt mutation"
                     )
+                    diagnostic_code = "E_RECEIPT_DIGEST"
+                    expected_fields = {
+                        "obligation_id": "p0-control-plane",
+                        "field": "command_sha256",
+                        "expected": _sha256_command(row["command"]),
+                        "actual": execution["command_sha256"],
+                    }
                 receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
                 result = self.run_repository_checker(
                     root, base_commit, receipt_path, "--diagnostics-json"
                 )
                 self.assert_result_diagnostic(
-                    result, "E_RECEIPT_DIGEST", fields={"digest_kind": digest_kind}
+                    result, diagnostic_code, fields=expected_fields
                 )
 
     def test_post_receipt_artifact_mutation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            base_commit, _, candidate, receipt_path, _ = self.emit_runner_receipt(root)
+            base_commit, _, candidate, receipt_path, receipt = self.emit_runner_receipt(root)
             row = next(
                 row for row in tomllib.loads(candidate)["obligations"]
                 if row["id"] == "p0-control-plane"
             )
             artifact = root / row["artifact"]["path"]
+            execution = _receipt_execution(receipt, "p0-control-plane")
+            recorded = execution["artifact_sha256"]
             artifact.write_bytes(artifact.read_bytes() + b"\npost-receipt artifact mutation\n")
+            current = _sha256_resolved_path(root, row["artifact"]["path"])
             result = self.run_repository_checker(
                 root, base_commit, receipt_path, "--diagnostics-json"
             )
-        self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
+            self.assert_result_diagnostic(
+                result,
+                "E_RECEIPT_DIGEST",
+                fields={
+                    "obligation_id": "p0-control-plane",
+                    "field": "artifact_sha256",
+                    "expected": current,
+                    "actual": recorded,
+                },
+            )
 
     def test_post_receipt_base_manifest_mutation_digest_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2889,10 +2987,18 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 root, base_commit, receipt_path, "--diagnostics-json"
             )
         self.assert_result_diagnostic(
-            result, "E_RECEIPT_DIGEST", fields={"digest_kind": "base_manifest"}
+            result,
+            "E_RECEIPT_MANIFEST_DIGEST",
+            fields={
+                "field": "base_manifest_sha256",
+                "expected": _sha256_bytes(base_bytes),
+                "actual": receipt["base_manifest_sha256"],
+            },
         )
 
-    def test_post_receipt_symlink_retarget_is_rejected(self) -> None:
+    def test_post_receipt_artifact_symlink_retarget_with_identical_external_bytes_is_rejected(
+        self,
+    ) -> None:
         override = {"p0-control-plane": "artifacts/control.py"}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2900,10 +3006,10 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             base_commit = _init_git_repository(root, base, files=marker_files())
             artifact = root / "artifacts/control.py"
             target_a = root / "artifacts/target-a.py"
-            target_b = root / "artifacts/target-b.py"
+            external = root.parent / f"ledger-artifact-retarget-{root.name}.py"
             artifact.parent.mkdir(parents=True, exist_ok=True)
-            target_a.write_text("target-a\n", encoding="utf-8")
-            target_b.write_text("target-b\n", encoding="utf-8")
+            identical = b"identical artifact bytes\n"
+            target_a.write_bytes(identical)
             _create_required_symlink(
                 artifact, Path("target-a.py"), operation="post-receipt-initial"
             )
@@ -2917,14 +3023,92 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             receipt_path = root / "receipt.json"
             runner = self.run_repository_runner(root, base_commit, receipt_path)
             self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
-            artifact.unlink()
+            try:
+                expected_path = str(target_a.resolve())
+                external.write_bytes(identical)
+                artifact.unlink()
+                _create_required_symlink(
+                    artifact,
+                    external,
+                    operation="post-receipt-artifact-retarget",
+                )
+                self.assertEqual(artifact.resolve().read_bytes(), identical)
+                self.assertEqual(str(artifact.resolve()), str(external.resolve()))
+                result = self.run_repository_checker(
+                    root, base_commit, receipt_path, "--diagnostics-json"
+                )
+                self.assert_result_diagnostic(
+                    result,
+                    "E_RECEIPT_PATH_IDENTITY",
+                    fields={
+                        "obligation_id": "p0-control-plane",
+                        "field": "artifact_path",
+                        "expected": expected_path,
+                        "actual": str(external.resolve()),
+                    },
+                )
+            finally:
+                if artifact.is_symlink() or artifact.exists():
+                    artifact.unlink()
+                if external.is_symlink() or external.exists():
+                    external.unlink()
+
+    def test_post_receipt_cwd_symlink_retarget_is_rejected(self) -> None:
+        manifest = _replace_in_obligation(
+            valid_manifest(marker=True),
+            "p0-control-plane",
+            'cwd = "."',
+            'cwd = "links/cwd"',
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_commit = _init_git_repository(root, manifest, files=marker_files())
+            command_bytes = (root / "markers/cmd-control-plane.py").read_bytes()
+            artifact_bytes = (
+                root / "crates/tenferro-runtime/tests/execution_engine_identity.rs"
+            ).read_bytes()
+            cwd_link = root / "links/cwd"
+            cwd_link.parent.mkdir(parents=True, exist_ok=True)
             _create_required_symlink(
-                artifact, Path("target-b.py"), operation="post-receipt-retarget"
+                cwd_link, Path(".."), operation="post-receipt-cwd-initial"
+            )
+            base_commit = _commit(root, "base internal cwd symlink")
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                manifest, encoding="utf-8"
+            )
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            _commit(root, "candidate with internal cwd symlink")
+            receipt_path = root / "receipt.json"
+            runner = self.run_repository_runner(root, base_commit, receipt_path)
+            self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
+            target = root / "cwd-after-receipt"
+            target.mkdir()
+            self.assertEqual(
+                (root / "markers/cmd-control-plane.py").read_bytes(), command_bytes
+            )
+            self.assertEqual(
+                (root / "crates/tenferro-runtime/tests/execution_engine_identity.rs").read_bytes(),
+                artifact_bytes,
+            )
+            cwd_link.unlink()
+            _create_required_symlink(
+                cwd_link,
+                Path("../cwd-after-receipt"),
+                operation="post-receipt-cwd-retarget",
             )
             result = self.run_repository_checker(
                 root, base_commit, receipt_path, "--diagnostics-json"
             )
-        self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
+            self.assert_result_diagnostic(
+                result,
+                "E_RECEIPT_PATH_IDENTITY",
+                fields={
+                    "obligation_id": "p0-control-plane",
+                    "field": "cwd",
+                    "expected": str(root.resolve()),
+                    "actual": str(target.resolve()),
+                },
+            )
 
     def test_post_receipt_command_path_symlink_retarget_is_rejected(self) -> None:
         _require_v2_runner()
@@ -2951,6 +3135,10 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             base_commit = _init_git_repository(root, manifest, files=marker_files())
             link = root / command_path
             link.parent.mkdir(parents=True, exist_ok=True)
+            command_bytes = (root / "markers/cmd-control-plane.py").read_bytes()
+            identical_target = root / "links/cmd-control-plane-identical.py"
+            identical_target.write_bytes(command_bytes)
+            identical_target.chmod(0o755)
             _create_required_symlink(
                 link,
                 Path("../markers/cmd-control-plane.py"),
@@ -2965,30 +3153,30 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             receipt_path = root / "receipt.json"
             runner = self.run_repository_runner(root, base_commit, receipt_path)
             self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
-            outside = root.parent / f"ledger-command-retarget-{root.name}.py"
-            try:
-                outside.write_text("raise SystemExit(99)\n", encoding="utf-8")
-                link.unlink()
-                _create_required_symlink(
-                    link, outside, operation="post-receipt-command-retarget"
-                )
-                result = self.run_repository_checker(
-                    root, base_commit, receipt_path, "--diagnostics-json"
-                )
-            finally:
-                if link.is_symlink() or link.exists():
-                    link.unlink()
-                if outside.is_symlink() or outside.exists():
-                    outside.unlink()
-        self.assert_result_diagnostic(
-            result,
-            "E_COMMAND_ARGV_SYMLINK_ESCAPE",
-            fields={
-                "command_id": "cmd-control-plane",
-                "index": 1,
-                "argument": command_path,
-            },
-        )
+            expected_path = str((root / "markers/cmd-control-plane.py").resolve())
+            link.unlink()
+            _create_required_symlink(
+                link,
+                Path("cmd-control-plane-identical.py"),
+                operation="post-receipt-command-in-repo-retarget",
+            )
+            self.assertTrue(identical_target.is_file())
+            self.assertTrue(os.access(identical_target, os.X_OK))
+            self.assertEqual(identical_target.read_bytes(), command_bytes)
+            self.assertEqual(link.resolve().read_bytes(), command_bytes)
+            result = self.run_repository_checker(
+                root, base_commit, receipt_path, "--diagnostics-json"
+            )
+            self.assert_result_diagnostic(
+                result,
+                "E_RECEIPT_PATH_IDENTITY",
+                fields={
+                    "obligation_id": "p0-control-plane",
+                    "field": "argv[1].resolved_path",
+                    "expected": expected_path,
+                    "actual": str(identical_target.resolve()),
+                },
+            )
 
     def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
         _require_v2_checker()

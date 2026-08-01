@@ -408,11 +408,12 @@ Checker and runner failures have a stable machine-readable envelope when
 
 `code` and the identifying `fields` are compatibility-stable within schema
 v1; human `message` text is not. The RED suite therefore asserts codes and
-relevant IDs/paths rather than prose. Each one-fault case requires the exact
-one-code set and the exact field-key shape registered by the RED harness;
-duplicate codes, unknown codes, extra envelope keys, missing `message`, or
-extra identifying fields are failures. This prevents a checker from passing a
-negative case by emitting every known code or an unrelated diagnostic.
+relevant IDs/paths plus a non-empty human message, without freezing message
+wording. Each one-fault case requires the exact one-code set and the exact
+field-key shape registered by the RED harness; duplicate codes, unknown codes,
+extra envelope keys, missing or empty `message`, or extra identifying fields
+are failures. This prevents a checker from passing a negative case by emitting
+every known code or an unrelated diagnostic.
 
 The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
 `E_SCHEMA_PARALLEL_TABLE`, `E_SCHEMA_UNKNOWN_TABLE`,
@@ -429,8 +430,9 @@ The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSIO
 `E_COMMAND_ARGV_PATH_ESCAPE`, `E_COMMAND_CWD_SYMLINK_ESCAPE`,
 `E_COMMAND_ARGV_SYMLINK_ESCAPE`, `E_COMMAND_ARTIFACT_BINDING`,
 `E_COMMAND_TARGET_BINDING`, `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`,
-`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`,
-`E_RECEIPT_EXECUTION_BINDING`, `E_RECEIPT_INCOMPLETE`, and
+`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_MANIFEST_DIGEST`,
+`E_RECEIPT_DIGEST`, `E_RECEIPT_PATH_IDENTITY`, `E_RECEIPT_EXECUTION_BINDING`,
+`E_RECEIPT_INCOMPLETE`, and
 `E_RECEIPT_OBSERVATION_BINDING`, `E_TERMINAL_DECLARED`. Command kinds have an
 exact allow-listed `argv` vector:
 `E_COMMAND_ARGV_BINDING` has exactly `command_id`, `index`, `expected`, and
@@ -447,11 +449,25 @@ it safe. `E_COMMAND_CWD_SYMLINK_ESCAPE` has exactly `command_id` and `cwd`;
 `E_COMMAND_ARGV_SYMLINK_ESCAPE` has exactly `command_id`, `index`, and
 `argument`. These symlink diagnostics are also required on post-receipt
 revalidation when a previously internal command path is retargeted outside
-the repository. The execution-binding code has exactly `obligation_id`,
+the repository. A previously internal command path retargeted to a different
+in-repository executable with identical bytes is instead an
+`E_RECEIPT_PATH_IDENTITY` case with `field = "argv[1].resolved_path"` in the
+RED fixture; confinement and content digest checks must both pass first. The
+execution-binding code has exactly `obligation_id`,
 `field`, `expected`, and `actual` fields and is used for a swapped or forged
-execution identity. Adding a code is compatible; changing the meaning or
-required identifying fields of an existing code requires a diagnostic schema
-revision.
+execution identity. Receipt-level manifest digest failures use
+`E_RECEIPT_MANIFEST_DIGEST` with exactly `field`, `expected`, and `actual`;
+obligation-level artifact or command digest failures use `E_RECEIPT_DIGEST`
+with exactly `obligation_id`, `field`, `expected`, and `actual`. Resolved cwd,
+command argv, or artifact identity changes after receipt use
+`E_RECEIPT_PATH_IDENTITY` with that same obligation-scoped field set; its
+`expected` value is the receipt-time resolved identity and its `actual` value
+is the post-receipt resolved identity, not merely a content digest. For both
+manifest and obligation-level digest diagnostics, `expected` is the current
+canonical recomputation and `actual` is the recorded receipt claim. Adding a
+code is compatible;
+changing the meaning or required identifying fields of an existing code
+requires a diagnostic schema revision.
 
 The RED suite includes both a structured temporary repository for adversarial
 path, graph, promotion, and command-binding cases and an integration case that

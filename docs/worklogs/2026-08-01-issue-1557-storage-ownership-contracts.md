@@ -322,15 +322,43 @@ Python markers. The nonce/challenge is evidence of independent child emission
 under the test model, not cryptographic resistance to a malicious runner
 forging child output.
 
+Checkpoint 2B/2C closes the remaining RED evidence gaps without implementing
+the checker or runner. Post-receipt revalidation now requires resolved-path
+identity for all three filesystem dimensions: command argv path, command cwd,
+and artifact path. The cwd case retargets an in-repository symlink to another
+in-repository directory while command and artifact bytes stay unchanged. The
+command case retargets an in-repository command-path symlink to a different
+in-repository executable with identical bytes and uses field
+`argv[1].resolved_path`; confinement and command digest therefore cannot mask
+the resolved-path change. The artifact case retargets an in-repository artifact symlink
+to an external target with identical bytes; confinement is not weakened, and
+`E_RECEIPT_PATH_IDENTITY` must report the obligation, field, expected resolved
+path, and actual resolved path. Existing command-path retarget coverage remains
+explicit.
+
+Receipt digest diagnostics are now typed separately for receipt-level manifest
+digests (`E_RECEIPT_MANIFEST_DIGEST`) and obligation-level artifact/command
+digests (`E_RECEIPT_DIGEST`). Every such assertion requires exact field,
+expected, and actual values, with `obligation_id` where applicable. All
+obligation-scoped execution and child-observation mutation cases retain the
+same four identifying fields, and the diagnostic envelope self-test rejects a
+missing/wrong obligation ID or an empty message. Messages remain wording-flexible
+but must be non-empty. The child nonce/challenge remains test-model evidence,
+not cryptographic resistance to a malicious runner forging child output.
+Digest diagnostics use current canonical recomputation as `expected` and the
+recorded receipt claim as `actual`; path-identity diagnostics use the
+receipt-time resolved path as `expected` and the post-receipt resolved path as
+`actual`.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 61 tests and
-  reports exactly 201 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 63 tests and
+  reports exactly 202 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
   skipped tests. The causes are machine-readable: v2 checker absent (167
-  events), v2 runner absent (30 events), future production proof artifacts
+  events), v2 runner absent (31 events), future production proof artifacts
   absent (3 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
   subtest parameters as a multiset. The required symlink capability test
