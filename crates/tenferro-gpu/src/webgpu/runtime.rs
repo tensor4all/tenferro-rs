@@ -19,6 +19,33 @@ pub fn webgpu_available() -> bool {
     .is_ok()
 }
 
+/// Opaque identity of one exact WebGPU runtime instance.
+///
+/// The identity follows the executable queue/client resources, including
+/// Apple-backed host-visible Metal runtimes. Cloning preserves identity;
+/// independently initialized runtimes are distinct even for the same device
+/// ordinal. The token intentionally carries no provider or device identifier.
+#[derive(Clone, Debug)]
+pub struct WebGpuRuntimeIdentity {
+    marker: std::sync::Arc<()>,
+}
+
+impl WebGpuRuntimeIdentity {
+    fn fresh() -> Self {
+        Self {
+            marker: std::sync::Arc::new(()),
+        }
+    }
+}
+
+impl PartialEq for WebGpuRuntimeIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.marker, &other.marker)
+    }
+}
+
+impl Eq for WebGpuRuntimeIdentity {}
+
 /// CubeCL WebGPU runtime wrapper.
 ///
 /// # Examples
@@ -35,6 +62,7 @@ pub struct WebGpuRuntime {
     client: ComputeClient<WgpuRuntime>,
     device_ordinal: usize,
     pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
+    identity: WebGpuRuntimeIdentity,
 }
 
 impl fmt::Debug for WebGpuRuntime {
@@ -96,6 +124,7 @@ impl WebGpuRuntime {
             client,
             device_ordinal,
             apple_domain: None,
+            identity: WebGpuRuntimeIdentity::fresh(),
         })
     }
 
@@ -108,6 +137,7 @@ impl WebGpuRuntime {
             client,
             device_ordinal,
             apple_domain: Some(domain),
+            identity: WebGpuRuntimeIdentity::fresh(),
         }
     }
 
@@ -144,6 +174,20 @@ impl WebGpuRuntime {
         self.device_ordinal
     }
 
+    /// Return the opaque identity of this exact executable runtime instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::WebGpuRuntime;
+    ///
+    /// let _identity: fn(&WebGpuRuntime) -> tenferro_gpu::WebGpuRuntimeIdentity =
+    ///     WebGpuRuntime::runtime_identity;
+    /// ```
+    pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
+        self.identity.clone()
+    }
+
     /// Block the current thread until work submitted to the WebGPU queue completes.
     ///
     /// # Examples
@@ -161,5 +205,39 @@ impl WebGpuRuntime {
     pub fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "webgpu_runtime_synchronize";
         future::block_on(self.client.sync()).map_err(|err| crate::Error::backend_source(OP, err))
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{webgpu_available, WebGpuRuntimeIdentity};
+    use crate::WebGpuBackend;
+
+    #[test]
+    fn webgpu_runtime_identity_is_clone_stable_and_instance_scoped() {
+        let first = WebGpuRuntimeIdentity::fresh();
+        let clone = first.clone();
+        let independent = WebGpuRuntimeIdentity::fresh();
+
+        assert_eq!(first, clone);
+        assert_ne!(first, independent);
+    }
+
+    #[test]
+    fn webgpu_backend_identity_tracks_the_exact_runtime_when_hardware_is_available() {
+        if !webgpu_available() {
+            return;
+        }
+
+        let first = WebGpuBackend::new(0).expect("WebGPU backend should initialize");
+        let clone = first.clone();
+        let independent = WebGpuBackend::new(0).expect("second WebGPU backend should initialize");
+
+        assert_eq!(first.runtime_identity(), clone.runtime_identity());
+        assert_ne!(first.runtime_identity(), independent.runtime_identity());
+        assert_eq!(
+            first.runtime_identity(),
+            WebGpuBackend::from_runtime(first.runtime().clone()).runtime_identity()
+        );
     }
 }

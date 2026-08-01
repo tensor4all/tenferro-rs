@@ -145,7 +145,7 @@ use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_ope
 
 pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
-pub use runtime::{gpu_available, CudaRuntime};
+pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{
     cuda_runtime_engine_id, cuda_runtime_engine_registration,
     cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class,
@@ -756,6 +756,23 @@ impl CudaBackend {
     /// ```
     pub fn runtime(&self) -> &CudaRuntime {
         &self.inner.rt
+    }
+
+    /// Return the opaque identity of this exact executable backend instance.
+    ///
+    /// Clones of a backend return the same identity. Independently constructed
+    /// backends return different identities even when they target the same
+    /// CUDA device ordinal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::CudaBackend;
+    ///
+    /// let _identity = CudaBackend::runtime_identity;
+    /// ```
+    pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
+        self.inner.rt.runtime_identity()
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {

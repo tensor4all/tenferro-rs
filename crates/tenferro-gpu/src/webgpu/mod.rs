@@ -32,7 +32,7 @@ mod structural;
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
-pub use runtime::{webgpu_available, WebGpuRuntime};
+pub use runtime::{webgpu_available, WebGpuRuntime, WebGpuRuntimeIdentity};
 pub use runtime_adapter::{
     webgpu_runtime_engine_id, webgpu_runtime_engine_registration,
     webgpu_runtime_engine_registration_with_id, webgpu_runtime_hardware_class,
@@ -627,6 +627,23 @@ impl WebGpuBackend {
     /// ```
     pub fn runtime(&self) -> &WebGpuRuntime {
         &self.runtime
+    }
+
+    /// Return the opaque identity of this exact executable backend instance.
+    ///
+    /// Clones of a backend return the same identity. Independently initialized
+    /// backends return different identities even when they target the same
+    /// WebGPU device ordinal. This also covers Apple-backed WebGPU runtimes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _identity = WebGpuBackend::runtime_identity;
+    /// ```
+    pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
+        self.runtime.runtime_identity()
     }
 
     /// Block until queued WebGPU work completes.

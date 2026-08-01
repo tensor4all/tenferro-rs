@@ -21,6 +21,33 @@ pub fn gpu_available() -> bool {
     .is_ok()
 }
 
+/// Opaque identity of one exact CUDA runtime instance.
+///
+/// Cloning the identity preserves the underlying executable runtime witness;
+/// constructing another runtime, even for the same device ordinal, produces a
+/// distinct identity. The token intentionally carries no provider or device
+/// identifier and grants no execution authority.
+#[derive(Clone, Debug)]
+pub struct CudaRuntimeIdentity {
+    marker: Arc<()>,
+}
+
+impl CudaRuntimeIdentity {
+    fn fresh() -> Self {
+        Self {
+            marker: Arc::new(()),
+        }
+    }
+}
+
+impl PartialEq for CudaRuntimeIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.marker, &other.marker)
+    }
+}
+
+impl Eq for CudaRuntimeIdentity {}
+
 /// CubeCL CUDA runtime wrapper.
 ///
 /// # Examples
@@ -41,6 +68,7 @@ struct CudaRuntimeState {
     client: ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
     primary_context: CudaPrimaryContext,
+    identity: CudaRuntimeIdentity,
 }
 
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
@@ -134,6 +162,7 @@ impl CudaRuntime {
                 client,
                 device_ordinal,
                 primary_context,
+                identity: CudaRuntimeIdentity::fresh(),
             }),
         })
     }
@@ -153,6 +182,20 @@ impl CudaRuntime {
     /// ```
     pub fn device_ordinal(&self) -> usize {
         self.inner.device_ordinal
+    }
+
+    /// Return the opaque identity of this exact executable runtime instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::CudaRuntime;
+    ///
+    /// let _identity: fn(&CudaRuntime) -> tenferro_gpu::CudaRuntimeIdentity =
+    ///     CudaRuntime::runtime_identity;
+    /// ```
+    pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
+        self.inner.identity.clone()
     }
 
     #[doc(hidden)]
@@ -224,5 +267,38 @@ impl Drop for CudaRuntimeState {
         if let Err(err) = self.synchronize() {
             report_cuda_runtime_drop_error(&err);
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
+    use crate::CudaBackend;
+
+    #[test]
+    fn cuda_runtime_identity_is_clone_stable_and_instance_scoped() {
+        let first = CudaRuntimeIdentity::fresh();
+        let clone = first.clone();
+        let independent = CudaRuntimeIdentity::fresh();
+
+        assert_eq!(first, clone);
+        assert_ne!(first, independent);
+    }
+
+    #[test]
+    fn cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available() {
+        if !gpu_available() {
+            return;
+        }
+
+        let first = CudaBackend::new(0).expect("CUDA backend should initialize");
+        let clone = first.clone();
+        let independent = CudaBackend::new(0).expect("second CUDA backend should initialize");
+
+        assert_eq!(first.runtime_identity(), clone.runtime_identity());
+        assert_ne!(first.runtime_identity(), independent.runtime_identity());
+
+        let runtime_clone = first.runtime().clone();
+        let _: CudaRuntime = runtime_clone;
     }
 }
