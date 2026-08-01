@@ -73,6 +73,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/check-coverage.py coverage.json",
     ),
     "ci-config": (
+        "python3 scripts/test-check-storage-ownership-contracts.py",
+        "python3 scripts/check-storage-ownership-contracts.py",
         "python3 -m unittest discover -s scripts/ci/tests -v",
         "actionlint",
     ),

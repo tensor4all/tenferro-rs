@@ -1,0 +1,93 @@
+schema = "tenferro.storage-ownership-contracts.v1"
+
+# Phase 1 records the future verification surface without claiming that later
+# phases' production fixtures or source baselines already exist. Active rows
+# and production source scans are added by the owning implementation phases.
+
+[[fixtures]]
+id = "g3-host-guard-across-submit"
+gate = "G3"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1565
+rationale = "A host guard must not survive a consuming submission. The owning G1/G3 phase will add the real compile-fail fixture."
+
+[[fixtures]]
+id = "g3-scoped-handle-escape"
+gate = "G3"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1565
+rationale = "A scoped execution handle must not escape its submission scope."
+
+[[fixtures]]
+id = "g4-owner-non-clone"
+gate = "G4"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1559
+rationale = "The ownership token and mutable capability must remain non-Clone."
+
+[[fixtures]]
+id = "g4-owner-container-swap"
+gate = "G4"
+kind = "trybuild-fail"
+status = "deferred"
+owner_issue = 1559
+rationale = "The public API must not permit swapping owner containers through a mutable projection."
+
+[[fixtures]]
+id = "g2-group-n-way-splitting"
+gate = "G2"
+kind = "property"
+status = "deferred"
+owner_issue = 1561
+rationale = "AllocationGroup splitting needs N=0, N=1, N>2, empty, reverse-stride, and overflow coverage."
+
+[[fixtures]]
+id = "g1-corruption-at-map"
+gate = "G1"
+kind = "corruption"
+status = "deferred"
+owner_issue = 1560
+rationale = "Corrupted descriptor ranges must be rejected at host-map revalidation."
+
+[[fixtures]]
+id = "g1-corruption-at-enqueue"
+gate = "G1"
+kind = "corruption"
+status = "deferred"
+owner_issue = 1560
+rationale = "Corrupted descriptor ranges must also be rejected at device enqueue revalidation."
+
+[[fixtures]]
+id = "g1-miri-surface"
+gate = "G1"
+kind = "miri"
+status = "deferred"
+owner_issue = 1560
+rationale = "The host guard, range, and retirement surface requires a supported Miri lane."
+
+[[fixtures]]
+id = "g1-property-surface"
+gate = "G1"
+kind = "property"
+status = "deferred"
+owner_issue = 1560
+rationale = "G1 span/range and retirement invariants require property coverage."
+
+[[fixtures]]
+id = "g2-miri-surface"
+gate = "G2"
+kind = "miri"
+status = "deferred"
+owner_issue = 1561
+rationale = "G2 disjoint-view lifetime behavior requires a supported Miri lane."
+
+[[fixtures]]
+id = "g2-property-surface"
+gate = "G2"
+kind = "property"
+status = "deferred"
+owner_issue = 1561
+rationale = "G2 layout injectivity, overlap, and generation invariants require property coverage."

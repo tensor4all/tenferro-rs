@@ -118,6 +118,35 @@ class RunProfileTests(unittest.TestCase):
             commands.index("bash scripts/build_docs_site.sh"),
         )
 
+    def test_ci_config_checks_storage_ownership_contract_ledger(self) -> None:
+        commands = commands_for("ci-config")
+        self.assertIn(
+            "python3 scripts/test-check-storage-ownership-contracts.py", commands
+        )
+        self.assertIn("python3 scripts/check-storage-ownership-contracts.py", commands)
+        self.assertLess(
+            commands.index("python3 scripts/test-check-storage-ownership-contracts.py"),
+            commands.index("python3 scripts/check-storage-ownership-contracts.py"),
+        )
+
+    def test_ci_config_dry_run_prints_storage_ownership_checker(self) -> None:
+        output = io.StringIO()
+        with patch("scripts.ci.run_profile.subprocess.run") as run:
+            run_profiles(["ci-config"], dry_run=True, output=output)
+        run.assert_not_called()
+        lines = output.getvalue().splitlines()
+        self.assertIn(
+            "+ python3 scripts/test-check-storage-ownership-contracts.py", lines
+        )
+        self.assertIn(
+            "+ python3 scripts/check-storage-ownership-contracts.py",
+            lines,
+        )
+        self.assertLess(
+            lines.index("+ python3 scripts/test-check-storage-ownership-contracts.py"),
+            lines.index("+ python3 scripts/check-storage-ownership-contracts.py"),
+        )
+
     def test_full_profile_expands_named_profiles_once(self) -> None:
         expanded = expand_profiles(["full"])
         self.assertEqual(
