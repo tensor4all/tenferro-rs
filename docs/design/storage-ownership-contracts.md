@@ -97,24 +97,30 @@ requested range/ids, and resolved span identity, without raw addresses.
 
 ## Phase 1 verification ledger
 
-The machine-readable ledger is
-`scripts/storage-ownership-contracts.toml`. The v2 checker and runner are
-`scripts/check-storage-ownership-contracts.py` and
+The machine-readable production registry is
+`scripts/storage-ownership-contracts.toml`. After the atomic migration, that
+file is the sole machine authority for the production graph and obligations.
+The Python tuples in `scripts/test-storage-ownership-contracts-v2.py`
+(`UNITS`, `EDGES`, and the obligation expectations) are independent verifier
+expectations used to detect drift; they are not a second production registry.
+The graph and tables in this document are explanatory documentation. The v2
+checker and runner are `scripts/check-storage-ownership-contracts.py` and
 `scripts/run-storage-ownership-contracts.py`; both are deliberately absent in
 their v2 form in this RED checkpoint (the first path still contains the
 superseded v1 checker). The executable RED specification is
 `scripts/test-storage-ownership-contracts-v2.py`; it must remain checked in
 and must invoke the exact production manifest as well as adversarial temporary
-repositories. The checked-in production manifest is currently the superseded
-v1 input. While it remains v1, the RED specification independently asserts
-that schema and records that the parsed production manifest is not the
-canonical v2 model; a separate v2-checker gate requires rejection of that
-legacy input. After migration, the same gate requires exact canonical
-`UNITS`/`EDGES`/obligation equality before requiring checker success. The
-v2 gate must convert it to v2 and reject the actual legacy
-`fixtures`/`source_scans`/`source_inventory` tables represented by the checked-
-in `scripts/fixtures/storage-ownership-contracts-v1.toml` sample rather than
-adding a compatibility parser; the RED test records that required migration.
+repositories.
+
+The checked-in production manifest, v1 checker, v1 test suite, and full v1
+fixture are current superseded deletion debt. They are owned by the immediate
+atomic checker implementation checkpoint and are not an accepted compatibility
+surface. That checkpoint must replace the manifest with exact v2 registry
+content, make the checker v2-only, delete/replace the v1 suite, and leave only
+the minimal schema-only legacy fixture for rejection. The RED contract records
+that migration deterministically rather than accepting a compatibility
+parser. After migration, the production manifest must equal the independent
+v2 verifier expectation exactly before checker success is required.
 
 ### One canonical graph
 
@@ -312,7 +318,7 @@ duplicate codes, unknown codes, extra envelope keys, missing `message`, or
 extra identifying fields are failures. This prevents a checker from passing a
 negative case by emitting every known code or an unrelated diagnostic.
 
-The v1 code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
+The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
 `E_SCHEMA_PARALLEL_TABLE`, `E_SCHEMA_UNKNOWN_TABLE`,
 `E_OBLIGATION_TAGGED_STATE`, `E_UNIT_OBLIGATION_MISSING`,
 `E_GRAPH_P2_PREREQUISITE`, `E_GRAPH_DUPLICATE_EDGE`,
@@ -321,15 +327,29 @@ The v1 code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
 `E_OBSOLETE_OWNERSHIP_TABLE`, `E_ARTIFACT_SYNTHETIC_TERMINAL`,
 `E_ARTIFACT_DUPLICATE_TARGET`, `E_ARTIFACT_MISSING`, `E_PATH_ESCAPE`,
 `E_PATH_SYMLINK_ESCAPE`, `E_DEFERRED_ARTIFACT_EXISTS`,
-`E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_PATH_ESCAPE`,
-`E_COMMAND_ARTIFACT_BINDING`, `E_COMMAND_TARGET_BINDING`,
-`E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`, `E_PROMOTION_IDENTITY`,
-`E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`, `E_RECEIPT_EXECUTION_BINDING`,
-`E_RECEIPT_INCOMPLETE`, and `E_TERMINAL_DECLARED`. The execution-binding
-code has exactly `obligation_id`, `field`, `expected`, and `actual`
-fields and is used for a swapped or forged execution identity. Adding a code
-is compatible; changing the meaning or required identifying fields of an
-existing code requires a diagnostic schema revision.
+`E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_ARGV_BINDING`,
+`E_COMMAND_CWD_ESCAPE`, `E_COMMAND_PATH_ESCAPE`,
+`E_COMMAND_ARGV_PATH_ESCAPE`, `E_COMMAND_CWD_SYMLINK_ESCAPE`,
+`E_COMMAND_ARGV_SYMLINK_ESCAPE`, `E_COMMAND_ARTIFACT_BINDING`,
+`E_COMMAND_TARGET_BINDING`, `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`,
+`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_DIGEST`,
+`E_RECEIPT_EXECUTION_BINDING`, `E_RECEIPT_INCOMPLETE`, and
+`E_TERMINAL_DECLARED`. Command kinds have an exact allow-listed `argv` vector:
+`E_COMMAND_ARGV_BINDING` has exactly `command_id`, `index`, `expected`, and
+`actual`. `E_COMMAND_CWD_ESCAPE` has exactly `command_id` and `cwd`, and
+covers absolute cwd values and cwd values whose normalized path escapes the
+repository. `E_COMMAND_ARGV_PATH_ESCAPE` has exactly `command_id`, `index`,
+and `argument`; every path-bearing argv element is canonicalized independently
+of `path_args`, so lying by omitting an argv value from `path_args` cannot make
+it safe. `E_COMMAND_CWD_SYMLINK_ESCAPE` has exactly `command_id` and `cwd`;
+`E_COMMAND_ARGV_SYMLINK_ESCAPE` has exactly `command_id`, `index`, and
+`argument`. These symlink diagnostics are also required on post-receipt
+revalidation when a previously internal command path is retargeted outside
+the repository. The execution-binding code has exactly `obligation_id`,
+`field`, `expected`, and `actual` fields and is used for a swapped or forged
+execution identity. Adding a code is compatible; changing the meaning or
+required identifying fields of an existing code requires a diagnostic schema
+revision.
 
 The RED suite includes both a structured temporary repository for adversarial
 path, graph, promotion, and command-binding cases and an integration case that
@@ -338,10 +358,11 @@ real files and real symlinks; they do not stand in for the production gate.
 
 The RED command emits a machine-readable
 `tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
-keyed by test and subtest parameters and records a named cause. The runner
-compares observed failure/error/subtest/skip events with that exact set as a
-multiset, preserves duplicate multiplicity, and requires equal total event
-counts. An unlisted event, duplicate event, skipped required test, or missing
+keyed by test and subtest parameters and records both a named cause and the
+expected exception type. The runner compares observed failure/error/subtest/
+skip events with that exact set as a multiset, preserves duplicate
+multiplicity, and requires equal total event counts. An unlisted event,
+duplicate event, wrong exception/cause, skipped required test, or missing
 expected event makes the RED harness itself fail, so an implementation cannot
 relabel an unexpected regression as intentional.
 

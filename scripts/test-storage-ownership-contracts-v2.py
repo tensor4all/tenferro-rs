@@ -29,6 +29,8 @@ PRODUCTION_MANIFEST = ROOT / "scripts" / "storage-ownership-contracts.toml"
 LEGACY_V1_MANIFEST_FIXTURE = (
     ROOT / "scripts" / "fixtures" / "storage-ownership-contracts-v1.toml"
 )
+V1_TEST_SUITE = ROOT / "scripts" / "test-check-storage-ownership-contracts.py"
+V2_RED_SUITE = ROOT / "scripts" / "test-storage-ownership-contracts-v2.py"
 
 SCHEMA = "tenferro.storage-ownership-contracts.v2"
 LEGACY_SCHEMA = "tenferro.storage-ownership-contracts.v1"
@@ -37,6 +39,7 @@ GATES = tuple(f"G{number}" for number in range(1, 8))
 CHECKER_CAUSE = "v2-checker-not-implemented"
 RUNNER_CAUSE = "v2-runner-not-implemented"
 FUTURE_ARTIFACT_CAUSE = "future-production-proof-artifact-not-landed"
+MIGRATION_CAUSE = "v2-atomic-migration-not-landed"
 
 
 class RedExpectedFailure(AssertionError):
@@ -75,6 +78,40 @@ def _v2_checker_unavailable_cause() -> str | None:
 def _v2_runner_unavailable_cause() -> str | None:
     """Prove that the v2 runner has not landed at its reserved path."""
     return None if RUNNER.is_file() else RUNNER_CAUSE
+
+
+def _legacy_tooling_is_current() -> bool:
+    """Prove the exact legacy-tool state owned by the next atomic migration."""
+    # Every component is part of the predicate.  Changing even one component
+    # makes this false, so partial migration reaches the assertions below as
+    # an ordinary unexpected failure rather than an intentional RED event.
+    try:
+        production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
+        checker_source = CHECKER.read_text(encoding="utf-8")
+        v1_test_source = V1_TEST_SUITE.read_text(encoding="utf-8")
+        legacy_fixture = tomllib.loads(
+            LEGACY_V1_MANIFEST_FIXTURE.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return False
+    return (
+        production.get("schema") == LEGACY_SCHEMA
+        and f'SCHEMA = "{LEGACY_SCHEMA}"' in checker_source
+        and "TOP_LEVEL_KEYS = frozenset" in checker_source
+        and "def _fixture_rows(" in checker_source
+        and "def _fixture_suite_rows(" in checker_source
+        and "class CheckerTests" in v1_test_source
+        and "def _manifest(" in v1_test_source
+        and "storage-ownership-contracts.v1" in v1_test_source
+        and set(legacy_fixture)
+        == {
+            "schema",
+            "fixture_suites",
+            "fixtures",
+            "source_scans",
+            "source_inventory",
+        }
+    )
 
 
 def _require_v2_checker() -> None:
@@ -418,7 +455,18 @@ DIAGNOSTIC_FIELDS = {
     "E_DEFERRED_ARTIFACT_EXISTS": frozenset({"obligation_id"}),
     "E_COMMAND_KIND": frozenset({"command_id", "kind"}),
     "E_COMMAND_ARGV": frozenset({"command_id"}),
+    "E_COMMAND_ARGV_BINDING": frozenset(
+        {"command_id", "index", "expected", "actual"}
+    ),
+    "E_COMMAND_CWD_ESCAPE": frozenset({"command_id", "cwd"}),
     "E_COMMAND_PATH_ESCAPE": frozenset({"command_id"}),
+    "E_COMMAND_ARGV_PATH_ESCAPE": frozenset(
+        {"command_id", "index", "argument"}
+    ),
+    "E_COMMAND_CWD_SYMLINK_ESCAPE": frozenset({"command_id", "cwd"}),
+    "E_COMMAND_ARGV_SYMLINK_ESCAPE": frozenset(
+        {"command_id", "index", "argument"}
+    ),
     "E_COMMAND_ARTIFACT_BINDING": frozenset({"command_id"}),
     "E_COMMAND_TARGET_BINDING": frozenset({"command_id"}),
     "E_COMMAND_ID_CONFLICT": frozenset({"command_id"}),
@@ -439,6 +487,9 @@ DIAGNOSTIC_FIELDS = {
 # absorbed by a broad "known RED" label.  The registry must be updated in the
 # same change that lands the corresponding checker/runner/artifact.
 RED_EXPECTED_FAILURES = {
+    "test_atomic_v2_migration_removes_legacy_surface": {
+        "cause": "v2-atomic-migration-not-landed",
+    },
     "test_legacy_v1_fixture_and_source_tables_are_rejected": {
         "cause": "v2-checker-not-implemented",
     },
@@ -461,6 +512,30 @@ RED_EXPECTED_FAILURES = {
     },
     "test_command_allowlist_is_typed_and_fail_closed": {
         "cause": "v2-checker-not-implemented",
+    },
+    "test_command_argv_exact_allowlist_is_enforced": {
+        "cause": "v2-checker-not-implemented",
+    },
+    "test_command_cwd_confinement_rejects_absolute_and_parent_escape": {
+        "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"cwd": "/tmp/ledger-command-outside"},
+            {"cwd": "../ledger-command-outside"},
+        ],
+    },
+    "test_command_argv_path_escape_ignores_path_args_metadata": {
+        "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"argument": "/tmp/ledger-command-outside.py"},
+            {"argument": "../ledger-command-outside.py"},
+        ],
+    },
+    "test_command_symlink_confinement_rejects_cwd_and_argv_escape": {
+        "cause": "v2-checker-not-implemented",
+        "subtests": [
+            {"case": "cwd-symlink"},
+            {"case": "argv-symlink"},
+        ],
     },
     "test_command_must_bind_to_exact_artifact_and_target_links": {
         "cause": "v2-checker-not-implemented",
@@ -494,6 +569,9 @@ RED_EXPECTED_FAILURES = {
         "cause": "v2-runner-not-implemented",
     },
     "test_post_receipt_base_manifest_mutation_digest_is_rejected": {
+        "cause": "v2-runner-not-implemented",
+    },
+    "test_post_receipt_command_path_symlink_retarget_is_rejected": {
         "cause": "v2-runner-not-implemented",
     },
     "test_post_receipt_symlink_retarget_is_rejected": {
@@ -568,6 +646,7 @@ RED_CAUSE_EVENT_SHAPES = {
     CHECKER_CAUSE: ("failure", "RedExpectedFailure"),
     RUNNER_CAUSE: ("error", "RedExpectedError"),
     FUTURE_ARTIFACT_CAUSE: ("failure", "RedExpectedFailure"),
+    MIGRATION_CAUSE: ("failure", "RedExpectedFailure"),
 }
 
 
@@ -957,6 +1036,34 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 check=False,
             )
 
+    def run_checker_at_root(
+        self,
+        root: Path,
+        manifest: str,
+        *,
+        manifest_name: str = "ledger.toml",
+        extra_args: tuple[str, ...] = (),
+    ) -> subprocess.CompletedProcess[str]:
+        _require_v2_checker()
+        manifest_path = root / manifest_name
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(manifest, encoding="utf-8")
+        return subprocess.run(
+            [
+                sys.executable,
+                str(CHECKER),
+                "--root",
+                str(root),
+                "--manifest",
+                manifest_name,
+                *extra_args,
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def run_production_checker(
         self, *extra_args: str
     ) -> subprocess.CompletedProcess[str]:
@@ -1170,6 +1277,45 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         result = self.run_production_checker()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_atomic_v2_migration_removes_legacy_surface(self) -> None:
+        if _legacy_tooling_is_current():
+            raise RedExpectedFailure(MIGRATION_CAUSE)
+
+        self.assertTrue(PRODUCTION_MANIFEST.is_file())
+        production = tomllib.loads(PRODUCTION_MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(production.get("schema"), SCHEMA)
+        self.assertEqual(production, tomllib.loads(valid_manifest()))
+
+        self.assertTrue(CHECKER.is_file())
+        checker_source = CHECKER.read_text(encoding="utf-8")
+        self.assertIn(f'SCHEMA = "{SCHEMA}"', checker_source)
+        self.assertNotIn(f'SCHEMA = "{LEGACY_SCHEMA}"', checker_source)
+        for legacy_surface in (
+            "TOP_LEVEL_KEYS = frozenset",
+            "def _fixture_rows(",
+            "def _fixture_suite_rows(",
+            "def _scan_rows(",
+            "def _inventory_rows(",
+            "class FixtureSuite",
+        ):
+            self.assertNotIn(legacy_surface, checker_source)
+
+        self.assertTrue(V2_RED_SUITE.is_file())
+        self.assertFalse(V1_TEST_SUITE.exists())
+
+        self.assertTrue(LEGACY_V1_MANIFEST_FIXTURE.is_file())
+        legacy_fixture = tomllib.loads(
+            LEGACY_V1_MANIFEST_FIXTURE.read_text(encoding="utf-8")
+        )
+        self.assertEqual(legacy_fixture, {"schema": LEGACY_SCHEMA})
+
+        v2_manifests = []
+        for path in sorted((ROOT / "scripts").rglob("*.toml")):
+            parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+            if parsed.get("schema") == SCHEMA:
+                v2_manifests.append(path)
+        self.assertEqual(v2_manifests, [PRODUCTION_MANIFEST])
+
     def test_result_diagnostic_rejects_wrong_schema_and_array_shape(self) -> None:
         for payload in (
             {"schema": "wrong", "diagnostics": [{"code": "E_X", "fields": {}}]},
@@ -1196,18 +1342,15 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
         )
 
     def test_legacy_v1_fixture_and_source_tables_are_rejected(self) -> None:
+        _require_v2_checker()
         self.assertTrue(LEGACY_V1_MANIFEST_FIXTURE.is_file())
         legacy = LEGACY_V1_MANIFEST_FIXTURE.read_text(encoding="utf-8")
         parsed = tomllib.loads(legacy)
-        self.assertEqual(parsed["schema"], "tenferro.storage-ownership-contracts.v1")
-        self.assertIn("fixtures", parsed)
-        self.assertIn("fixture_suites", parsed)
-        self.assertIn("source_scans", parsed)
-        self.assertIn("source_inventory", parsed)
+        self.assertEqual(parsed, {"schema": LEGACY_SCHEMA})
         self.assert_checker_error(
             legacy,
             "E_SCHEMA_VERSION",
-            fields={"actual": "tenferro.storage-ownership-contracts.v1"},
+            fields={"actual": LEGACY_SCHEMA},
         )
 
     def test_one_tagged_obligation_table_replaces_parallel_status_tables(self) -> None:
@@ -1468,6 +1611,142 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
             path_escape, "E_COMMAND_PATH_ESCAPE", fields={"command_id": "cmd-ledger"}
         )
 
+    def test_command_argv_exact_allowlist_is_enforced(self) -> None:
+        mutated = _replace_in_obligation(
+            valid_manifest(),
+            "p1-ledger",
+            'argv = ["python3", "scripts/check-storage-ownership-contracts.py"]',
+            'argv = ["python", "scripts/check-storage-ownership-contracts.py"]',
+        )
+        self.assert_checker_error(
+            mutated,
+            "E_COMMAND_ARGV_BINDING",
+            fields={
+                "command_id": "cmd-ledger",
+                "index": 0,
+                "expected": "python3",
+                "actual": "python",
+            },
+        )
+
+    def test_command_cwd_confinement_rejects_absolute_and_parent_escape(self) -> None:
+        for cwd in ("/tmp/ledger-command-outside", "../ledger-command-outside"):
+            with self.subTest(cwd=cwd):
+                mutated = _replace_in_obligation(
+                    valid_manifest(),
+                    "p1-ledger",
+                    'cwd = "."',
+                    f"cwd = {_quote(cwd)}",
+                )
+                self.assert_checker_error(
+                    mutated,
+                    "E_COMMAND_CWD_ESCAPE",
+                    fields={"command_id": "cmd-ledger", "cwd": cwd},
+                )
+
+    def test_command_argv_path_escape_ignores_path_args_metadata(self) -> None:
+        argv = 'argv = ["python3", "scripts/check-storage-ownership-contracts.py"]'
+        path_args = (
+            'path_args = ["scripts/check-storage-ownership-contracts.py", '
+            '"scripts/storage-ownership-contracts.toml"]'
+        )
+        for argument in ("/tmp/ledger-command-outside.py", "../ledger-command-outside.py"):
+            with self.subTest(argument=argument):
+                mutated = _replace_in_obligation(
+                    valid_manifest(),
+                    "p1-ledger",
+                    argv,
+                    f'argv = ["python3", {_quote(argument)}]',
+                )
+                # The path_args declaration deliberately lies: argv is scanned
+                # independently and cannot be made safe by omitting the value.
+                mutated = _replace_in_obligation(
+                    mutated,
+                    "p1-ledger",
+                    path_args,
+                    "path_args = []",
+                )
+                self.assert_checker_error(
+                    mutated,
+                    "E_COMMAND_ARGV_PATH_ESCAPE",
+                    fields={
+                        "command_id": "cmd-ledger",
+                        "index": 1,
+                        "argument": argument,
+                    },
+                )
+
+    def test_command_symlink_confinement_rejects_cwd_and_argv_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_files(root, repository_files())
+            links = root / "links"
+            links.mkdir(parents=True, exist_ok=True)
+            outside_cwd = root.parent / f"ledger-command-outside-cwd-{root.name}"
+            outside_path = root.parent / f"ledger-command-outside-{root.name}.py"
+            cwd_link = links / "outside-cwd"
+            argv_link = links / "outside-command.py"
+            outside_cwd.mkdir()
+            outside_path.write_text("raise SystemExit(99)\n", encoding="utf-8")
+            try:
+                _create_required_symlink(
+                    cwd_link, outside_cwd, operation="command-cwd-symlink-escape"
+                )
+                _create_required_symlink(
+                    argv_link, outside_path, operation="command-argv-symlink-escape"
+                )
+                cwd_manifest = _replace_in_obligation(
+                    valid_manifest(),
+                    "p1-ledger",
+                    'cwd = "."',
+                    'cwd = "links/outside-cwd"',
+                )
+                argv_manifest = _replace_in_obligation(
+                    valid_manifest(),
+                    "p1-ledger",
+                    'argv = ["python3", "scripts/check-storage-ownership-contracts.py"]',
+                    'argv = ["python3", "links/outside-command.py"]',
+                )
+                argv_manifest = _replace_in_obligation(
+                    argv_manifest,
+                    "p1-ledger",
+                    'path_args = ["scripts/check-storage-ownership-contracts.py", '
+                    '"scripts/storage-ownership-contracts.toml"]',
+                    "path_args = []",
+                )
+                cases = (
+                    (
+                        "cwd-symlink",
+                        cwd_manifest,
+                        "E_COMMAND_CWD_SYMLINK_ESCAPE",
+                        {"command_id": "cmd-ledger", "cwd": "links/outside-cwd"},
+                    ),
+                    (
+                        "argv-symlink",
+                        argv_manifest,
+                        "E_COMMAND_ARGV_SYMLINK_ESCAPE",
+                        {
+                            "command_id": "cmd-ledger",
+                            "index": 1,
+                            "argument": "links/outside-command.py",
+                        },
+                    ),
+                )
+                for case, manifest, code, fields in cases:
+                    with self.subTest(case=case):
+                        result = self.run_checker_at_root(
+                            root, manifest, extra_args=("--diagnostics-json",)
+                        )
+                        self.assert_result_diagnostic(result, code, fields=fields)
+            finally:
+                for link in (cwd_link, argv_link):
+                    if link.is_symlink() or link.exists():
+                        link.unlink()
+                if outside_path.is_symlink() or outside_path.exists():
+                    outside_path.unlink()
+                if outside_cwd.is_symlink() or outside_cwd.exists():
+                    outside_cwd.rmdir()
+
     def test_command_must_bind_to_exact_artifact_and_target_links(self) -> None:
         wrong_id = _replace_once(
             valid_manifest(),
@@ -1689,6 +1968,70 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 root, base_commit, receipt_path, "--diagnostics-json"
             )
         self.assert_result_diagnostic(result, "E_RECEIPT_DIGEST", fields={"digest_kind": "artifact"})
+
+    def test_post_receipt_command_path_symlink_retarget_is_rejected(self) -> None:
+        _require_v2_runner()
+        command_path = "links/cmd-control-plane.py"
+        manifest = valid_manifest(marker=True)
+        manifest = _replace_in_obligation(
+            manifest,
+            "p0-control-plane",
+            'argv = ["python3", "markers/cmd-control-plane.py", '
+            '"crates/tenferro-runtime/tests/execution_engine_identity.rs"]',
+            f'argv = ["python3", "{command_path}", '
+            '"crates/tenferro-runtime/tests/execution_engine_identity.rs"]',
+        )
+        manifest = _replace_in_obligation(
+            manifest,
+            "p0-control-plane",
+            'path_args = ["markers/cmd-control-plane.py", '
+            '"crates/tenferro-runtime/tests/execution_engine_identity.rs"]',
+            f'path_args = ["{command_path}", '
+            '"crates/tenferro-runtime/tests/execution_engine_identity.rs"]',
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base_commit = _init_git_repository(root, manifest, files=marker_files())
+            link = root / command_path
+            link.parent.mkdir(parents=True, exist_ok=True)
+            _create_required_symlink(
+                link,
+                Path("../markers/cmd-control-plane.py"),
+                operation="post-receipt-command-initial",
+            )
+            base_commit = _commit(root, "base internal command symlink")
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                manifest, encoding="utf-8"
+            )
+            (root / "candidate-note").write_text("candidate\n", encoding="utf-8")
+            _commit(root, "candidate with internal command symlink")
+            receipt_path = root / "receipt.json"
+            runner = self.run_repository_runner(root, base_commit, receipt_path)
+            self.assertEqual(runner.returncode, 0, runner.stdout + runner.stderr)
+            outside = root.parent / f"ledger-command-retarget-{root.name}.py"
+            try:
+                outside.write_text("raise SystemExit(99)\n", encoding="utf-8")
+                link.unlink()
+                _create_required_symlink(
+                    link, outside, operation="post-receipt-command-retarget"
+                )
+                result = self.run_repository_checker(
+                    root, base_commit, receipt_path, "--diagnostics-json"
+                )
+            finally:
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                if outside.is_symlink() or outside.exists():
+                    outside.unlink()
+        self.assert_result_diagnostic(
+            result,
+            "E_COMMAND_ARGV_SYMLINK_ESCAPE",
+            fields={
+                "command_id": "cmd-control-plane",
+                "index": 1,
+                "argument": command_path,
+            },
+        )
 
     def test_promotion_rejects_artifact_or_command_identity_change(self) -> None:
         _require_v2_checker()

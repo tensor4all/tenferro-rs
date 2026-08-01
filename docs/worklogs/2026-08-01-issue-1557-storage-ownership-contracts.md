@@ -19,11 +19,13 @@ This checkpoint delivers two artifacts:
   adversarial temporary repositories with real files and real symlinks.
 
 The v2 checker and runner are intentionally not implemented in this
-checkpoint. The existing checker file is still the superseded v1
-implementation; it is not a compatibility implementation of v2. Phase 1
-must later replace it with the v2 checker and add the runner. No production
-storage API, unsafe importer, corruption hook, or test escape hatch was added
-here.
+checkpoint. The existing checker file and v1 test suite are superseded
+deletion debt owned by the immediate atomic checker implementation checkpoint;
+they are not a compatibility implementation or an accepted compatibility
+surface for v2. That checkpoint must replace them atomically, migrate the
+production manifest, and reduce the legacy fixture to a schema-only negative
+fixture. No production storage API, unsafe importer, corruption hook, or test
+escape hatch was added here.
 
 ## Contract decisions fixed by this checkpoint
 
@@ -51,9 +53,10 @@ here.
   symlink escapes cannot become green. Existing deferred artifacts do not
   promote themselves.
 - Command execution is fail-closed and allow-listed by typed command kind.
-  Shell strings, empty argv, path escapes, unknown command kinds, unbound
-  target links, and a failed active command are errors. Active commands run
-  once; deferred commands never run.
+  Shell strings, empty argv, exact argv mutations, absolute/escaping cwd,
+  path-bearing argv escapes even when `path_args` lies, cwd/argv symlink
+  escapes, unknown command kinds, unbound target links, and a failed active
+  command are errors. Active commands run once; deferred commands never run.
 - The storage kernel is provider-neutral and allocation-free on resolve/acquire
   hot paths. It owns one provider vtable in `RootResourceState`; no provider
   enum, per-access `Box`/`Arc`, or receiver-plus-resolved authority is part of
@@ -90,6 +93,9 @@ The executable specification covers:
 
 - the exact production manifest path, explicit current-v1 state, and the
   post-migration canonical-v2 equality/checker-success gate;
+- the atomic migration checkpoint: exact v2 production registry, v2-only
+  checker source, deletion/replacement of the v1 suite, and a schema-only
+  negative legacy fixture;
 - an independent checked-in legacy v1 fixture/source sample and rejection test
   without compatibility;
 - nominal v2 parsing, tagged-state shape, canonical graph edges, P0/P1 root
@@ -108,7 +114,10 @@ The executable specification covers:
   and post-receipt mutation rejection;
 - stable JSON diagnostic codes and identifying fields, with checked fixture
   replacement helpers rather than unchecked text mutation. Every one-fault
-  case requires an exact diagnostic code set and field shape;
+  case requires an exact diagnostic code set and field shape. Command
+  confinement additionally fixes exact argv allowlist differences, cwd
+  lexical escapes, argv path escapes independent of `path_args`, cwd/argv
+  symlink escapes, and post-receipt command-path retarget revalidation;
 - canonical future production-bound borrow, auto-trait, and provider-release
   artifact/command obligations. No inline synthetic borrow compile is
   canonical evidence and no private-name source scan is used;
@@ -203,6 +212,29 @@ records; the checker and runner remain intentionally unimplemented.
 - The normative production-bound borrow statement now names P4, and the
   diagnostic registry documents the new execution-binding code.
 
+## QUALITY follow-up: confinement and atomic migration contract
+
+The remaining Phase-1 QUALITY scope is intentionally limited to the executable
+RED contract; no checker or runner implementation is included. The command
+contract now treats each command's `argv` as an exact allow-listed vector,
+canonicalizes `cwd` and every path-bearing argv value independently of the
+advisory `path_args` metadata, and rejects absolute paths, normalized `..`
+escapes, and symlink escapes with command-specific identifying fields. A
+separate required symlink-capability test remains the prerequisite; dependent
+cases never convert capability failure into a skip. The same command-path
+symlink diagnostic is required when a path accepted for a receipt is retargeted
+outside the repository before checker revalidation.
+
+The atomic migration test is intentionally RED only while the deterministic
+legacy predicate proves the current v1 manifest/checker/parser/suite/fixture
+surface is still present. Once that predicate is false, the test requires the
+production manifest to equal the independent v2 verifier expectation exactly,
+the checker to contain no v1 parser/schema acceptance surface, the v1 suite to
+be absent, and the legacy fixture to contain only its v1 schema marker. The
+production TOML remains the sole machine registry authority after migration;
+Python constants in this RED script are independent verifier expectations and
+the design graph is explanatory documentation.
+
 ## Verification evidence for this checkpoint
 
 Passing deterministic checks:
@@ -229,15 +261,17 @@ Passing deterministic checks:
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 39 tests and
-  reports exactly 43 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 48 tests and
+  reports exactly 52 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (23
-  events), v2 runner absent (17 events), and future production proof artifacts
-  absent (3 events). The required symlink capability test passes on this host;
-  an unsupported host would add an unexpected capability event and return 2.
-  There are no unexpected Python errors.
+  skipped tests. The causes are machine-readable: v2 checker absent (30
+  events), v2 runner absent (18 events), future production proof artifacts
+  absent (3 events), and atomic v2 migration not landed (1 event). The event
+  registry matches exception type, failure/error kind, cause, test, and
+  subtest parameters as a multiset. The required symlink capability test
+  passes on this host; an unsupported host would add an unexpected capability
+  event and return 2. There are no unexpected Python errors.
 
 No cargo implementation tests are claimed here because this checkpoint changes
 only design, ledger specification tests, and provenance. The next Phase 1
@@ -247,12 +281,14 @@ inventory, trybuild, parity, docs, and repository quality gates.
 
 ## Residual work and change control
 
-- Replace the v1 production ledger with the v2 single-table schema in the
-  checker/runner implementation checkpoint; do not add a v1 compatibility
-  parser.
-- Keep the production-manifest equality assertion coupled to the canonical
-  `UNITS`/`EDGES`/obligation model; do not weaken it to schema or checker-exit
-  checks.
+- The immediate checker/runner implementation checkpoint owns the atomic
+  migration: replace the v1 production ledger with the exact v2 single-table
+  registry, delete/replace the v1 checker parser and test suite, and reduce
+  the legacy fixture to schema-only rejection. Do not add a v1 compatibility
+  parser or retain the old tooling as a supported path.
+- Keep the production-manifest equality assertion coupled to the sole machine
+  registry and the independent `UNITS`/`EDGES`/obligation verifier
+  expectations; do not weaken it to schema or checker-exit checks.
 - Implement filesystem-aware artifact resolution, promotion comparison,
   candidate-bound receipts, typed command execution, and derived terminal
   reporting to satisfy this RED suite.
