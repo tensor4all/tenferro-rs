@@ -11,3 +11,4 @@ mod schedule;
 mod signature;
 mod snapshot;
 mod specialization;
+mod architectural_remediation;

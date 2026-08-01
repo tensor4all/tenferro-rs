@@ -100,3 +100,35 @@ touches that test file. The production/library GPU checks pass.
   are not implemented here.
 - Storage ownership, leases, allocation owners, and other later-phase changes
   remain intentionally untouched.
+
+## Retrospective withdrawal and remediation RED
+
+The acceptance of the candidate rooted at `5572bc9df73f5cfcf10ecd29120dbc714855e7ba`
+is withdrawn. The remediation is based on parent `origin/main`
+`0ee2d0dc2f8d21ff62ea682f90f34e4319108ace` after rebasing the preserved Phase 0
+stack. This is a breaking redesign; no compatibility constructor, setter,
+token, or fallback is retained.
+
+The first RED test requires `PreparationOnly` versus
+`Executable(ExecutableEngineContract)`, named ingress contract newtypes, and a
+production reconfiguration path that assigns identity before freeze. The
+current branch fails before test execution because those witness types and
+constructors do not exist:
+
+```text
+cargo test -p tenferro-runtime --lib architectural_remediation --no-fail-fast
+```
+
+Observed RED evidence: unresolved imports for `EngineRegistrationState`,
+`ExecutableEngineContract`, `InputIngressContract`,
+`InputPlacementContract`, `InputSignatureContract`, `RuntimeInputContract`,
+and `ResidentOutputContract`, plus missing
+`EngineRegistration::preparation_only` and `EngineRegistration::executable`.
+The test also exposed that its result type must carry snapshot and
+reconfiguration errors rather than erase them into `RuntimeConfigError`.
+
+The target state is a single immutable executable witness, a consuming
+`CandidateConfig -> BoundCandidateConfig -> freeze` pipeline, and typed
+preparation/execution failures before schedule admission. The existing
+runtime/epoch/registration-qualified event provenance and deliberate transfer
+host bridge remain valid and are not being replaced.
