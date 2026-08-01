@@ -957,6 +957,8 @@ PUB_ITEM = re.compile(
 )
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# Matches #[cfg(test)] and #[cfg(all(test, ...))] but not #[cfg(not(test))].
+INLINE_CFG_TEST = re.compile(r"^#\[cfg\((?:all\()?\s*test\s*[,)]")
 # A doc-example line that binds or names a path without calling anything.
 VACUOUS_EXAMPLE_LINE = re.compile(
     r"^(?:let\s+_\w*\s*(?::[^=]{0,120})?=\s*)?[A-Za-z_][\w:<>]*;$"
@@ -988,7 +990,7 @@ def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
     blocks: list[tuple[int, int]] = []
     index = 0
     while index < total:
-        if lines[index].strip().startswith("#[cfg(test)]"):
+        if INLINE_CFG_TEST.match(lines[index].strip()):
             probe = index + 1
             while probe < total and (
                 not lines[probe].strip() or lines[probe].strip().startswith("#[")
@@ -1249,12 +1251,21 @@ def vacuous_doc_example_findings(
     return findings
 
 
-def ai_report_file_findings(files: list[str]) -> list[Finding]:
+def ai_report_file_findings(
+    files: list[str],
+    *,
+    ref: str | None = None,
+    worktree: bool = False,
+) -> list[Finding]:
     findings: list[Finding] = []
     for path in sorted(files):
         if not AI_REPORT_PATH.search(path):
             continue
         if path.startswith("docs/worklogs/"):
+            continue
+        if changed_file_text(path, ref=ref, worktree=worktree) is None:
+            # The change deletes the report file; that is the remediation,
+            # not a violation.
             continue
         findings.append(
             Finding(
@@ -1334,18 +1345,25 @@ def parse_dependency_diagram(doc_text: str) -> dict[str, set[str]] | None:
     return edges
 
 
+def list_crate_manifests(*, ref: str | None, worktree: bool) -> list[str]:
+    if worktree:
+        return sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "crates").glob("tenferro-*/Cargo.toml")
+        )
+    output = run_git(["ls-tree", "-r", "--name-only", ref or "HEAD", "--", "crates"])
+    return sorted(path for path in output.splitlines() if CRATE_CARGO_TOML.match(path))
+
+
 def dependency_diagram_findings(
     files: list[str],
     *,
     ref: str | None,
     worktree: bool,
 ) -> list[Finding]:
-    relevant = [
-        path
-        for path in files
-        if CRATE_CARGO_TOML.match(path) or path == DEPENDENCY_DIAGRAM_DOC
-    ]
-    if not relevant:
+    changed_manifests = [path for path in files if CRATE_CARGO_TOML.match(path)]
+    doc_changed = DEPENDENCY_DIAGRAM_DOC in files
+    if not changed_manifests and not doc_changed:
         return []
     doc_text = changed_file_text(DEPENDENCY_DIAGRAM_DOC, ref=ref, worktree=worktree)
     if doc_text is None:
@@ -1353,8 +1371,13 @@ def dependency_diagram_findings(
     diagram = parse_dependency_diagram(doc_text)
     if diagram is None:
         return []
+    # A diagram-only change must be validated against every crate manifest,
+    # not only the manifests touched by the same PR.
+    manifests = set(changed_manifests)
+    if doc_changed:
+        manifests.update(list_crate_manifests(ref=ref, worktree=worktree))
     findings: list[Finding] = []
-    for path in sorted(files):
+    for path in sorted(manifests):
         crate_match = CRATE_CARGO_TOML.match(path)
         if not crate_match:
             continue
@@ -1428,7 +1451,7 @@ def deterministic_checks(
     added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    findings.extend(ai_report_file_findings(files))
+    findings.extend(ai_report_file_findings(files, ref=head, worktree=worktree))
     if added_lines is not None:
         findings.extend(
             inline_test_module_findings(

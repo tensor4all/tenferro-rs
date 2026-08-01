@@ -987,13 +987,24 @@ def test_vacuous_doc_example_findings_accepts_real_usage() -> None:
 
 def test_ai_report_file_findings_flags_reports_outside_worklogs() -> None:
     mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            ".superpowers/sdd/task-1-report.md": "report",
+            "notes/session-report.md": "report",
+            "docs/worklogs/2026-08-01-task-report.md": "worklog",
+            "crates/x/src/lib.rs": "code",
+        },
+    )
     findings = mod.ai_report_file_findings(
         [
             ".superpowers/sdd/task-1-report.md",
             "notes/session-report.md",
             "docs/worklogs/2026-08-01-task-report.md",
             "crates/x/src/lib.rs",
-        ]
+        ],
+        ref="HEAD",
+        worktree=False,
     )
     flagged = sorted(item.file for item in findings)
     assert flagged == [
@@ -1141,6 +1152,82 @@ def test_pr_content_hygiene_section_is_parseable() -> None:
     assert "AI-generated" in sections["PR Content Hygiene"]
 
 
+def test_ai_report_file_findings_skips_deleted_reports() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {})
+    findings = mod.ai_report_file_findings(
+        [".superpowers/sdd/task-1-report.md"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_rust_inline_test_blocks_recognizes_cfg_all_test() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            '#[cfg(all(test, feature = "cuda"))]',
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 6)]
+
+
+def test_rust_inline_test_blocks_ignores_cfg_not_test() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "#[cfg(not(test))]",
+            "mod production {",
+            "    fn run() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == []
+
+
+def test_dependency_diagram_findings_checks_all_crates_on_doc_only_change() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    mod.list_crate_manifests = lambda *, ref, worktree: [
+        "crates/tenferro-fft/Cargo.toml"
+    ]
+    findings = mod.dependency_diagram_findings(
+        [mod.DEPENDENCY_DIAGRAM_DOC],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-cpu" in findings[0].detail
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1195,6 +1282,10 @@ def main() -> int:
         test_select_rule_sections_routes_unit_test_rules_for_src_rust,
         test_select_rule_sections_falls_back_for_unrouted_paths,
         test_pr_content_hygiene_section_is_parseable,
+        test_ai_report_file_findings_skips_deleted_reports,
+        test_rust_inline_test_blocks_recognizes_cfg_all_test,
+        test_rust_inline_test_blocks_ignores_cfg_not_test,
+        test_dependency_diagram_findings_checks_all_crates_on_doc_only_change,
     ]:
         test()
     return 0
