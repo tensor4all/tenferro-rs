@@ -1311,6 +1311,65 @@ def test_dependency_diagram_findings_reports_deleted_crate_entry() -> None:
     assert "Deleted crate" in findings[0].summary
 
 
+def test_rust_inline_test_blocks_handles_multiline_cfg_attribute() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            "#[cfg(all(",
+            '    feature = "cuda",',
+            "    test",
+            "))]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 9)]
+
+
+def test_rust_inline_test_blocks_skips_multiline_non_cfg_attribute() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "#[cfg(test)]",
+            "#[allow(",
+            "    dead_code",
+            ")]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(1, 8)]
+
+
+def test_module_publicly_reachable_follows_pub_use_reexport() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": "pub fn helper() {}",
+            "crates/x/src/lib.rs": "mod concrete;\npub use concrete::helper;",
+        },
+    )
+    assert mod.module_publicly_reachable(
+        "crates/x/src/concrete.rs", ref="HEAD", worktree=False
+    )
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": "pub fn helper() {}",
+            "crates/x/src/lib.rs": "mod concrete;",
+        },
+    )
+    assert not mod.module_publicly_reachable(
+        "crates/x/src/concrete.rs", ref="HEAD", worktree=False
+    )
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1374,6 +1433,9 @@ def main() -> int:
         test_module_publicly_reachable_respects_private_parent_declaration,
         test_missing_doc_example_findings_skips_privately_declared_module,
         test_dependency_diagram_findings_reports_deleted_crate_entry,
+        test_rust_inline_test_blocks_handles_multiline_cfg_attribute,
+        test_rust_inline_test_blocks_skips_multiline_non_cfg_attribute,
+        test_module_publicly_reachable_follows_pub_use_reexport,
     ]:
         test()
     return 0

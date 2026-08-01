@@ -997,6 +997,22 @@ def changed_file_text(path: str, *, ref: str | None, worktree: bool) -> str | No
         return None
 
 
+def read_attribute(lines: list[str], start: int) -> tuple[str, int]:
+    """Join a possibly multiline `#[...]` attribute into one string.
+
+    Returns the whitespace-normalized attribute text and the 0-based index of
+    its last line.
+    """
+    text = lines[start].strip()
+    end = start
+    while (
+        text.count("[") > text.count("]") or text.count("(") > text.count(")")
+    ) and end + 1 < len(lines):
+        end += 1
+        text += " " + lines[end].strip()
+    return text, end
+
+
 def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
     """Return 1-based (start, end) line spans of inline `#[cfg(test)] mod` blocks."""
     lines = text.splitlines()
@@ -1004,12 +1020,22 @@ def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
     blocks: list[tuple[int, int]] = []
     index = 0
     while index < total:
-        if is_cfg_test_attr(lines[index].strip()):
-            probe = index + 1
-            while probe < total and (
-                not lines[probe].strip() or lines[probe].strip().startswith("#[")
-            ):
-                probe += 1
+        stripped = lines[index].strip()
+        if stripped.startswith("#[cfg("):
+            attr_text, attr_end = read_attribute(lines, index)
+        else:
+            attr_text, attr_end = stripped, index
+        if is_cfg_test_attr(attr_text):
+            probe = attr_end + 1
+            while probe < total:
+                probe_stripped = lines[probe].strip()
+                if not probe_stripped:
+                    probe += 1
+                elif probe_stripped.startswith("#["):
+                    _, probe = read_attribute(lines, probe)
+                    probe += 1
+                else:
+                    break
             if probe < total and INLINE_TEST_MOD.match(lines[probe].strip()):
                 depth = 0
                 end = total - 1
@@ -1185,7 +1211,16 @@ def module_publicly_reachable(
             return True
         visibility = declaration.group(1) or ""
         if not visibility.startswith("pub") or visibility.startswith("pub("):
-            return False
+            # A private module can still expose items via a plain `pub use`
+            # re-export in the declaring file; treat that as reachable.
+            declaring_text = changed_file_text(
+                declaring_file.as_posix(), ref=ref, worktree=worktree
+            )
+            reexport = re.compile(
+                r"^\s*pub\s+use\b[^;]*\b" + re.escape(name) + r"\b", re.M
+            )
+            if declaring_text is None or not reexport.search(declaring_text):
+                return False
         current = declaring_file
     return True
 
