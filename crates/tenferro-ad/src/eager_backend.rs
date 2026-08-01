@@ -48,6 +48,18 @@ impl EagerBackend {
         Self::Cpu(backend)
     }
 
+    pub(crate) fn cpu_backend(&self) -> Option<&CpuBackend> {
+        match self {
+            Self::Cpu(backend) => Some(backend),
+            #[cfg(test)]
+            Self::Recording(_) => None,
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) => None,
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(_) => None,
+        }
+    }
+
     pub(crate) fn cpu_snapshot(&self) -> Option<CpuBackend> {
         match self {
             Self::Cpu(backend) => Some(backend.clone()),
@@ -95,8 +107,8 @@ pub(crate) fn eager_runtime_for_backend(
     backend: &EagerBackend,
 ) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
-    if let Some(backend) = backend.cpu_snapshot() {
-        builder.register_engine(cpu_runtime_engine_registration(&backend)?)?;
+    if let Some(backend) = backend.cpu_backend() {
+        builder.register_engine(cpu_runtime_engine_registration(backend)?)?;
     }
     #[cfg(feature = "cuda")]
     if let EagerBackend::Cuda(backend) = backend {

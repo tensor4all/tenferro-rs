@@ -1022,6 +1022,7 @@ fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) 
 /// ```
 #[derive(Clone)]
 pub struct CpuBackend {
+    runtime_identity: CpuRuntimeIdentity,
     shared: Arc<CpuBackendState>,
     requested: CpuPlacement,
     resolved: ResolvedCpuExecution,
@@ -1029,6 +1030,42 @@ pub struct CpuBackend {
     provider_bundle: CpuProviderBundle,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
 }
+
+/// Opaque identity for one CPU backend executable witness.
+///
+/// The token carries no backend, execution, storage, or mutation authority.
+/// Cloning a token is cheap and preserves identity; separately constructed
+/// backends and backends returned after immutable witness resources change use
+/// distinct tokens.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuBackend;
+///
+/// let identity = CpuBackend::new().runtime_identity();
+/// assert_eq!(identity, identity.clone());
+/// ```
+#[derive(Clone, Debug)]
+pub struct CpuRuntimeIdentity {
+    marker: Arc<()>,
+}
+
+impl CpuRuntimeIdentity {
+    fn fresh() -> Self {
+        Self {
+            marker: Arc::new(()),
+        }
+    }
+}
+
+impl PartialEq for CpuRuntimeIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.marker, &other.marker)
+    }
+}
+
+impl Eq for CpuRuntimeIdentity {}
 
 fn resolve_discovered_topology(
     kind: CpuBackendKind,
@@ -1132,6 +1169,7 @@ impl CpuBackend {
                     buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
                     indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
                 }),
+                runtime_identity: CpuRuntimeIdentity::fresh(),
                 requested: CpuPlacement::Auto,
                 resolved,
                 engine,
@@ -1199,6 +1237,7 @@ impl CpuBackend {
                 buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
                 indexed_plan_cache_limits: Mutex::new(DEFAULT_INDEXED_PLAN_CACHE_LIMITS),
             }),
+            runtime_identity: CpuRuntimeIdentity::fresh(),
             requested: CpuPlacement::Auto,
             resolved,
             engine: base_engine,
@@ -1473,6 +1512,7 @@ impl CpuBackend {
         let resolved = ResolvedCpuExecution::ExternalManaged(engine.placement().clone());
         let kind = CpuBackendKind::default_compiled();
         let backend = Self {
+            runtime_identity: CpuRuntimeIdentity::fresh(),
             shared: Arc::new(CpuBackendState {
                 topology,
                 engines: CpuEngineRegistry::ExternalPrebuilt(ExternalEngineRegistry {
@@ -1719,6 +1759,7 @@ impl CpuBackend {
         if self.shared.is_external() {
             let engine = self.shared.external_engine_for(requested)?;
             return Ok(Self {
+                runtime_identity: CpuRuntimeIdentity::fresh(),
                 shared: Arc::clone(&self.shared),
                 requested,
                 resolved: ResolvedCpuExecution::ExternalManaged(engine.placement().clone()),
@@ -1735,6 +1776,7 @@ impl CpuBackend {
         )?;
         if requested == CpuPlacement::Auto && !managed_affinity_available {
             return Ok(Self {
+                runtime_identity: CpuRuntimeIdentity::fresh(),
                 shared: Arc::clone(&self.shared),
                 requested,
                 resolved,
@@ -1767,6 +1809,7 @@ impl CpuBackend {
             .shared
             .managed_engine_for(&engine_placement, requested)?;
         Ok(Self {
+            runtime_identity: CpuRuntimeIdentity::fresh(),
             shared: Arc::clone(&self.shared),
             requested,
             resolved,
@@ -1924,20 +1967,14 @@ impl CpuBackend {
         &self.provider_bundle
     }
 
-    /// Return whether two backend handles retain the same runtime registration
-    /// identity.
+    /// Return the opaque identity of this backend's executable witness.
     ///
-    /// Clones of one backend share the execution domain, selected engine, and
-    /// immutable provider bundle. Replacing any of those resources requires a
-    /// fresh runtime registration even when the public provider/device target
-    /// remains unchanged.
-    pub fn shares_runtime_identity_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.shared, &other.shared)
-            && Arc::ptr_eq(&self.engine, &other.engine)
-            && self
-                .provider_bundle
-                .shares_identity_with(&other.provider_bundle)
-            && self.allocation_domain() == other.allocation_domain()
+    /// The identity has no access to backend execution or storage resources.
+    /// Clones of this backend retain the identity, while separately constructed
+    /// backends and backends returned after changing immutable witness resources
+    /// receive a distinct identity.
+    pub fn runtime_identity(&self) -> CpuRuntimeIdentity {
+        self.runtime_identity.clone()
     }
 
     /// Return this backend with an immutable construction-time provider bundle.
@@ -1965,6 +2002,7 @@ impl CpuBackend {
     ) -> Result<Self, CpuProviderBundleInstallError> {
         self.validate_provider_bundle_for_domains(&bundle)?;
         self.provider_bundle = bundle;
+        self.runtime_identity = CpuRuntimeIdentity::fresh();
         Ok(self)
     }
 
@@ -3331,6 +3369,7 @@ impl CpuBackend {
     /// ```
     pub fn with_allocation_domain(mut self, domain: Arc<dyn SharedTensorAllocationDomain>) -> Self {
         self.allocation_domain = Some(domain);
+        self.runtime_identity = CpuRuntimeIdentity::fresh();
         self
     }
 

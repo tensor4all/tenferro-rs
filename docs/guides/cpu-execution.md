@@ -151,6 +151,12 @@ the stable public provider identity. `provider_diagnostic()` may mention a
 compiled provider such as OpenBLAS or a runtime-injected provider, but that
 string is diagnostic only and may change.
 
+Runtime registration uses the opaque `CpuRuntimeIdentity` witness token for
+exact backend identity. Clones of one backend share the token; a newly
+constructed backend or a backend whose provider bundle, placement, or shared
+allocation domain changes receives a distinct token. The token carries no
+execution or storage authority and is not a provider/device identifier.
+
 ```rust
 let backend = tenferro_cpu::CpuBackend::new();
 let info = backend.execution_info();

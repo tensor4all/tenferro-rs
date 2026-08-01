@@ -178,7 +178,7 @@ pub use affinity_policy::{
 };
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
-    ExternalCpuDomainRegistryError,
+    CpuRuntimeIdentity, ExternalCpuDomainRegistryError,
 };
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;

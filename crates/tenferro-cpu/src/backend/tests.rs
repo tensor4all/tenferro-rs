@@ -389,6 +389,21 @@ fn explicit_backend_kind_constructor_records_selection() {
 }
 
 #[test]
+fn cpu_runtime_identity_changes_when_provider_bundle_changes() {
+    let backend = CpuBackend::new();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+
+    assert_eq!(
+        backend.runtime_identity(),
+        backend.clone().runtime_identity()
+    );
+    assert_ne!(backend.runtime_identity(), replacement.runtime_identity());
+}
+
+#[test]
 fn cpu_backend_can_be_bound_to_a_shared_allocation_domain() {
     #[derive(Debug)]
     struct TestDomain(tenferro_tensor::AllocationDomainId);
@@ -410,11 +425,18 @@ fn cpu_backend_can_be_bound_to_a_shared_allocation_domain() {
     }
 
     let domain = tenferro_tensor::AllocationDomainId::fresh();
-    let backend = CpuBackend::new().with_allocation_domain(Arc::new(TestDomain(domain)));
+    let original = CpuBackend::new();
+    let original_identity = original.runtime_identity();
+    let backend = original.with_allocation_domain(Arc::new(TestDomain(domain)));
 
     assert_eq!(backend.allocation_domain(), Some(domain));
     assert_eq!(backend.clone().allocation_domain(), Some(domain));
     assert_eq!(backend.shared_allocation_domain().unwrap().id(), domain);
+    assert_ne!(backend.runtime_identity(), original_identity);
+    assert_eq!(
+        backend.runtime_identity(),
+        backend.clone().runtime_identity()
+    );
 }
 
 #[test]
@@ -424,6 +446,8 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
     let mut placed = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
     let clone = placed.clone();
 
+    assert_ne!(backend.runtime_identity(), placed.runtime_identity());
+    assert_eq!(placed.runtime_identity(), clone.runtime_identity());
     assert_eq!(
         placed.coordinator_id_for_test(),
         clone.coordinator_id_for_test()

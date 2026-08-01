@@ -113,6 +113,37 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 }
 
 #[test]
+fn eager_cpu_registration_cache_is_opaque_and_lock_ordered_source_contract() {
+    let source = include_str!("../../src/eager.rs");
+    assert!(
+        source.contains("registered_cpu_identity: Mutex<Option<CpuRuntimeIdentity>>"),
+        "eager runtime should cache only the typed CPU runtime identity"
+    );
+    assert!(
+        !source.contains("registered_cpu_backend: Mutex<Option<CpuBackend>>"),
+        "eager runtime must not cache a full CPU backend as identity"
+    );
+
+    let synchronization = source
+        .split_once("fn synchronize_runtime_registration_for_backend")
+        .and_then(|(_, rest)| rest.split_once("fn from_backend"))
+        .map(|(body, _)| body)
+        .expect("missing eager CPU registration synchronization helper");
+    assert!(
+        synchronization.contains("Lock ordering:"),
+        "CPU registration synchronization must document its lock ordering"
+    );
+    assert!(
+        synchronization.contains("lock_registered_cpu_identity"),
+        "CPU registration synchronization must use the identity lock"
+    );
+    assert!(
+        !synchronization.contains("shares_runtime_identity_with"),
+        "CPU registration synchronization must compare the opaque token directly"
+    );
+}
+
+#[test]
 fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() {
     let source = include_str!("../../src/eager_ops.rs");
 

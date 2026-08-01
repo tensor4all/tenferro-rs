@@ -17,7 +17,7 @@ use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
 use computegraph::ValueRef;
-use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
+use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement, CpuRuntimeIdentity};
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
@@ -548,7 +548,7 @@ pub struct EagerRuntime {
     id: ContextId,
     runtime: Runtime,
     pub(crate) backend: Mutex<EagerBackend>,
-    registered_cpu_backend: Mutex<Option<CpuBackend>>,
+    registered_cpu_identity: Mutex<Option<CpuRuntimeIdentity>>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -647,10 +647,10 @@ impl EagerRuntime {
         })
     }
 
-    fn lock_registered_cpu_backend(&self) -> Result<MutexGuard<'_, Option<CpuBackend>>> {
-        self.registered_cpu_backend.lock().map_err(|_| {
+    fn lock_registered_cpu_identity(&self) -> Result<MutexGuard<'_, Option<CpuRuntimeIdentity>>> {
+        self.registered_cpu_identity.lock().map_err(|_| {
             Error::runtime_state(
-                "eager_registered_cpu_backend",
+                "eager_registered_cpu_identity",
                 ErrorPhase::Execution,
                 "lock poisoned",
             )
@@ -727,18 +727,23 @@ impl EagerRuntime {
         let engine_id = cpu_runtime_engine_id().map_err(|source| {
             runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source)
         })?;
+        // Lock ordering: callers hold the eager backend lock first (and the
+        // extension-cache lock second when applicable); this helper then
+        // acquires the CPU identity lock before the runtime snapshot lock.
+        // Runtime reconfiguration never acquires an eager lock in reverse.
+        let mut registered_cpu_identity = self.lock_registered_cpu_identity()?;
         let snapshot = self
             .runtime
             .snapshot()
             .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
         let has_cpu_engine = snapshot.engine(&engine_id).is_some();
-        let mut registered_cpu_backend = self.lock_registered_cpu_backend()?;
-        match backend.cpu_snapshot() {
+        match backend.cpu_backend() {
             Some(backend) => {
+                let backend_identity = backend.runtime_identity();
                 if has_cpu_engine
-                    && registered_cpu_backend
+                    && registered_cpu_identity
                         .as_ref()
-                        .is_some_and(|registered| registered.shares_runtime_identity_with(&backend))
+                        .is_some_and(|registered| registered == &backend_identity)
                 {
                     return Ok(());
                 }
@@ -758,7 +763,7 @@ impl EagerRuntime {
                     .map_err(|source| {
                         runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
                     })?;
-                *registered_cpu_backend = Some(backend);
+                *registered_cpu_identity = Some(backend_identity);
                 Ok(())
             }
             None if has_cpu_engine => {
@@ -770,11 +775,11 @@ impl EagerRuntime {
                     .map_err(|source| {
                         runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
                     })?;
-                *registered_cpu_backend = None;
+                *registered_cpu_identity = None;
                 Ok(())
             }
             None => {
-                *registered_cpu_backend = None;
+                *registered_cpu_identity = None;
                 Ok(())
             }
         }
@@ -794,12 +799,12 @@ impl EagerRuntime {
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
         let runtime = build_eager_runtime_for_backend(&backend);
-        let registered_cpu_backend = backend.cpu_snapshot();
+        let registered_cpu_identity = backend.cpu_backend().map(CpuBackend::runtime_identity);
         Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
-            registered_cpu_backend: Mutex::new(registered_cpu_backend),
+            registered_cpu_identity: Mutex::new(registered_cpu_identity),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,

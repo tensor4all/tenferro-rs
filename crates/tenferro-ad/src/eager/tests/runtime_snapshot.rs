@@ -218,6 +218,23 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
 }
 
 #[test]
+fn cpu_runtime_identity_is_shared_only_by_exact_backend_clones() {
+    let backend = CpuBackend::new();
+    let clone = backend.clone();
+    let replacement = backend
+        .clone()
+        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .unwrap();
+
+    assert_eq!(backend.runtime_identity(), clone.runtime_identity());
+    assert_ne!(backend.runtime_identity(), replacement.runtime_identity());
+    assert_ne!(
+        CpuBackend::new().runtime_identity(),
+        CpuBackend::new().runtime_identity()
+    );
+}
+
+#[test]
 fn runtime_snapshot_refresh_reports_typed_configuration_failures() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
     let rows: [RuntimeConfigurationFailureRow; 3] = [
