@@ -92,6 +92,7 @@ use cubecl::prelude::{
 };
 use cubecl::prelude::{CubeCount, Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::CacheStats;
@@ -132,8 +133,8 @@ mod runtime_adapter;
 
 use dispatch::{
     alloc_bool_output, alloc_output, alloc_output_for_op, bool_tensor_array_arg, comptime_sequence,
-    cube_count_for_len, cube_count_for_len_for_op, cube_dim_1d, dtype_mismatch, ensure_axes_unique,
-    ensure_axis, ensure_rank, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    cube_count_for_len, cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
@@ -330,15 +331,21 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 
 mod cuda_zero_scalar {
     use cubecl::prelude::{CubeElement, CubePrimitive};
+    use cudarc::driver::ValidAsZeroBits;
 
-    pub trait Sealed: CubeElement + CubePrimitive + Clone + Send + Sync + 'static {
-        // Marker trait; bounds are available to the CUDA implementation.
+    pub trait Sealed:
+        CubeElement + CubePrimitive + ValidAsZeroBits + Clone + Send + Sync + 'static
+    {
+        // Marker trait; all-zero bits are valid for every admitted scalar.
     }
 
     impl Sealed for f64 {}
 }
 
 /// Scalar types supported by [`CudaBackend::zeros`].
+///
+/// Every admitted scalar has a valid all-zero bit pattern. For the initial
+/// `f64` implementation, that pattern is IEEE 754 positive zero.
 ///
 /// # Examples
 ///
@@ -797,7 +804,7 @@ impl CudaBackend {
 
     /// Allocate a one-dimensional CUDA tensor initialized to positive zero.
     ///
-    /// The initialization kernel is enqueued on this backend's current stream;
+    /// The asynchronous byte memset is enqueued on this backend's current stream;
     /// this method does not synchronize or transfer data to the host.
     ///
     /// # Examples
@@ -813,31 +820,32 @@ impl CudaBackend {
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the
-    /// requested length cannot be represented by the CUDA launch or allocation,
+    /// requested allocation byte length cannot be represented,
     /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
     /// bound to this backend's runtime.
     pub fn zeros<T: CudaZeroScalar>(&self, len: usize) -> crate::Result<TypedTensor<T>> {
         const OP: &str = "zeros";
-        let count = cube_count_for_len_for_op(len, OP)?;
+        let byte_len = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                OP,
+                "length",
+                format!("CUDA allocation byte length overflows usize for {len} elements"),
+            )
+        })?;
         let output = alloc_output_for_op::<T>(self.runtime(), &[len], OP)?;
-        launch_nullary_into(
-            self.runtime(),
-            &output,
-            OP,
-            count,
-            cube_dim_1d(),
-            |client, count, dim, out| {
-                // SAFETY: `output` is a fresh, unaliased dense allocation of exactly
-                // `len` elements. `launch_nullary_into` validates its runtime and
-                // backing length before binding it; the launch covers the domain, and
-                // the kernel guards every write with `ABSOLUTE_POS < out.len()`.
-                unsafe {
-                    structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                        client, count, dim, out,
-                    );
-                }
-            },
-        )?;
+        if len == 0 {
+            return Ok(output);
+        }
+
+        self.runtime().set_current_cuda_context(OP)?;
+        let ptr = interop::typed_device_ptr(self.runtime(), &output, OP)?;
+        let stream = interop::raw_cuda_stream(self.runtime(), OP)? as usize as cudaStream_t;
+        // SAFETY: `output` owns a fresh CubeCL allocation of `byte_len` bytes and
+        // keeps it alive after this call. `CudaZeroScalar` is sealed to types for
+        // which all-zero bits are valid, and the memset is ordered on CubeCL's
+        // current stream before any subsequent use of the returned tensor.
+        unsafe { cuda_result::memset_d8_async(ptr, 0, byte_len, stream) }
+            .map_err(|err| crate::Error::backend_source(OP, err))?;
         Ok(output)
     }
 

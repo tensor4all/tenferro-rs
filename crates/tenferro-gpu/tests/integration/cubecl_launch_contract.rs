@@ -1449,6 +1449,47 @@ fn cubecl_gemm_zero_contracting_path_stays_device_native() {
 }
 
 #[test]
+fn cuda_zeros_uses_stream_ordered_byte_memset() {
+    let source = cubecl_source("mod.rs");
+    let scalar = source_section(
+        &source,
+        "mod cuda_zero_scalar",
+        "impl CudaZeroScalar for f64",
+    );
+    let zeros = source_section(
+        &source,
+        "    pub fn zeros<T: CudaZeroScalar>",
+        "    fn cutensor_handle",
+    );
+
+    assert!(scalar.contains("ValidAsZeroBits"));
+    assert_ordered_needles(
+        "CudaBackend::zeros",
+        zeros,
+        &[
+            "checked_mul(core::mem::size_of::<T>())",
+            "alloc_output_for_op::<T>",
+            "if len == 0",
+            "set_current_cuda_context(OP)",
+            "interop::typed_device_ptr",
+            "interop::raw_cuda_stream",
+            "cuda_result::memset_d8_async",
+        ],
+    );
+    for banned in [
+        "fill_zero_kernel",
+        "launch_nullary_into",
+        "create_from_slice",
+        "synchronize",
+    ] {
+        assert!(
+            !zeros.contains(banned),
+            "CudaBackend::zeros must stay asynchronous and device-native: {banned}"
+        );
+    }
+}
+
+#[test]
 fn cubecl_raw_device_pointer_paths_use_exposed_provenance() {
     for (name, source) in [
         ("cubecl/interop.rs", cubecl_source("interop.rs")),
