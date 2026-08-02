@@ -1,8 +1,8 @@
 # Phase 0 retrospective architectural remediation
 
-Issue: #1556 under #1555  
-Parent after rebase: `0ee2d0dc2f8d21ff62ea682f90f34e4319108ace`  
-Accepted-but-withdrawn candidate: `5572bc9df73f5cfcf10ecd29120dbc714855e7ba`  
+Issue: #1556 under #1555
+Parent after rebase: `0ee2d0dc2f8d21ff62ea682f90f34e4319108ace`
+Accepted-but-withdrawn candidate: `5572bc9df73f5cfcf10ecd29120dbc714855e7ba`
 Compatibility: none; the withdrawn candidate API is replaced in place.
 
 ## Design decision
