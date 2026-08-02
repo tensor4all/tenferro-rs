@@ -113,53 +113,6 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 }
 
 #[test]
-fn eager_registration_cache_is_opaque_and_lock_ordered_source_contract() {
-    let source = include_str!("../../src/eager.rs");
-    assert!(
-        source.contains("registered_eager_registration: Mutex<EagerBackendRegistrationState>"),
-        "eager runtime should cache typed provider-neutral registration state"
-    );
-    assert!(
-        source.contains("enum EagerBackendRegistrationState"),
-        "eager runtime should model registration as an explicit sum state"
-    );
-    assert!(
-        source.contains("Synchronized(EagerBackendIdentity)"),
-        "synchronized registration should retain the opaque backend identity"
-    );
-    assert!(
-        source.contains("ReconciliationRequired"),
-        "registration state should represent quarantine explicitly"
-    );
-    assert!(
-        !source.contains("identity: Option<EagerBackendIdentity>"),
-        "registration state must not encode quarantine through Option"
-    );
-    assert!(
-        !source.contains("registered_eager_backend: Mutex<Option<EagerBackend>>"),
-        "eager runtime must not cache a full backend as identity"
-    );
-
-    let synchronization = source
-        .split_once("fn synchronize_runtime_registration_for_backend")
-        .and_then(|(_, rest)| rest.split_once("fn from_backend"))
-        .map(|(body, _)| body)
-        .expect("missing eager CPU registration synchronization helper");
-    assert!(
-        synchronization.contains("Lock ordering:"),
-        "CPU registration synchronization must document its lock ordering"
-    );
-    assert!(
-        synchronization.contains("lock_eager_registration"),
-        "registration synchronization must use the registration-state lock"
-    );
-    assert!(
-        !synchronization.contains("shares_runtime_identity_with"),
-        "CPU registration synchronization must compare the opaque token directly"
-    );
-}
-
-#[test]
 fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() {
     let source = include_str!("../../src/eager_ops.rs");
 

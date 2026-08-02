@@ -98,26 +98,6 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
 }
 
 #[test]
-fn eager_runtime_session_callback_is_excluded_when_reconciliation_fails() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    {
-        let mut backend = runtime.backend.lock().unwrap();
-        *backend = EagerBackend::Cpu(CpuBackend::new());
-    }
-    runtime.inject_next_registration_failure_for_test().unwrap();
-
-    let callback_calls = AtomicUsize::new(0);
-    let error = runtime
-        .with_execution_session(|_| {
-            callback_calls.fetch_add(1, Ordering::SeqCst);
-        })
-        .unwrap_err();
-
-    assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
-    assert!(matches!(error, Error::RuntimeStateSource { .. }));
-}
-
-#[test]
 fn eager_materialization_uses_backend() {
     let mut cpu_backend = EagerBackend::cpu(CpuBackend::new());
     assert!(format!("{cpu_backend:?}").contains("Cpu"));

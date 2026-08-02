@@ -17,11 +17,11 @@ use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
 use computegraph::ValueRef;
-use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement, CpuRuntimeIdentity};
+use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
 #[cfg(feature = "cuda")]
-use tenferro_gpu::{CudaBackend, CudaRuntimeIdentity};
+use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::{WebGpuBackend, WebGpuRuntimeIdentity};
+use tenferro_gpu::WebGpuBackend;
 #[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
@@ -41,9 +41,7 @@ use tenferro_tensor::{
 };
 
 use crate::eager_backend::{
-    cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_default_engine_families,
-    eager_engine_registration_for_backend, eager_runtime_for_backend, plan_eager_registration,
-    EagerBackend, EagerBackendRegistration, EagerEngineFamily, EagerRegistrationTarget,
+    cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_runtime_for_backend, EagerBackend,
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
@@ -77,80 +75,6 @@ struct CpuRuntimeSelection {
     registration_identity: RegistrationIdentity,
     capabilities: CoreCapabilityBundle,
 }
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EagerBackendIdentity {
-    /// No executable eager engine is installed for this backend. This is the
-    /// test-only recording/preparation state.
-    NoEngine,
-    Cpu {
-        identity: CpuRuntimeIdentity,
-    },
-    #[cfg(feature = "cuda")]
-    Cuda {
-        identity: CudaRuntimeIdentity,
-    },
-    #[cfg(feature = "webgpu")]
-    WebGpu {
-        identity: WebGpuRuntimeIdentity,
-    },
-}
-
-impl EagerBackendIdentity {
-    fn for_backend(backend: &EagerBackend) -> Self {
-        match backend {
-            EagerBackend::Cpu(backend) => Self::Cpu {
-                identity: backend.runtime_identity(),
-            },
-            #[cfg(test)]
-            EagerBackend::Recording(_) => Self::NoEngine,
-            #[cfg(feature = "cuda")]
-            EagerBackend::Cuda(backend) => Self::Cuda {
-                identity: backend.runtime_identity(),
-            },
-            #[cfg(feature = "webgpu")]
-            EagerBackend::WebGpu(backend) => Self::WebGpu {
-                identity: backend.runtime_identity(),
-            },
-        }
-    }
-
-    fn family(&self) -> EagerEngineFamily {
-        match self {
-            Self::NoEngine => EagerEngineFamily::NoEngine,
-            Self::Cpu { .. } => EagerEngineFamily::Cpu,
-            #[cfg(feature = "cuda")]
-            Self::Cuda { .. } => EagerEngineFamily::Cuda,
-            #[cfg(feature = "webgpu")]
-            Self::WebGpu { .. } => EagerEngineFamily::WebGpu,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EagerBackendRegistrationState {
-    Synchronized(EagerBackendIdentity),
-    ReconciliationRequired,
-}
-
-impl EagerBackendRegistrationState {
-    fn synchronized_for_backend(backend: &EagerBackend) -> Self {
-        Self::Synchronized(EagerBackendIdentity::for_backend(backend))
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-enum RegistrationFailureInjection {
-    Disabled,
-    FailNext,
-}
-
-#[cfg(test)]
-#[derive(Debug, thiserror::Error)]
-#[error("test-injected eager engine registration failure")]
-struct InjectedRegistrationFailure;
 
 #[derive(Debug, Default, Clone)]
 struct EagerOpProfileEntry {
@@ -487,7 +411,6 @@ impl fmt::Debug for CpuPlacementBoundEager {
 
 impl CpuPlacementBoundEager {
     fn refresh_runtime_selection(&mut self) -> Result<()> {
-        self.runtime.reconcile_backend_before_use()?;
         let current_epoch = self.runtime.runtime.epoch().map_err(|source| {
             runtime_state_source("CpuPlacementBoundEager::refresh_runtime_selection", source)
         })?;
@@ -612,17 +535,10 @@ impl CpuPlacementBoundEager {
 pub struct EagerRuntime {
     id: ContextId,
     runtime: Runtime,
-    pub(crate) backend: Mutex<EagerBackend>,
-    // The private Runtime can change its known eager engine registrations only
-    // through synchronize_runtime_registration_for_backend. The backend mutex
-    // is the serialization boundary for that path; extension-only Runtime
-    // changes do not alter the backend witness and therefore do not invalidate
-    // this cache.
-    registered_eager_registration: Mutex<EagerBackendRegistrationState>,
-    #[cfg(test)]
-    registration_snapshot_reads: AtomicUsize,
-    #[cfg(test)]
-    registration_failure_injection: Mutex<RegistrationFailureInjection>,
+    // The backend and its exact runtime engine registration are selected
+    // together during construction and remain paired for this runtime's
+    // lifetime. The mutex only serializes mutable backend operations.
+    backend: Mutex<EagerBackend>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -715,73 +631,10 @@ impl fmt::Debug for EagerRuntime {
 }
 
 impl EagerRuntime {
-    fn reconcile_backend_before_use(&self) -> Result<()> {
-        // A placement-bound session owns its backend snapshot independently of
-        // the eager backend mutex. A completed target witness is the fast path;
-        // only quarantine needs to reacquire the central backend lock and
-        // attempt publication before the bound session can proceed.
-        let registration = self.lock_eager_registration()?;
-        if !matches!(
-            &*registration,
-            EagerBackendRegistrationState::ReconciliationRequired
-        ) {
-            return Ok(());
-        }
-        drop(registration);
-        let _backend = self.lock_backend()?;
-        Ok(())
-    }
-
     pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
-        let backend = self.backend.lock().map_err(|_| {
+        self.backend.lock().map_err(|_| {
             Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
-        })?;
-        self.synchronize_runtime_registration_for_backend(&backend)?;
-        Ok(backend)
-    }
-
-    fn lock_eager_registration(&self) -> Result<MutexGuard<'_, EagerBackendRegistrationState>> {
-        self.registered_eager_registration.lock().map_err(|_| {
-            Error::runtime_state(
-                "eager_backend_registration",
-                ErrorPhase::Execution,
-                "lock poisoned",
-            )
         })
-    }
-
-    #[cfg(test)]
-    fn eager_backend_registration_state_for_test(&self) -> Result<EagerBackendRegistrationState> {
-        self.lock_eager_registration()
-            .map(|registration| registration.clone())
-    }
-
-    #[cfg(test)]
-    fn inject_next_registration_failure_for_test(&self) -> Result<()> {
-        let mut injection = self.registration_failure_injection.lock().map_err(|_| {
-            Error::runtime_state(
-                "eager_backend_registration_failure_injection",
-                ErrorPhase::Execution,
-                "lock poisoned",
-            )
-        })?;
-        *injection = RegistrationFailureInjection::FailNext;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn take_registration_failure_injection(&self) -> Result<RegistrationFailureInjection> {
-        let mut injection = self.registration_failure_injection.lock().map_err(|_| {
-            Error::runtime_state(
-                "eager_backend_registration_failure_injection",
-                ErrorPhase::Execution,
-                "lock poisoned",
-            )
-        })?;
-        Ok(std::mem::replace(
-            &mut *injection,
-            RegistrationFailureInjection::Disabled,
-        ))
     }
 
     fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {
@@ -850,91 +703,6 @@ impl EagerRuntime {
         })
     }
 
-    fn synchronize_runtime_registration_for_backend(&self, backend: &EagerBackend) -> Result<()> {
-        // Lock ordering: callers hold the eager backend lock first (and the
-        // extension-cache lock second when applicable); this helper acquires
-        // the registration lock before the runtime snapshot lock. Runtime
-        // reconfiguration never acquires an eager lock in reverse.
-        //
-        // The target is derived from the exact current backend. A synchronized
-        // identity is the only fast path; any mismatch, including a family
-        // change or a fresh backend of the same family, enters quarantine
-        // before any fallible registry work begins.
-        let target_identity = EagerBackendIdentity::for_backend(backend);
-        let mut registered_eager_registration = self.lock_eager_registration()?;
-        if matches!(
-            &*registered_eager_registration,
-            EagerBackendRegistrationState::Synchronized(identity)
-                if identity == &target_identity
-        ) {
-            return Ok(());
-        }
-        *registered_eager_registration = EagerBackendRegistrationState::ReconciliationRequired;
-        #[cfg(test)]
-        if matches!(
-            self.take_registration_failure_injection()?,
-            RegistrationFailureInjection::FailNext
-        ) {
-            return Err(runtime_state_source(
-                "EagerRuntime::runtime_reconciliation",
-                InjectedRegistrationFailure,
-            ));
-        }
-        #[cfg(test)]
-        self.registration_snapshot_reads
-            .fetch_add(1, Ordering::SeqCst);
-        let target_registration =
-            eager_engine_registration_for_backend(backend).map_err(|source| {
-                runtime_config_error("EagerRuntime::eager_engine_registration", source)
-            })?;
-        let target = match &target_registration {
-            EagerBackendRegistration::NoEngine => EagerRegistrationTarget::NoEngine,
-            EagerBackendRegistration::Install {
-                family,
-                registration,
-            } => {
-                debug_assert_eq!(*family, target_identity.family());
-                EagerRegistrationTarget::Install {
-                    family: target_identity.family(),
-                    engine_id: registration.engine_id().clone(),
-                }
-            }
-        };
-        let known = eager_default_engine_families().map_err(|source| {
-            runtime_config_error("EagerRuntime::eager_default_engine_families", source)
-        })?;
-        let snapshot = self
-            .runtime
-            .snapshot()
-            .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
-        let installed = known
-            .iter()
-            .filter(|(_, engine_id)| snapshot.engine(engine_id).is_some())
-            .map(|(_, engine_id)| engine_id.clone())
-            .collect::<Vec<_>>();
-        let plan = plan_eager_registration(&known, &installed, &target);
-
-        self.runtime
-            .reconfigure(|edit| {
-                for engine_id in plan.removals() {
-                    edit.remove_engine(engine_id)?;
-                }
-                match target_registration {
-                    EagerBackendRegistration::NoEngine => {}
-                    EagerBackendRegistration::Install { registration, .. } => {
-                        edit.register_engine(registration)?;
-                    }
-                }
-                Ok(())
-            })
-            .map_err(|source| {
-                runtime_state_source("EagerRuntime::runtime_reconciliation", source)
-            })?;
-        *registered_eager_registration =
-            EagerBackendRegistrationState::Synchronized(target_identity);
-        Ok(())
-    }
-
     fn from_backend(backend: EagerBackend) -> Result<Self> {
         Self::from_backend_with_rules_and_cache(
             backend,
@@ -950,17 +718,10 @@ impl EagerRuntime {
     ) -> Result<Self> {
         let runtime = eager_runtime_for_backend(&backend)
             .map_err(|source| runtime_config_error("EagerRuntime::from_backend", source))?;
-        let registered_eager_registration =
-            EagerBackendRegistrationState::synchronized_for_backend(&backend);
         Ok(Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
-            registered_eager_registration: Mutex::new(registered_eager_registration),
-            #[cfg(test)]
-            registration_snapshot_reads: AtomicUsize::new(0),
-            #[cfg(test)]
-            registration_failure_injection: Mutex::new(RegistrationFailureInjection::Disabled),
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,

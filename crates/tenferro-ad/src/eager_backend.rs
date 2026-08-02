@@ -29,91 +29,13 @@ pub(crate) enum EagerBackend {
     WebGpu(WebGpuBackend),
 }
 
-/// The closed set of default eager engine families known by this crate.
-///
-/// The CUDA and WebGPU variants remain available to provider-neutral planning
-/// tests even when the corresponding backend feature is disabled. Concrete
-/// [`EagerBackendRegistrationState`](crate::eager::EagerBackendRegistrationState)
-/// variants are feature-gated with their backend types.
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EagerEngineFamily {
-    NoEngine,
-    Cpu,
-    Cuda,
-    WebGpu,
-}
-
-/// Provider-neutral transaction shape for replacing eager engine registrations.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EagerRegistrationPlan {
-    RemoveOnly {
-        remove: Vec<EngineId>,
-    },
-    RemoveAndInstall {
-        remove: Vec<EngineId>,
-        family: EagerEngineFamily,
-        target: EngineId,
-    },
-}
-
-impl EagerRegistrationPlan {
-    pub(crate) fn removals(&self) -> &[EngineId] {
-        match self {
-            Self::RemoveOnly { remove } | Self::RemoveAndInstall { remove, .. } => remove,
-        }
-    }
-}
-
-/// Provider-neutral target descriptor paired with the exact backend witness.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EagerRegistrationTarget {
-    NoEngine,
-    Install {
-        family: EagerEngineFamily,
-        engine_id: EngineId,
-    },
-}
-
 /// The fallible provider-specific registration produced from the exact eager
 /// backend. `NoEngine` is used by the test-only recording backend, whose
 /// tensor operations are intentionally not installed as a runtime engine.
-#[allow(dead_code)]
 pub(crate) enum EagerBackendRegistration {
+    #[cfg(test)]
     NoEngine,
-    Install {
-        family: EagerEngineFamily,
-        registration: EngineRegistration,
-    },
-}
-
-/// Build the one transaction plan used by all eager backend families.
-///
-/// `known` is the complete set of canonical eager engine IDs enabled in this
-/// build, while `installed` is the subset currently present in the runtime
-/// snapshot. Every known eager engine is removed before the new target is
-/// installed. The helper deliberately carries no provider/device identity;
-/// identity equality is handled by the registration state machine.
-pub(crate) fn plan_eager_registration(
-    known: &[(EagerEngineFamily, EngineId)],
-    installed: &[EngineId],
-    target: &EagerRegistrationTarget,
-) -> EagerRegistrationPlan {
-    let remove = known
-        .iter()
-        .filter(|(_, id)| installed.contains(id))
-        .map(|(_, id)| id.clone())
-        .collect();
-    match target {
-        EagerRegistrationTarget::NoEngine => EagerRegistrationPlan::RemoveOnly { remove },
-        EagerRegistrationTarget::Install { family, engine_id } => {
-            EagerRegistrationPlan::RemoveAndInstall {
-                remove,
-                family: *family,
-                target: engine_id.clone(),
-            }
-        }
-    }
+    Install(EngineRegistration),
 }
 
 impl std::fmt::Debug for EagerBackend {
@@ -183,51 +105,32 @@ pub(crate) fn eager_runtime_for_backend(
 ) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
     match eager_engine_registration_for_backend(backend)? {
+        #[cfg(test)]
         EagerBackendRegistration::NoEngine => {}
-        EagerBackendRegistration::Install { registration, .. } => {
+        EagerBackendRegistration::Install(registration) => {
             builder.register_engine(registration)?;
         }
     }
     builder.build()
 }
 
-pub(crate) fn eager_default_engine_families(
-) -> Result<Vec<(EagerEngineFamily, EngineId)>, RuntimeConfigError> {
-    let mut known = Vec::with_capacity(3);
-    known.push((EagerEngineFamily::Cpu, cpu_runtime_engine_id()?));
-    #[cfg(feature = "cuda")]
-    known.push((
-        EagerEngineFamily::Cuda,
-        tenferro_gpu::cuda_runtime_engine_id()?,
-    ));
-    #[cfg(feature = "webgpu")]
-    known.push((
-        EagerEngineFamily::WebGpu,
-        tenferro_gpu::webgpu_runtime_engine_id()?,
-    ));
-    Ok(known)
-}
-
 pub(crate) fn eager_engine_registration_for_backend(
     backend: &EagerBackend,
 ) -> Result<EagerBackendRegistration, RuntimeConfigError> {
     match backend {
-        EagerBackend::Cpu(backend) => Ok(EagerBackendRegistration::Install {
-            family: EagerEngineFamily::Cpu,
-            registration: cpu_runtime_engine_registration(backend)?,
-        }),
+        EagerBackend::Cpu(backend) => Ok(EagerBackendRegistration::Install(
+            cpu_runtime_engine_registration(backend)?,
+        )),
         #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
-        EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install {
-            family: EagerEngineFamily::Cuda,
-            registration: tenferro_gpu::cuda_runtime_engine_registration(backend)?,
-        }),
+        EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install(
+            tenferro_gpu::cuda_runtime_engine_registration(backend)?,
+        )),
         #[cfg(feature = "webgpu")]
-        EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install {
-            family: EagerEngineFamily::WebGpu,
-            registration: tenferro_gpu::webgpu_runtime_engine_registration(backend)?,
-        }),
+        EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(
+            tenferro_gpu::webgpu_runtime_engine_registration(backend)?,
+        )),
     }
 }
 
