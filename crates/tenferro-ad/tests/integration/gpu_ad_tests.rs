@@ -5,7 +5,7 @@ use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::{Buffer, TensorDeviceTransfer};
+use tenferro_tensor::Buffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())

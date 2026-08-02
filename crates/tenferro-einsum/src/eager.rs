@@ -1025,6 +1025,7 @@ pub(crate) fn eager_einsum_subscripts(
     ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn eager_einsum_subscripts_with_session(
     exec: &mut dyn BackendSession,
     inputs: &[&Tensor],

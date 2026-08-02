@@ -5,7 +5,6 @@
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{Tensor, TypedTensor};
-use tenferro_tensor::TensorDeviceTransfer;
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())

@@ -984,6 +984,7 @@ pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn execute_einsum_extension_session_reads(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
