@@ -1,5 +1,7 @@
 use std::fmt;
 
+use tenferro_tensor::BoxError;
+
 /// Provider-qualified identity of a CUDA device ordinal.
 ///
 /// A device ID is an opaque CUDA provider value. Use [`Self::ordinal`] only
@@ -60,10 +62,9 @@ impl fmt::Debug for CudaDeviceId {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{CudaDeviceId, CudaDeviceInfo};
+/// use tenferro_gpu::CudaDeviceInfo;
 ///
-/// let info = CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA GPU");
-/// assert_eq!(info.name(), "NVIDIA GPU");
+/// let _type_name = std::any::type_name::<CudaDeviceInfo>();
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CudaDeviceInfo {
@@ -73,16 +74,7 @@ pub struct CudaDeviceInfo {
 
 impl CudaDeviceInfo {
     /// Construct device metadata for a CUDA device.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_gpu::{CudaDeviceId, CudaDeviceInfo};
-    ///
-    /// let info = CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA GPU");
-    /// assert_eq!(info.id().ordinal(), 1);
-    /// ```
-    pub fn new(id: CudaDeviceId, name: impl Into<String>) -> Self {
+    pub(crate) fn new(id: CudaDeviceId, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),
@@ -94,11 +86,9 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceId, CudaDeviceInfo};
+    /// use tenferro_gpu::CudaDeviceInfo;
     ///
-    /// let id = CudaDeviceId::from_ordinal(4);
-    /// let info = CudaDeviceInfo::new(id, "NVIDIA GPU");
-    /// assert_eq!(info.id(), id);
+    /// let _id = CudaDeviceInfo::id;
     /// ```
     pub fn id(&self) -> CudaDeviceId {
         self.id
@@ -109,14 +99,49 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceId, CudaDeviceInfo};
+    /// use tenferro_gpu::CudaDeviceInfo;
     ///
-    /// let info = CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA GPU");
-    /// assert_eq!(info.name(), "NVIDIA GPU");
+    /// let _name = CudaDeviceInfo::name;
     /// ```
     pub fn name(&self) -> &str {
         &self.name
     }
+}
+
+trait DiscoveryDriver {
+    fn initialize(&self) -> Result<(), BoxError>;
+
+    fn device_count(&self) -> Result<u32, BoxError>;
+
+    fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError>;
+}
+
+fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
+    driver
+        .initialize()
+        .map_err(|source| CudaDeviceError::Discovery {
+            operation: "initialize_driver",
+            source,
+        })?;
+    let device_count = driver
+        .device_count()
+        .map_err(|source| CudaDeviceError::Discovery {
+            operation: "enumerate_devices",
+            source,
+        })?;
+
+    let mut devices = Vec::new();
+    for ordinal in 0..device_count {
+        let id = CudaDeviceId::from_ordinal(ordinal);
+        let name = driver
+            .device_name(id)
+            .map_err(|source| CudaDeviceError::Discovery {
+                operation: "get_device_name",
+                source,
+            })?;
+        devices.push(CudaDeviceInfo::new(id, name));
+    }
+    Ok(devices)
 }
 
 /// Structured failures from CUDA device discovery and initialization.
@@ -263,7 +288,27 @@ mod tests {
     use std::error::Error as _;
     use std::hash::{Hash, Hasher};
 
-    use super::{CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
+    use tenferro_tensor::BoxError;
+
+    use super::{discover_with, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, DiscoveryDriver};
+
+    struct FakeDriver {
+        names: Vec<String>,
+    }
+
+    impl DiscoveryDriver for FakeDriver {
+        fn initialize(&self) -> Result<(), BoxError> {
+            Ok(())
+        }
+
+        fn device_count(&self) -> Result<u32, BoxError> {
+            Ok(self.names.len() as u32)
+        }
+
+        fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError> {
+            Ok(self.names[device.ordinal() as usize].clone())
+        }
+    }
 
     fn assert_cuda_device_id_traits<T>()
     where
@@ -295,6 +340,31 @@ mod tests {
         assert_eq!(info.id(), id);
         assert_eq!(info.name(), "NVIDIA H100");
         assert_eq!(info, info.clone());
+    }
+
+    #[test]
+    fn discovery_of_zero_devices_returns_empty() {
+        let driver = FakeDriver { names: Vec::new() };
+
+        assert!(discover_with(&driver).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discovery_preserves_ordinal_order_and_is_deterministic() {
+        let driver = FakeDriver {
+            names: vec!["NVIDIA A100".into(), "NVIDIA H100".into()],
+        };
+        let expected = vec![
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA A100"),
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA H100"),
+        ];
+
+        let first = discover_with(&driver).unwrap();
+        let second = discover_with(&driver).unwrap();
+
+        assert_eq!(first, expected);
+        assert_eq!(first, second);
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
 
     #[test]
