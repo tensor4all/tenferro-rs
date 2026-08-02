@@ -208,7 +208,7 @@ unit = "P1"
 gates = ["G4"]
 artifact = { id = "artifact-element-access-baseline", kind = "benchmark-report", path = "docs/testing/storage-element-access-baseline.json" }
 command = { id = "cmd-element-access-baseline", kind = "benchmark-check", argv = ["python3", "scripts/verify-storage-element-access-baseline.py", "--report", "docs/testing/storage-element-access-baseline.json"], cwd = ".", path_args = ["scripts/verify-storage-element-access-baseline.py", "docs/testing/storage-element-access-baseline.json"], artifact_id = "artifact-element-access-baseline" }
-state = { kind = "deferred", activation_unit = "P1", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

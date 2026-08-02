@@ -108,11 +108,11 @@ contractual active/deferred IDs without becoming another production registry.
 The checker is v2-only, the old v1 test authority is deleted, and the retained
 v1 fixture contains only its schema marker so that an old manifest is rejected
 without a compatibility parser. The real design-document checker is an active
-P1 obligation. The current production state deliberately activates only
-`p1-ledger`, `p1-contract-document`, and `p1-api-parity`; P0 control-plane,
-the P1 element-access baseline, and P2 root claims remain deferred until their
-real artifacts and verifiers land. No missing deferred artifact is fabricated
-to make this phase terminal.
+P1 obligation. The current production state deliberately activates only these
+four P1 rows: `p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
+`p1-element-access-baseline`. P0 control-plane and P2 root claims remain
+deferred until their real artifacts and verifiers land. No missing deferred
+artifact is fabricated to make this phase terminal.
 
 ### One canonical graph
 
@@ -401,11 +401,11 @@ The v2 suite uses temporary repositories for reachable path, graph, promotion,
 command, receipt, and exit-status mistakes, plus an integration case for the
 checked-in production manifest. Counts are derived from the parsed manifest;
 the suite does not preserve a migration-event registry or historical totals.
-It verifies that only the three currently implementable P1 rows are active.
-P0 control-plane, the real-measurement P1 baseline, and P2 root claims remain
-deferred, and the remaining future rows are not executed or materialized.
-Fake active artifacts are rejected because they would turn missing scientific
-evidence into a green lifecycle state rather than proving the underlying work.
+It verifies the four currently implementable P1 rows, including the measured
+element-access baseline. P0 control-plane and P2 root claims remain deferred,
+and the remaining future rows are not executed or materialized. Fake active
+artifacts are rejected because they would turn missing scientific evidence
+into a green lifecycle state rather than proving the underlying work.
 
 Command tests cover exact typed argv and repository path confinement, including
 the ordering rule that a path escape is reported before a later command-identity
@@ -1150,15 +1150,36 @@ report (`p10-storage-traversal-performance`). Timing alone is not a sound CI
 proof; the deterministic counters and structural checks are mandatory even
 when a machine-dependent benchmark comparison is reported.
 
-The P1 element-access baseline remains deferred in this phase. At the next P1
-checkpoint, the owner checks out the exact pre-redesign source commit and runs
-the release capture utility once. That command records `element_access`
-direct-slice, contiguous owner/view, and representative strided results in
-`docs/testing/storage-element-access-baseline.json`, then adds the measured
-report to the ledger. The report records the measured source commit,
-benchmark source path, capture command/tool path, optimized toolchain/profile,
-machine/CPU, pinned thread configuration, sample settings, and machine-readable
-results. The active canonical command is deliberately a read-only verifier:
+The P1 element-access baseline is active after one clean pre-redesign source
+measurement. The measured source commit is
+`da7b36e699f9f4731dec08de6a4e1ca93f20cd6f`; the benchmark source path is
+`crates/tenferro-tensor/benches/element_access.rs`; and the tracked report is
+`docs/testing/storage-element-access-baseline.json`. The capture utility was
+run with:
+
+```text
+python3 scripts/capture-storage-element-access-baseline.py \
+  --root . --output docs/testing/storage-element-access-baseline.json
+```
+
+Its exact Criterion command was:
+
+```text
+cargo bench --locked -p tenferro-tensor --bench element_access -- \
+  --warm-up-time 2 --measurement-time 5 --sample-size 100 --noplot
+```
+
+The command uses Cargo's optimized `bench` profile, records WallTime values
+as nanoseconds, and sets `MKL_NUM_THREADS`, `OMP_NUM_THREADS`,
+`OPENBLAS_NUM_THREADS`, `RAYON_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS` to
+`1`. It records the actual Cargo/rustc/toolchain, CPU/OS/affinity, and actual
+`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` values (both were empty here). The
+report retains explicit warm-up, measurement, sample, and unit fields without
+duplicating Criterion arguments, version, provider, or a derivable thread
+count. Mutable cases aggregate touched values, and the strided case is a full
+logical-order traversal of a rectangular transpose. The required cases include
+fixed-rank 3D access, dynamic immutable iteration, and dynamic mutable
+iteration. The active canonical command is deliberately a read-only verifier:
 
 ```text
 python3 scripts/verify-storage-element-access-baseline.py \
@@ -1171,7 +1192,16 @@ measurement commit and source paths as provenance. The exact Git commit plus
 path identifies tracked bytes; no content checksum or saved baseline receipt
 is required. P10 consumes the baseline report and its commit/path provenance
 directly. A benchmark added after the redesign or an unmeasured `--no-run`
-build cannot replace the deferred measured artifact.
+build cannot replace the measured artifact.
+
+P10 may compare a candidate traversal with this baseline only in a compatible
+environment: the relevant CPU architecture/model and affinity, OS/kernel
+class, rustc/Cargo/toolchain and compilation target, optimized profile, thread
+environment, and provider/placement configuration where applicable must match
+or be explicitly justified as equivalent. On an incompatible environment the
+report remains useful provenance but the comparison is inconclusive; no
+machine-independent threshold is inferred and no threshold is transferred
+between environments.
 
 ### Ordering rules
 
@@ -1907,7 +1937,7 @@ The v2 ledger carries these executable obligations:
 
 | Obligation | Phase | Artifact and proof |
 |---|---|---|
-| `p1-element-access-baseline` | P1 | remain deferred until the real measured direct-slice/contiguous/strided report and verifier land; later candidates use its exact Git commit and repository-relative path |
+| `p1-element-access-baseline` | P1 | active measured direct-slice/contiguous/strided report and verifier; later candidates use its exact Git commit and repository-relative path, subject to P10 compatible-environment comparison |
 | `p3-static-rank-preservation` | P3 | compile/API contract for owner, immutable view, and mutable view preserving `R` |
 | `p3-as-view-zero-allocation` | P3 | warmed allocator/refcount/provider-clone/layout-clone counters plus borrow-only source contract for owner/view-mut reborrows, including dynamic rank |
 | `p4-traversal-resolution-counts` | P4 | fake provider counters proving resolve/map/lease/dispatch counts are independent of element count |
@@ -2280,10 +2310,11 @@ phase issues carry the full inventories; this index is the cross-reference.
 
 - #1556 and #1557 are independent roots of the canonical DAG; #1557 owns the
   v2 ledger and its executable test gate.
-- `p1-element-access-baseline` is deferred until the real measured report and
-  verifier exist. Its later tracked report will be identified by its measured
-  Git commit and repository-relative path; this task does not benchmark or
-  capture it.
+- `p1-element-access-baseline` is active with the tracked measured report and
+  verifier. The report is identified by measured commit
+  `da7b36e699f9f4731dec08de6a4e1ca93f20cd6f` and repository-relative path
+  `docs/testing/storage-element-access-baseline.json`; P10 may compare it only
+  under the compatible-environment rule above.
 - #1558 owns the root pin, non-`Clone` claim, and the single typed provider
   bridge. #1560 owns access/retirement. #1561 owns groups and generational
   descriptors. None waits for the public host cutover.
