@@ -56,9 +56,10 @@
 //! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
 //! # {
 //! use num_complex::Complex32;
+//! use tenferro_cpu::with_cpu_exec_session;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_gpu::AppleContext;
-//! use tenferro_tensor::Tensor;
+//! use tenferro_gpu::{with_webgpu_exec_session, AppleContext};
+//! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! if let Ok(context) = AppleContext::new() {
 //!     let host = Tensor::from_vec_col_major(
@@ -68,15 +69,31 @@
 //!     let input = context.upload_tensor(&host).unwrap();
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
-//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
+//!     let cpu_output = cpu
+//!         .with_backend_session(|session| {
+//!             with_cpu_exec_session(session, |exec_session| {
+//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
+//!             })
+//!             .expect("CpuBackend must expose a CPU execution session")
+//!         })
+//!         .unwrap();
 //!     let mut metal = context.metal_backend().clone();
-//!     let output = input.fft(
-//!         None,
-//!         0,
-//!         FftNorm::Backward,
-//!         &mut metal,
-//!     ).unwrap();
-//!     metal.synchronize().unwrap();
+//!     let output = metal
+//!         .with_backend_session(|session| {
+//!             with_webgpu_exec_session(session, |exec_session| {
+//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
+//!             })
+//!             .expect("WebGpuBackend must expose a WebGPU execution session")
+//!         })
+//!         .unwrap();
+//!     metal
+//!         .with_backend_session(|session| {
+//!             with_webgpu_exec_session(session, |exec_session| {
+//!                 exec_session.runtime().synchronize()
+//!             })
+//!             .expect("WebGpuBackend must expose a WebGPU execution session")
+//!         })
+//!         .unwrap();
 //!     assert_eq!(output.shape(), &[4]);
 //!     assert_eq!(cpu_output.shape(), output.shape());
 //!     assert_eq!(context.transfer_stats(), after_creation);
@@ -86,13 +103,20 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_tensor::Tensor;
+//! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let mut backend = CpuBackend::new();
-//! let out = x.fft(None, -1, FftNorm::Backward, &mut backend).unwrap();
+//! let out = backend
+//!     .with_backend_session(|session| {
+//!         with_cpu_exec_session(session, |exec_session| {
+//!             x.fft(None, -1, FftNorm::Backward, exec_session)
+//!         })
+//!         .expect("CpuBackend must expose a CPU execution session")
+//!     })
+//!     .unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -420,14 +444,19 @@ impl TracedTensorFftExt for TracedTensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_fft::{FftNorm, TensorFftExt};
-/// use tenferro_tensor::Tensor;
+/// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = input.fft(None, -1, FftNorm::Backward, &mut backend)?;
+/// let spectrum = backend.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |exec_session| {
+///         input.fft(None, -1, FftNorm::Backward, exec_session)
+///     })
+///     .expect("CpuBackend must expose a CPU execution session")
+/// })?;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -586,16 +615,21 @@ impl TensorFftExt for Tensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_fft::{FftNorm, TensorReadFftExt};
-/// use tenferro_tensor::{TensorRead, TensorView};
+/// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 ///
 /// let shape = [4usize];
 /// let data = [1.0_f64, 2.0, 3.0, 4.0];
 /// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = input.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
+/// let spectrum = backend.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |exec_session| {
+///         input.fft_read(None, -1, FftNorm::Backward, exec_session)
+///     })
+///     .expect("CpuBackend must expose a CPU execution session")
+/// })?;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
