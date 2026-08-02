@@ -1,2747 +1,446 @@
-schema = "tenferro.storage-ownership-contracts.v1"
-
-# Phase 1 records the future verification surface without claiming that later
-# phases' production fixtures or source baselines already exist. Task 3 adds
-# the narrow current-main source inventory; later phases must remove or replace
-# each inventoried seam under its declared removal issue.
-
-[[fixture_suites]]
-id = "g4-trybuild-fail-fixtures"
-kind = "trybuild-fail"
-root = "crates/tenferro-tensor/tests/ui/storage/fail"
-glob = "**/*.rs"
-owner_issue = 1557
-rationale = "The current Rust trybuild harness owns the active compile-fail storage fixtures in this root."
-
-[[fixture_suites]]
-id = "g4-trybuild-pass-fixtures"
-kind = "trybuild-pass"
-root = "crates/tenferro-tensor/tests/ui/storage/pass"
-glob = "**/*.rs"
-owner_issue = 1557
-rationale = "The current Rust trybuild harness owns the active compile-pass storage fixtures in this root."
-
-[[fixtures]]
-id = "g4-immutable-typed-view-while-mutable-used"
-gate = "G4"
-kind = "trybuild-fail"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/fail/immutable_typed_view_while_mutable_used.rs"
-
-[[fixtures]]
-id = "g4-second-mutable-typed-view"
-gate = "G4"
-kind = "trybuild-fail"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/fail/second_mutable_typed_view.rs"
-
-[[fixtures]]
-id = "g4-tensor-view-mut-not-clone"
-gate = "G4"
-kind = "trybuild-fail"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/fail/tensor_view_mut_not_clone.rs"
-
-[[fixtures]]
-id = "g4-current-typed-tensor-owner-swap-exclusion"
-gate = "G4"
-kind = "trybuild-fail"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_current_owner_swap.rs"
-rationale = "This is the legacy current-surface baseline and must be replaced by the deferred new-owner fixture in #1559; there is no Buffer compatibility promise."
-
-[[fixtures]]
-id = "g4-typed-tensor-view-mut-not-clone"
-gate = "G4"
-kind = "trybuild-fail"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_view_mut_not_clone.rs"
-
-[[fixtures]]
-id = "g2-disjoint-try-multi-slice-mut"
-gate = "G2"
-kind = "trybuild-pass"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/pass/disjoint_try_multi_slice_mut.rs"
-
-[[fixtures]]
-id = "g4-multiple-immutable-typed-views"
-gate = "G4"
-kind = "trybuild-pass"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/pass/multiple_immutable_typed_views.rs"
-
-[[fixtures]]
-id = "g4-sequential-mutable-typed-views"
-gate = "G4"
-kind = "trybuild-pass"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/ui/storage/pass/sequential_mutable_typed_views.rs"
-
-[[fixtures]]
-id = "g3-host-guard-across-submit"
-gate = "G3"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1565
-activation_phase = 9
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/host_guard_across_consuming_submit.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "A host guard must not survive a consuming submission. Phase 9 adds the compile-fail fixture when the scoped submission API exists."
-
-[[fixtures]]
-id = "g3-scoped-handle-escape"
-gate = "G3"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1565
-activation_phase = 9
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/scoped_handle_escape.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "A scoped execution handle must not escape its submission scope."
-
-[[fixtures]]
-id = "g4-owner-non-clone"
-gate = "G4"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1559
-activation_phase = 3
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/owned_storage_not_clone.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "The ownership token and mutable capability must remain non-Clone."
-
-[[fixtures]]
-id = "g4-owner-container-swap"
-gate = "G4"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1559
-activation_phase = 3
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/owner_container_swap.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "The public API must not permit swapping owner containers through a mutable projection."
-
-[[fixtures]]
-id = "g1-corruption-at-map"
-gate = "G1"
-kind = "corruption"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs"
-command = "cargo test -p tenferro-tensor --lib storage::tests::corruption_map"
-rationale = "Corrupted descriptor ranges must be rejected at host-map revalidation. The future helper is private crate-unit-test code only."
-
-[[fixtures]]
-id = "g1-corruption-at-enqueue"
-gate = "G1"
-kind = "corruption"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/src/storage/tests/corruption_enqueue.rs"
-command = "cargo test -p tenferro-tensor --lib storage::tests::corruption_enqueue"
-rationale = "Corrupted descriptor ranges must also be rejected at device enqueue revalidation. The future helper is private crate-unit-test code only."
-
-[[fixtures]]
-id = "g1-miri-surface"
-gate = "G1"
-kind = "miri"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/tests/storage_access.rs"
-command = "cargo miri test -p tenferro-tensor --test storage_access"
-rationale = "The host guard, range, and retirement surface requires a supported Miri lane. Cover host read/write guard slices, empty spans, and guard drop/leak behavior without making safety depend on Drop."
-
-[[fixtures]]
-id = "g1-property-surface"
-gate = "G1"
-kind = "property"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/tests/storage_access_properties.rs"
-command = "cargo test -p tenferro-tensor --test storage_access_properties"
-rationale = "G1 properties cover checked range/alignment overflow and exactly-once root reclamation."
-
-[[fixtures]]
-id = "g2-miri-surface"
-gate = "G2"
-kind = "miri"
-status = "deferred"
-owner_issue = 1561
-activation_phase = 5
-future_path = "crates/tenferro-tensor/tests/storage_group.rs"
-command = "cargo miri test -p tenferro-tensor --test storage_group"
-rationale = "G2 Miri covers descriptor tombstones/stale generational IDs and N-way mutable-borrow lifetimes."
-
-[[fixtures]]
-id = "g2-property-surface"
-gate = "G2"
-kind = "property"
-status = "deferred"
-owner_issue = 1561
-activation_phase = 5
-future_path = "crates/tenferro-tensor/tests/storage_group_properties.rs"
-command = "cargo test -p tenferro-tensor --test storage_group_properties"
-rationale = "G2 properties cover reverse/zero strides, permutation-independent disjointness, overlapping claim rejection, and N=0, N=1, N>2, empty, and overflow group splits."
-
-[[fixtures]]
-id = "g4-storage-api-parity"
-gate = "G4"
-kind = "parity"
-status = "active"
-owner_issue = 1557
-activation_phase = 1
-path = "crates/tenferro-tensor/tests/storage_api_parity.rs"
-rationale = "One canonical read-only method list is exercised against all six current owner and view faces."
-
-[[fixtures]]
-id = "g1-write-guard-from-shared-capability"
-gate = "G1"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/write_guard_from_shared_capability.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "A host write guard must require the exclusive owner capability; shared access must not mint write authority."
-
-[[fixtures]]
-id = "g2-root-access-while-children-live"
-gate = "G2"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1561
-activation_phase = 5
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/root_access_while_children_live.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "The root/source capability is excluded while N-way child mutable borrows remain live."
-
-[[fixtures]]
-id = "g2-mutable-reinterpret-source-alias"
-gate = "G2"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1562
-activation_phase = 6
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/mutable_reinterpret_source_alias.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "Mutable reinterpretation must not reintroduce a source alias or bypass the exclusive capability."
-
-[[fixtures]]
-id = "g3-consuming-submission-positive"
-gate = "G3"
-kind = "trybuild-pass"
-status = "deferred"
-owner_issue = 1565
-activation_phase = 9
-future_path = "crates/tenferro-tensor/tests/ui/storage/pass/consuming_submission.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "The consuming submission path is valid after all borrowed host capabilities have ended and ownership is transferred."
-
-[[fixtures]]
-id = "g3-scoped-borrowed-read-submission-positive"
-gate = "G3"
-kind = "trybuild-pass"
-status = "deferred"
-owner_issue = 1565
-activation_phase = 9
-future_path = "crates/tenferro-tensor/tests/ui/storage/pass/scoped_borrowed_read_submission.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "A scoped submission may borrow read-only inputs for the declared scope and return only the contractually permitted handle."
-
-[[fixtures]]
-id = "g5-native-metal-provider-contract"
-gate = "G5"
-kind = "provider"
-status = "deferred"
-owner_issue = 1564
-activation_phase = 8
-future_path = "crates/tenferro-gpu/tests/native_metal_storage_contract.rs"
-command = "cargo test -p tenferro-gpu --test native_metal_storage_contract"
-rationale = "If a native Metal provider is introduced, its raw binding/provider surface must satisfy the same owner-scoped contract. The current Apple path is WebGPU/wgpu and is inventoried under #1564; this future test name is provisional while the provider contract shape is normative."
-
-[[fixtures]]
-id = "g1-host-write-guard-source-access"
-gate = "G1"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1560
-activation_phase = 4
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/source_access_while_host_write_guard_live.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "Holding a HostWriteGuard must reject source/owner access for the guard lifetime; the exclusive host capability cannot coexist with a source capability."
-
-[[fixtures]]
-id = "g2-unproven-second-mutable-child"
-gate = "G2"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1561
-activation_phase = 5
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/unproven_second_mutable_child.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "After an N-way split, a second mutable child requires a disjointness proof; an unproven child must be rejected by the type boundary."
-
-[[fixtures]]
-id = "g3-detached-submission-borrowed-input"
-gate = "G3"
-kind = "trybuild-fail"
-status = "deferred"
-owner_issue = 1565
-activation_phase = 9
-future_path = "crates/tenferro-tensor/tests/ui/storage/fail/detached_submission_borrowed_input.rs"
-command = "cargo test -p tenferro-tensor --test storage_compile_contract"
-rationale = "A detached consuming submission must not accept a borrowed input or owner; borrowed execution belongs to the scoped submission API."
-
-# Task 3 source scans are supplemental drift ledgers, not a Rust safety proof.
-# They intentionally remain lexical (no parser and no comment/string stripping)
-# and fail closed: every inventoried selector must literally contain its scan
-# needle, while a narrow family needle binds one exact multiline context per
-# literal occurrence in each production file. Compile contracts/trybuild,
-# later Miri/property lanes, and the final audit provide the other safety
-# layers. A forbidden scan is an active negative contract: its narrow
-# production scope must exist with zero rows and zero occurrences.
-
-[[source_scans]]
-id = "g4-scan-public-typed-as-view-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn as_view_mut(&mut self)"
-rationale = "Baseline the public owning-tensor to mutable-view projection for removal by the host owner migration."
-
-[[source_scans]]
-id = "g4-scan-public-typed-host-data-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn host_data_mut(&mut self)"
-rationale = "Baseline the public mutable host slice projection that survives #1559 unique-owner cutover and #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-erased-as-slice-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn as_slice_mut<T: TensorScalar>"
-rationale = "Baseline the dtype-erased mutable slice projection that survives #1559 unique-owner cutover and #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-typed-iter-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn iter_mut(&mut self) -> crate::Result<std::slice::IterMut<'_, T>>"
-rationale = "Baseline the typed owner mutable host iterator that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-typed-get-mut2"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn get_mut2(&mut self, i: usize, j: usize) -> crate::Result<&mut T>"
-rationale = "Baseline the typed owner rank-2 mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-typed-get-mut3"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn get_mut3(&mut self, i: usize, j: usize, k: usize) -> crate::Result<&mut T>"
-rationale = "Baseline the typed owner rank-3 mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-typed-get-unchecked-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub unsafe fn get_unchecked_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-rationale = "Baseline the typed owner unchecked mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-erased-get-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn get_mut<T: TensorScalar>(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-rationale = "Baseline the erased owner mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-erased-get-unchecked-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub unsafe fn get_unchecked_mut<T: TensorScalar>("
-rationale = "Baseline the erased owner unchecked mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-public-erased-iter-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types/accessors.rs"
-needle = "pub fn iter_mut<T: TensorScalar>(&mut self) -> crate::Result<std::slice::IterMut<'_, T>>"
-rationale = "Baseline the erased owner mutable host iterator that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-tensor-scalar-as-slice-mut-contract"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]>;"
-rationale = "Baseline the public TensorScalar mutable-slice contract that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g4-scan-tensor-scalar-as-slice-mut-implementation"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]> {"
-rationale = "Baseline the scalar-family implementation of direct mutable host slices that #1560 replaces with span-scoped guards."
-
-[[source_scans]]
-id = "g4-scan-public-typed-get-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-rationale = "Baseline the typed owner mutable element projection that #1560 replaces with span-scoped guard access."
-
-[[source_scans]]
-id = "g3-scan-backend-buffer-map-write"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "fn map_write(&self) -> Result<HostWriteGuard"
-rationale = "Inventory the shared BackendBuffer map_write capability before #1560 replaces it with the allocation-scoped write lease."
-
-[[source_scans]]
-id = "g3-scan-webgpu-map-write"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src"
-glob = "webgpu/mod.rs"
-needle = "fn map_write(&self) -> Result<HostWriteGuard"
-rationale = "Inventory the WebGPU managed map_write shared-to-mutable implementation; WebGPU/wgpu is the current Apple Metal route and #1560 replaces this seam."
-
-[[source_scans]]
-id = "g5-scan-typed-write-from-tensor"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn from_tensor(tensor: &'a mut TypedTensor<T>)"
-rationale = "Baseline the legacy typed-owner TensorWrite construction path that #1563 replaces with sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-typed-write-from-view"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn from_view(view: TypedTensorViewMut<'a, T>) -> Self"
-rationale = "Baseline the legacy typed mutable-view TensorWrite construction path that #1563 replaces with sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-erased-write-from-tensor"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn from_tensor(tensor: &'a mut Tensor)"
-rationale = "Baseline the legacy erased-owner TensorWrite construction path that #1563 replaces with sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-erased-write-from-view"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn from_view(view: TensorViewMut<'a>) -> Self"
-rationale = "Baseline the legacy erased mutable-view TensorWrite construction path that #1563 replaces with sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-typed-write-from-owner-impl"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "impl<'a, T> From<&'a mut TypedTensor<T>> for TypedTensorWrite<'a, T>"
-rationale = "Baseline the safe From conversion from a typed owner into legacy write authority before #1563 seals construction around StorageMut."
-
-[[source_scans]]
-id = "g5-scan-typed-write-from-view-impl"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "impl<'a, T> From<TypedTensorViewMut<'a, T>> for TypedTensorWrite<'a, T>"
-rationale = "Baseline the safe From conversion from a typed mutable view into legacy write authority before #1563 seals construction around StorageMut."
-
-[[source_scans]]
-id = "g5-scan-typed-into-tensor-write"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "pub fn into_tensor_write(self) -> TensorWrite<'a>"
-rationale = "Baseline the public typed-to-erased write-authority conversion that #1563 replaces with sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-tensor-scalar-write-constructor"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_>;"
-rationale = "Baseline the public TensorScalar write constructor contract that can mint TensorWrite and must be replaced by #1563 sealed StorageMut construction."
-
-[[source_scans]]
-id = "g5-scan-tensor-scalar-write-implementation"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_> {"
-rationale = "Baseline the scalar-family implementation that independently constructs erased write authority before #1563 seals construction around StorageMut."
-
-[[source_scans]]
-id = "g4-scan-backend-arc-mut-view-transition"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = "TensorBufferRefMut::Backend(Arc::clone(buffer))"
-rationale = "Count every backend Arc clone that forms mutable view authority; #1559 replaces the owner/view transition with the unique-owner claim contract."
-
-[[source_scans]]
-id = "g1-scan-public-buffer-handle"
-gate = "G1"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone)]
-pub struct BufferHandle<T>"""
-rationale = "Baseline the public cloneable backend handle representation that currently participates in storage authority."
-
-[[source_scans]]
-id = "g1-scan-public-buffer-enum"
-gate = "G1"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone, Debug)]
-pub enum Buffer<T>"""
-rationale = "Baseline the public host-or-backend storage container that the new ownership kernel replaces."
-
-[[source_scans]]
-id = "g4-scan-typed-owner-clone-family"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone, Debug)]
-pub struct TypedTensor<T, R: TensorRank = DynRank>"""
-rationale = "Baseline the typed owner family whose derived Clone is a shallow storage-authority escape."
-
-[[source_scans]]
-id = "g4-scan-erased-owner-clone-family"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone, Debug)]
-pub enum Tensor {"""
-rationale = "Baseline the dtype-erased owner family whose derived Clone is a shallow storage-authority escape."
-
-[[source_scans]]
-id = "g5-scan-typed-write-definition"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = '''#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum TypedTensorWrite<'a, T> {
-    /// An owned compact typed tensor borrowed mutably for the write.
-    Tensor(&'a mut TypedTensor<T>),
-    /// An arbitrary-strided mutable typed tensor view.
-    View(TypedTensorViewMut<'a, T>),
-}'''
-rationale = "Seal the complete current public typed write enum definition; #1563 removes this temporary owner/view adapter."
-
-[[source_scans]]
-id = "g5-scan-erased-write-definition"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = '''#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum TensorWrite<'a> {
-    Tensor(&'a mut Tensor),
-    View(TensorViewMut<'a>),
-}'''
-rationale = "Seal the complete current public erased write enum definition; #1563 removes this temporary owner/view adapter."
-
-[[source_scans]]
-id = "g3-scan-tensor-owned-view-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone, Debug)]
-pub struct TensorOwnedView {"""
-rationale = "Baseline the owned lazy-view adapter that currently carries an Arc-backed tensor plus layout metadata."
-
-[[source_scans]]
-id = "g3-scan-tensor-value-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "types.rs"
-needle = """#[derive(Clone, Debug)]
-pub enum TensorValue {"""
-rationale = "Baseline the owned tensor-or-view value adapter used across runtime and AD boundaries."
-
-[[source_scans]]
-id = "g3-scan-ad-untracked-value-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-ad/src"
-glob = "extension.rs"
-needle = "pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue)"
-rationale = "Baseline the public AD migration adapter that adopts an untracked TensorValue into eager state."
-
-[[source_scans]]
-id = "g3-scan-ad-untracked-value-constructor"
-gate = "G3"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-ad/src"
-glob = "eager.rs"
-needle = "pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue)"
-rationale = "Baseline the crate-private temporary AD value constructor that must disappear with scoped result ownership."
-
-[[source_scans]]
-id = "g5-scan-cuda-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "memory.rs"
-needle = "pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor)"
-rationale = "Baseline the public CUDA raw device pointer extraction boundary."
-
-[[source_scans]]
-id = "g5-scan-cuda-typed-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "*.rs"
-needle = "fn typed_device_ptr"
-rationale = "Count every production CubeCL typed CUDA raw pointer extraction helper while excluding nested tests and non-CUDA providers."
-
-[[source_scans]]
-id = "g5-scan-cuda-root-device-ptr-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src"
-glob = "lib.rs"
-needle = "cuda_runtime_hardware_class, device_ptr, download_tensor, gpu_available, upload_tensor,"
-rationale = "Baseline the crate-root re-export that makes raw CUDA device_ptr extraction reachable outside tenferro-gpu."
-
-[[source_scans]]
-id = "g5-scan-cuda-device-byte-buffer-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "interop.rs"
-needle = "pub fn ptr(&self) -> *mut c_void"
-rationale = "Baseline the public DeviceByteBuffer raw pointer projection exposed through CUDA interop."
-
-[[source_scans]]
-id = "g5-scan-cuda-raw-stream"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "interop.rs"
-needle = "pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str)"
-rationale = "Baseline the public raw CUDA stream extraction boundary exposed through CUDA interop."
-
-[[source_scans]]
-id = "g5-scan-cuda-public-typed-tensor-binding"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "interop.rs"
-needle = "pub fn typed_tensor_binding<T: CubeElement + Clone>("
-rationale = "Baseline the public CUDA TensorBinding projection that carries a cloneable backend handle beyond tensor ownership."
-
-[[source_scans]]
-id = "g5-scan-cuda-public-typed-tensor-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "interop.rs"
-needle = "pub fn typed_tensor_array_arg<T: CubeElement + Clone>("
-rationale = "Baseline the public CUDA ArrayArg projection that carries a cloneable backend handle beyond tensor ownership."
-
-[[source_scans]]
-id = "g5-scan-cuda-dispatch-tensor-binding-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "dispatch.rs"
-needle = "TensorBinding::from_raw_parts("
-rationale = "Count every production CUDA TensorBinding raw-parts construction in the centralized dispatch boundary."
-
-[[source_scans]]
-id = "g5-scan-cuda-dispatch-array-arg-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "dispatch.rs"
-needle = "ArrayArg::from_raw_parts("
-rationale = "Count every production CUDA ArrayArg raw-parts construction in the centralized dispatch boundary."
-
-[[source_scans]]
-id = "g5-scan-cuda-device-ptr-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/cubecl"
-glob = "mod.rs"
-needle = "pub use memory::{device_ptr"
-rationale = "Baseline the public CubeCL module re-export that makes raw device_ptr extraction reachable."
-
-[[source_scans]]
-id = "g5-scan-cuda-interop-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src"
-glob = "lib.rs"
-needle = "pub use crate::cubecl::interop::*"
-rationale = "Baseline the hidden-but-public CUDA interop re-export that exposes typed raw handles to extension crates."
-
-[[source_scans]]
-id = "g5-scan-cuda-interop-module"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src"
-glob = "lib.rs"
-needle = "pub mod cuda_interop"
-rationale = "Baseline the public CUDA interop module that carries the raw-handle migration seam."
-
-[[source_scans]]
-id = "g5-scan-webgpu-root-interop"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src"
-glob = "lib.rs"
-needle = '''pub mod webgpu_interop {
-    pub use crate::webgpu::interop::*;
-}'''
-rationale = "Inventory the root WebGPU interop reachability boundary. WebGPU/wgpu is the current Apple Metal route; no native Metal provider is introduced here, and #1564 removes this migration export."
-
-[[source_scans]]
-id = "g5-scan-webgpu-client"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn client("
-rationale = "Inventory the public WebGPU client bridge exposed to extension crates; it is a temporary migration adapter for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-f32-input"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn f32_input("
-rationale = "Inventory the public WebGPU F32 TensorHandle/raw allocation bridge for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-c32-input-parts"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn c32_input_parts("
-rationale = "Inventory the public WebGPU C32 raw Handle import bridge for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-allocate-raw"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn allocate_raw("
-rationale = "Inventory the public WebGPU raw allocation constructor for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-finish-f32"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn finish_f32("
-rationale = "Inventory the public WebGPU F32 raw Handle completion adapter for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-finish-c32"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "pub fn finish_c32("
-rationale = "Inventory the public WebGPU C32 raw Handle completion adapter for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-input-parts"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "interop.rs"
-needle = "fn input_parts<T: Send + Sync + 'static>("
-rationale = "Inventory the private WebGPU input Handle clone/import bridge behind public interop; #1564 replaces the temporary adapter."
-
-[[source_scans]]
-id = "g5-scan-webgpu-buffer-new"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "fn new(handle: cubecl_runtime::server::Handle"
-rationale = "Inventory the private WebGpuBuffer raw Handle storage constructor for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-buffer-new-for-runtime"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "fn new_for_runtime("
-rationale = "Inventory the private WebGpuBuffer Handle import/pinning bridge, including managed resource cloning, for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-buffer-handle"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "fn handle(&self) -> &cubecl_runtime::server::Handle"
-rationale = "Inventory the private WebGpuBuffer raw Handle extraction point for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-handle-from-backend"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "fn webgpu_handle_from_backend<T: 'static>("
-rationale = "Inventory the private backend-erased WebGPU raw Handle extraction bridge for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-tensor-binding-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "TensorBinding::from_raw_parts("
-rationale = "Inventory the WebGPU TensorBinding raw-parts construction seam for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-array-arg-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "structural.rs"
-needle = "ArrayArg::from_raw_parts("
-rationale = "Inventory the WebGPU ArrayArg raw-parts construction seam for #1564."
-
-[[source_scans]]
-id = "g5-scan-webgpu-empty-allocation"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "mod.rs"
-needle = "rt.client().empty("
-rationale = "Count each production WebGPU raw allocation construction before #1564 replaces the temporary interop/handle boundary."
-
-[[source_scans]]
-id = "g5-scan-webgpu-memory-create-from-slice"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "memory.rs"
-needle = "rt.client().create_from_slice("
-rationale = "Count every production WebGPU upload that acquires a raw provider Handle before #1564 moves transfer allocation under the shared ownership kernel. WebGPU/wgpu is the current Apple Metal route."
-
-[[source_scans]]
-id = "g5-scan-webgpu-memory-buffer-wrap"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "memory.rs"
-needle = "WebGpuBuffer::new_for_runtime("
-rationale = "Count every production WebGPU upload adapter that wraps a raw provider Handle in the typed legacy buffer before #1564 removes that adapter. WebGPU/wgpu is the current Apple Metal route."
-
-[[source_scans]]
-id = "g5-scan-webgpu-memory-read-one"
-gate = "G5"
-kind = "source"
-status = "active"
-mode = "inventoried"
-owner_issue = 1557
-root = "crates/tenferro-gpu/src/webgpu"
-glob = "memory.rs"
-needle = ".read_one(handle)"
-rationale = "Count every production WebGPU download that exposes provider resource bytes before #1564 moves readback behind allocation-scoped access. WebGPU/wgpu is the current Apple Metal route."
-
-[[source_scans]]
-id = "g4-scan-no-public-buffer-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "forbidden"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "**/*.rs"
-needle = "pub fn buffer_mut("
-rationale = "Keep the storage crate free of a direct public mutable buffer projection."
-
-[[source_scans]]
-id = "g4-scan-no-public-as-any-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "forbidden"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "**/*.rs"
-needle = "pub fn as_any_mut("
-rationale = "Keep storage ownership code free of a public type-erased mutable escape hatch."
-
-[[source_scans]]
-id = "g4-scan-no-storage-deref-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "forbidden"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "**/*.rs"
-needle = "impl DerefMut"
-rationale = "Keep storage ownership code free of a public DerefMut authority escape."
-
-[[source_scans]]
-id = "g4-scan-no-storage-arc-make-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "forbidden"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "**/*.rs"
-needle = "Arc::make_mut("
-rationale = "Keep copy-on-write uniqueness decisions out of the storage surface until the ownership kernel defines them."
-
-[[source_scans]]
-id = "g4-scan-no-storage-arc-get-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-mode = "forbidden"
-owner_issue = 1557
-root = "crates/tenferro-tensor/src"
-glob = "**/*.rs"
-needle = "Arc::get_mut("
-rationale = "Keep ad hoc Arc uniqueness checks out of the storage surface until the ownership kernel defines them."
-
-[[source_inventory]]
-id = "g4-public-typed-as-view-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-public-typed-as-view-mut"
-needle = "pub fn as_view_mut(&mut self)"
-category = "public-mutable-projection"
-rationale = "The current owner can publicly produce a mutable view without the final allocation claim contract."
-disposition = "replace"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-public-typed-host-data-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-public-typed-host-data-mut"
-needle = "pub fn host_data_mut(&mut self)"
-category = "public-mutable-projection"
-rationale = "This direct typed host slice survives #1559 unique-owner cutover; #1560 replaces it with span-scoped write-guard access."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-erased-as-slice-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-erased-as-slice-mut"
-needle = "pub fn as_slice_mut<T: TensorScalar>"
-category = "public-mutable-projection"
-rationale = "This direct erased host slice survives #1559 unique-owner cutover; #1560 replaces it with span-scoped write-guard access."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-typed-iter-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-typed-iter-mut"
-needle = "pub fn iter_mut(&mut self) -> crate::Result<std::slice::IterMut<'_, T>>"
-category = "public-mutable-projection"
-rationale = "This typed owner iterator remains meaningful after #1559 unique-owner cutover; #1560 replaces its direct host borrow with span-scoped guard access."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-typed-get-mut2"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-typed-get-mut2"
-needle = "pub fn get_mut2(&mut self, i: usize, j: usize) -> crate::Result<&mut T>"
-category = "public-mutable-projection"
-rationale = "This typed owner element projection survives #1559 unique-owner cutover; #1560 routes it through a span-scoped write guard."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-typed-get-mut3"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-typed-get-mut3"
-needle = "pub fn get_mut3(&mut self, i: usize, j: usize, k: usize) -> crate::Result<&mut T>"
-category = "public-mutable-projection"
-rationale = "This typed owner element projection survives #1559 unique-owner cutover; #1560 routes it through a span-scoped write guard."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-typed-get-unchecked-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-typed-get-unchecked-mut"
-needle = "pub unsafe fn get_unchecked_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-category = "public-mutable-projection"
-rationale = "This typed owner unchecked projection survives #1559 unique-owner cutover; #1560 replaces direct host authority with a span-scoped guard contract."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-erased-get-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-erased-get-mut"
-needle = "pub fn get_mut<T: TensorScalar>(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-category = "public-mutable-projection"
-rationale = "This erased owner element projection survives #1559 unique-owner cutover; #1560 routes typed host access through a span-scoped guard."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-erased-get-unchecked-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-erased-get-unchecked-mut"
-needle = "pub unsafe fn get_unchecked_mut<T: TensorScalar>("
-category = "public-mutable-projection"
-rationale = "This erased owner unchecked projection survives #1559 unique-owner cutover; #1560 replaces direct host authority with a span-scoped guard contract."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-erased-iter-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types/accessors.rs"
-scan = "g4-scan-public-erased-iter-mut"
-needle = "pub fn iter_mut<T: TensorScalar>(&mut self) -> crate::Result<std::slice::IterMut<'_, T>>"
-category = "public-mutable-projection"
-rationale = "This erased owner iterator remains after #1559 unique-owner cutover; #1560 replaces its direct host borrow with span-scoped guard access."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-tensor-scalar-as-slice-mut-contract"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-tensor-scalar-as-slice-mut-contract"
-needle = "fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]>;"
-category = "public-mutable-projection"
-rationale = "The public scalar-family contract survives #1559 owner cutover but exposes a direct mutable slice; #1560 replaces it with span-scoped guards."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-tensor-scalar-as-slice-mut-implementation"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-tensor-scalar-as-slice-mut-implementation"
-needle = "fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]> {"
-category = "public-mutable-projection"
-rationale = "The scalar-family implementation realizes direct host authority that remains after #1559; #1560 replaces it with span-scoped guard access."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g4-public-typed-get-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-public-typed-get-mut"
-needle = "pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T>"
-category = "public-mutable-projection"
-rationale = "This typed owner element projection survives #1559 unique-owner cutover; #1560 routes it through a span-scoped write guard."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g3-backend-buffer-map-write"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g3-scan-backend-buffer-map-write"
-needle = '''fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
-        Err(HostAccessError::Unsupported {
-            backend: self.backend_family(),
-        })
-    }'''
-category = "shared-to-mutable"
-rationale = "BackendBuffer::map_write(&self) mints a host write guard from shared backend access; #1560 replaces it with the allocation-scoped write lease contract."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g3-webgpu-map-write"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g3-scan-webgpu-map-write"
-needle = '''fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
-        let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
-            backend: self.backend_family(),
-        })?;
-        let mut bytes = managed.resource().map_write().map_err(host_access_error)?;'''
-category = "shared-to-mutable"
-rationale = "The WebGPU managed resource turns shared BackendBuffer access into a mutable host mapping; #1560 removes this unsound authority path. WebGPU/wgpu is the Apple Metal provider in this design."
-disposition = "replace"
-removal_issue = 1560
-
-[[source_inventory]]
-id = "g5-typed-write-from-tensor"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-write-from-tensor"
-needle = "pub fn from_tensor(tensor: &'a mut TypedTensor<T>)"
-category = "temporary-migration-adapter"
-rationale = "This safe typed-owner constructor mints legacy write authority; #1563 replaces it with sealed construction from StorageMut plus a validated descriptor."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-webgpu-root-interop"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/lib.rs"
-scan = "g5-scan-webgpu-root-interop"
-needle = '''pub mod webgpu_interop {
-    pub use crate::webgpu::interop::*;
-}'''
-category = "temporary-migration-adapter"
-rationale = "The root hidden WebGPU interop module is a temporary extension boundary. WebGPU/wgpu is the current Apple Metal route; #1564 removes this re-export instead of adding native Metal-specific raw APIs."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-client"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-client"
-needle = '''pub fn client(backend: &WebGpuBackend) -> &ComputeClient<WgpuRuntime> {
-    backend.runtime().client()
-}'''
-category = "temporary-migration-adapter"
-rationale = "The public client bridge exposes provider execution state to extension crates; #1564 removes this temporary interop surface."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-f32-input"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-f32-input"
-needle = '''pub fn f32_input(
-    backend: &WebGpuBackend,
-    tensor: &TypedTensor<f32>,
-    op: &'static str,
-) -> tenferro_tensor::Result<TensorHandle<WgpuRuntime>> {
-    let (handle, shape, strides) = input_parts(backend, tensor, op)?;
-    Ok(TensorHandle::new('''
-category = "raw-handle-extraction"
-rationale = "The public F32 TensorHandle constructor carries a cloned provider Handle beyond tensor ownership; #1564 replaces it with an owner-scoped binding."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-c32-input-parts"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-c32-input-parts"
-needle = '''pub fn c32_input_parts(
-    backend: &WebGpuBackend,
-    tensor: &TypedTensor<Complex32>,
-    op: &'static str,
-) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
-    input_parts(backend, tensor, op)'''
-category = "raw-handle-extraction"
-rationale = "The public C32 bridge returns a raw provider Handle and logical metadata; #1564 removes this unscoped extraction path."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-allocate-raw"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-allocate-raw"
-needle = '''pub fn allocate_raw(backend: &WebGpuBackend, bytes: usize) -> Handle {
-    client(backend).empty(bytes)'''
-category = "raw-handle-extraction"
-rationale = "The public allocator returns a raw provider Handle for later completion; #1564 removes this temporary raw allocation API."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-finish-f32"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-finish-f32"
-needle = '''pub fn finish_f32(
-    backend: &WebGpuBackend,
-    shape: Vec<usize>,
-    handle: Handle,
-    op: &'static str,
-) -> tenferro_tensor::Result<TypedTensor<f32>> {
-    finish(backend, shape, handle, op)'''
-category = "temporary-migration-adapter"
-rationale = "The public F32 completion function imports a raw Handle back into a tensor; #1564 removes this temporary adapter."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-finish-c32"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-finish-c32"
-needle = '''pub fn finish_c32(
-    backend: &WebGpuBackend,
-    shape: Vec<usize>,
-    handle: Handle,
-    op: &'static str,
-) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
-    finish(backend, shape, handle, op)'''
-category = "temporary-migration-adapter"
-rationale = "The public C32 completion function imports a raw Handle back into a tensor; #1564 removes this temporary adapter."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-input-parts"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/interop.rs"
-scan = "g5-scan-webgpu-input-parts"
-needle = '''fn input_parts<T: Send + Sync + 'static>(
-    backend: &WebGpuBackend,
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
-    ensure_resident_on_runtime(backend.runtime(), tensor, op)?;
-    validate_compact_column_major(tensor, op)?;
-    let buffer = webgpu_buffer(tensor, op)?;
-    let expected = checked_shape_product(op, tensor.shape())?;
-    if buffer.element_len() != expected {
-        return Err(Error::runtime_state(
-            op,
-            format!(
-                "WebGPU allocation has {} elements but shape requires {expected}",
-                buffer.element_len()
-            ),
-        ));
-    }
-    Ok((
-        buffer.handle().clone(),'''
-category = "raw-handle-extraction"
-rationale = "The private input bridge clones a provider Handle from an owner-backed tensor; #1564 replaces this raw extraction with a scoped binding."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-buffer-new"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-buffer-new"
-needle = '''fn new(handle: cubecl_runtime::server::Handle, len: usize, device_ordinal: usize) -> Self {
-        Self {
-            handle,'''
-category = "raw-handle-extraction"
-rationale = "The private WebGpuBuffer constructor stores an unscoped provider Handle as the backend authority; #1564 replaces the bridge with owner-scoped storage."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-buffer-new-for-runtime"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-buffer-new-for-runtime"
-needle = '''fn new_for_runtime(
-        rt: &WebGpuRuntime,
-        handle: cubecl_runtime::server::Handle,
-        len: usize,
-        op: &'static str,
-    ) -> crate::Result<Self> {
-        let Some(domain) = rt.allocation_domain() else {
-            return Ok(Self::new(handle, len, rt.device_ordinal()));
-        };
-        let managed = rt
-            .client()
-            .get_resource(handle.clone())'''
-category = "raw-handle-extraction"
-rationale = "The private runtime constructor imports and clones the raw Handle into managed provider state; #1564 removes this temporary binding bridge."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-buffer-handle"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-buffer-handle"
-needle = '''fn handle(&self) -> &cubecl_runtime::server::Handle {
-        &self.handle'''
-category = "raw-handle-extraction"
-rationale = "The private WebGpuBuffer handle accessor is the raw provider extraction point used by all WebGPU bindings; #1564 removes it."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-handle-from-backend"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-handle-from-backend"
-needle = '''fn webgpu_handle_from_backend<T: 'static>(
-    buffer: &dyn BackendBuffer<T>,
-    op: &'static str,
-) -> crate::Result<cubecl_runtime::server::Handle> {
-    buffer
-        .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
-        .map(|buffer| buffer.handle().clone())'''
-category = "raw-handle-extraction"
-rationale = "The backend-erased WebGPU bridge downcasts and clones a provider Handle; #1564 replaces it with an owner-scoped provider binding."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-tensor-binding-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-tensor-binding-construction"
-needle = '''fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T>,
-    shape: &[usize],
-    strides: &[usize],
-    op: &'static str,
-) -> crate::Result<TensorBinding<WgpuRuntime>> {
-    if shape.len() != strides.len() {
-        return Err(Error::rank_mismatch(op, shape.len(), strides.len()));
-    }
-    let buffer = webgpu_buffer(tensor, op)?;
-    validate_webgpu_buffer_len(tensor, buffer, op)?;
-    let layout_len = checked_shape_product(op, shape)?;
-    if layout_len != buffer.element_len() {
-        return Err(Error::runtime_state(
-            op,
-            format!(
-                "WebGPU tensor binding layout covers {layout_len} elements, backing buffer has {}",
-                buffer.element_len()
-            ),
-        ));
-    }
-
-    let (shape, strides) = if shape.is_empty() {
-        (vec![1], vec![1])
-    } else {
-        (shape.to_vec(), strides.to_vec())
-    };
-
-    // SAFETY: The tensor buffer is a validated WebGPU allocation for `tensor`.
-    // The caller-provided shape/stride metadata is checked to cover exactly the
-    // same element count, so CubeCL logical indexing remains inside the backing
-    // allocation.
-    Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())'''
-category = "raw-handle-extraction"
-rationale = "The WebGPU TensorBinding constructor turns a cloned provider Handle into an execution binding; #1564 replaces this raw-parts mint with a scoped claim."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-array-arg-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/structural.rs"
-scan = "g5-scan-webgpu-array-arg-construction"
-needle = '''fn view_array_arg<T, R>(
-    backend: &WebGpuBackend,
-    view: &TypedTensorView<'_, T, R>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<WgpuRuntime>>
-where
-    T: CubeElement + Clone + Send + Sync + 'static,
-    R: TensorRank,
-{
-    ensure_placement_resident_on_runtime(backend.runtime(), view.placement(), op)?;
-    let buffer = view.backend_buffer().ok_or_else(|| {
-        crate::Error::runtime_state(
-            op,
-            "expected WebGPU view, got host view; upload before materializing",
-        )
-    })?;
-    let buffer = buffer
-        .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
-        .ok_or_else(|| {
-            crate::Error::runtime_state(
-                op,
-                format!(
-                    "expected WebGPU backend buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            )
-        })?;
-    if let Some(expected) = backend.runtime().allocation_domain() {
-        match buffer.domain.as_ref().map(|domain| domain.id) {
-            Some(actual) if actual == expected.id => {}
-            Some(actual) => {
-                return Err(crate::Error::host_access(
-                    op,
-                    crate::HostAccessError::ForeignDomain {
-                        expected: expected.id,
-                        actual,
-                    },
-                ));
-            }
-            None => {
-                return Err(crate::Error::runtime_state(
-                    op,
-                    "Apple runtime requires a managed allocation from its domain",
-                ));
-            }
-        }
-    }
-
-    // SAFETY: TypedTensorView construction proves every reachable signed
-    // offset is inside the backing allocation. The kernel receives that same
-    // validated layout metadata and indexes only logical output elements.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len())'''
-category = "raw-handle-extraction"
-rationale = "The WebGPU structural ArrayArg constructor turns a cloned provider Handle into a kernel argument; #1564 replaces this raw-parts mint with a scoped claim."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-alloc-output"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-empty-allocation"
-needle = '''fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
-    rt: &WebGpuRuntime,
-    shape: &[usize],
-    op: &'static str,
-) -> crate::Result<TypedTensor<T>> {
-    let len = checked_shape_product(op, shape)?;
-    let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-        Error::invalid_argument(
-            op,
-            "shape",
-            format!("WebGPU output byte length overflow for shape {shape:?}"),
-        )
-    })?;
-    let handle = rt.client().empty(bytes);'''
-category = "raw-handle-extraction"
-rationale = "The production WebGPU output allocator creates a raw provider Handle before wrapping it in WebGpuBuffer; #1564 replaces this construction under the ownership kernel."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-alloc-bool-output"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/mod.rs"
-scan = "g5-scan-webgpu-empty-allocation"
-needle = '''        DType::Bool => {
-            let len = checked_shape_product("apple_alloc", shape)?;
-            let handle = rt.client().empty(len);'''
-category = "raw-handle-extraction"
-rationale = "The production WebGPU bool allocator creates a raw provider Handle before wrapping it in WebGpuBuffer; #1564 replaces this construction under the ownership kernel."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-upload-typed-create"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-create-from-slice"
-needle = '''pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
-    rt: &WebGpuRuntime,
-    typed: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
-
-    let byte_len = T::as_bytes(host_data).len();
-    let handle = rt.client().create_from_slice(T::as_bytes(host_data));'''
-category = "raw-handle-extraction"
-rationale = "The typed WebGPU upload calls the provider directly and receives a raw Handle; #1564 replaces this call site with allocation-owned transfer construction. WebGPU/wgpu is the current Apple Metal route."
-disposition = "replace"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-upload-bool-create"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-create-from-slice"
-needle = '''fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
-
-    let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
-    let handle = rt.client().create_from_slice(&bytes);'''
-category = "raw-handle-extraction"
-rationale = "The bool WebGPU upload calls the provider directly and receives a raw Handle; #1564 replaces this call site with allocation-owned transfer construction. WebGPU/wgpu is the current Apple Metal route."
-disposition = "replace"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-upload-typed-wrap"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-buffer-wrap"
-needle = '''pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
-    rt: &WebGpuRuntime,
-    typed: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
-
-    let byte_len = T::as_bytes(host_data).len();
-    let handle = rt.client().create_from_slice(T::as_bytes(host_data));
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;'''
-category = "temporary-migration-adapter"
-rationale = "The typed upload immediately wraps a raw provider Handle in the typed legacy WebGpuBuffer adapter; #1564 removes this adapter in favor of WebGpuAllocation."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-upload-bool-wrap"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-buffer-wrap"
-needle = '''fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
-
-    let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
-    let handle = rt.client().create_from_slice(&bytes);
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;'''
-category = "temporary-migration-adapter"
-rationale = "The bool upload immediately wraps a raw provider Handle in the typed legacy WebGpuBuffer adapter; #1564 removes this adapter in favor of WebGpuAllocation."
-disposition = "remove"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-download-typed-read"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-read-one"
-needle = '''pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
-    rt: &WebGpuRuntime,
-    client: &ComputeClient<WgpuRuntime>,
-    typed: &TypedTensor<T>,
-) -> crate::Result<TypedTensor<T>> {
-    ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
-    let handle = match typed.buffer() {
-        Buffer::Host(_) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_download",
-                "expected WebGPU backend buffer",
-            ));
-        }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
-    };
-
-    if typed.n_elements() == 0 {
-        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
-    }
-
-    let bytes = client
-        .read_one(handle)'''
-category = "raw-handle-extraction"
-rationale = "The typed WebGPU download passes an extracted raw Handle to the provider readback API; #1564 replaces this call site with allocation-scoped read access. WebGPU/wgpu is the current Apple Metal route."
-disposition = "replace"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-webgpu-memory-download-bool-read"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/webgpu/memory.rs"
-scan = "g5-scan-webgpu-memory-read-one"
-needle = '''fn download_bool(
-    rt: &WebGpuRuntime,
-    client: &ComputeClient<WgpuRuntime>,
-    typed: &TypedTensor<bool>,
-) -> crate::Result<TypedTensor<bool>> {
-    ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
-    let handle = match typed.buffer() {
-        Buffer::Host(_) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_download",
-                "expected WebGPU backend buffer",
-            ));
-        }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
-    };
-
-    if typed.n_elements() == 0 {
-        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
-    }
-
-    let bytes = client
-        .read_one(handle)'''
-category = "raw-handle-extraction"
-rationale = "The bool WebGPU download passes an extracted raw Handle to the provider readback API; #1564 replaces this call site with allocation-scoped read access. WebGPU/wgpu is the current Apple Metal route."
-disposition = "replace"
-removal_issue = 1564
-
-[[source_inventory]]
-id = "g5-typed-write-from-view"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-write-from-view"
-needle = "pub fn from_view(view: TypedTensorViewMut<'a, T>) -> Self"
-category = "temporary-migration-adapter"
-rationale = "This safe typed mutable-view constructor mints legacy write authority; #1563 replaces it with sealed construction from StorageMut plus a validated descriptor."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-erased-write-from-tensor"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-erased-write-from-tensor"
-needle = "pub fn from_tensor(tensor: &'a mut Tensor)"
-category = "temporary-migration-adapter"
-rationale = "This safe erased-owner constructor mints legacy write authority; #1563 replaces it with sealed construction from StorageMut plus a validated descriptor."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-erased-write-from-view"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-erased-write-from-view"
-needle = "pub fn from_view(view: TensorViewMut<'a>) -> Self"
-category = "temporary-migration-adapter"
-rationale = "This safe erased mutable-view constructor mints legacy write authority; #1563 replaces it with sealed construction from StorageMut plus a validated descriptor."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-typed-write-from-owner-impl"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-write-from-owner-impl"
-needle = "impl<'a, T> From<&'a mut TypedTensor<T>> for TypedTensorWrite<'a, T>"
-category = "temporary-migration-adapter"
-rationale = "This safe From impl bypasses inherent-call syntax while constructing legacy write authority; #1563 replaces it with sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-typed-write-from-view-impl"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-write-from-view-impl"
-needle = "impl<'a, T> From<TypedTensorViewMut<'a, T>> for TypedTensorWrite<'a, T>"
-category = "temporary-migration-adapter"
-rationale = "This safe From impl converts a mutable view into legacy write authority; #1563 replaces it with sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-typed-into-tensor-write"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-into-tensor-write"
-needle = "pub fn into_tensor_write(self) -> TensorWrite<'a>"
-category = "temporary-migration-adapter"
-rationale = "This public conversion independently maps typed owner/view variants into erased write authority; #1563 replaces it with sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-tensor-scalar-write-constructor"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-tensor-scalar-write-constructor"
-needle = "fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_>;"
-category = "temporary-migration-adapter"
-rationale = "The public TensorScalar contract exposes another safe constructor from a mutable typed owner; #1563 replaces it with sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-tensor-scalar-write-implementation"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-tensor-scalar-write-implementation"
-needle = "fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_> {"
-category = "temporary-migration-adapter"
-rationale = "The scalar-family implementation realizes the public safe constructor by creating erased write authority; #1563 replaces it with sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g4-backend-arc-mut-view-try-slice"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-backend-arc-mut-view-transition"
-needle = '''pub fn try_slice(
-        &mut self,
-        slices: &[StridedSliceSpec],
-    ) -> crate::Result<TypedTensorViewMut<'_, T, R>> {
-        let specs = core_slice_specs(slices, self.shape(), "TypedTensorViewMut::try_slice")?;
-        let layout = self
-            .layout
-            .slice_view(specs, self.buffer.len())
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_slice", err))?;
-        layout
-            .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_slice", err))?;
-        let placement = self.placement.clone();
-        match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(data),
-                layout,
-                placement,
-            }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),'''
-category = "shared-to-mutable"
-rationale = "TypedTensorViewMut::try_slice clones backend Arc authority while reborrowing a mutable view; #1559 replaces this transition with the unique-owner claim contract."
-disposition = "replace"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-backend-arc-mut-view-try-reshape"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-backend-arc-mut-view-transition"
-needle = '''pub fn try_reshape(
-        &mut self,
-        shape: &[usize],
-    ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank>> {
-        let layout = reshape_layout_dyn(
-            &self.layout,
-            shape,
-            self.buffer.len(),
-            "TypedTensorViewMut::try_reshape",
-        )?;
-        layout
-            .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_reshape", err))?;
-        let placement = self.placement.clone();
-        match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(data),
-                layout,
-                placement,
-            }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),'''
-category = "shared-to-mutable"
-rationale = "TypedTensorViewMut::try_reshape clones backend Arc authority while reborrowing a mutable view; #1559 replaces this transition with the unique-owner claim contract."
-disposition = "replace"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-backend-arc-mut-view-as-view-mut"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-backend-arc-mut-view-transition"
-needle = '''pub fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R>
-    where
-        T: 'static,
-    {
-        let layout = self.layout.clone();
-        let placement = self.placement.clone();
-        let buffer = match &mut self.buffer {
-            Buffer::Host(data) => TensorBufferRefMut::Host(data),
-            Buffer::Backend(buffer) => TensorBufferRefMut::Backend(Arc::clone(buffer)),'''
-category = "shared-to-mutable"
-rationale = "TypedTensor::as_view_mut clones backend Arc authority from the public owner; #1559 eliminates this legacy owner/view transition in favor of a unique-owner claim."
-disposition = "replace"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-backend-arc-mut-view-backend-region"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-backend-arc-mut-view-transition"
-needle = '''pub fn backend_region_view_mut(
-        &mut self,
-        shape: Vec<usize>,
-        strides: Vec<isize>,
-        offset: isize,
-    ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank>>
-    where
-        T: 'static,
-    {
-        let op = "TypedTensor::backend_region_view_mut";
-        let Buffer::Backend(buffer) = &self.buffer else {
-            return Err(crate::Error::runtime_state(
-                op,
-                "expected a backend (device) buffer; mutable host regions use \
-                 TypedTensorViewMut host constructors or try_multi_slice_mut",
-            ));
-        };
-        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
-            .map_err(|err| tensor_layout_error(op, err))?;
-        layout
-            .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error(op, err))?;
-        Ok(TypedTensorViewMut {
-            buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),'''
-category = "shared-to-mutable"
-rationale = "TypedTensor::backend_region_view_mut clones backend Arc authority from the public owner; #1559 replaces this path with descriptor validation under a unique-owner claim."
-disposition = "replace"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g1-public-buffer-handle"
-gate = "G1"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g1-scan-public-buffer-handle"
-needle = """#[derive(Clone)]
-pub struct BufferHandle<T>"""
-category = "temporary-migration-adapter"
-rationale = "The public cloneable backend handle is part of the current storage authority representation."
-disposition = "remove"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g1-public-buffer-enum"
-gate = "G1"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g1-scan-public-buffer-enum"
-needle = """#[derive(Clone, Debug)]
-pub enum Buffer<T>"""
-category = "temporary-migration-adapter"
-rationale = "The public host-or-backend storage container is the legacy allocation authority boundary."
-disposition = "remove"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-typed-owner-clone-family"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-typed-owner-clone-family"
-needle = """#[derive(Clone, Debug)]
-pub struct TypedTensor<T, R: TensorRank = DynRank>"""
-category = "temporary-migration-adapter"
-rationale = "The typed owner currently derives Clone, so the owner family is a shallow storage-authority seam."
-disposition = "remove"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g4-erased-owner-clone-family"
-gate = "G4"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g4-scan-erased-owner-clone-family"
-needle = """#[derive(Clone, Debug)]
-pub enum Tensor {"""
-category = "temporary-migration-adapter"
-rationale = "The erased owner currently derives Clone, so the owner family is a shallow storage-authority seam."
-disposition = "remove"
-removal_issue = 1559
-
-[[source_inventory]]
-id = "g5-typed-write-definition"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-typed-write-definition"
-needle = '''#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum TypedTensorWrite<'a, T> {
-    /// An owned compact typed tensor borrowed mutably for the write.
-    Tensor(&'a mut TypedTensor<T>),
-    /// An arbitrary-strided mutable typed tensor view.
-    View(TypedTensorViewMut<'a, T>),
-}'''
-category = "temporary-migration-adapter"
-rationale = "The complete typed write enum is a temporary owner/view adapter; #1563 removes it in favor of sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-erased-write-definition"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g5-scan-erased-write-definition"
-needle = '''#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum TensorWrite<'a> {
-    Tensor(&'a mut Tensor),
-    View(TensorViewMut<'a>),
-}'''
-category = "temporary-migration-adapter"
-rationale = "The complete erased write enum is a temporary owner/view adapter; #1563 removes it in favor of sealed StorageMut construction."
-disposition = "remove"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g3-tensor-owned-view-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g3-scan-tensor-owned-view-adapter"
-needle = """#[derive(Clone, Debug)]
-pub struct TensorOwnedView {"""
-category = "temporary-migration-adapter"
-rationale = "The owned Arc-plus-layout view is a current lazy-value adapter that must be replaced by scoped storage claims."
-disposition = "remove"
-removal_issue = 1565
-
-[[source_inventory]]
-id = "g3-tensor-value-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-tensor/src/types.rs"
-scan = "g3-scan-tensor-value-adapter"
-needle = """#[derive(Clone, Debug)]
-pub enum TensorValue {"""
-category = "temporary-migration-adapter"
-rationale = "The current owned tensor-or-view value adapter crosses runtime and AD boundaries without the final scoped outcome contract."
-disposition = "remove"
-removal_issue = 1565
-
-[[source_inventory]]
-id = "g3-ad-untracked-value-adapter"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-ad/src/extension.rs"
-scan = "g3-scan-ad-untracked-value-adapter"
-needle = "pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue)"
-category = "temporary-migration-adapter"
-rationale = "This public AD entry point explicitly adopts a value outside the final descriptor and scope ownership protocol."
-disposition = "remove"
-removal_issue = 1565
-
-[[source_inventory]]
-id = "g3-ad-untracked-value-constructor"
-gate = "G3"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-ad/src/eager.rs"
-scan = "g3-scan-ad-untracked-value-constructor"
-needle = "pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue)"
-category = "temporary-migration-adapter"
-rationale = "This crate-private constructor is residual AD value scaffolding for the pre-scoped result path."
-disposition = "remove"
-removal_issue = 1565
-
-[[source_inventory]]
-id = "g5-cuda-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/memory.rs"
-scan = "g5-scan-cuda-device-ptr"
-needle = "pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor)"
-category = "raw-handle-extraction"
-rationale = "The public CUDA API returns an unscoped raw device pointer from tensor storage."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-typed-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/interop.rs"
-scan = "g5-scan-cuda-typed-device-ptr"
-needle = "pub fn typed_device_ptr<T: 'static>"
-category = "raw-handle-extraction"
-rationale = "The public typed CUDA interop API returns a raw pointer without the final provider pin contract."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-gemm-typed-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/gemm.rs"
-scan = "g5-scan-cuda-typed-device-ptr"
-needle = "fn typed_device_ptr<T: 'static>("
-category = "raw-handle-extraction"
-rationale = "The production cuTENSOR GEMM helper extracts a raw CUDA pointer for FFI; #1563 replaces this internal path with provider-pinned claim access."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-permutation-typed-device-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/permutation.rs"
-scan = "g5-scan-cuda-typed-device-ptr"
-needle = "fn typed_device_ptr<T, R>("
-category = "raw-handle-extraction"
-rationale = "The production permutation helper extracts a raw CUDA pointer for FFI; #1563 replaces this internal path with provider-pinned claim access."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-root-device-ptr-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/lib.rs"
-scan = "g5-scan-cuda-root-device-ptr-reexport"
-needle = "cuda_runtime_hardware_class, device_ptr, download_tensor, gpu_available, upload_tensor,"
-category = "raw-handle-extraction"
-rationale = "The crate-root CUDA export is an external reachability boundary for unscoped device_ptr extraction; #1563 narrows it to claim-backed interop."
-disposition = "narrow"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-device-byte-buffer-ptr"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/interop.rs"
-scan = "g5-scan-cuda-device-byte-buffer-ptr"
-needle = "pub fn ptr(&self) -> *mut c_void"
-category = "raw-handle-extraction"
-rationale = "DeviceByteBuffer publicly returns its unscoped raw CUDA pointer; #1563 replaces this projection with provider-pinned claim access."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-raw-stream"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/interop.rs"
-scan = "g5-scan-cuda-raw-stream"
-needle = "pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str)"
-category = "raw-handle-extraction"
-rationale = "The public interop function extracts an unscoped raw CUDA stream handle; #1563 narrows stream reachability under the provider contract."
-disposition = "narrow"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-public-typed-tensor-binding"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/interop.rs"
-scan = "g5-scan-cuda-public-typed-tensor-binding"
-needle = "pub fn typed_tensor_binding<T: CubeElement + Clone>("
-category = "raw-handle-extraction"
-rationale = "The public interop function exposes a TensorBinding carrying a cloned backend handle; #1563 replaces it with provider-pinned claim construction."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-public-typed-tensor-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/interop.rs"
-scan = "g5-scan-cuda-public-typed-tensor-array-arg"
-needle = "pub fn typed_tensor_array_arg<T: CubeElement + Clone>("
-category = "raw-handle-extraction"
-rationale = "The public interop function exposes an ArrayArg carrying a cloned backend handle; #1563 replaces it with provider-pinned claim construction."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-tensor-binding-construction"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-tensor-binding-construction"
-needle = '''pub(crate) fn typed_tensor_binding<T: Clone + 'static>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let (shape, strides) = cubecl_shape_and_strides(tensor.shape())?;
-
-    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
-    // The checked invariant above proves `buffer.element_len()` equals the dense
-    // element count of `tensor.shape`; `strides` is the matching dense
-    // column-major layout metadata, so kernel indexing stays within that
-    // allocation.
-    Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())'''
-category = "raw-handle-extraction"
-rationale = "The centralized CUDA dispatch helper constructs TensorBinding from raw allocation parts; #1563 replaces this internal mint with claim-validated binding construction."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-typed-tensor-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-array-arg-construction"
-needle = '''pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-
-    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
-    // `validate_cubecl_buffer_len` proves `buffer.element_len()` equals the dense shape
-    // product, so raw linear kernels that index `0..out.len()` cannot observe
-    // an array longer than the logical tensor allocation.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })'''
-category = "raw-handle-extraction"
-rationale = "The typed tensor dispatch helper constructs ArrayArg from raw allocation parts; #1563 routes construction through a provider-pinned storage claim."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-typed-view-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-array-arg-construction"
-needle = '''pub(crate) fn typed_view_array_arg<T: CubeElement + Clone>(
-    view: &TypedTensorView<'_, T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_view_buffer(view, op)?;
-
-    // SAFETY: `TensorLayout` validation at view construction proves the
-    // reachable logical offsets are within this backing allocation. Kernels
-    // using this raw array also receive the validated signed layout metadata
-    // because CubeCL TensorBinding cannot express signed view strides.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })'''
-category = "raw-handle-extraction"
-rationale = "The typed read-view dispatch helper constructs ArrayArg from raw allocation parts; #1563 routes construction through a provider-pinned storage claim."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-typed-view-mut-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-array-arg-construction"
-needle = '''pub(crate) fn typed_view_mut_array_arg<T: CubeElement + Clone>(
-    view: &TypedTensorViewMut<'_, T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_view_mut_buffer(view, op)?;
-
-    // SAFETY: `TypedTensorViewMut` construction validates both reachable
-    // offsets and no-overlap. The raw array length covers the backing
-    // allocation, while the kernel launch domain covers only the logical view.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })'''
-category = "raw-handle-extraction"
-rationale = "The typed mutable-view dispatch helper constructs ArrayArg from raw allocation parts; #1563 routes construction through a provider-pinned mutable claim."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-bool-tensor-array-arg"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-array-arg-construction"
-needle = '''pub(crate) fn bool_tensor_array_arg(
-    tensor: &TypedTensor<bool, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-
-    // SAFETY: CubeCL bool tensors are stored as one-byte predicate buffers by
-    // `memory::upload_bool` and `alloc_bool_output`. The validated buffer
-    // length is the logical element count consumed by raw Array<bool> kernels.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })'''
-category = "raw-handle-extraction"
-rationale = "The bool tensor dispatch helper constructs ArrayArg from raw allocation parts; #1563 routes construction through a provider-pinned storage claim."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-dispatch-typed-tensor-array-arg-as"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/dispatch.rs"
-scan = "g5-scan-cuda-dispatch-array-arg-construction"
-needle = '''pub(crate) fn typed_tensor_array_arg_as<T, U>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    len: usize,
-    op: &'static str,
-) -> crate::Result<ArrayArg<CubeclCudaRuntime>>
-where
-    T: CubeElement + Clone,
-    U: CubeElement + Clone,
-{
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
-        crate::Error::invalid_argument(
-            op,
-            "length",
-            format!("reinterpreted CubeCL array length overflow for len {len}"),
-        )
-    })?;
-    let available_bytes = buffer
-        .element_len()
-        .checked_mul(core::mem::size_of::<T>())
-        .ok_or_else(|| {
-            crate::Error::runtime_state(
-                op,
-                format!(
-                    "CubeCL buffer byte length overflow for {} elements",
-                    buffer.element_len()
-                ),
-            )
-        })?;
-    if requested_bytes > available_bytes {
-        return Err(crate::Error::runtime_state(op, format!(
-                "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
-            )));
-    }
-
-    // SAFETY: `validate_cubecl_buffer_len` first proves the typed tensor shape
-    // matches the backing allocation. The checked byte-size invariant then
-    // proves the requested representation view stays within the same
-    // allocation. Kernels using this helper are responsible for using a
-    // representation-compatible scalar view, for example complex values as
-    // their real and imaginary scalar parts.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), len) })'''
-category = "raw-handle-extraction"
-rationale = "The representation-reinterpreting dispatch helper constructs ArrayArg from raw allocation parts; #1563 routes construction through a provider-pinned validated claim."
-disposition = "replace"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-device-ptr-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/cubecl/mod.rs"
-scan = "g5-scan-cuda-device-ptr-reexport"
-needle = "pub use memory::{device_ptr"
-category = "raw-handle-extraction"
-rationale = "The CubeCL module re-export keeps the raw CUDA pointer helper public."
-disposition = "narrow"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-interop-reexport"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/lib.rs"
-scan = "g5-scan-cuda-interop-reexport"
-needle = "pub use crate::cubecl::interop::*"
-category = "raw-handle-extraction"
-rationale = "The public hidden interop module re-exports the typed raw-handle surface to extension crates."
-disposition = "narrow"
-removal_issue = 1563
-
-[[source_inventory]]
-id = "g5-cuda-interop-module"
-gate = "G5"
-kind = "source"
-status = "active"
-owner_issue = 1557
-path = "crates/tenferro-gpu/src/lib.rs"
-scan = "g5-scan-cuda-interop-module"
-needle = "pub mod cuda_interop"
-category = "raw-handle-extraction"
-rationale = "The public CUDA interop module is the reachability boundary for raw provider handles."
-disposition = "narrow"
-removal_issue = 1563
+schema = "tenferro.storage-ownership-contracts.v2"
+
+[registry]
+
+[[registry.gates]]
+id = "G1"
+title = "G1 storage ownership gate"
+
+[[registry.gates]]
+id = "G2"
+title = "G2 storage ownership gate"
+
+[[registry.gates]]
+id = "G3"
+title = "G3 storage ownership gate"
+
+[[registry.gates]]
+id = "G4"
+title = "G4 storage ownership gate"
+
+[[registry.gates]]
+id = "G5"
+title = "G5 storage ownership gate"
+
+[[registry.gates]]
+id = "G6"
+title = "G6 storage ownership gate"
+
+[[registry.gates]]
+id = "G7"
+title = "G7 storage ownership gate"
+
+[[registry.units]]
+id = "P0"
+issue = 1556
+name = "control-plane"
+
+[[registry.units]]
+id = "P1"
+issue = 1557
+name = "contract-ledger"
+
+[[registry.units]]
+id = "P2"
+issue = 1558
+name = "root-claims"
+
+[[registry.units]]
+id = "P3"
+issue = 1559
+name = "host-ownership"
+
+[[registry.units]]
+id = "P4"
+issue = 1560
+name = "access-retirement"
+
+[[registry.units]]
+id = "P5"
+issue = 1561
+name = "allocation-group"
+
+[[registry.units]]
+id = "P6"
+issue = 1562
+name = "reinterpret"
+
+[[registry.units]]
+id = "P7"
+issue = 1563
+name = "cuda"
+
+[[registry.units]]
+id = "P8"
+issue = 1564
+name = "webgpu-metal"
+
+[[registry.units]]
+id = "P9"
+issue = 1565
+name = "runtime-ad-cutover"
+
+[[registry.units]]
+id = "P10"
+issue = 1566
+name = "api-normalization"
+
+[[registry.units]]
+id = "P11"
+issue = 1568
+name = "hardware"
+
+[[registry.units]]
+id = "P12"
+issue = 1569
+name = "documentation"
+
+[[registry.units]]
+id = "P13-A"
+issue = 1567
+name = "freeze"
+
+[[registry.units]]
+id = "P13-B"
+issue = 1567
+name = "closure"
+
+[[registry.edges]]
+from = "P1"
+to = "P2"
+
+[[registry.edges]]
+from = "P2"
+to = "P4"
+
+[[registry.edges]]
+from = "P4"
+to = "P5"
+
+[[registry.edges]]
+from = "P3"
+to = "P6"
+
+[[registry.edges]]
+from = "P9"
+to = "P6"
+
+[[registry.edges]]
+from = "P6"
+to = "P7"
+
+[[registry.edges]]
+from = "P6"
+to = "P8"
+
+[[registry.edges]]
+from = "P7"
+to = "P10"
+
+[[registry.edges]]
+from = "P8"
+to = "P10"
+
+[[registry.edges]]
+from = "P10"
+to = "P13-A"
+
+[[registry.edges]]
+from = "P13-A"
+to = "P11"
+
+[[registry.edges]]
+from = "P13-A"
+to = "P12"
+
+[[registry.edges]]
+from = "P11"
+to = "P13-B"
+
+[[registry.edges]]
+from = "P12"
+to = "P13-B"
+
+[[registry.cohorts]]
+id = "cutover"
+prerequisites = ["P0", "P5"]
+members = ["P3", "P9"]
+
+[[obligations]]
+id = "p1-ledger"
+unit = "P1"
+gates = ["G1", "G3", "G5"]
+artifact = { id = "artifact-ledger", kind = "manifest", path = "scripts/storage-ownership-contracts.toml" }
+command = { id = "cmd-ledger", kind = "python-test", argv = ["python3", "scripts/check-storage-ownership-contracts.py"], cwd = ".", path_args = ["scripts/check-storage-ownership-contracts.py", "scripts/storage-ownership-contracts.toml"], artifact_id = "artifact-ledger" }
+state = { kind = "active" }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p1-contract-document"
+unit = "P1"
+gates = ["G6"]
+artifact = { id = "artifact-contract-document", kind = "documentation", path = "docs/design/storage-ownership-contracts.md" }
+command = { id = "cmd-contract-document", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/design/storage-ownership-contracts.md"], artifact_id = "artifact-contract-document" }
+state = { kind = "active" }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p1-api-parity"
+unit = "P1"
+gates = ["G4"]
+artifact = { id = "artifact-api-parity", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_api_parity.rs" }
+command = { id = "cmd-api-parity", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_api_parity"], cwd = ".", path_args = [], artifact_id = "artifact-api-parity" }
+state = { kind = "active" }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p0-control-plane"
+unit = "P0"
+gates = ["G3"]
+artifact = { id = "artifact-control-plane", kind = "rust-test", path = "crates/tenferro-runtime/tests/execution_engine_identity.rs" }
+command = { id = "cmd-control-plane", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-runtime", "--test", "execution_engine_identity"], cwd = ".", path_args = [], artifact_id = "artifact-control-plane" }
+state = { kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p1-element-access-baseline"
+unit = "P1"
+gates = ["G4"]
+artifact = { id = "artifact-element-access-baseline", kind = "benchmark-report", path = "docs/testing/storage-element-access-baseline.json" }
+command = { id = "cmd-element-access-baseline", kind = "benchmark-check", argv = ["python3", "scripts/verify-storage-element-access-baseline.py", "--report", "docs/testing/storage-element-access-baseline.json"], cwd = ".", path_args = ["scripts/verify-storage-element-access-baseline.py", "docs/testing/storage-element-access-baseline.json"], artifact_id = "artifact-element-access-baseline" }
+state = { kind = "deferred", activation_unit = "P1", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p2-root-claims"
+unit = "P2"
+gates = ["G1"]
+artifact = { id = "artifact-root-claims", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_root_claims.rs" }
+command = { id = "cmd-root-claims", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_root_claims"], cwd = ".", path_args = [], artifact_id = "artifact-root-claims" }
+state = { kind = "deferred", activation_unit = "P2", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p4-production-borrow-contract"
+unit = "P4"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-production-borrow-contract", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_borrow_contract.rs" }
+command = { id = "cmd-production-borrow-contract", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_borrow_contract"], cwd = ".", path_args = [], artifact_id = "artifact-production-borrow-contract" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p3-host-owner"
+unit = "P3"
+gates = ["G4"]
+artifact = { id = "artifact-owner-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/fail/owned_storage_not_clone.rs" }
+command = { id = "cmd-owner-compile", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"], cwd = ".", path_args = [], artifact_id = "artifact-owner-compile" }
+state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p3-static-rank-preservation"
+unit = "P3"
+gates = ["G4"]
+artifact = { id = "artifact-static-rank-preservation", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_static_rank.rs" }
+command = { id = "cmd-static-rank-preservation", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_static_rank"], cwd = ".", path_args = [], artifact_id = "artifact-static-rank-preservation" }
+state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p3-as-view-zero-allocation"
+unit = "P3"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-as-view-zero-allocation", kind = "allocation-borrow-contract", path = "crates/tenferro-tensor/tests/storage_as_view_allocation.rs" }
+command = { id = "cmd-as-view-zero-allocation", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_as_view_allocation"], cwd = ".", path_args = [], artifact_id = "artifact-as-view-zero-allocation" }
+state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p3-auto-trait-contract"
+unit = "P3"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-storage-auto-traits", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_auto_traits.rs" }
+command = { id = "cmd-storage-auto-traits", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_auto_traits"], cwd = ".", path_args = [], artifact_id = "artifact-storage-auto-traits" }
+state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p4-access-retirement"
+unit = "P4"
+gates = ["G1", "G3"]
+artifact = { id = "artifact-corruption-map", kind = "corruption-test", path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs" }
+command = { id = "cmd-corruption-map", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"], cwd = ".", path_args = [], artifact_id = "artifact-corruption-map" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p4-provider-release-lifecycle"
+unit = "P4"
+gates = ["G1", "G3"]
+artifact = { id = "artifact-provider-release-lifecycle", kind = "provider-test", path = "crates/tenferro-tensor/src/storage/tests/provider_release_lifecycle.rs" }
+command = { id = "cmd-provider-release-lifecycle", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::provider_release_lifecycle"], cwd = ".", path_args = [], artifact_id = "artifact-provider-release-lifecycle" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p4-traversal-resolution-counts"
+unit = "P4"
+gates = ["G1", "G3", "G4"]
+artifact = { id = "artifact-traversal-resolution-counts", kind = "provider-test", path = "crates/tenferro-tensor/tests/storage_traversal_resolution.rs" }
+command = { id = "cmd-traversal-resolution-counts", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_traversal_resolution"], cwd = ".", path_args = [], artifact_id = "artifact-traversal-resolution-counts" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p4-prepared-access-api"
+unit = "P4"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-prepared-access-api", kind = "api-source-contract", path = "crates/tenferro-tensor/tests/storage_prepared_access.rs" }
+command = { id = "cmd-prepared-access-api", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_access"], cwd = ".", path_args = [], artifact_id = "artifact-prepared-access-api" }
+state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p5-allocation-group"
+unit = "P5"
+gates = ["G2", "G5"]
+artifact = { id = "artifact-allocation-group", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_allocation_group.rs" }
+command = { id = "cmd-allocation-group", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_allocation_group"], cwd = ".", path_args = [], artifact_id = "artifact-allocation-group" }
+state = { kind = "deferred", activation_unit = "P5", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p9-submission"
+unit = "P9"
+gates = ["G3"]
+artifact = { id = "artifact-submit-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/pass/consuming_submission.rs" }
+command = { id = "cmd-submit-compile", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"], cwd = ".", path_args = [], artifact_id = "artifact-submit-compile" }
+state = { kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p6-reinterpret"
+unit = "P6"
+gates = ["G4"]
+artifact = { id = "artifact-reinterpret", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_reinterpret.rs" }
+command = { id = "cmd-reinterpret", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret"], cwd = ".", path_args = [], artifact_id = "artifact-reinterpret" }
+state = { kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p6-reinterpret-rank-policy"
+unit = "P6"
+gates = ["G4"]
+artifact = { id = "artifact-reinterpret-rank-policy", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_reinterpret_rank.rs" }
+command = { id = "cmd-reinterpret-rank-policy", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret_rank"], cwd = ".", path_args = [], artifact_id = "artifact-reinterpret-rank-policy" }
+state = { kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p7-cuda"
+unit = "P7"
+gates = ["G1", "G3"]
+artifact = { id = "artifact-cuda-provider", kind = "hardware-test", path = "crates/tenferro-cuda/tests/storage_provider.rs" }
+command = { id = "cmd-cuda-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-cuda", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-cuda-provider" }
+state = { kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p8-webgpu-metal"
+unit = "P8"
+gates = ["G1", "G3"]
+artifact = { id = "artifact-webgpu-metal-provider", kind = "hardware-test", path = "crates/tenferro-wgpu/tests/storage_provider.rs" }
+command = { id = "cmd-webgpu-metal-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-wgpu", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-webgpu-metal-provider" }
+state = { kind = "deferred", activation_unit = "P8", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p10-api-normalization"
+unit = "P10"
+gates = ["G4"]
+artifact = { id = "artifact-api-normalization", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_public_api.rs" }
+command = { id = "cmd-api-normalization", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_public_api"], cwd = ".", path_args = [], artifact_id = "artifact-api-normalization" }
+state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p10-element-hot-path-structure"
+unit = "P10"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-element-hot-path-structure", kind = "source-contract", path = "scripts/check-storage-element-hot-path.py" }
+command = { id = "cmd-element-hot-path-structure", kind = "python-test", argv = ["python3", "scripts/check-storage-element-hot-path.py"], cwd = ".", path_args = ["scripts/check-storage-element-hot-path.py"], artifact_id = "artifact-element-hot-path-structure" }
+state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p10-storage-traversal-performance"
+unit = "P10"
+gates = ["G1", "G4"]
+artifact = { id = "artifact-storage-traversal-performance", kind = "performance-report", path = "docs/testing/storage-traversal-performance.md" }
+command = { id = "cmd-storage-traversal-performance", kind = "benchmark-check", argv = ["python3", "scripts/verify-storage-traversal-performance.py", "--baseline-obligation", "p1-element-access-baseline", "--baseline-report", "docs/testing/storage-element-access-baseline.json", "--report", "docs/testing/storage-traversal-performance.md"], cwd = ".", path_args = ["scripts/verify-storage-traversal-performance.py", "docs/testing/storage-element-access-baseline.json", "docs/testing/storage-traversal-performance.md"], artifact_id = "artifact-storage-traversal-performance" }
+state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p10-static-rank-codegen"
+unit = "P10"
+gates = ["G4"]
+artifact = { id = "artifact-static-rank-codegen", kind = "codegen-report", path = "docs/testing/storage-static-rank-codegen.md" }
+command = { id = "cmd-static-rank-codegen", kind = "codegen-check", argv = ["python3", "scripts/check-storage-static-rank-codegen.py", "--report", "docs/testing/storage-static-rank-codegen.md"], cwd = ".", path_args = ["scripts/check-storage-static-rank-codegen.py", "docs/testing/storage-static-rank-codegen.md"], artifact_id = "artifact-static-rank-codegen" }
+state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p13-freeze"
+unit = "P13-A"
+gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
+artifact = { id = "artifact-contract-freeze", kind = "documentation", path = "docs/design/storage-contract-freeze.md" }
+command = { id = "cmd-contract-freeze", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/design/storage-contract-freeze.md"], artifact_id = "artifact-contract-freeze" }
+state = { kind = "deferred", activation_unit = "P13-A", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p11-hardware"
+unit = "P11"
+gates = ["G1", "G3"]
+artifact = { id = "artifact-hardware-matrix", kind = "documentation", path = "docs/testing/storage-hardware-matrix.md" }
+command = { id = "cmd-hardware-matrix", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/testing/storage-hardware-matrix.md"], artifact_id = "artifact-hardware-matrix" }
+state = { kind = "deferred", activation_unit = "P11", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p12-documentation"
+unit = "P12"
+gates = ["G6"]
+artifact = { id = "artifact-storage-guide", kind = "documentation", path = "docs/storage-ownership.md" }
+command = { id = "cmd-storage-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/storage-ownership.md"], artifact_id = "artifact-storage-guide" }
+state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p12-element-access-guide"
+unit = "P12"
+gates = ["G4", "G6"]
+artifact = { id = "artifact-element-access-guide", kind = "documentation", path = "docs/guides/views-and-slicing.md" }
+command = { id = "cmd-element-access-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-element-access-docs.py", "docs/guides/views-and-slicing.md"], cwd = ".", path_args = ["scripts/check-storage-element-access-docs.py", "docs/guides/views-and-slicing.md"], artifact_id = "artifact-element-access-guide" }
+state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p12-element-access-examples"
+unit = "P12"
+gates = ["G4", "G6"]
+artifact = { id = "artifact-element-access-examples", kind = "tutorial", path = "docs/tutorial-code/src/bin/storage_element_access.rs" }
+command = { id = "cmd-element-access-examples", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tutorial-code", "--release", "tutorial_binaries_run_successfully", "--", "--exact"], cwd = ".", path_args = [], artifact_id = "artifact-element-access-examples" }
+state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+
+[[obligations]]
+id = "p13-closure"
+unit = "P13-B"
+gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
+artifact = { id = "artifact-storage-closure", kind = "documentation", path = "docs/worklogs/storage-redesign-closure.md" }
+command = { id = "cmd-storage-closure", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/worklogs/storage-redesign-closure.md"], artifact_id = "artifact-storage-closure" }
+state = { kind = "deferred", activation_unit = "P13-B", promotion = { mode = "activate-in-place" } }
+rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."

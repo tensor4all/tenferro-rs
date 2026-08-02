@@ -121,11 +121,11 @@ class RunProfileTests(unittest.TestCase):
     def test_ci_config_checks_storage_ownership_contract_ledger(self) -> None:
         commands = commands_for("ci-config")
         self.assertIn(
-            "python3 scripts/test-check-storage-ownership-contracts.py", commands
+            "python3 scripts/test-storage-ownership-contracts-v2.py", commands
         )
         self.assertIn("python3 scripts/check-storage-ownership-contracts.py", commands)
         self.assertLess(
-            commands.index("python3 scripts/test-check-storage-ownership-contracts.py"),
+            commands.index("python3 scripts/test-storage-ownership-contracts-v2.py"),
             commands.index("python3 scripts/check-storage-ownership-contracts.py"),
         )
 
@@ -136,14 +136,14 @@ class RunProfileTests(unittest.TestCase):
         run.assert_not_called()
         lines = output.getvalue().splitlines()
         self.assertIn(
-            "+ python3 scripts/test-check-storage-ownership-contracts.py", lines
+            "+ python3 scripts/test-storage-ownership-contracts-v2.py", lines
         )
         self.assertIn(
             "+ python3 scripts/check-storage-ownership-contracts.py",
             lines,
         )
         self.assertLess(
-            lines.index("+ python3 scripts/test-check-storage-ownership-contracts.py"),
+            lines.index("+ python3 scripts/test-storage-ownership-contracts-v2.py"),
             lines.index("+ python3 scripts/check-storage-ownership-contracts.py"),
         )
 
