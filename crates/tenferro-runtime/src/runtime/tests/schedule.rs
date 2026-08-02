@@ -3,8 +3,9 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::super::schedule::{
-    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, SchedulePreflightError,
-    ScheduledCollective, ScheduledGraph, ScheduledNode, ScheduledOperation, ScheduledTransfer,
+    EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
+    ScheduledGraph, ScheduledNode, ScheduledNodeKind, ScheduledOperation, ScheduledTransfer,
+    UnsupportedScheduledNodeError,
 };
 use super::super::{
     EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
@@ -365,7 +366,10 @@ fn collective_node_is_representable_but_execution_is_unsupported() {
     assert!(graph.validate().is_ok());
     assert!(matches!(
         graph.execute_for_test(),
-        Err(SchedulePreflightError::UnsupportedCollective { index: 0 })
+        Err(UnsupportedScheduledNodeError {
+            node_index: 0,
+            node_kind: ScheduledNodeKind::Collective,
+        })
     ));
 }
 

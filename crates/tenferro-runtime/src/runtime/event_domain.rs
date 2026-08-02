@@ -46,8 +46,9 @@ impl fmt::Display for EventDomainOperation {
 
 /// Structured event-domain admission and provenance failure.
 ///
-/// Every mismatch retains the expected and actual domains together with the
-/// operation and optional scheduled-node context. Providers use the same
+/// Every provenance mismatch retains the expected and actual domains together
+/// with the operation and optional scheduled-node context; a missing-driver
+/// failure identifies the unavailable domain directly. Providers use the same
 /// vocabulary for direct admission failures.
 ///
 /// # Examples
@@ -62,6 +63,12 @@ impl fmt::Display for EventDomainOperation {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EventDomainError {
+    /// The scheduler reached a domain for which no driver run was registered.
+    #[error("event domain {domain:?} has no registered driver")]
+    MissingDriver {
+        /// Event domain whose driver run was unavailable.
+        domain: EventDomainId,
+    },
     /// A driver returned a run for a domain other than the requested domain.
     #[error(
         "{operation} node {node_index:?} returned run domain {actual:?}, expected {expected:?}"

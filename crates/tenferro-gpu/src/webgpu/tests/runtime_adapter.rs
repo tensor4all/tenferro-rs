@@ -15,14 +15,6 @@ use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TypedTensor};
 
 use super::*;
 
-#[test]
-fn webgpu_event_domain_has_no_generic_foreign_token_wait_fallback() {
-    let source = include_str!("../event_domain.rs");
-    assert!(
-        !source.contains("_ => dependency.wait()?"),
-        "WebGPU event admission must reject foreign origins instead of host-waiting them"
-    );
-}
 use crate::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 
 #[derive(Debug)]
@@ -315,7 +307,18 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         &[Arc::new(FailingEventToken { origin: domain })],
         &mut forbidden,
     );
-    assert!(dependency_error.is_err());
+    assert!(matches!(
+        dependency_error,
+        Err(tenferro_runtime::Error::EventDomain {
+            source: tenferro_runtime::runtime::EventDomainError::IncompatibleTokenType {
+                operation: tenferro_runtime::runtime::EventDomainOperation::Enqueue,
+                expected,
+                actual,
+                token_type: "non-WebGPU event token",
+                ..
+            }
+        }) if expected == domain && actual == domain
+    ));
     assert_eq!(forbidden_launches, 0);
 
     let mut panic_output = None;

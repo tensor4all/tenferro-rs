@@ -116,9 +116,9 @@ compatibility overloads or a default origin.
   `EventDomainError::DrainPanicked`, and rejects every later operation with a
   typed lifecycle source. `ScheduledEventDomains` attempts every started run
   in first-use order and retains every failure in that order through the
-  existing suppressed-error chain. Drop retires only `Pending`; the consumed
-  provider box is never retried, and the minimal panic boundary prevents a
-  provider Drop panic from replacing an existing unwind.
+  existing suppressed-error chain. Drop is a one-shot, non-panicking fallback
+  for a skipped explicit drain; it retires only `Pending`, never retries a
+  terminal run, and may suppress its diagnostics because Drop has no `Result`.
 - Returned completion provenance is intentionally validated after the provider
   `enqueue` has returned: the launch has already happened by contract. The
   scheduler validates the token before recording it and before any downstream
@@ -132,9 +132,9 @@ compatibility overloads or a default origin.
   runtime wrapper's provider-box drop from submitting a second barrier.
 - CUDA and WebGPU retain separate provider-specific explicit drain/error paths.
   Their implicit run, submission-guard, and native-handle cleanup bodies call
-  the one crate-private `tenferro-gpu` retirement helper, which catches the
-  complete body—including backend cleanup and diagnostic formatting. The
-  helper has one deterministic injected-panic test and is ready for Metal.
+  the one crate-private `tenferro-gpu` retirement helper as a one-shot,
+  non-panicking best-effort fallback. Phase 0 has no bespoke structured Drop
+  sink, panic-payload attestation, or untrusted-destructor threat model.
 
 ## A0.2 baseline verification
 
@@ -232,7 +232,8 @@ Additional fresh checks passed:
 Native CUDA/WebGPU event execution and Metal integration still require their
 respective hardware/provider environments. The common non-unwinding and
 one-shot retirement boundaries are in place, but Metal's event adapter will be
-implemented in its own follow-up slice. Provider Drop panic payloads remain
-intentionally swallowed by the minimal Drop boundary; no broader provider
-diagnostic sink is part of this Phase 0 cleanup. The A0.2 API intentionally has
+implemented in its own follow-up slice. Drop-only fallback diagnostics are
+intentionally not surfaced; no bespoke provider diagnostic sink, panic-payload
+attestation, or untrusted-destructor threat model is part of this Phase 0
+cleanup. The A0.2 API intentionally has
 no compatibility shim for the replaced unqualified event-token contract.

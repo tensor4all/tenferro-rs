@@ -43,33 +43,36 @@ allocator. Freeze accepts only `BoundCandidateConfig`, so it does not contain
 late `Option` extraction or invalid transfer variants. Route binding is likewise
 bound-only after validation.
 
-Event-domain retirement is modeled as `Pending` or a terminal retired outcome.
-An explicit drain records both success and failure as terminal before returning;
-an error from `EventDomainRun::drain` is still a retirement boundary. Drop can
-retry only a pending run, and a provider panic is converted to a typed terminal
-diagnostic while the panic payload is forgotten without running an untrusted
-destructor. Runtime-owned runs use the same carrier. Domain cleanup reports an
-ordered aggregate; when execution already failed, the primary error remains
-primary and cleanup diagnostics are attached as a complete ordered list.
+Event-domain retirement is modeled with the `Pending`, `Retired`, and `Failed`
+states. Explicit drain is the normal diagnostic path: it consumes `Pending`
+before provider code, attempts every run in deterministic first-use order, and
+returns every failure while preserving an execution failure as the primary
+error. Explicit drain followed by provider `Drop` invokes retirement exactly
+once.
 
-Implicit retirement diagnostics are delivered to a panic-contained structured
-sink owned by the runtime/provider contract. There is no `eprintln!` fallback
-and no silent discard. Invalid lifecycle, missing completion, duplicate
-completion destination, missing executable driver/contract, and unsupported
-scheduled node/collective states are typed error variants with fields and source
-chains.
+`Drop` is a one-shot, non-panicking, best-effort emergency fallback only when
+explicit drain was skipped. It does not retry terminal runs, and its errors may
+be suppressed because `Drop` has no `Result` channel. Phase 0 does not define a
+runtime-wide structured `Drop` diagnostic sink, panic-payload attestation, or an
+untrusted-destructor threat model.
+
+Typed machine-readable fields are required only where callers or tests need
+them: missing event-domain drivers or scheduled completions, duplicate transfer
+destinations, missing executable contracts, and unsupported scheduled nodes.
+Other explanatory runtime-state messages remain ordinary source-preserving
+runtime errors.
 
 ## Evidence boundary
 
-RED tests first prove the public state transitions, typed errors, retirement
-boundary, aggregate cleanup, panic-payload containment, no-launch behavior, and
-production snapshot-to-driver wiring. Existing source substring/count tests are
-deleted or retained only where a token-aware inventory is genuinely required;
-behavioral tests are the safety proof. The existing provenance contracts remain
+RED tests first prove the public state transitions, typed fields and source
+chains, retirement boundary, aggregate cleanup, no-launch behavior, and
+production snapshot-to-driver wiring. The two obsolete foreign-token source
+scans are replaced by direct typed rejection assertions; unrelated historical
+source checks remain outside this task. The existing provenance contracts remain
 unchanged: runtime/epoch/registration-qualified `EventDomainId`, same-domain
 admission, the scheduler-owned transfer host bridge, returned-completion
-validation, panic containment, no generic CUDA/WebGPU foreign fallback, and no
-compatibility token API.
+validation, provider panic containment, no generic CUDA/WebGPU foreign fallback,
+and no compatibility token API.
 
 The worklogs record the withdrawn acceptance, this parent/candidate provenance,
 the typed-state decisions, exact RED/GREEN commands, and the absence of a

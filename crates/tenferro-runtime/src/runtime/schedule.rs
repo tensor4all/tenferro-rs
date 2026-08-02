@@ -600,6 +600,18 @@ impl ScheduledNode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScheduledNodeKind {
+    Collective,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("scheduled node {node_index} of kind {node_kind:?} is unsupported during execution")]
+pub(crate) struct UnsupportedScheduledNodeError {
+    pub(crate) node_index: usize,
+    pub(crate) node_kind: ScheduledNodeKind,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ScheduledGraph {
     nodes: Box<[ScheduledNode]>,
@@ -899,13 +911,16 @@ impl ScheduledGraph {
     /// Reject non-executable node kinds before any provider event-domain run
     /// is acquired. Preparation currently emits operations, transfers, and
     /// no-op barriers; collective execution remains unsupported.
-    pub(crate) fn preflight(&self) -> Result<(), SchedulePreflightError> {
+    pub(crate) fn preflight(&self) -> Result<(), UnsupportedScheduledNodeError> {
         if let Some(index) = self
             .nodes
             .iter()
             .position(|node| matches!(node, ScheduledNode::Collective(_)))
         {
-            return Err(SchedulePreflightError::UnsupportedCollective { index });
+            return Err(UnsupportedScheduledNodeError {
+                node_index: index,
+                node_kind: ScheduledNodeKind::Collective,
+            });
         }
         Ok(())
     }
@@ -938,7 +953,7 @@ impl ScheduledGraph {
     }
 
     #[cfg(test)]
-    pub(crate) fn execute_for_test(&self) -> Result<(), ScheduleExecutionError> {
+    pub(crate) fn execute_for_test(&self) -> Result<(), UnsupportedScheduledNodeError> {
         self.preflight()
     }
 
@@ -1007,15 +1022,6 @@ pub(crate) enum ScheduleBuildError {
     #[error("scheduled node count exceeds the event-slot identity space")]
     EventSlotExhausted,
 }
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum SchedulePreflightError {
-    #[error("scheduled node {index} is a collective, but collective execution is unsupported")]
-    UnsupportedCollective { index: usize },
-}
-
-#[cfg(test)]
-type ScheduleExecutionError = SchedulePreflightError;
 
 #[cfg(test)]
 #[derive(Debug)]

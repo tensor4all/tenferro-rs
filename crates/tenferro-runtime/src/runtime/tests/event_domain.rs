@@ -4,7 +4,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::super::execution::{EventDomainRunLifecycleError, ScheduledEventDomains};
+use super::super::execution::{
+    EventDomainRunLifecycleError, MissingScheduledDependencyCompletionError, ScheduledEventDomains,
+};
 use super::super::schedule::{
     EventCompletion, EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledNode,
     ScheduledOperation, ScheduledTransfer,
@@ -498,6 +500,31 @@ fn scheduler_rejects_a_run_that_reports_another_domain() -> Result<()> {
 }
 
 #[test]
+fn scheduler_reports_missing_event_domain_driver_with_domain() -> Result<()> {
+    let registered = qualified_domain(1, 1, 1, 1);
+    let missing = qualified_domain(1, 1, 1, 2);
+    let (driver, _, _) = driver(registered, registered);
+    let mut scheduler = ScheduledEventDomains::for_test(vec![(registered, driver)])?;
+    let mut launches = 0;
+    let mut launch = || {
+        launches += 1;
+        Ok(())
+    };
+
+    let error = scheduler
+        .enqueue(0, &operation(missing, 0, []), &mut launch)
+        .expect_err("missing event-domain driver");
+    assert!(matches!(
+        error,
+        Error::EventDomain {
+            source: EventDomainError::MissingDriver { domain }
+        } if domain == missing
+    ));
+    assert_eq!(launches, 0);
+    Ok(())
+}
+
+#[test]
 fn scheduler_rejects_forged_completion_after_enqueue_before_recording_or_downstream_launch(
 ) -> Result<()> {
     let domain = qualified_domain(1, 1, 1, 1);
@@ -544,9 +571,17 @@ fn scheduler_rejects_forged_completion_after_enqueue_before_recording_or_downstr
             &mut downstream_launch,
         )
         .expect_err("forged completion must not be available downstream");
-    assert!(downstream_error
-        .to_string()
-        .contains("has no completion token"));
+    let Error::RuntimeStateSource { source, .. } = downstream_error else {
+        panic!("missing scheduled completion must retain a typed source");
+    };
+    let missing = source
+        .downcast_ref::<MissingScheduledDependencyCompletionError>()
+        .expect("typed missing scheduled completion source");
+    assert_eq!(
+        missing.dependency,
+        EventDependency::new(domain, EventSlotId::new(0), 0)
+    );
+    assert_eq!(missing.node_index, 1);
     assert_eq!(downstream_launches.load(Ordering::SeqCst), 0);
     Ok(())
 }

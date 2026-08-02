@@ -21,7 +21,8 @@ use crate::exec::{
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
-    EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
+    EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledNodeKind,
+    ScheduledTransfer, UnsupportedScheduledNodeError,
 };
 use crate::runtime::{
     CacheOwnerError, CacheStats, EventDomainError, EventDomainOperation, EventDomainRun,
@@ -1026,10 +1027,13 @@ fn execute_scheduled_slots<'input>(
                     event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Collective(_) => {
-                    return Err(Error::runtime_state(
+                    return Err(Error::runtime_state_source(
                         "Runtime::run_compiled",
                         ErrorPhase::Execution,
-                        "collective node execution is not implemented",
+                        UnsupportedScheduledNodeError {
+                            node_index,
+                            node_kind: ScheduledNodeKind::Collective,
+                        },
                     ));
                 }
                 ScheduledNode::Barrier(_) => {
@@ -1060,6 +1064,22 @@ fn execute_scheduled_slots<'input>(
 pub(crate) struct ScheduledEventDomains {
     runs: Vec<RuntimeOwnedEventDomainRun>,
     completions: HashMap<EventDependency, Arc<dyn EventToken>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "scheduled node {node_index} depends on completion {dependency:?}, but no completion token was recorded"
+)]
+pub(crate) struct MissingScheduledDependencyCompletionError {
+    pub(crate) dependency: EventDependency,
+    pub(crate) node_index: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("scheduled transfer destination {destination:?} already contains value slot {value_slot}")]
+pub(crate) struct DuplicateTransferDestinationError {
+    pub(crate) value_slot: usize,
+    pub(crate) destination: ExecutionLocation,
 }
 
 impl ScheduledEventDomains {
@@ -1179,10 +1199,13 @@ impl ScheduledEventDomains {
         for dependency in node.dependencies() {
             let dependency_completion =
                 self.completions.get(dependency).cloned().ok_or_else(|| {
-                    Error::runtime_state(
+                    Error::runtime_state_source(
                         "Runtime::run_compiled",
                         ErrorPhase::Execution,
-                        format!("scheduled dependency {dependency:?} has no completion token"),
+                        MissingScheduledDependencyCompletionError {
+                            dependency: *dependency,
+                            node_index,
+                        },
                     )
                 })?;
             let actual = dependency_completion.origin();
@@ -1442,11 +1465,7 @@ impl Drop for RuntimeOwnedEventDomainRun {
 }
 
 fn missing_event_domain_driver(domain: super::EventDomainId) -> Error {
-    Error::runtime_state(
-        "Runtime::run_compiled",
-        ErrorPhase::Execution,
-        format!("event domain {domain:?} has no registered driver"),
-    )
+    Error::from(EventDomainError::MissingDriver { domain })
 }
 
 fn event_domain_error(source: EventDomainError) -> Error {
@@ -1668,13 +1687,13 @@ fn execute_scheduled_transfer<'input>(
                 slot: transfer.value_slot(),
             })?;
     if values.iter().any(|value| &value.location == destination) {
-        return Err(Error::runtime_state(
+        return Err(Error::runtime_state_source(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
-            format!(
-                "scheduled transfer destination already contains value slot {}",
-                transfer.value_slot()
-            ),
+            DuplicateTransferDestinationError {
+                value_slot: transfer.value_slot(),
+                destination: destination.clone(),
+            },
         ));
     }
     let transferred = {
@@ -2027,17 +2046,24 @@ mod tests {
         BackendSession, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
     };
 
-    use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+    use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
     use crate::runtime::{
-        CoreCapabilityBundle, EngineId, ErasedExecutionContext, EventDomainDriver,
+        CoreCapabilityBundle, EngineId, ErasedExecutionContext, EventDomainDriver, EventDomainId,
         ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId, InputIngressContract,
         InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
-        PreparedOperationPlan, ProviderDeviceIdentity, RegistrationIdentity, RuntimeCacheOwner,
-        RuntimeEpoch, RuntimeId, SpecializationProjection, SpecializationRequirements,
+        PreparedOperationPlan, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
+        RuntimeCacheOwner, RuntimeEpoch, RuntimeId, SpecializationProjection,
+        SpecializationRequirements, StorageClass,
     };
     use crate::{Error, ErrorPhase, ExtensionCacheStore, Result};
 
-    use super::{ErasedTensorBackendExecutor, TensorBackendExecutor};
+    use super::{
+        DuplicateTransferDestinationError, ErasedTensorBackendExecutor, LocatedExecSlot,
+        TensorBackendExecutor,
+    };
+    use crate::runtime::schedule::{
+        EventCompletion, EventSlotId, ExecutionLocation, ScheduledTransfer,
+    };
 
     const LOCK_PROBE_FAMILY: &str = "runtime.lock-probe.v1";
     const REENTRANT_PROBE_FAMILY: &str = "runtime.reentrant-probe.v1";
@@ -2452,6 +2478,62 @@ mod tests {
                 .to_string(),
             primary_display
         );
+    }
+
+    #[test]
+    fn duplicate_scheduled_transfer_destination_reports_typed_fields() {
+        let domain = EventDomainId::runtime_created_for_test(
+            RuntimeId::from_nonzero(nz(1)),
+            RuntimeEpoch::from_nonzero(nz(1)),
+            RegistrationIdentity::new(nz(1), nz(1)),
+        );
+        let source = ExecutionLocation::new(
+            EngineId::new("tenferro-test.transfer-source").expect("source engine"),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro-test.transfer").expect("provider id"),
+                "source",
+            )
+            .expect("source provider target"),
+            domain,
+            StorageClass::new("tenferro-test.transfer-source").expect("source storage"),
+        );
+        let destination = ExecutionLocation::new(
+            EngineId::new("tenferro-test.transfer-destination").expect("destination engine"),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro-test.transfer").expect("provider id"),
+                "destination",
+            )
+            .expect("destination provider target"),
+            domain,
+            StorageClass::new("tenferro-test.transfer-destination").expect("destination storage"),
+        );
+        let transfer = ScheduledTransfer::new(
+            3,
+            source,
+            destination.clone(),
+            [],
+            EventCompletion::new(domain, EventSlotId::new(0), 0),
+        );
+        let mut located = vec![
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![LocatedExecSlot {
+                location: destination.clone(),
+                value: ExecSlot::Owned(f64_zeros(vec![1])),
+            }],
+        ];
+
+        let error = super::execute_scheduled_transfer(&transfer, &mut located)
+            .expect_err("duplicate transfer destination");
+        let Error::RuntimeStateSource { source, .. } = error else {
+            panic!("duplicate transfer destination must retain a typed source");
+        };
+        let duplicate = source
+            .downcast_ref::<DuplicateTransferDestinationError>()
+            .expect("typed duplicate transfer destination source");
+        assert_eq!(duplicate.value_slot, 3);
+        assert_eq!(duplicate.destination, destination);
     }
 
     #[test]

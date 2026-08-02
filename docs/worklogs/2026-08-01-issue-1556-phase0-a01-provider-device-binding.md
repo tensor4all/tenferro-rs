@@ -192,18 +192,27 @@ worklog; it does not claim that the later typed-error or retirement redesign is
 complete. Hardware-only CUDA execution was not available in this environment;
 CUDA compilation without hardware remains a later verification gate.
 
-### Deliberately deferred audit items
+### D1 scope after proportionality refinement
 
-- Replace remaining stringly `runtime_state` execution/configuration failures
-  with typed variants and assert fields/source chains, including missing
-  executable contracts, completion tokens, duplicate destinations, unsupported
-  schedule nodes, and consumed runs.
-- Replace provider/runtime run booleans and `Option` lifecycle carriers with
-  typed retirement states, aggregate ordered cleanup diagnostics, and route
-  implicit Drop diagnostics through a panic-contained structured sink.
-- Remove the remaining raw `include_str!`/substring structural tests and finish
-  the repository-wide audit for stale provisional wording, CUDA registration
-  documentation, parallel-Option state, and compatibility paths.
+This continuation completes only the remaining reachable execution-boundary
+cases named by Phase 0 Task D1:
+
+- Missing event-domain drivers, missing scheduled completions, duplicate
+  transfer destinations, unsupported scheduled nodes, and missing prepared
+  extension executors now retain small typed sources with the fields needed by
+  callers/tests. Other explanatory `runtime_state` messages remain unchanged.
+- Explicit scheduler drain remains the normal diagnostic path: it attempts
+  every run in deterministic order and preserves execution as primary. `Drop`
+  is only a one-shot, non-panicking emergency fallback when explicit drain was
+  skipped; Drop-only errors may be suppressed because `Drop` has no `Result`.
+  Phase 0 adds no structured Drop sink, panic-payload attestation, or
+  untrusted-destructor threat model.
+- The two obsolete CUDA/WebGPU foreign-token source-substring tests were
+  removed and their direct provider tests now assert typed rejection before
+  launch. Unrelated historical source checks remain outside this task.
+
+The two-device hardware execution test and any broader repository-wide audit
+remain deferred to later phases.
 
 ## Follow-up: fallible eager-runtime construction
 

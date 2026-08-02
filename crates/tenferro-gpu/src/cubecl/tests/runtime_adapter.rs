@@ -235,18 +235,6 @@ fn cuda_registration_installs_native_event_domain_driver() {
 }
 
 #[test]
-fn cuda_event_domain_has_no_generic_foreign_token_wait_fallback() {
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cubecl/event_domain.rs"),
-    )
-    .expect("CUDA event-domain source must be readable");
-    assert!(
-        !source.contains("_ => dependency.wait()?"),
-        "CUDA event admission must reject foreign origins instead of host-waiting them"
-    );
-}
-
-#[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
     if !gpu_available() {
@@ -371,7 +359,18 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         &[Arc::new(FailingEventToken { origin: domain })],
         &mut forbidden,
     );
-    assert!(dependency_error.is_err());
+    assert!(matches!(
+        dependency_error,
+        Err(tenferro_runtime::Error::EventDomain {
+            source: tenferro_runtime::runtime::EventDomainError::IncompatibleTokenType {
+                operation: tenferro_runtime::runtime::EventDomainOperation::Enqueue,
+                expected,
+                actual,
+                token_type: "non-CUDA event token",
+                ..
+            }
+        }) if expected == domain && actual == domain
+    ));
     assert_eq!(forbidden_launches, 0);
 
     let mut panic_output = None;
