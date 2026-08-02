@@ -24,7 +24,7 @@ pub trait EagerTensorFftExt {
     ///
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-    ///     EagerRuntime::new().unwrap(),
+    ///     EagerRuntime::new()?,
     /// )?;
     /// let y = x.fft(None, -1, FftNorm::Backward)?;
     /// assert_eq!(y.materialized()?.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
@@ -49,7 +49,7 @@ pub trait EagerTensorFftExt {
     ///
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap(),
-    ///     EagerRuntime::new().unwrap(),
+    ///     EagerRuntime::new()?,
     /// )?;
     /// let y = x.ifft(None, -1, FftNorm::Backward)?;
     /// assert_eq!(y.shape(), &[2]);
@@ -73,7 +73,7 @@ pub trait EagerTensorFftExt {
     ///
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     EagerRuntime::new().unwrap(),
+    ///     EagerRuntime::new()?,
     /// )?;
     /// let y = x.rfft(None, -1, FftNorm::Backward)?;
     /// assert_eq!(y.shape(), &[3]);
@@ -98,7 +98,7 @@ pub trait EagerTensorFftExt {
     ///
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)]).unwrap(),
-    ///     EagerRuntime::new().unwrap(),
+    ///     EagerRuntime::new()?,
     /// )?;
     /// let y = x.irfft(Some(4), -1, FftNorm::Backward)?;
     /// assert_eq!(y.shape(), &[4]);

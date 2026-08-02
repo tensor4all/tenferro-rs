@@ -124,7 +124,7 @@ impl EagerTensorEinsumExt for EagerTensor {
 /// use tenferro_einsum::EagerEinsumExt;
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -159,7 +159,7 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// use tenferro_einsum::{EagerEinsumExt, parse_einsum_subscripts};
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -309,7 +309,7 @@ fn try_whole_program_untracked(
 /// use tenferro_einsum::{ContractionTree, Subscripts};
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -915,7 +915,7 @@ fn runtime_missing(message: impl Into<String>) -> Error {
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_einsum::{EagerTensorEinsumExt, TensorDotAxes};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let lhs = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     ctx.clone(),
