@@ -19,7 +19,7 @@ use tenferro_tensor::{
     TensorReduction, TensorStructural, TensorValue, TensorWrite,
 };
 
-pub enum EagerBackend {
+pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
     #[cfg(test)]
     Recording(RecordingBackend),
