@@ -302,6 +302,12 @@ alias. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
+Hosted `ci-config` checks fetch full Git history and pass exactly one canonical
+event base to the existing production checker: `pull_request.base.sha` for a
+pull request and `github.event.before` for a push. The local `ci-config`
+profile omits the base by default and remains a structural developer check.
+Supplying a storage-ownership base without selecting `ci-config` is invalid.
+
 Availability is an explicit CLI contract, not source inspection or path
 existence. Both tools accept `--contract-schema`, exit successfully
 without loading a manifest, write exactly one JSON object to stdout, and write
