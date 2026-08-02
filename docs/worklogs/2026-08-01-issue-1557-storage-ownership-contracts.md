@@ -379,7 +379,7 @@ subtest, and one extra `terminal` case rejects a second status authority.
 `E_RECEIPT_SHAPE` carries exact string `field`, `expected`, and `actual` values
 plus a non-empty message; self-tests reject missing or wrong diagnostic fields.
 
-Finally, future proof coverage is derived from all 15 canonical
+Finally, future proof coverage is derived from all 25 canonical
 `DEFERRED_OBLIGATIONS`, not a second three-item list. Every subtest validates
 the complete unit/gate/artifact/state/command contract before reporting the
 exact future-artifact cause or executing an existing artifact's canonical
@@ -387,16 +387,64 @@ command from its canonical cwd. Existing-file-only promotion remains rejected,
 and promotion identity now has separate artifact and command mutation cases,
 so a noncanonical manifest cannot supply an arbitrary command for execution.
 
+The blocking static-rank and element-hot-path amendment from #1555 adds one
+active P1 baseline and ten deferred implementation proofs. The exact ledger
+IDs and owners are:
+
+- P1: `p1-element-access-baseline`;
+- P3: `p3-static-rank-preservation`, `p3-as-view-zero-allocation`;
+- P4: `p4-traversal-resolution-counts`, `p4-prepared-access-api`;
+- P6: `p6-reinterpret-rank-policy`;
+- P10: `p10-element-hot-path-structure`,
+  `p10-storage-traversal-performance`, `p10-static-rank-codegen`;
+- P12: `p12-element-access-guide`, `p12-element-access-examples`.
+
+P1 runs the release benchmark exactly once against the recorded pre-redesign
+commit and stores a machine-readable direct-slice/contiguous/strided result
+plus source/tool digest, toolchain, machine, thread, and sampling configuration
+in `docs/testing/storage-element-access-baseline.json`. The report is added in
+the P1 ledger commit. Its active canonical command is a read-only verifier: it
+never benchmarks or rewrites the artifact on later candidates. The runner
+digest-binds the report and persists the original
+`.storage-ownership-receipts/p1-element-access-baseline.json`; ordinary later
+candidate receipts use separate paths. P10 names and verifies both immutable
+inputs. The measurement anchor is evidence only, not a compatibility shim. The
+contract requires static-rank preservation, O(1)
+allocation-free view reborrows, zero storage/provider refcount clones, zero
+dynamic-rank metadata clones, constant provider-resolution counts per
+traversal/launch, structural and codegen checks, and the #1569 cost-model
+documentation. Timing reports remain machine-aware rather than brittle
+absolute CI thresholds.
+
+P4 additionally owns a concrete prepared-access API equivalent to
+`CheckedLayout` plus `iter_contiguous()`/typed slice access. Its fallible
+constructor completes bounds, shape/stride arithmetic, layout, storage-span,
+alignment, write-injectivity, provider/map, and synchronization checks before
+constructing or publishing a checked layout, prepared object, or iterator;
+typed failure returns the unchanged input capability after rollback. The
+prepared state is an enum, not a combination of booleans. Its exact contract
+includes fallible owner-view and mutable-view constructors, contiguous typed
+slice/iterator variants, and strided iterator variants holding the guard,
+checked plan, cursor, borrow marker, and exact `Iterator::Item` lifetime.
+Exhaustion is represented only by `remaining == 0`; mutable iteration requires
+the checked injectivity state and never yields an offset twice. Contiguous inner
+loops contain only typed slice iteration, while strided loops add only necessary
+incremental stride/carry updates. The P4 artifact includes structural checks
+for validation placement, iterator bodies, and enum-authoritative state;
+P10 repeats the final hot-loop scan. Alternative names or type splits require
+an explicit equivalence map and all four prepared-access/counter/source/codegen
+proofs to be updated together.
+
 The following RED result is intentional and is evidence that the implementation
 surface has not been silently added in this checkpoint:
 
-- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 68 tests and
-  reports exactly 222 expected failure/subtest events. The emitted
+- `python3.12 scripts/test-storage-ownership-contracts-v2.py` runs 69 tests and
+  reports exactly 315 expected failure/subtest events. The emitted
   `tenferro.storage-ownership-red-report.v1` has zero unexpected failures and
   zero missing expected events, equal expected/observed event counts, and no
-  skipped tests. The causes are machine-readable: v2 checker absent (168
+  skipped tests. The causes are machine-readable: v2 checker absent (251
   events), v2 runner absent (38 events), future production proof artifacts
-  absent (15 events), and atomic v2 migration not landed (1 event). The event
+  absent (25 events), and atomic v2 migration not landed (1 event). The event
   registry matches exception type, failure/error kind, cause, test, and
   subtest parameters as a multiset. The required symlink capability test
   passes on this host; an unsupported host would add an unexpected capability

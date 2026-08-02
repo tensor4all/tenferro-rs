@@ -1263,6 +1263,54 @@ receipt records the loop count, allocator counter, resolved-value size, and
 backend; a regression that introduces a per-access allocation fails the G1
 performance gate.
 
+Resolution is a traversal or launch boundary, never an element boundary.
+For one prepared host traversal or backend launch, allocation-key/span
+validation, provider dispatch/downcast, host mapping, guard acquisition, and
+`UseLease` acquisition each occur a constant number of times independent of
+the element count. The resulting loop or kernel receives a monomorphized typed
+slice/pointer plus a prevalidated iteration plan. No element iteration may
+perform virtual dispatch, `Any` downcast, heap allocation, reference-count
+operation, lock acquisition, synchronization, or descriptor-range
+revalidation. Contiguous host traversal has a slice-equivalent inner loop;
+strided traversal pays only its prepared stride arithmetic and ordinary loop
+control. No path in this contract transfers or materializes storage.
+
+Phase 4 proves the constant-count boundary with an instrumented fake provider
+(`p4-traversal-resolution-counts`). Phase 10 adds a source-contract proof
+(`p10-element-hot-path-structure`) and verifies release traversal performance
+against both a direct-slice control and the immutable Phase 1 pre-redesign
+receipt (`p10-storage-traversal-performance`). Timing alone is not a sound CI
+proof; the deterministic counters and structural checks are mandatory even
+when a machine-dependent benchmark comparison is reported.
+
+Before redesign work resumes, the P1 owner checks out the exact pre-redesign
+source commit and runs the release capture utility once. That one-time command
+records `element_access` direct-slice, contiguous owner/view, and representative
+strided results in `docs/testing/storage-element-access-baseline.json`, then
+adds the immutable report in the P1 ledger commit. The report records the
+measured source commit, benchmark source digest, capture command/tool digest,
+optimized toolchain/profile, machine/CPU, pinned thread configuration, sample
+settings, and machine-readable results. The active canonical command is
+deliberately a read-only verifier:
+
+```text
+python3 scripts/verify-storage-element-access-baseline.py \
+  --report docs/testing/storage-element-access-baseline.json
+```
+
+It never benchmarks or rewrites the report. On every later candidate it checks
+the existing bytes, loads the measured commit with `git show`, rehashes that
+commit's benchmark source and capture tool, and validates the complete report
+schema/configuration. Thus an active obligation can run repeatedly without
+moving the baseline. The v2 runner digest-binds the report once at the P1
+ledger commit and the gate coordinator persists that original receipt as
+`.storage-ownership-receipts/p1-element-access-baseline.json`; later candidate
+receipts use candidate-specific paths and must not overwrite it. P10 takes the
+immutable report and original receipt explicitly and fails if the receipt's
+candidate, artifact digest, obligation ID, command identity, or report
+configuration does not match. A benchmark added after the redesign or an
+unmeasured `--no-run` build cannot impersonate the baseline.
+
 ### Ordering rules
 
 Conceptually each allocation tracks, per span, the last unretired device
@@ -1730,12 +1778,12 @@ Rules (#1555, "Capability surface and method distribution"; #1559):
    canonicalization:
 
    ```rust
-   impl<T> TypedTensor<T> {
-       fn as_view(&self) -> TypedTensorView<'_, T>;
-       fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T>;
+   impl<T, R: TensorRank> TypedTensor<T, R> {
+       fn as_view(&self) -> TypedTensorView<'_, T, R>;
+       fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R>;
    }
-   impl<'a, T> TypedTensorViewMut<'a, T> {
-       fn as_view(&self) -> TypedTensorView<'_, T>; // reborrow
+   impl<'a, T, R: TensorRank> TypedTensorViewMut<'a, T, R> {
+       fn as_view(&self) -> TypedTensorView<'_, T, R>; // reborrow
    }
    ```
 
@@ -1770,6 +1818,244 @@ Method-home table:
 | in-place mutation (write guard acquisition, mutable slicing, `split_mut` entry points) | `TypedTensorViewMut` | owner delegates via `as_view_mut()` |
 | consuming (into-conversions, consuming reinterpretation, extraction) | `TypedTensor` / `AllocationGroup` | not available on views |
 | duplication (explicit copy) | `TypedTensorView` (reads source) returning a new owner | owner/view-mut delegate |
+
+### Rank preservation and element-access cost model
+
+The optional rank parameter is part of the public type and performance
+contract. Rank-preserving operations retain `R` on the owner and both views:
+
+```rust
+struct TypedTensor<T, R: TensorRank = DynRank> {
+    storage: OwnedStorage,
+    layout: TensorLayout<R>,
+    placement: Placement,
+    _scalar: PhantomData<T>,
+}
+
+struct TypedTensorView<'a, T, R: TensorRank = DynRank> {
+    storage: StorageRef<'a>,
+    layout: TensorLayoutRef<'a, R>,
+    placement: Placement,
+    _scalar: PhantomData<T>,
+}
+
+struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
+    storage: StorageMut<'a>,
+    layout: TensorLayoutRef<'a, R>,
+    placement: Placement,
+    _scalar: PhantomData<T>,
+}
+```
+
+The sketches are normative in shape, while names remain provisional until
+their owning implementation phase. `TensorLayoutRef` denotes a borrowed
+metadata representation: an ordinary `as_view()` or `as_view_mut()` is O(1),
+allocation-free, and does not clone heap-backed dynamic shape/stride metadata,
+clone or increment a storage/provider reference count, resolve a provider,
+synchronize, transfer, or materialize data. It only reborrows the existing
+owner capability and layout. `DynRank` remains a first-class supported rank;
+it is not permission to erase fixed rank from unrelated APIs.
+
+`p3-as-view-zero-allocation` is a combined allocation, counter, and structural
+contract rather than an allocator-only test. Around warmed owner and mutable
+view reborrows for both fixed and dynamic rank, it asserts zero allocator
+events, zero storage/provider clone or strong-count operations, and zero
+dynamic shape/stride metadata clones. Its source-contract inventory proves
+that view storage and dynamic layout metadata are borrow fields and that
+`as_view*` contains no ownership clone path. An `Arc::clone` that happens not
+to allocate is therefore still a gate failure.
+
+Checked random `get(&[usize])` and `get_mut(&[usize])` may validate bounds and
+perform O(rank) offset arithmetic per call. They are not the canonical hot-loop
+interface. Contiguous bulk access resolves once and exposes a typed slice or
+guard. Strided iteration resolves once and carries a prevalidated incremental
+offset/stride plan. Backend execution resolves and leases once per launch.
+Static-rank traversal remains monomorphized and eligible for loop unrolling;
+dynamic-rank support must not route every typed element through opaque
+per-element dispatch. The release codegen artifact
+`p10-static-rank-codegen` records at least one contiguous fixed-rank loop and
+must show a slice-equivalent inner loop without storage/provider abstraction
+work.
+
+Phase 4 must expose a concrete prepared-access boundary equivalent to this
+shape:
+
+```rust
+enum CheckedLayout<R: TensorRank> {
+    Contiguous {
+        element_range: core::ops::Range<usize>,
+    },
+    Strided(CheckedStrided<R>),
+}
+
+enum PreparedHostRead<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousRead<'a, T, R>),
+    Strided(PreparedStridedRead<'a, T, R>),
+}
+
+enum PreparedHostWrite<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousWrite<'a, T, R>),
+    Strided(PreparedStridedWrite<'a, T, R>),
+}
+
+struct PreparedContiguousRead<'a, T, R: TensorRank> {
+    guard: HostReadGuard<'a, T>,
+    element_range: core::ops::Range<usize>,
+    _rank: PhantomData<R>,
+}
+
+struct PreparedContiguousWrite<'a, T, R: TensorRank> {
+    guard: HostWriteGuard<'a, T>,
+    element_range: core::ops::Range<usize>,
+    _rank: PhantomData<R>,
+}
+
+struct PreparedStridedRead<'a, T, R: TensorRank> {
+    guard: HostReadGuard<'a, T>,
+    plan: CheckedStrided<R>,
+}
+
+struct PreparedStridedWrite<'a, T, R: TensorRank> {
+    guard: HostWriteGuard<'a, T>,
+    plan: CheckedInjectiveStrided<R>,
+}
+
+struct StrideCursor<R: TensorRank> {
+    coordinate: RankIndex<R>,
+    next_element_offset: usize,
+    remaining: usize,
+}
+
+struct PreparedStridedIter<'i, T, R: TensorRank> {
+    base: core::ptr::NonNull<T>,
+    plan: &'i CheckedStrided<R>,
+    cursor: StrideCursor<R>,
+    _borrow: PhantomData<&'i T>,
+}
+
+struct PreparedStridedIterMut<'i, T, R: TensorRank> {
+    base: core::ptr::NonNull<T>,
+    plan: &'i CheckedInjectiveStrided<R>,
+    cursor: StrideCursor<R>,
+    _borrow: PhantomData<&'i mut T>,
+}
+
+impl<'a, T, R: TensorRank> TypedTensorView<'a, T, R> {
+    fn prepare_host(
+        self,
+    ) -> Result<PreparedHostRead<'a, T, R>, (Self, AccessError)>;
+}
+
+impl<'a, T, R: TensorRank> TypedTensorViewMut<'a, T, R> {
+    fn prepare_host_mut(
+        self,
+    ) -> Result<PreparedHostWrite<'a, T, R>, (Self, AccessError)>;
+}
+
+impl<'a, T, R: TensorRank> PreparedContiguousRead<'a, T, R> {
+    fn as_slice(&self) -> &[T];
+    fn iter_contiguous(&self) -> core::slice::Iter<'_, T>;
+}
+
+impl<'a, T, R: TensorRank> PreparedContiguousWrite<'a, T, R> {
+    fn as_slice_mut(&mut self) -> &mut [T];
+    fn iter_contiguous_mut(&mut self) -> core::slice::IterMut<'_, T>;
+}
+
+impl<'a, T, R: TensorRank> PreparedStridedRead<'a, T, R> {
+    fn iter_strided(&self) -> PreparedStridedIter<'_, T, R>;
+}
+
+impl<'a, T, R: TensorRank> PreparedStridedWrite<'a, T, R> {
+    fn iter_strided_mut(&mut self) -> PreparedStridedIterMut<'_, T, R>;
+}
+
+impl<'i, T, R: TensorRank> Iterator for PreparedStridedIter<'i, T, R> {
+    type Item = &'i T;
+    fn next(&mut self) -> Option<Self::Item>;
+}
+
+impl<'i, T, R: TensorRank> Iterator for PreparedStridedIterMut<'i, T, R> {
+    type Item = &'i mut T;
+    fn next(&mut self) -> Option<Self::Item>;
+}
+```
+
+`RankIndex<R>` is the rank-preserving cursor representation: inline for fixed
+rank and initialized once outside iteration for dynamic rank.
+`CheckedStrided<R>` owns the checked start offset, extents, strides, element
+count, and incremental carry plan; it contains no provider or storage receiver.
+`CheckedInjectiveStrided<R>` is constructible only after the write-injectivity
+proof and otherwise has the same traversal data. The fallible `prepare_host*`
+constructor resolves the storage capability, validates checked
+shape/stride/offset arithmetic, bounds, span containment, alignment, layout
+injectivity for writes, provider compatibility, mapping, and synchronization
+before constructing or publishing `CheckedLayout`, `PreparedHostRead`, or
+`PreparedHostWrite`. Failure rolls back any partial mapping/registration and
+returns the unchanged input capability with a typed `AccessError`; no prepared
+object or iterator exists on failure. The constructor consumes the checked
+layout into exactly one `PreparedHost*` enum variant. Matching that variant is
+the only contiguous/strided state transition and performs no validation or
+provider work.
+
+`as_slice*` and `iter_contiguous*` perform only typed slice access after one
+range extraction outside the loop. `PreparedStridedIter*::next` performs only
+typed pointer/slice access, the necessary incremental stride/carry updates,
+and loop termination. It does not decode a flat index into coordinates or
+repeat bounds, layout, span, alignment, capability, provider, map, or
+synchronization checks. The `PreparedHost*` and `CheckedLayout` enums are the
+state authorities; independent booleans such as `is_checked`, `is_contiguous`,
+`is_mapped`, and `is_writable` must not encode these states.
+
+`iter_strided*` borrows its prepared guard for `'i`, takes the already checked
+base pointer, and initializes `StrideCursor` once; it performs no validation,
+mapping, synchronization, or provider operation. Exhaustion has one authority:
+`cursor.remaining == 0`; `next()` returns `None` without pointer arithmetic in
+that state. Otherwise it dereferences the previously proven in-span offset,
+decrements `remaining`, and advances the incremental carry plan. The immutable
+iterator's `Item = &'i T` is bounded by the read guard. The mutable iterator's
+`Item = &'i mut T` is sound because `CheckedInjectiveStrided` proves that no
+two yielded offsets overlap for `size_of::<T>()`; the iterator owns the sole
+mutable borrow of its guard for `'i` and never yields an offset twice. The
+unsafe pointer dereference is private, adjacent to these checked-plan
+invariants, and covered by empty, singleton, negative/reverse-stride,
+noncontiguous, overflow-rejection, exhaustion, and Miri tests.
+
+These type names are provisional, but the prepared boundary and contiguous
+specialization are normative. An owning phase that chooses different names or
+splits the objects differently must update this contract in the same PR and
+include an explicit mapping from every sketch type/method/state transition to
+its replacement. It must show, through `p4-prepared-access-api`,
+`p4-traversal-resolution-counts`, `p10-element-hot-path-structure`, and
+`p10-static-rank-codegen`, that its API has the same prevalidation, inner-loop,
+and code-generation properties. The P4 artifact combines compile/runtime API
+tests with a source-contract inventory proving all validation and provider
+work precede construction, iterator bodies contain only the permitted typed
+access and increments, and no boolean fields duplicate enum state. P10 repeats
+the loop-boundary structural proof over the final normalized API.
+
+Rank-changing reinterpretation is separate from ordinary views. Phase 6 must
+define each operation's result-rank policy explicitly and test it under
+`p6-reinterpret-rank-policy`. A stable-Rust limitation in expressing a type
+level result such as `N + 1` may require a dynamic result or an explicit
+caller-selected result rank for that operation only; it must never force
+rank-preserving view, slice, or traversal APIs to erase `R`.
+
+The v2 ledger carries these executable obligations:
+
+| Obligation | Phase | Artifact and proof |
+|---|---|---|
+| `p1-element-access-baseline` | P1 | capture once against the exact pre-redesign commit, digest-bind the machine-readable direct-slice/contiguous/strided report and original receipt, then run only the read-only verifier on later candidates |
+| `p3-static-rank-preservation` | P3 | compile/API contract for owner, immutable view, and mutable view preserving `R` |
+| `p3-as-view-zero-allocation` | P3 | warmed allocator/refcount/provider-clone/layout-clone counters plus borrow-only source contract for owner/view-mut reborrows, including dynamic rank |
+| `p4-traversal-resolution-counts` | P4 | fake provider counters proving resolve/map/lease/dispatch counts are independent of element count |
+| `p4-prepared-access-api` | P4 | compile/runtime and source contract for typed failure, enum-authoritative preparation, contiguous slice/iterator access, and incremental strided iteration |
+| `p6-reinterpret-rank-policy` | P6 | behavior and compile contract for every rank-changing reinterpretation |
+| `p10-element-hot-path-structure` | P10 | source-contract check that provider/capability resolution is outside element loops |
+| `p10-storage-traversal-performance` | P10 | release contiguous and representative strided report that explicitly verifies and consumes the P1 result JSON and its digest-bound receipt |
+| `p10-static-rank-codegen` | P10 | release codegen/assembly report for a contiguous static-rank typed loop |
+| `p12-element-access-guide` | P12 | executable content check for the guide and required rustdoc cost claims |
+| `p12-element-access-examples` | P12 | release runnable owner/view/view-mut traversal tutorial |
 
 ## G5. Raw handles and reclamation
 
@@ -1923,7 +2209,18 @@ Common validation commands:
 | 9 (#1565) | detached vs scoped ownership, outcome recovery, detach vs cancel, extraction; G3 state tables kept current | common commands |
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate SHA | common commands |
-| 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry; `docs/getting-started/core-concepts.md`; README/tutorials; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered` |
+| 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
+
+The Phase 12 element-access section must distinguish O(rank) checked random
+access, contiguous typed-slice/guard traversal, prepared strided traversal,
+and one-resolution-per-launch backend execution. It documents host-visible
+versus device-only storage, including the explicit download boundary, and
+warns against repeated multidimensional `get` in a hot loop when a slice,
+iterator, or prepared strided plan is available. Every affected rustdoc entry
+states whether the operation allocates, dispatches through a provider,
+synchronizes, performs per-element bounds/stride work, preserves static rank,
+or can transfer/materialize. The source-blind reviewer must be able to select
+the zero-overhead path without reading implementation source.
 | 13 (#1567) | final worklog linking candidate SHA, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 ## G7. AD value retention
@@ -2109,18 +2406,21 @@ phase issues carry the full inventories; this index is the cross-reference.
 
 | Gate | Enforcement | Owning phases |
 |---|---|---|
-| G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices | #1560, providers in #1563/#1564 |
+| G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
 | G2 group, splitting, extraction | N-way split cases (N=0,1,>2, empty, reverse-stride, overflow); permutation-independence property tests; group-qualified stale-generation tests; compile-fail (root access while children live); extraction counters | #1561 |
 | G3 submission terminal semantics | rejection carriers return identical allocation keys; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and quarantine outcomes; cancellation/panic/detach/unobserved-error suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
-| G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections) | #1557 harness, #1559 |
+| G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
-| G6 documentation | rendered stale-language checker; doctests; tutorial-code checks; source-blind audit | #1569, #1567 |
+| G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
 | G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); generational stale-handle and all-liveness-root extraction tests; checkpoint interior-release test; mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
 ## Relationship to phase issues
 
 - #1556 and #1557 are independent roots of the canonical DAG; #1557 owns the
   v2 ledger and its executable RED/green gate.
+- The active P1 `p1-element-access-baseline` receipt is created before the
+  redesign and is immutable evidence consumed by P10. It is a measurement
+  anchor, not a production compatibility shim or retained implementation path.
 - #1558 owns the root pin, non-`Clone` claim, and the single typed provider
   bridge. #1560 owns access/retirement. #1561 owns groups and generational
   descriptors. None waits for the public host cutover.

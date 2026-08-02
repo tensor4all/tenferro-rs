@@ -610,6 +610,26 @@ BASE_ACTIVE_OBLIGATIONS = (
         (),
     ),
     (
+        "p1-element-access-baseline",
+        "P1",
+        ("G4",),
+        "artifact-element-access-baseline",
+        "docs/testing/storage-element-access-baseline.json",
+        "benchmark-report",
+        "cmd-element-access-baseline",
+        "benchmark-check",
+        (
+            "python3",
+            "scripts/verify-storage-element-access-baseline.py",
+            "--report",
+            "docs/testing/storage-element-access-baseline.json",
+        ),
+        (
+            "scripts/verify-storage-element-access-baseline.py",
+            "docs/testing/storage-element-access-baseline.json",
+        ),
+    ),
+    (
         "p2-root-claims",
         "P2",
         ("G1",),
@@ -646,6 +666,44 @@ DEFERRED_OBLIGATIONS = (
         "cmd-owner-compile",
         "cargo-test",
         ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"),
+        (),
+    ),
+    (
+        "p3-static-rank-preservation",
+        "P3",
+        ("G4",),
+        "artifact-static-rank-preservation",
+        "crates/tenferro-tensor/tests/storage_static_rank.rs",
+        "compile-contract",
+        "cmd-static-rank-preservation",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tensor",
+            "--test",
+            "storage_static_rank",
+        ),
+        (),
+    ),
+    (
+        "p3-as-view-zero-allocation",
+        "P3",
+        ("G1", "G4"),
+        "artifact-as-view-zero-allocation",
+        "crates/tenferro-tensor/tests/storage_as_view_allocation.rs",
+        "allocation-borrow-contract",
+        "cmd-as-view-zero-allocation",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tensor",
+            "--test",
+            "storage_as_view_allocation",
+        ),
         (),
     ),
     (
@@ -692,6 +750,44 @@ DEFERRED_OBLIGATIONS = (
         (),
     ),
     (
+        "p4-traversal-resolution-counts",
+        "P4",
+        ("G1", "G3", "G4"),
+        "artifact-traversal-resolution-counts",
+        "crates/tenferro-tensor/tests/storage_traversal_resolution.rs",
+        "provider-test",
+        "cmd-traversal-resolution-counts",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tensor",
+            "--test",
+            "storage_traversal_resolution",
+        ),
+        (),
+    ),
+    (
+        "p4-prepared-access-api",
+        "P4",
+        ("G1", "G4"),
+        "artifact-prepared-access-api",
+        "crates/tenferro-tensor/tests/storage_prepared_access.rs",
+        "api-source-contract",
+        "cmd-prepared-access-api",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tensor",
+            "--test",
+            "storage_prepared_access",
+        ),
+        (),
+    ),
+    (
         "p5-allocation-group",
         "P5",
         ("G2", "G5"),
@@ -725,6 +821,25 @@ DEFERRED_OBLIGATIONS = (
         "cmd-reinterpret",
         "cargo-test",
         ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret"),
+        (),
+    ),
+    (
+        "p6-reinterpret-rank-policy",
+        "P6",
+        ("G4",),
+        "artifact-reinterpret-rank-policy",
+        "crates/tenferro-tensor/tests/storage_reinterpret_rank.rs",
+        "rust-test",
+        "cmd-reinterpret-rank-policy",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tensor",
+            "--test",
+            "storage_reinterpret_rank",
+        ),
         (),
     ),
     (
@@ -764,6 +879,66 @@ DEFERRED_OBLIGATIONS = (
         (),
     ),
     (
+        "p10-element-hot-path-structure",
+        "P10",
+        ("G1", "G4"),
+        "artifact-element-hot-path-structure",
+        "scripts/check-storage-element-hot-path.py",
+        "source-contract",
+        "cmd-element-hot-path-structure",
+        "python-test",
+        ("python3", "scripts/check-storage-element-hot-path.py"),
+        ("scripts/check-storage-element-hot-path.py",),
+    ),
+    (
+        "p10-storage-traversal-performance",
+        "P10",
+        ("G1", "G4"),
+        "artifact-storage-traversal-performance",
+        "docs/testing/storage-traversal-performance.md",
+        "performance-report",
+        "cmd-storage-traversal-performance",
+        "benchmark-check",
+        (
+            "python3",
+            "scripts/verify-storage-traversal-performance.py",
+            "--baseline-obligation",
+            "p1-element-access-baseline",
+            "--baseline-report",
+            "docs/testing/storage-element-access-baseline.json",
+            "--baseline-receipt",
+            ".storage-ownership-receipts/p1-element-access-baseline.json",
+            "--report",
+            "docs/testing/storage-traversal-performance.md",
+        ),
+        (
+            "scripts/verify-storage-traversal-performance.py",
+            "docs/testing/storage-element-access-baseline.json",
+            ".storage-ownership-receipts/p1-element-access-baseline.json",
+            "docs/testing/storage-traversal-performance.md",
+        ),
+    ),
+    (
+        "p10-static-rank-codegen",
+        "P10",
+        ("G4",),
+        "artifact-static-rank-codegen",
+        "docs/testing/storage-static-rank-codegen.md",
+        "codegen-report",
+        "cmd-static-rank-codegen",
+        "codegen-check",
+        (
+            "python3",
+            "scripts/check-storage-static-rank-codegen.py",
+            "--report",
+            "docs/testing/storage-static-rank-codegen.md",
+        ),
+        (
+            "scripts/check-storage-static-rank-codegen.py",
+            "docs/testing/storage-static-rank-codegen.md",
+        ),
+    ),
+    (
         "p13-freeze",
         "P13-A",
         ("G1", "G2", "G3", "G4", "G5", "G6", "G7"),
@@ -798,6 +973,46 @@ DEFERRED_OBLIGATIONS = (
         "doc-check",
         ("python3", "scripts/check-storage-design-docs.py"),
         ("scripts/check-storage-design-docs.py", "docs/storage-ownership.md"),
+    ),
+    (
+        "p12-element-access-guide",
+        "P12",
+        ("G4", "G6"),
+        "artifact-element-access-guide",
+        "docs/guides/views-and-slicing.md",
+        "documentation",
+        "cmd-element-access-guide",
+        "doc-check",
+        (
+            "python3",
+            "scripts/check-storage-element-access-docs.py",
+            "docs/guides/views-and-slicing.md",
+        ),
+        (
+            "scripts/check-storage-element-access-docs.py",
+            "docs/guides/views-and-slicing.md",
+        ),
+    ),
+    (
+        "p12-element-access-examples",
+        "P12",
+        ("G4", "G6"),
+        "artifact-element-access-examples",
+        "docs/tutorial-code/src/bin/storage_element_access.rs",
+        "tutorial",
+        "cmd-element-access-examples",
+        "cargo-test",
+        (
+            "cargo",
+            "test",
+            "-p",
+            "tenferro-tutorial-code",
+            "--release",
+            "tutorial_binaries_run_successfully",
+            "--",
+            "--exact",
+        ),
+        (),
     ),
     (
         "p13-closure",
@@ -2577,6 +2792,178 @@ class StorageOwnershipV2RedTests(unittest.TestCase):
                 self.assertEqual(row["state"]["kind"], "deferred")
                 self.assertEqual(row["command"]["artifact_id"], row["artifact"]["id"])
                 self.assertNotIn("test-storage-ownership-contracts-v2.py", row["artifact"]["path"])
+
+    def test_rank_hot_path_performance_and_docs_proofs_are_canonical(self) -> None:
+        rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
+        expected = {
+            "p1-element-access-baseline": (
+                "P1",
+                {"G4"},
+                "docs/testing/storage-element-access-baseline.json",
+                "benchmark-report",
+                "benchmark-check",
+                [
+                    "python3",
+                    "scripts/verify-storage-element-access-baseline.py",
+                    "--report",
+                    "docs/testing/storage-element-access-baseline.json",
+                ],
+                "active",
+            ),
+            "p3-static-rank-preservation": (
+                "P3",
+                {"G4"},
+                "crates/tenferro-tensor/tests/storage_static_rank.rs",
+                "compile-contract",
+                "cargo-test",
+                ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_static_rank"],
+                "deferred",
+            ),
+            "p3-as-view-zero-allocation": (
+                "P3",
+                {"G1", "G4"},
+                "crates/tenferro-tensor/tests/storage_as_view_allocation.rs",
+                "allocation-borrow-contract",
+                "cargo-test",
+                ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_as_view_allocation"],
+                "deferred",
+            ),
+            "p4-traversal-resolution-counts": (
+                "P4",
+                {"G1", "G3", "G4"},
+                "crates/tenferro-tensor/tests/storage_traversal_resolution.rs",
+                "provider-test",
+                "cargo-test",
+                ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_traversal_resolution"],
+                "deferred",
+            ),
+            "p4-prepared-access-api": (
+                "P4",
+                {"G1", "G4"},
+                "crates/tenferro-tensor/tests/storage_prepared_access.rs",
+                "api-source-contract",
+                "cargo-test",
+                ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_access"],
+                "deferred",
+            ),
+            "p6-reinterpret-rank-policy": (
+                "P6",
+                {"G4"},
+                "crates/tenferro-tensor/tests/storage_reinterpret_rank.rs",
+                "rust-test",
+                "cargo-test",
+                ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret_rank"],
+                "deferred",
+            ),
+            "p10-element-hot-path-structure": (
+                "P10",
+                {"G1", "G4"},
+                "scripts/check-storage-element-hot-path.py",
+                "source-contract",
+                "python-test",
+                ["python3", "scripts/check-storage-element-hot-path.py"],
+                "deferred",
+            ),
+            "p10-storage-traversal-performance": (
+                "P10",
+                {"G1", "G4"},
+                "docs/testing/storage-traversal-performance.md",
+                "performance-report",
+                "benchmark-check",
+                [
+                    "python3",
+                    "scripts/verify-storage-traversal-performance.py",
+                    "--baseline-obligation",
+                    "p1-element-access-baseline",
+                    "--baseline-report",
+                    "docs/testing/storage-element-access-baseline.json",
+                    "--baseline-receipt",
+                    ".storage-ownership-receipts/p1-element-access-baseline.json",
+                    "--report",
+                    "docs/testing/storage-traversal-performance.md",
+                ],
+                "deferred",
+            ),
+            "p10-static-rank-codegen": (
+                "P10",
+                {"G4"},
+                "docs/testing/storage-static-rank-codegen.md",
+                "codegen-report",
+                "codegen-check",
+                [
+                    "python3",
+                    "scripts/check-storage-static-rank-codegen.py",
+                    "--report",
+                    "docs/testing/storage-static-rank-codegen.md",
+                ],
+                "deferred",
+            ),
+            "p12-element-access-guide": (
+                "P12",
+                {"G4", "G6"},
+                "docs/guides/views-and-slicing.md",
+                "documentation",
+                "doc-check",
+                [
+                    "python3",
+                    "scripts/check-storage-element-access-docs.py",
+                    "docs/guides/views-and-slicing.md",
+                ],
+                "deferred",
+            ),
+            "p12-element-access-examples": (
+                "P12",
+                {"G4", "G6"},
+                "docs/tutorial-code/src/bin/storage_element_access.rs",
+                "tutorial",
+                "cargo-test",
+                [
+                    "cargo",
+                    "test",
+                    "-p",
+                    "tenferro-tutorial-code",
+                    "--release",
+                    "tutorial_binaries_run_successfully",
+                    "--",
+                    "--exact",
+                ],
+                "deferred",
+            ),
+        }
+        for obligation_id, contract in expected.items():
+            with self.subTest(obligation_id=obligation_id):
+                unit, gates, path, artifact_kind, command_kind, argv, state = contract
+                row = rows[obligation_id]
+                self.assertEqual(row["unit"], unit)
+                self.assertEqual(set(row["gates"]), gates)
+                self.assertEqual(row["artifact"]["path"], path)
+                self.assertEqual(row["artifact"]["kind"], artifact_kind)
+                self.assertEqual(row["command"]["kind"], command_kind)
+                self.assertEqual(row["command"]["argv"], argv)
+                self.assertEqual(row["command"]["artifact_id"], row["artifact"]["id"])
+                self.assertEqual(row["state"]["kind"], state)
+                self.assertNotIn("test-storage-ownership-contracts-v2.py", path)
+
+        baseline = rows["p1-element-access-baseline"]
+        self.assertEqual(baseline["artifact"]["id"], "artifact-element-access-baseline")
+        self.assertEqual(baseline["command"]["id"], "cmd-element-access-baseline")
+        self.assertEqual(
+            baseline["command"]["path_args"],
+            [
+                "scripts/verify-storage-element-access-baseline.py",
+                "docs/testing/storage-element-access-baseline.json",
+            ],
+        )
+        performance = rows["p10-storage-traversal-performance"]
+        self.assertEqual(
+            performance["command"]["path_args"],
+            [
+                "scripts/verify-storage-traversal-performance.py",
+                "docs/testing/storage-element-access-baseline.json",
+                ".storage-ownership-receipts/p1-element-access-baseline.json",
+                "docs/testing/storage-traversal-performance.md",
+            ],
+        )
 
     def test_production_borrow_proof_is_not_a_self_referential_fixture(self) -> None:
         rows = {row["id"]: row for row in tomllib.loads(valid_manifest())["obligations"]}
