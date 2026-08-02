@@ -2,10 +2,31 @@ use std::fmt;
 
 use tenferro_tensor::BoxError;
 
+#[derive(Debug, thiserror::Error)]
+enum CudaDriverDiscoveryError {
+    #[error("CUDA driver call {function} failed: {source}")]
+    DriverCall {
+        function: &'static str,
+        #[source]
+        source: cudarc::driver::result::DriverError,
+    },
+    #[error("CUDA returned an invalid device count {count}")]
+    InvalidDeviceCount { count: i32 },
+    #[error("CUDA device ordinal {device:?} is out of range")]
+    DeviceOrdinalOutOfRange { device: CudaDeviceId },
+}
+
+fn boxed_discovery_error(error: CudaDriverDiscoveryError) -> BoxError {
+    Box::new(error)
+}
+
+struct CudaDriverApi;
+
 /// Provider-qualified identity of a CUDA device ordinal.
 ///
 /// A device ID is an opaque CUDA provider value. Use [`Self::ordinal`] only
-/// when passing the selected ordinal to CUDA APIs.
+/// when passing the selected ordinal to CUDA APIs. The ordinal is
+/// process-visible and may change when `CUDA_VISIBLE_DEVICES` changes.
 ///
 /// # Examples
 ///
@@ -58,6 +79,10 @@ impl fmt::Debug for CudaDeviceId {
 }
 
 /// Immutable metadata describing one CUDA device.
+///
+/// Equality and debug output are deterministic only while the process-visible
+/// CUDA topology remains unchanged; they do not provide stable identity across
+/// topology changes.
 ///
 /// # Examples
 ///
@@ -142,6 +167,89 @@ fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, C
         devices.push(CudaDeviceInfo::new(id, name));
     }
     Ok(devices)
+}
+
+impl DiscoveryDriver for CudaDriverApi {
+    fn initialize(&self) -> Result<(), BoxError> {
+        cudarc::driver::result::init().map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuInit",
+                source,
+            })
+        })
+    }
+
+    fn device_count(&self) -> Result<u32, BoxError> {
+        let count = cudarc::driver::result::device::get_count().map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGetCount",
+                source,
+            })
+        })?;
+        u32::try_from(count).map_err(|_| {
+            boxed_discovery_error(CudaDriverDiscoveryError::InvalidDeviceCount { count })
+        })
+    }
+
+    fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError> {
+        let ordinal = i32::try_from(device.ordinal()).map_err(|_| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DeviceOrdinalOutOfRange { device })
+        })?;
+
+        let cuda_device = cudarc::driver::result::device::get(ordinal).map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGet",
+                source,
+            })
+        })?;
+        let name = cudarc::driver::result::device::get_name(cuda_device).map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGetName",
+                source,
+            })
+        })?;
+        Ok(name)
+    }
+}
+
+/// Discover CUDA devices visible to the current process.
+///
+/// Discovery initializes the CUDA driver and queries device ordinals directly.
+/// It does not create a CUDA context, CUDA runtime, CubeCL runtime, backend, or
+/// client. Device ordinals are process-visible and may change when
+/// `CUDA_VISIBLE_DEVICES` changes. The returned values have deterministic
+/// `Eq` and `Debug` behavior only while that process-visible topology remains
+/// unchanged.
+///
+/// # Errors
+///
+/// Returns [`CudaDeviceError::Discovery`] for driver initialization, device
+/// enumeration, or device-name lookup failures.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::{cuda_devices, CudaDeviceError, CudaDeviceInfo};
+///
+/// let _discover: fn() -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> = cuda_devices;
+/// ```
+pub fn cuda_devices() -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
+    discover_with(&CudaDriverApi)
+}
+
+#[cfg(test)]
+fn select_device(
+    requested: CudaDeviceId,
+    discovered: Vec<CudaDeviceInfo>,
+) -> Result<(), CudaDeviceError> {
+    if discovered.iter().any(|device| device.id() == requested) {
+        Ok(())
+    } else {
+        Err(CudaDeviceError::Unavailable {
+            requested,
+            discovered: discovered.into_boxed_slice(),
+        })
+    }
 }
 
 /// Structured failures from CUDA device discovery and initialization.
@@ -291,7 +399,10 @@ mod tests {
 
     use tenferro_tensor::BoxError;
 
-    use super::{discover_with, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, DiscoveryDriver};
+    use super::{
+        discover_with, select_device, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
+        DiscoveryDriver,
+    };
 
     #[derive(Copy, Clone)]
     enum FakeDriverScenario {
@@ -397,6 +508,26 @@ mod tests {
         assert_eq!(info.id(), id);
         assert_eq!(info.name(), "NVIDIA H100");
         assert_eq!(info, info.clone());
+    }
+
+    #[test]
+    fn unavailable_device_selection_preserves_requested_id_and_discovered_records() {
+        let requested = CudaDeviceId::from_ordinal(2);
+        let discovered = vec![
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+        ];
+
+        let error = select_device(requested, discovered.clone())
+            .expect_err("an undiscovered device must be rejected");
+
+        assert!(matches!(
+            error,
+            CudaDeviceError::Unavailable {
+                requested: actual_requested,
+                discovered: actual_discovered,
+            } if actual_requested == requested && actual_discovered.as_ref() == discovered
+        ));
     }
 
     #[test]
