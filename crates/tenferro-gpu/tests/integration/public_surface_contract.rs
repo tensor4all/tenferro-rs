@@ -14,6 +14,41 @@ fn repo_file_if_exists(path: &str) -> Option<String> {
     std::fs::read_to_string(root).ok()
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
+    use tenferro_gpu::{
+        cuda_runtime_engine_registration, CudaBackend, CudaDeviceError, CudaDeviceId, CudaRuntime,
+    };
+    use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
+
+    let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
+    let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
+    let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+        cuda_runtime_engine_registration;
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_public_inventory_has_no_fixed_engine_helper_or_public_selector() {
+    let lib_rs = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let device = repo_file("crates/tenferro-gpu/src/cubecl/device.rs");
+    let runtime_adapter = repo_file("crates/tenferro-gpu/src/cubecl/runtime_adapter.rs");
+
+    assert!(!lib_rs.contains("cuda_runtime_engine_id"));
+    assert!(!lib_rs.contains("cuda_runtime_engine_registration_with_id"));
+    assert!(!cubecl_mod.contains("cuda_runtime_engine_id"));
+    assert!(!cubecl_mod.contains("cuda_runtime_engine_registration_with_id"));
+    assert!(runtime_adapter.contains(
+        "pub fn cuda_runtime_engine_registration(\n    backend: &CudaBackend,\n    engine_id: EngineId,"
+    ));
+    assert!(!runtime_adapter.contains("pub fn cuda_runtime_engine_id"));
+    assert!(!runtime_adapter.contains("pub fn cuda_runtime_engine_registration_with_id"));
+    assert!(device.contains("pub(crate) fn select_device("));
+    assert!(!device.contains("pub fn select_device("));
+}
+
 fn feature_block(manifest: &str, name: &str) -> String {
     let prefix = format!("{name} = [");
     let mut block = String::new();

@@ -3,14 +3,16 @@
 //! # Examples
 //!
 //! ```rust
-//! # fn main() -> tenferro_tensor::Result<()> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! #[cfg(feature = "cuda")]
 //! {
-//!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
+//!     use tenferro_gpu::{
+//!         download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
+//!     };
 //!     use tenferro_tensor::{Tensor, TensorElementwise};
 //!
 //!     if gpu_available() {
-//!         let mut backend = CudaBackend::new(0).unwrap();
+//!         let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
 //!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 //!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 //!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
@@ -40,9 +42,8 @@ mod webgpu;
 
 #[cfg(feature = "cuda")]
 pub use cubecl::{
-    cuda_capabilities, cuda_devices, cuda_runtime_engine_id, cuda_runtime_engine_registration,
-    cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class, device_ptr,
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
+    cuda_capabilities, cuda_devices, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
+    device_ptr, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
     CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaExecSession, CudaRuntime,
     CudaRuntimeIdentity,
 };

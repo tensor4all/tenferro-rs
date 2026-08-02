@@ -3,7 +3,7 @@
 // Run with: cargo test --features cuda -- --ignored
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_runtime::{Tensor, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
@@ -21,7 +21,7 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let c_device = upload_tensor(upload_backend.runtime(), &c_host).unwrap();

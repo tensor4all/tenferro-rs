@@ -124,9 +124,12 @@ fn eager_engine_registration_for_backend(
         #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
-        EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install(
-            tenferro_gpu::cuda_runtime_engine_registration(backend)?,
-        )),
+        EagerBackend::Cuda(backend) => {
+            let engine_id = EngineId::new("tenferro-ad.cuda.default.v1")?;
+            Ok(EagerBackendRegistration::Install(
+                tenferro_gpu::cuda_runtime_engine_registration(backend, engine_id)?,
+            ))
+        }
         #[cfg(feature = "webgpu")]
         EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(
             tenferro_gpu::webgpu_runtime_engine_registration(backend)?,

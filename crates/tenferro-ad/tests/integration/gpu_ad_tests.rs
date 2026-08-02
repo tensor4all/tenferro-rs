@@ -3,7 +3,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Buffer;
 
@@ -72,7 +72,7 @@ fn test_gpu_eager_backward_smoke() {
         return;
     }
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let x_gpu = upload_tensor(
         upload_backend.runtime(),
         &f64_tensor(vec![2], vec![2.0_f64, 3.0]),
@@ -149,7 +149,7 @@ fn test_gpu_matmul_vjp() {
     let cpu_grad_a = eval_cpu_tensor(&cpu_engine, &grad_a_cpu);
     let cpu_grad_b = eval_cpu_tensor(&cpu_engine, &grad_b_cpu);
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let cotangent_device = upload_tensor(upload_backend.runtime(), &cotangent_host).unwrap();

@@ -237,8 +237,7 @@ pub fn cuda_devices() -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
     discover_with(&CudaDriverApi)
 }
 
-#[cfg(test)]
-fn select_device(
+pub(crate) fn select_device(
     requested: CudaDeviceId,
     discovered: Vec<CudaDeviceInfo>,
 ) -> Result<(), CudaDeviceError> {

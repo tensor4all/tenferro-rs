@@ -158,7 +158,7 @@ domain and rejects the other's tensors.
 
 ## Runtime And Library Loading
 
-`CudaRuntime::new(device_ordinal)` initializes CUDA and creates the CubeCL CUDA
+`CudaRuntime::new(device_id)` initializes CUDA and creates the CubeCL CUDA
 client for one device. GPU kernels are JIT-compiled by CubeCL, so local CUDA
 toolkit configuration matters.
 
@@ -417,10 +417,10 @@ view, but source and destination allocations must not alias. Both operations
 preserve CUDA residency and never stage tensor payloads through host memory.
 
 ```text
-use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_tensor::{Tensor, TensorBackend};
 
-let mut backend = CudaBackend::new(0)?;
+let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
 let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 

@@ -10,12 +10,23 @@ use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
 use cudarc::driver::sys::{CUcontext, CUdevice};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 
+use super::device::{cuda_devices, select_device, CudaDeviceError, CudaDeviceId};
+
 /// Returns `true` if a CUDA device is available for CubeCL.
 ///
 /// Use this in test helpers to skip GPU tests on machines without hardware.
 pub fn gpu_available() -> bool {
+    let Ok(devices) = cuda_devices() else {
+        return false;
+    };
+    let Some(device_id) = devices.first().map(|device| device.id()) else {
+        return false;
+    };
+    let Ok(device_ordinal) = usize::try_from(device_id.ordinal()) else {
+        return false;
+    };
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let device = CudaDevice::new(0);
+        let device = CudaDevice::new(device_ordinal);
         let _ = CubeclCudaRuntime::client(&device);
     }))
     .is_ok()
@@ -55,7 +66,8 @@ impl Eq for CudaRuntimeIdentity {}
 /// ```
 /// use tenferro_gpu::CudaRuntime;
 ///
-/// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
+/// let _ctor: fn(tenferro_gpu::CudaDeviceId) ->
+///     Result<CudaRuntime, tenferro_gpu::CudaDeviceError> = CudaRuntime::new;
 /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
 ///     CudaRuntime::synchronize;
 /// ```
@@ -66,6 +78,7 @@ pub struct CudaRuntime {
 
 struct CudaRuntimeState {
     client: ComputeClient<CubeclCudaRuntime>,
+    device_id: CudaDeviceId,
     device_ordinal: usize,
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
@@ -83,7 +96,7 @@ unsafe impl Sync for CudaRuntimeState {}
 impl fmt::Debug for CudaRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CudaRuntime")
-            .field("device_ordinal", &self.inner.device_ordinal)
+            .field("device_id", &self.inner.device_id)
             .finish_non_exhaustive()
     }
 }
@@ -128,38 +141,51 @@ fn report_cuda_runtime_drop_error(err: &crate::Error) {
 }
 
 impl CudaRuntime {
-    /// Initialize the CubeCL CUDA runtime on the given device ordinal.
+    /// Initialize the CubeCL CUDA runtime on the caller-selected device.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId, CudaRuntime};
     ///
-    /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
+    /// let _ctor: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when CUDA device selection,
-    /// driver initialization, primary-context retention, or CubeCL client
-    /// creation fails.
-    pub fn new(device_ordinal: usize) -> crate::Result<Self> {
+    /// Returns [`CudaDeviceError::Discovery`] when device discovery fails,
+    /// [`CudaDeviceError::Unavailable`] when the selected device is not
+    /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
+    /// context, or CubeCL client initialization fails.
+    pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
+        let discovered = cuda_devices()?;
+        select_device(device_id, discovered)?;
+        let device_ordinal = usize::try_from(device_id.ordinal()).map_err(|source| {
+            cuda_initialization_error(device_id, "convert_device_ordinal", source)
+        })?;
+        let cuda_ordinal = i32::try_from(device_id.ordinal()).map_err(|source| {
+            cuda_initialization_error(device_id, "convert_cuda_ordinal", source)
+        })?;
         // INVARIANT: CUDA ordinals are device identifiers, not tensor extents;
         // an unrepresentable ordinal becomes a CUDA invalid-device error.
-        cudarc::runtime::result::device::set(device_ordinal as i32)
-            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
+        cudarc::runtime::result::device::set(cuda_ordinal)
+            .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         cudarc::driver::result::init()
-            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
-        let cuda_device = cudarc::driver::result::device::get(device_ordinal as i32)
-            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
-        let primary_context = CudaPrimaryContext::retain(cuda_device)?;
-        unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }
-            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
+            .map_err(|source| cuda_initialization_error(device_id, "initialize_driver", source))?;
+        let cuda_device = cudarc::driver::result::device::get(cuda_ordinal)
+            .map_err(|source| cuda_initialization_error(device_id, "get_device", source))?;
+        let primary_context = CudaPrimaryContext::retain(cuda_device).map_err(|source| {
+            cuda_initialization_error(device_id, "retain_primary_context", source)
+        })?;
+        unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }.map_err(
+            |source| cuda_initialization_error(device_id, "set_current_context", source),
+        )?;
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
             inner: Arc::new(CudaRuntimeState {
                 client,
+                device_id,
                 device_ordinal,
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
@@ -171,16 +197,20 @@ impl CudaRuntime {
         &self.inner.client
     }
 
-    /// Return the CUDA device ordinal that this runtime targets.
+    /// Return the caller-selected CUDA device identity that this runtime targets.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::{CudaDeviceId, CudaRuntime};
     ///
-    /// let _device_ordinal: fn(&CudaRuntime) -> usize = CudaRuntime::device_ordinal;
+    /// let _device_id: fn(&CudaRuntime) -> CudaDeviceId = CudaRuntime::device_id;
     /// ```
-    pub fn device_ordinal(&self) -> usize {
+    pub fn device_id(&self) -> CudaDeviceId {
+        self.inner.device_id
+    }
+
+    pub(crate) fn device_ordinal(&self) -> usize {
         self.inner.device_ordinal
     }
 
@@ -232,7 +262,9 @@ impl CudaRuntimeState {
     fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
         // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
         // reported by CUDA instead of indexing memory in tenferro.
-        cudarc::runtime::result::device::set(self.device_ordinal as i32)
+        let device_ordinal = i32::try_from(self.device_id.ordinal())
+            .map_err(|source| crate::Error::backend_source(op, source))?;
+        cudarc::runtime::result::device::set(device_ordinal)
             .map_err(|err| crate::Error::backend_source(op, err))?;
         unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }
             .map_err(|err| crate::Error::backend_source(op, err))
@@ -257,6 +289,21 @@ impl CudaRuntimeState {
         let stream = self.raw_cuda_stream()? as usize as cudaStream_t;
         unsafe { cuda_result::stream::synchronize(stream) }
             .map_err(|err| crate::Error::backend_source(OP, err))
+    }
+}
+
+fn cuda_initialization_error<E>(
+    device: CudaDeviceId,
+    operation: &'static str,
+    source: E,
+) -> CudaDeviceError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    CudaDeviceError::Initialization {
+        device,
+        operation,
+        source: Box::new(source),
     }
 }
 
@@ -291,9 +338,15 @@ mod identity_tests {
             return;
         }
 
-        let first = CudaBackend::new(0).expect("CUDA backend should initialize");
+        let device = super::cuda_devices()
+            .expect("CUDA device discovery should succeed")
+            .into_iter()
+            .next()
+            .expect("CUDA device should be available")
+            .id();
+        let first = CudaBackend::new(device).expect("CUDA backend should initialize");
         let clone = first.clone();
-        let independent = CudaBackend::new(0).expect("second CUDA backend should initialize");
+        let independent = CudaBackend::new(device).expect("second CUDA backend should initialize");
 
         assert_eq!(first.runtime_identity(), clone.runtime_identity());
         assert_ne!(first.runtime_identity(), independent.runtime_identity());

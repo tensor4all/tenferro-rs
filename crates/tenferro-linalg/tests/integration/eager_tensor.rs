@@ -424,7 +424,7 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]).unwrap();
     let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]).unwrap();
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
@@ -433,7 +433,7 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let x = a.solve(&b).unwrap();
 
-    let download_backend = CudaBackend::new(0).unwrap();
+    let download_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
     let x_host = download_tensor(
         download_backend.runtime(),
         x.materialized().unwrap().as_ref(),

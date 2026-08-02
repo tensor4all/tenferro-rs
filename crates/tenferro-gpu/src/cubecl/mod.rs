@@ -36,16 +36,18 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
+//! use tenferro_gpu::{
+//!     download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
+//! };
 //! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
 //!
-//! fn main() -> tenferro_tensor::Result<()> {
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! if !gpu_available() {
 //!     return Ok(());
 //! }
 //!
 //! // 1. Create the GPU backend (device ordinal 0)
-//! let mut backend = CudaBackend::new(0)?;
+//! let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
 //!
 //! // 2. Create tensors on the CPU
 //! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])?);
@@ -151,10 +153,7 @@ pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 pub use exec_session::{with_cuda_exec_session, CudaExecSession};
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
-pub use runtime_adapter::{
-    cuda_runtime_engine_id, cuda_runtime_engine_registration,
-    cuda_runtime_engine_registration_with_id, cuda_runtime_hardware_class,
-};
+pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
 
 fn op_name(
     kind: PrimitiveOpKind,
@@ -339,9 +338,9 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaBackend;
+/// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
 ///
-/// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
+/// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
 /// ```
 #[derive(Clone)]
 pub struct CudaBackend {
@@ -727,25 +726,27 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
 }
 
 impl CudaBackend {
-    /// Create a new CubeCL backend for the given CUDA device ordinal.
+    /// Create a new CubeCL backend for the caller-selected CUDA device.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
     ///
-    /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
+    /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when CUDA initialization,
-    /// context creation, or CubeCL client creation fails.
-    pub fn new(device_ordinal: usize) -> crate::Result<Self> {
+    /// Returns [`CudaDeviceError::Discovery`] when device discovery fails,
+    /// [`CudaDeviceError::Unavailable`] when the selected device is not
+    /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
+    /// context, or CubeCL client initialization fails.
+    pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
         Ok(Self {
             inner: Arc::new(CudaBackendState {
                 cutensor: OnceLock::new(),
                 extension_cache: CudaExtensionCache::new(),
-                rt: CudaRuntime::new(device_ordinal)?,
+                rt: CudaRuntime::new(device_id)?,
             }),
         })
     }
@@ -761,6 +762,19 @@ impl CudaBackend {
     /// ```
     pub fn runtime(&self) -> &CudaRuntime {
         &self.inner.rt
+    }
+
+    /// Return the caller-selected CUDA device identity used by this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaBackend, CudaDeviceId};
+    ///
+    /// let _device_id: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
+    /// ```
+    pub fn device_id(&self) -> CudaDeviceId {
+        self.inner.rt.device_id()
     }
 
     /// Return the opaque identity of this exact executable backend instance.

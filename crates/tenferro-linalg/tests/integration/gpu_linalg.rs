@@ -5,7 +5,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_gpu::{
     download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaExecSession,
+    CudaDeviceId, CudaExecSession,
 };
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{BackendSessionHost, Error, Tensor, TypedTensor};
@@ -15,7 +15,7 @@ fn cpu_backend() -> CpuBackend {
 }
 
 fn gpu_backend() -> CudaBackend {
-    CudaBackend::new(0).unwrap()
+    CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
 }
 
 fn with_cpu_linalg_session<R>(

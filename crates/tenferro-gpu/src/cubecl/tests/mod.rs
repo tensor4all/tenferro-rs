@@ -3,7 +3,7 @@ use std::error::Error as _;
 use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
-use crate::cubecl::{download_tensor, upload_tensor, CudaBackend};
+use crate::cubecl::{download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
 use crate::{DType, Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{ErrorKind, ValidationError, ValidationKind};
@@ -24,7 +24,7 @@ fn cpu_backend() -> CpuBackend {
 }
 
 fn gpu_backend() -> CudaBackend {
-    CudaBackend::new(0).unwrap()
+    CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
 }
 
 fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {

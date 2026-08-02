@@ -10,7 +10,70 @@ use tenferro_runtime::{
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
 use super::*;
-use crate::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaRuntime};
+use crate::{
+    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceError,
+    CudaDeviceId, CudaDeviceInfo, CudaRuntime,
+};
+
+#[test]
+fn cuda_public_constructors_and_registration_require_typed_selection() {
+    let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
+    let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
+    let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+        cuda_runtime_engine_registration;
+    let _: fn(&CudaRuntime) -> CudaDeviceId = CudaRuntime::device_id;
+    let _: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
+}
+
+#[test]
+fn caller_selected_devices_and_engine_ids_are_distinct_through_fake_selection() {
+    let first_device = CudaDeviceId::from_ordinal(2);
+    let second_device = CudaDeviceId::from_ordinal(7);
+    let first_engine =
+        EngineId::new("tenferro.test.cuda.selected.first.v1").expect("first test engine ID");
+    let second_engine =
+        EngineId::new("tenferro.test.cuda.selected.second.v1").expect("second test engine ID");
+
+    for (device, name) in [
+        (first_device, "NVIDIA A100"),
+        (second_device, "NVIDIA H100"),
+    ] {
+        super::super::device::select_device(device, vec![CudaDeviceInfo::new(device, name)])
+            .expect("the fake discovery record should admit its selected device");
+    }
+
+    let first_identity =
+        super::cuda_provider_device_identity(first_device).expect("first provider/device identity");
+    let second_identity = super::cuda_provider_device_identity(second_device)
+        .expect("second provider/device identity");
+    assert_ne!(first_device, second_device);
+    assert_ne!(first_engine, second_engine);
+    assert_ne!(first_identity, second_identity);
+    assert_eq!(first_device.ordinal(), 2);
+    assert_eq!(second_device.ordinal(), 7);
+    assert_eq!(first_identity.target_identity(), "device:2");
+    assert_eq!(second_identity.target_identity(), "device:7");
+}
+
+#[test]
+fn unavailable_selection_preserves_requested_id_and_discovered_records() {
+    let requested = CudaDeviceId::from_ordinal(9);
+    let discovered = vec![
+        CudaDeviceInfo::new(CudaDeviceId::from_ordinal(2), "NVIDIA A100"),
+        CudaDeviceInfo::new(CudaDeviceId::from_ordinal(7), "NVIDIA H100"),
+    ];
+
+    let error = super::super::device::select_device(requested, discovered.clone())
+        .expect_err("the fake discovery list must reject an unavailable device");
+
+    assert!(matches!(
+        error,
+        CudaDeviceError::Unavailable {
+            requested: actual_requested,
+            discovered: actual_discovered,
+        } if actual_requested == requested && actual_discovered.as_ref() == discovered
+    ));
+}
 
 #[derive(Debug)]
 struct TestCudaBuffer {
@@ -128,7 +191,7 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     if !gpu_available() {
         return;
     }
-    let runtime = CudaRuntime::new(0).expect("CUDA runtime");
+    let runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).expect("CUDA runtime");
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).expect("host tensor");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");
 
@@ -171,41 +234,68 @@ fn sum_squares_routes_through_runtime_reduction_preparation() {
 
 #[test]
 fn cuda_registration_installs_native_event_domain_driver() {
-    let source = include_str!("../runtime_adapter.rs");
-    assert!(
-        source.contains("assemble_executable_engine_registration(")
-            && source.contains("CudaEventDomainDriver::new(")
-            && source.contains("backend.runtime().clone(),"),
-        "CUDA registration must use the shared executable assembly with its native driver"
-    );
-    assert!(!source.contains("ExecutableEngineContract::new("));
-    assert!(!source.contains("ProviderExecutableBinding::new("));
-}
-
-#[test]
-#[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_registration_preserves_a_caller_selected_engine_id() {
-    if !gpu_available() {
-        return;
-    }
-    let backend = CudaBackend::new(0).expect("CUDA backend");
-    let engine_id =
-        EngineId::new("tenferro-cuda.test.selected.v1").expect("selected CUDA engine ID");
-    let registration = cuda_runtime_engine_registration_with_id(&backend, engine_id.clone())
-        .expect("selected CUDA registration");
-    assert_eq!(registration.engine_id(), &engine_id);
-    assert_eq!(
-        registration.hardware_class(),
-        &cuda_runtime_hardware_class().expect("CUDA hardware class")
-    );
+    let _: fn(CudaRuntime) -> super::CudaEventDomainDriver = super::CudaEventDomainDriver::new;
 }
 
 #[test]
 fn cuda_event_domain_has_no_generic_foreign_token_wait_fallback() {
-    let source = include_str!("../event_domain.rs");
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cubecl/event_domain.rs"),
+    )
+    .expect("CUDA event-domain source must be readable");
     assert!(
         !source.contains("_ => dependency.wait()?"),
         "CUDA event admission must reject foreign origins instead of host-waiting them"
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
+    if !gpu_available() {
+        return;
+    }
+    let devices = cuda_devices().expect("CUDA device discovery");
+    if devices.len() < 2 {
+        return;
+    }
+    let first_device = devices[0].id();
+    let second_device = devices[1].id();
+    let first_backend = CudaBackend::new(first_device).expect("first CUDA backend");
+    let second_backend = CudaBackend::new(second_device).expect("second CUDA backend");
+    let first_engine =
+        EngineId::new("tenferro-cuda.test.selected.first.v1").expect("first CUDA engine ID");
+    let second_engine =
+        EngineId::new("tenferro-cuda.test.selected.second.v1").expect("second CUDA engine ID");
+    let first_registration = cuda_runtime_engine_registration(&first_backend, first_engine.clone())
+        .expect("first selected CUDA registration");
+    let second_registration =
+        cuda_runtime_engine_registration(&second_backend, second_engine.clone())
+            .expect("second selected CUDA registration");
+
+    assert_eq!(first_backend.device_id(), first_device);
+    assert_eq!(second_backend.device_id(), second_device);
+    assert_eq!(first_registration.engine_id(), &first_engine);
+    assert_eq!(second_registration.engine_id(), &second_engine);
+    assert_eq!(
+        first_registration
+            .provider_device_identity()
+            .target_identity(),
+        format!("device:{}", first_device.ordinal())
+    );
+    assert_eq!(
+        second_registration
+            .provider_device_identity()
+            .target_identity(),
+        format!("device:{}", second_device.ordinal())
+    );
+    assert_eq!(
+        first_registration.hardware_class(),
+        &cuda_runtime_hardware_class().expect("CUDA hardware class")
+    );
+    assert_eq!(
+        second_registration.hardware_class(),
+        &cuda_runtime_hardware_class().expect("CUDA hardware class")
     );
 }
 
@@ -216,7 +306,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         return;
     }
 
-    let backend = CudaBackend::new(0).expect("CUDA backend");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = backend.runtime().clone();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host input");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");

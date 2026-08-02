@@ -22,20 +22,9 @@ use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorR
 use super::event_domain::CudaEventDomainDriver;
 use super::CudaBackend;
 
-const CUDA_ENGINE_ID: &str = "tenferro-cuda.default.v1";
 const CUDA_HARDWARE_CLASS_ID: &str = "tenferro-cuda.device.v1";
 const CUDA_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
 const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
-
-/// Return the canonical CUDA runtime engine identifier.
-///
-/// # Errors
-///
-/// Returns [`RuntimeConfigError`] if the built-in CUDA engine identifier violates
-/// runtime identifier validation.
-pub fn cuda_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
-    EngineId::new(CUDA_ENGINE_ID).map_err(RuntimeConfigError::from)
-}
 
 /// Return the canonical CUDA runtime hardware class.
 ///
@@ -47,28 +36,20 @@ pub fn cuda_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigErr
     HardwareClassId::new(CUDA_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)
 }
 
-/// Build a runtime engine registration for a [`CudaBackend`].
+/// Build a runtime engine registration for a [`CudaBackend`] and caller-selected
+/// [`EngineId`].
 ///
 /// The registration exposes CUDA direct core preparation capabilities, CUDA
 /// extension-cache ownership hooks, and the runtime-owned tensor backend
-/// execution bridge.
+/// execution bridge. The caller owns the engine namespace and identity; CUDA
+/// does not provide a process-global engine ID.
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeConfigError`] if one of the built-in CUDA runtime identifiers
-/// violates runtime validation or if the registration is internally invalid.
+/// Returns [`RuntimeConfigError`] if the CUDA hardware/storage identifiers or
+/// provider/device identity fail validation, or if the registration is
+/// internally invalid.
 pub fn cuda_runtime_engine_registration(
-    backend: &CudaBackend,
-) -> Result<EngineRegistration, RuntimeConfigError> {
-    cuda_runtime_engine_registration_with_id(backend, cuda_runtime_engine_id()?)
-}
-
-/// Build a CUDA runtime engine registration with a caller-selected engine ID.
-///
-/// The caller-selected ID is the only identity changed by this helper; the
-/// CUDA hardware/storage classes and the provider device target remain tied to
-/// the selected CUDA device.
-pub fn cuda_runtime_engine_registration_with_id(
     backend: &CudaBackend,
     engine_id: EngineId,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
@@ -95,11 +76,9 @@ pub fn cuda_runtime_engine_registration_with_id(
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
-    let device_ordinal = backend.runtime().device_ordinal();
-    let provider_device_identity = ProviderDeviceIdentity::new(
-        ProviderId::new("tenferro.cuda")?,
-        format!("device:{device_ordinal}"),
-    )?;
+    let device_id = backend.device_id();
+    let device_ordinal = device_id.ordinal() as usize;
+    let provider_device_identity = cuda_provider_device_identity(device_id)?;
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {
             candidate == &placement_storage && cuda_input_placement(placement, device_ordinal)
@@ -127,6 +106,15 @@ pub fn cuda_runtime_engine_registration_with_id(
         ingress,
         Some(cache_owner),
     )
+}
+
+fn cuda_provider_device_identity(
+    device_id: super::CudaDeviceId,
+) -> Result<ProviderDeviceIdentity, RuntimeConfigError> {
+    Ok(ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.cuda")?,
+        format!("device:{}", device_id.ordinal()),
+    )?)
 }
 
 fn cuda_input_signature(
