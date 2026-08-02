@@ -231,7 +231,8 @@ labels in that form.
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
 
-let ctx = EagerRuntime::new().unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::new()?;
 let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap()).unwrap();
 
@@ -248,6 +249,8 @@ assert_eq!(
     diag.materialized().unwrap().as_slice::<f64>().unwrap(),
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
 );
+Ok(())
+}
 ```
 
 ## Tensordot Sugar

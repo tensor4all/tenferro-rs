@@ -219,7 +219,8 @@ use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
 ).with_max_retained_bytes(
@@ -236,6 +237,8 @@ compiler.clear_caches();
 
 let mut backend = CpuBackend::new();
 backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
+Ok(())
+}
 ```
 
 For CPU backends, the CPU buffer pool has its own retention limit:
@@ -258,7 +261,8 @@ use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let runtime = Runtime::builder().build().unwrap();
 let mut compiler = GraphCompiler::new();
 
@@ -266,6 +270,8 @@ runtime.clear_prepared_cache().unwrap();
 runtime.clear_caches().unwrap();
 compiler.clear_caches();
 eager.clear_caches().unwrap();
+Ok(())
+}
 ```
 
 For CPU backends, clear the buffer pool through the backend:

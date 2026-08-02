@@ -136,7 +136,7 @@ use tenferro_fft::{EagerTensorFftExt, FftNorm};
 
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
-    EagerRuntime::new().unwrap(),
+    EagerRuntime::new()?,
 )?;
 let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
 let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
