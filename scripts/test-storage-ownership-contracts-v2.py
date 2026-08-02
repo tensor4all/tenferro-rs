@@ -23,10 +23,16 @@ SCHEMA = "tenferro.storage-ownership-contracts.v2"
 RECEIPT_SCHEMA = "tenferro.storage-ownership-receipt.v1"
 DIAGNOSTICS_SCHEMA = "tenferro.storage-ownership-diagnostics.v1"
 
-ACTIVE_IDS = frozenset({"p1-ledger", "p1-contract-document", "p1-api-parity"})
+ACTIVE_IDS = frozenset(
+    {
+        "p1-ledger",
+        "p1-contract-document",
+        "p1-api-parity",
+        "p1-element-access-baseline",
+    }
+)
 DEFERRED_CORRECTIONS = {
     "p0-control-plane": "P0",
-    "p1-element-access-baseline": "P1",
     "p2-root-claims": "P2",
 }
 
@@ -243,6 +249,11 @@ def _runner_files() -> dict[str, str]:
     files.update({
         "scripts/check-storage-ownership-contracts.py": CHECKER.read_text(encoding="utf-8"),
         "scripts/check-storage-design-docs.py": DOC_CHECKER.read_text(encoding="utf-8"),
+        # This test exercises runner argv/receipt binding; the baseline verifier
+        # itself has a dedicated 8-case test suite.
+        "scripts/verify-storage-element-access-baseline.py": (
+            "raise SystemExit(0)\n"
+        ),
         "docs/design/storage-ownership-contracts.md": (
             ROOT / "docs/design/storage-ownership-contracts.md"
         ).read_text(encoding="utf-8"),
@@ -333,7 +344,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("storage-design-docs-ok", result.stdout)
 
-    def test_production_manifest_has_only_current_p1_active(self) -> None:
+    def test_production_manifest_has_current_active_rows(self) -> None:
         data = tomllib.loads(_manifest_text())
         self.assertEqual(data["schema"], SCHEMA)
         rows = data["obligations"]
@@ -432,7 +443,13 @@ class StorageOwnershipV2Tests(unittest.TestCase):
 
     def test_active_unit_requires_all_direct_source_obligations_active(self) -> None:
         manifest = _replace_row_state(
-            _manifest_text(), "p2-root-claims", '{ kind = "active" }'
+            _replace_row_state(
+                _manifest_text(),
+                "p1-element-access-baseline",
+                '{ kind = "deferred", activation_unit = "P1", promotion = { mode = "activate-in-place" } }',
+            ),
+            "p2-root-claims",
+            '{ kind = "active" }',
         )
         result = _run_checker(manifest, extra=("--diagnostics-json",))
         _assert_error(
