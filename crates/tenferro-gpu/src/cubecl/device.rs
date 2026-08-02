@@ -119,12 +119,151 @@ impl CudaDeviceInfo {
     }
 }
 
+/// Structured failures from CUDA device discovery and initialization.
+///
+/// The error retains only provider-neutral device identities and metadata. It
+/// does not expose the concrete CUDA runtime error type behind a source.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+///
+/// let error = CudaDeviceError::Unavailable {
+///     requested: CudaDeviceId::from_ordinal(1),
+///     discovered: Vec::new().into_boxed_slice(),
+/// };
+/// assert_eq!(error.requested(), Some(CudaDeviceId::from_ordinal(1)));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum CudaDeviceError {
+    /// Device discovery failed while performing the named operation.
+    #[error("CUDA device discovery failed during {operation}: {source}")]
+    Discovery {
+        /// The provider-neutral discovery operation being performed.
+        operation: &'static str,
+        /// The underlying discovery failure.
+        #[source]
+        source: tenferro_tensor::BoxError,
+    },
+    /// The requested device was not present in the discovered device list.
+    #[error(
+        "requested CUDA device {requested:?} is unavailable; discovered devices: {discovered:?}"
+    )]
+    Unavailable {
+        /// The device selected by the caller.
+        requested: CudaDeviceId,
+        /// Devices found during discovery, in discovery order.
+        discovered: Box<[CudaDeviceInfo]>,
+    },
+    /// Device initialization failed while performing the named operation.
+    #[error("CUDA device {device:?} initialization failed during {operation}: {source}")]
+    Initialization {
+        /// The device whose runtime could not be initialized.
+        device: CudaDeviceId,
+        /// The provider-neutral initialization operation being performed.
+        operation: &'static str,
+        /// The underlying initialization failure.
+        #[source]
+        source: tenferro_tensor::BoxError,
+    },
+}
+
+impl CudaDeviceError {
+    /// Return the operation associated with discovery or initialization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    ///
+    /// let error = CudaDeviceError::Unavailable {
+    ///     requested: CudaDeviceId::from_ordinal(1),
+    ///     discovered: Vec::new().into_boxed_slice(),
+    /// };
+    /// assert_eq!(error.operation(), None);
+    /// ```
+    pub fn operation(&self) -> Option<&'static str> {
+        match self {
+            Self::Discovery { operation, .. } | Self::Initialization { operation, .. } => {
+                Some(operation)
+            }
+            Self::Unavailable { .. } => None,
+        }
+    }
+
+    /// Return the requested device for an unavailable-device error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    ///
+    /// let requested = CudaDeviceId::from_ordinal(1);
+    /// let error = CudaDeviceError::Unavailable {
+    ///     requested,
+    ///     discovered: Vec::new().into_boxed_slice(),
+    /// };
+    /// assert_eq!(error.requested(), Some(requested));
+    /// ```
+    pub fn requested(&self) -> Option<CudaDeviceId> {
+        match self {
+            Self::Unavailable { requested, .. } => Some(*requested),
+            Self::Discovery { .. } | Self::Initialization { .. } => None,
+        }
+    }
+
+    /// Borrow the devices discovered for an unavailable-device error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    ///
+    /// let error = CudaDeviceError::Unavailable {
+    ///     requested: CudaDeviceId::from_ordinal(1),
+    ///     discovered: Vec::new().into_boxed_slice(),
+    /// };
+    /// assert!(error.discovered().is_some_and(<[_]>::is_empty));
+    /// ```
+    pub fn discovered(&self) -> Option<&[CudaDeviceInfo]> {
+        match self {
+            Self::Unavailable { discovered, .. } => Some(discovered),
+            Self::Discovery { .. } | Self::Initialization { .. } => None,
+        }
+    }
+
+    /// Return the device whose initialization failed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    ///
+    /// let device = CudaDeviceId::from_ordinal(1);
+    /// let error = CudaDeviceError::Initialization {
+    ///     device,
+    ///     operation: "create_client",
+    ///     source: Box::new(std::io::Error::other("context failed")),
+    /// };
+    /// assert_eq!(error.device(), Some(device));
+    /// ```
+    pub fn device(&self) -> Option<CudaDeviceId> {
+        match self {
+            Self::Initialization { device, .. } => Some(*device),
+            Self::Discovery { .. } | Self::Unavailable { .. } => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::hash_map::DefaultHasher;
+    use std::error::Error as _;
     use std::hash::{Hash, Hasher};
 
-    use super::{CudaDeviceId, CudaDeviceInfo};
+    use super::{CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 
     fn assert_cuda_device_id_traits<T>()
     where
@@ -156,5 +295,108 @@ mod tests {
         assert_eq!(info.id(), id);
         assert_eq!(info.name(), "NVIDIA H100");
         assert_eq!(info, info.clone());
+    }
+
+    #[test]
+    fn cuda_device_error_discovery_preserves_fields_and_source() {
+        let error = CudaDeviceError::Discovery {
+            operation: "enumerate_devices",
+            source: Box::new(std::io::Error::other("driver query failed")),
+        };
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Discovery {
+                operation: "enumerate_devices",
+                source,
+            } if source.to_string() == "driver query failed"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "CUDA device discovery failed during enumerate_devices: driver query failed"
+        );
+        assert_eq!(error.operation(), Some("enumerate_devices"));
+        assert_eq!(error.requested(), None);
+        assert_eq!(error.discovered(), None);
+        assert_eq!(error.device(), None);
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("driver query failed")
+        );
+    }
+
+    #[test]
+    fn cuda_device_error_unavailable_preserves_fields_without_source() {
+        let requested = CudaDeviceId::from_ordinal(2);
+        let discovered = vec![
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+        ]
+        .into_boxed_slice();
+        let error = CudaDeviceError::Unavailable {
+            requested,
+            discovered,
+        };
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Unavailable {
+                requested: actual_requested,
+                discovered: actual_discovered,
+            } if *actual_requested == requested
+                && actual_discovered.as_ref() == [
+                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+                ]
+        ));
+        assert_eq!(
+            error.to_string(),
+            "requested CUDA device CudaDeviceId(2) is unavailable; discovered devices: [CudaDeviceInfo { id: CudaDeviceId(0), name: \"NVIDIA H100\" }, CudaDeviceInfo { id: CudaDeviceId(1), name: \"NVIDIA A100\" }]"
+        );
+        assert_eq!(error.operation(), None);
+        assert_eq!(error.requested(), Some(requested));
+        assert_eq!(
+            error.discovered(),
+            Some(
+                [
+                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(error.device(), None);
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn cuda_device_error_initialization_preserves_fields_and_source() {
+        let device = CudaDeviceId::from_ordinal(1);
+        let error = CudaDeviceError::Initialization {
+            device,
+            operation: "create_client",
+            source: Box::new(std::io::Error::other("CUDA context failed")),
+        };
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Initialization {
+                device: actual_device,
+                operation: "create_client",
+                source,
+            } if *actual_device == device && source.to_string() == "CUDA context failed"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "CUDA device CudaDeviceId(1) initialization failed during create_client: CUDA context failed"
+        );
+        assert_eq!(error.operation(), Some("create_client"));
+        assert_eq!(error.requested(), None);
+        assert_eq!(error.discovered(), None);
+        assert_eq!(error.device(), Some(device));
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("CUDA context failed")
+        );
     }
 }
