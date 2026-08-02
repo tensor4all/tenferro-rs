@@ -1001,9 +1001,9 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap())?;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
-    /// # Ok::<(), tenferro_ad::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
