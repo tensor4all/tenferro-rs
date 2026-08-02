@@ -984,7 +984,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn new() -> Result<Arc<Self>> {
@@ -1005,7 +1005,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_cpu_backend(backend: CpuBackend) -> Result<Arc<Self>> {
@@ -1083,7 +1083,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_cpu_backend_and_ad_context(
@@ -1112,7 +1112,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_cuda_backend(backend: CudaBackend) -> Result<Arc<Self>> {
@@ -1134,7 +1134,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_cuda_backend_and_ad_context(
@@ -1163,7 +1163,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_webgpu_backend(backend: WebGpuBackend) -> Result<Arc<Self>> {
@@ -1185,7 +1185,7 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when the backend's fixed runtime
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
     /// registration cannot be configured, preserving the underlying
     /// [`RuntimeConfigError`] as the typed error source.
     pub fn with_webgpu_backend_and_ad_context(
