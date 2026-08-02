@@ -142,7 +142,7 @@ slices/arrays:
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
 
-let ctx = EagerRuntime::new();
+let ctx = EagerRuntime::new().unwrap();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let a = ctx.constant_from(a).unwrap();

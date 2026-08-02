@@ -23,7 +23,7 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = EagerRuntime::new();
+    let runtime = EagerRuntime::new().unwrap();
     let x = runtime.variable_from(Tensor::from_vec_col_major(
         vec![3],
         vec![1.0_f64, 2.0, 3.0],

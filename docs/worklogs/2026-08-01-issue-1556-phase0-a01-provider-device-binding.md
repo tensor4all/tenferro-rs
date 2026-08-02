@@ -204,3 +204,69 @@ CUDA compilation without hardware remains a later verification gate.
 - Remove the remaining raw `include_str!`/substring structural tests and finish
   the repository-wide audit for stale provisional wording, CUDA registration
   documentation, parallel-Option state, and compatibility paths.
+
+## Follow-up: fallible eager-runtime construction
+
+This Phase 0 continuation makes every public `EagerRuntime` constructor report
+the existing typed `tenferro_ad::Result` instead of hiding
+`RuntimeConfigError` behind a panic. It does not change eager backend privacy,
+session-only extension execution, replacement/reconciliation, or fixed
+provider IDs.
+
+### RED evidence
+
+Added `eager_runtime_constructors_return_typed_results` to the existing eager
+runtime API integration contract. The test assigns each canonical constructor
+to an exact function-pointer type returning
+`tenferro_ad::Result<Arc<EagerRuntime>>`, including both CPU constructors and
+the feature-gated CUDA/WebGPU constructors.
+
+The required focused RED command was:
+
+```text
+cargo test -p tenferro-ad --test integration eager_runtime_constructors_return_typed_results --no-fail-fast
+```
+
+It failed before production edits with the expected `E0308` mismatches: the
+three CPU constructors were `fn(...) -> Arc<EagerRuntime>` while the test
+required `fn(...) -> Result<Arc<EagerRuntime>, tenferro_runtime::Error>`.
+
+### Implementation and GREEN evidence
+
+- `from_backend` and `from_backend_with_rules_and_cache` now return
+  `Result<Self>` and map `RuntimeConfigError` through
+  `Error::runtime_state_source`.
+- Removed `build_eager_runtime_for_backend` and its fixed-configuration panic.
+- Changed all public CPU, CUDA, and WebGPU constructors in place to return
+  `Result<Arc<EagerRuntime>>`, with concrete `# Errors` rustdoc and no
+  compatibility or `try_` constructors.
+- Updated all workspace tests, benches, examples, current user-facing docs,
+  and runnable doctests directly with the new result handling.
+
+Fresh GREEN verification:
+
+- `cargo test -p tenferro-ad --lib --no-fail-fast`: PASS (71 tests).
+- `cargo test -p tenferro-ad --test integration --no-fail-fast`: PASS (332 tests).
+- `cargo test -p tenferro-ad --doc --no-fail-fast`: PASS (137 doctests).
+- `cargo test -p tenferro-ad --features cuda --test integration --no-run`: PASS.
+- `cargo test -p tenferro-ad --features webgpu --test integration --no-run`: PASS.
+- `cargo test -p tenferro-einsum --features autodiff --no-run`: PASS.
+- `cargo test -p tenferro-fft --features autodiff --no-run`: PASS.
+- `cargo test -p tenferro-linalg --features autodiff --no-run`: PASS.
+- `cargo fmt --all -- --check`: PASS.
+- `git diff --check`: PASS.
+
+The first parallel dependent-crate compile attempt hit linker `SIGBUS` under
+resource pressure; each requested no-run command passed when rerun
+sequentially. The worktree's disposable Cargo target (57.3 GiB) was cleaned
+after an initial trybuild run exhausted the filesystem; no source files were
+removed.
+
+### Residual next steps
+
+- Keep the remaining Phase 0 provider/device identity and event-provenance
+  follow-ups separate from this constructor slice.
+- Preserve the typed source-chain contract when later reconciliation or fixed
+  provider-ID work changes runtime configuration failure paths.
+- Hardware-only CUDA/WebGPU execution remains environment-dependent and was not
+  exercised by these compile-only feature gates.

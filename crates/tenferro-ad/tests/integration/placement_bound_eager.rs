@@ -108,7 +108,7 @@ fn assert_send_sync<T: Send + Sync>() {}
 #[test]
 fn placement_bound_type_is_send_sync_and_callback_may_borrow_stack_data() {
     assert_send_sync::<CpuPlacementBoundEager>();
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
     let label = String::from("borrowed callback result");
     let mut calls = 0;
@@ -129,7 +129,7 @@ fn placement_binding_is_idle_until_a_session_operation_runs() {
     let counters = Arc::new(ExecutorCounters::default());
     let backend = external_backend(Arc::clone(&counters));
     let probe = backend.clone();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let runtime = EagerRuntime::with_cpu_backend(backend).unwrap();
     let cpu = runtime.on_cpu(placement()).unwrap();
     assert_eq!(counters.installs.load(Ordering::Relaxed), 0);
 
@@ -149,7 +149,7 @@ fn placement_binding_is_idle_until_a_session_operation_runs() {
 #[test]
 fn fallible_external_session_enters_each_core_operation_exactly_once() {
     let counters = Arc::new(ExecutorCounters::default());
-    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters)));
+    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters))).unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
     cpu.with_eager_session(|_| Ok(())).unwrap();
@@ -170,7 +170,7 @@ fn fallible_external_session_enters_each_core_operation_exactly_once() {
 #[test]
 fn placement_and_executor_failures_retain_typed_sources() {
     let counters = Arc::new(ExecutorCounters::default());
-    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters)));
+    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters))).unwrap();
     let placement_error = runtime
         .on_cpu(CpuPlacement::NumaNode(NumaNodeId::new(99)))
         .unwrap_err();
@@ -191,7 +191,7 @@ fn placement_and_executor_failures_retain_typed_sources() {
 #[test]
 fn callback_error_and_panic_release_the_session_for_reuse() {
     let counters = Arc::new(ExecutorCounters::default());
-    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters)));
+    let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters))).unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
     let error = cpu
@@ -216,7 +216,7 @@ fn callback_error_and_panic_release_the_session_for_reuse() {
 #[test]
 fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
     let counters = Arc::new(ExecutorCounters::default());
-    let runtime = EagerRuntime::with_cpu_backend(external_backend(counters));
+    let runtime = EagerRuntime::with_cpu_backend(external_backend(counters)).unwrap();
     let eager = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
         Arc::clone(&runtime),
@@ -246,7 +246,7 @@ fn placement_session_matches_graph_execution_for_core_operations() {
     let counters = Arc::new(ExecutorCounters::default());
     let backend = external_backend(counters);
     let graph_backend = backend.for_placement(placement()).unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let runtime = EagerRuntime::with_cpu_backend(backend).unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
     let session_output = cpu.with_eager_session(add_one).unwrap();
 

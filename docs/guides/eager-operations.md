@@ -283,7 +283,7 @@ explicitly when you want a fresh pass.
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
@@ -314,7 +314,7 @@ start from an explicit cotangent seed:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
@@ -335,7 +335,7 @@ Functional eager transforms return tensors instead of updating gradient slots:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
@@ -364,7 +364,7 @@ be written as `jvp(grad(f))`:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ctx.clone(),
@@ -389,7 +389,7 @@ Wrap updates, metric computations, and other non-differentiated eager work in
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ctx.clone(),
@@ -407,7 +407,7 @@ assert!(!y.tracks_grad());
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let a = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ctx.clone(),

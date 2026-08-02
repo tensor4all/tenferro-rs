@@ -83,7 +83,7 @@ fn test_gpu_eager_backward_smoke() {
         &f64_tensor(vec![2], vec![1.0_f64, 1.0]),
     )
     .unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let y = x.mul(&x).unwrap();
@@ -153,7 +153,7 @@ fn test_gpu_matmul_vjp() {
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let cotangent_device = upload_tensor(upload_backend.runtime(), &cotangent_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let a_gpu = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();

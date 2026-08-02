@@ -31,7 +31,7 @@ pub use tenferro_runtime::extension::{
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::{Tensor, TensorValue};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 /// let value = TensorValue::from_tensor(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 /// );
@@ -54,7 +54,7 @@ pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::Tensor;
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 /// let x = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 ///     ctx,

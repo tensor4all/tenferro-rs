@@ -183,7 +183,7 @@ fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
 
 #[test]
 fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new().unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -210,7 +210,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
 #[test]
 fn eager_tensor_methods_cover_core_elementwise_surface() {
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),
@@ -248,7 +248,7 @@ fn eager_tensor_methods_cover_core_elementwise_surface() {
 
 #[test]
 fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -315,7 +315,7 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         &[22.0, 28.0, 49.0, 64.0]
     );
 
-    let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let other = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         other_ctx,
@@ -327,7 +327,7 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
 
 #[test]
 fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
         ctx.clone(),

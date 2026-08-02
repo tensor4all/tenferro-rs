@@ -228,7 +228,7 @@ gradients or when a derivative transform should return another eager tensor.
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+let ctx = EagerRuntime::new().unwrap();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let y = (&x * &x).reduce_sum(Some(&[0])).unwrap();
 
@@ -296,7 +296,7 @@ sequences and code that needs deferred graph errors to remain visible.
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+let ctx = EagerRuntime::new().unwrap();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
 let y = x.exp().unwrap();
 
@@ -332,7 +332,7 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+let ctx = EagerRuntime::new().unwrap();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let repeated = v.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 

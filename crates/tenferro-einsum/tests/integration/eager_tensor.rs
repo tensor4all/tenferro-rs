@@ -18,7 +18,7 @@ fn test_ctx() -> Arc<EagerRuntime> {
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "1");
     }
-    EagerRuntime::with_cpu_backend(CpuBackend::new())
+    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
 
 #[test]
 fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),

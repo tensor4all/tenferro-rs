@@ -246,7 +246,7 @@ fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {
 fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
     reset_refreshes();
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
     assert_bound_matches_current_runtime(&cpu);
     let original_epoch = cpu.epoch;
@@ -282,7 +282,7 @@ fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
 
 #[test]
 fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let before = runtime.runtime.snapshot().unwrap();
     let before_epoch = before.epoch();
     let before_identity = before
@@ -306,7 +306,7 @@ fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
 #[test]
 fn unchanged_cpu_runtime_identity_avoids_registration_snapshot_and_reconfigure() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     reset_registration_snapshot_reads(&runtime);
     let before = runtime.runtime.snapshot().unwrap();
     let before_registration = before
@@ -331,7 +331,7 @@ fn unchanged_cpu_runtime_identity_avoids_registration_snapshot_and_reconfigure()
 #[test]
 fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let before_epoch = runtime.runtime.snapshot().unwrap().epoch();
 
     runtime
@@ -357,7 +357,7 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
         .clone()
         .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
         .unwrap();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let runtime = EagerRuntime::with_cpu_backend(backend).unwrap();
     let engine_id = cpu_engine_id();
     let before = runtime.runtime.snapshot().unwrap();
     let before_engine = before.engine(&engine_id).expect("CPU engine registered");
@@ -379,7 +379,7 @@ fn backend_sync_refreshes_a_new_witness_with_the_same_provider_device_target() {
 
 #[test]
 fn extension_execution_context_error_preserves_cpu_registration() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let before = runtime.runtime.snapshot().unwrap();
     let before_engine = before
         .engine(&cpu_engine_id())
@@ -413,7 +413,7 @@ fn extension_execution_context_error_preserves_cpu_registration() {
 
 #[test]
 fn backend_reconciliation_replaces_cpu_with_no_engine_and_back() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let materializations = Arc::new(AtomicUsize::new(0));
 
     replace_backend_for_test(
@@ -454,7 +454,7 @@ fn registration_quarantine_blocks_use_until_retry_then_clears() {
         .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
         .unwrap();
     let replacement_identity = replacement.runtime_identity();
-    let runtime = EagerRuntime::with_cpu_backend(backend);
+    let runtime = EagerRuntime::with_cpu_backend(backend).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
     runtime.inject_next_registration_failure_for_test().unwrap();
     replace_backend_for_test(&runtime, EagerBackend::Cpu(replacement)).unwrap_err();
@@ -627,7 +627,7 @@ fn runtime_snapshot_refresh_reports_typed_configuration_failures() {
     ];
 
     for (label, break_runtime, expected_kind, expected_message) in rows {
-        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
         let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
         break_runtime(&runtime, &mut cpu);
 

@@ -231,7 +231,7 @@ labels in that form.
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
 
-let ctx = EagerRuntime::new();
+let ctx = EagerRuntime::new().unwrap();
 let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap()).unwrap();
 

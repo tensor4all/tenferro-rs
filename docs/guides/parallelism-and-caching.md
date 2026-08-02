@@ -219,7 +219,7 @@ use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let eager = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
 ).with_max_retained_bytes(
@@ -258,7 +258,7 @@ use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let eager = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 let runtime = Runtime::builder().build().unwrap();
 let mut compiler = GraphCompiler::new();
 

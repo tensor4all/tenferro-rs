@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_tensor = matrix_a()?;
     let b_tensor = matrix_b()?;
     let c_tensor = matrix_c()?;
-    let runtime = EagerRuntime::new();
+    let runtime = EagerRuntime::new().unwrap();
     let a = runtime.variable_from(a_tensor.clone())?;
     let b = runtime.variable_from(b_tensor.clone())?;
     let product = [&a, &b].einsum("ij,jk->ik")?;

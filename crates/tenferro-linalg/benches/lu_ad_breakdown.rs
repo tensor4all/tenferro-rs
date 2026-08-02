@@ -49,6 +49,7 @@ fn ad_ctx(threads: usize) -> Arc<EagerRuntime> {
         .build()
         .unwrap();
     EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::with_threads(threads).unwrap(), &ad)
+        .unwrap()
 }
 
 fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

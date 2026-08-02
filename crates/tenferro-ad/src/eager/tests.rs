@@ -64,7 +64,7 @@ fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>
 
 #[test]
 fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = ctx.backend.lock().unwrap();
         panic!("poison eager backend lock");
@@ -85,7 +85,7 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
 
 #[test]
 fn eager_runtime_execution_session_runs_cpu_operation() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
@@ -99,7 +99,7 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
 
 #[test]
 fn eager_runtime_session_callback_is_excluded_when_reconciliation_fails() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     {
         let mut backend = runtime.backend.lock().unwrap();
         *backend = EagerBackend::Cpu(CpuBackend::new());
@@ -152,7 +152,7 @@ fn eager_materialization_uses_backend() {
     )
     .unwrap();
     assert_eq!(destination.as_slice::<f64>().unwrap(), &[2.0]);
-    let ctx = Arc::new(EagerRuntime::from_backend(backend));
+    let ctx = Arc::new(EagerRuntime::from_backend(backend).unwrap());
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
         Arc::clone(&ctx),
@@ -171,7 +171,7 @@ fn eager_materialization_uses_backend() {
 
 #[test]
 fn untracked_standard_op_results_do_not_enter_value_record_registry() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap(),
         Arc::clone(&ctx),
@@ -202,7 +202,7 @@ fn untracked_standard_op_results_do_not_enter_value_record_registry() {
 
 #[test]
 fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = ctx.extension_caches.lock().unwrap();
         panic!("poison extension cache lock");
@@ -227,7 +227,7 @@ fn eager_runtime_public_helpers_do_not_unwrap_poisoned_locks() {
 
 #[test]
 fn eager_runtime_execution_session_reports_poisoned_backend_lock() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = ctx.backend.lock().unwrap();
         panic!("poison eager backend lock");
@@ -248,7 +248,7 @@ fn eager_runtime_execution_session_reports_poisoned_backend_lock() {
 
 #[test]
 fn eager_index_select_reports_poisoned_backend_lock() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         Arc::clone(&ctx),
@@ -274,7 +274,7 @@ fn eager_index_select_reports_poisoned_backend_lock() {
 
 #[test]
 fn eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx.clone(),
@@ -427,7 +427,7 @@ impl ExtensionModule for ReadPathFallbackModule {
 
 #[test]
 fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
 
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
@@ -498,7 +498,7 @@ fn eager_op_profile_start_respects_enabled_gate() {
 
 #[test]
 fn standard_graph_op_executes_untracked_outputs_without_trace() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -530,7 +530,7 @@ fn standard_graph_op_executes_untracked_outputs_without_trace() {
 
 #[test]
 fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -568,7 +568,7 @@ fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
 #[test]
 fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
     fn compile_square(values: Vec<f64>) -> tenferro_runtime::CompiledGraph {
-        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
         let len = values.len();
         let x = EagerTensor::requires_grad_in(
             Tensor::from_vec_col_major(vec![len], values).unwrap(),
@@ -605,7 +605,7 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
 
 #[test]
 fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -628,7 +628,7 @@ fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
 
 #[test]
 fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -661,7 +661,7 @@ fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled
 
 #[test]
 fn eager_backward_with_accepts_vector_cotangent_seed() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -684,7 +684,7 @@ fn eager_backward_with_accepts_vector_cotangent_seed() {
 
 #[test]
 fn eager_backward_with_rejects_mismatched_seed_shape() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -715,7 +715,7 @@ fn eager_backward_with_rejects_mismatched_seed_shape() {
 
 #[test]
 fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -741,7 +741,7 @@ fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
 #[test]
 fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context() {
     let ad = AdContext::builder().build().unwrap();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
     let active = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -786,7 +786,7 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
 
 #[test]
 fn eager_runtime_jvp_returns_composable_semantic_trace() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -810,7 +810,7 @@ fn eager_runtime_jvp_returns_composable_semantic_trace() {
 
 #[test]
 fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -860,7 +860,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
 
 #[test]
 fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -897,7 +897,7 @@ fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
 
 #[test]
 fn eager_prepared_derivative_cache_is_visible_and_clearable() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         Arc::clone(&ctx),
@@ -930,7 +930,7 @@ fn eager_prepared_derivative_cache_is_visible_and_clearable() {
 
 #[test]
 fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     ctx.set_prepared_derivative_cache_limits(crate::AdTransformCacheLimits::new(
         NonZeroUsize::new(1).unwrap(),
     ))
@@ -966,7 +966,7 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
 
 #[test]
 fn eager_functional_grad_can_feed_jvp() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
         Arc::clone(&ctx),
@@ -995,7 +995,7 @@ fn eager_functional_grad_can_feed_jvp() {
 
 #[test]
 fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
         Arc::clone(&ctx),
@@ -1024,7 +1024,7 @@ fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
 
 #[test]
 fn eager_no_grad_scope_suppresses_operation_recording() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
         Arc::clone(&ctx),
@@ -1055,8 +1055,8 @@ fn standard_graph_op_rejects_empty_and_cross_context_inputs() {
         "{err}"
     );
 
-    let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         lhs_ctx,
@@ -1163,7 +1163,7 @@ fn eager_backend_delegates_elementwise_into_hook_to_cpu_variants() {
 
 #[test]
 fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx,
