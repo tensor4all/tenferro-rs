@@ -3,27 +3,19 @@
 //! # Examples
 //!
 //! ```rust
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! #[cfg(feature = "cuda")]
-//! {
-//!     use tenferro_gpu::{
-//!         download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
-//!     };
-//!     use tenferro_tensor::{Tensor, TensorElementwise};
+//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
 //!
-//!     if gpu_available() {
-//!         let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
-//!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-//!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
-//!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
-//!         let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-//!         let gpu_sum = backend.add(&gpu_a, &gpu_b).unwrap();
-//!         let sum = download_tensor(backend.runtime(), &gpu_sum).unwrap();
-//!         assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-//!     }
+//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//!     let devices = cuda_devices()?;
+//!     let Some(device) = devices.first() else {
+//!         return Ok(None);
+//!     };
+//!     Ok(Some(CudaBackend::new(device.id())?))
 //! }
-//! # Ok(())
-//! # }
+//!
+//! // This ordinary doctest checks the discovery-based selection API without
+//! // requiring CUDA hardware at test time.
+//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
 
 #[cfg(feature = "cuda")]

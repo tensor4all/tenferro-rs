@@ -417,10 +417,12 @@ view, but source and destination allocations must not alias. Both operations
 preserve CUDA residency and never stage tensor payloads through host memory.
 
 ```text
-use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
+use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
-let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
+let devices = cuda_devices()?;
+let device = devices.first().ok_or("no CUDA device is visible")?;
+let mut backend = CudaBackend::new(device.id())?;
 let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 

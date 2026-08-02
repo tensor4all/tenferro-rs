@@ -26,6 +26,22 @@ const CUDA_HARDWARE_CLASS_ID: &str = "tenferro-cuda.device.v1";
 const CUDA_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
 const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
 
+#[derive(Debug)]
+pub(crate) struct PreparedCudaRegistrationIdentity {
+    engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
+}
+
+pub(crate) fn prepare_cuda_registration_identity(
+    engine_id: EngineId,
+    device_id: super::CudaDeviceId,
+) -> Result<PreparedCudaRegistrationIdentity, RuntimeConfigError> {
+    Ok(PreparedCudaRegistrationIdentity {
+        engine_id,
+        provider_device_identity: cuda_provider_device_identity(device_id)?,
+    })
+}
+
 /// Return the canonical CUDA runtime hardware class.
 ///
 /// # Errors
@@ -53,6 +69,7 @@ pub fn cuda_runtime_engine_registration(
     backend: &CudaBackend,
     engine_id: EngineId,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    let prepared_identity = prepare_cuda_registration_identity(engine_id, backend.device_id())?;
     let backend = Arc::new(backend.clone());
     let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
     let reduction: Arc<dyn ReductionRuntime> = backend.clone();
@@ -76,9 +93,7 @@ pub fn cuda_runtime_engine_registration(
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
-    let device_id = backend.device_id();
-    let device_ordinal = device_id.ordinal() as usize;
-    let provider_device_identity = cuda_provider_device_identity(device_id)?;
+    let device_ordinal = backend.device_id().ordinal() as usize;
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {
             candidate == &placement_storage && cuda_input_placement(placement, device_ordinal)
@@ -95,11 +110,11 @@ pub fn cuda_runtime_engine_registration(
         }),
     );
     assemble_executable_engine_registration(
-        engine_id,
+        prepared_identity.engine_id,
         cuda_runtime_hardware_class()?,
         Arc::from(vec![storage]),
         default_storage,
-        provider_device_identity,
+        prepared_identity.provider_device_identity,
         capabilities.build(),
         execution_backend,
         Arc::new(CudaEventDomainDriver::new(backend.runtime().clone())),

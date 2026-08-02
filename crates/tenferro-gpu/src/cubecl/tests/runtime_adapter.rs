@@ -26,7 +26,7 @@ fn cuda_public_constructors_and_registration_require_typed_selection() {
 }
 
 #[test]
-fn caller_selected_devices_and_engine_ids_are_distinct_through_fake_selection() {
+fn caller_selected_devices_and_engine_ids_flow_through_prepared_registration_identity() {
     let first_device = CudaDeviceId::from_ordinal(2);
     let second_device = CudaDeviceId::from_ordinal(7);
     let first_engine =
@@ -43,16 +43,22 @@ fn caller_selected_devices_and_engine_ids_are_distinct_through_fake_selection() 
     }
 
     let first_identity =
-        super::cuda_provider_device_identity(first_device).expect("first provider/device identity");
-    let second_identity = super::cuda_provider_device_identity(second_device)
-        .expect("second provider/device identity");
+        super::prepare_cuda_registration_identity(first_engine.clone(), first_device)
+            .expect("first prepared registration identity");
+    let second_identity =
+        super::prepare_cuda_registration_identity(second_engine.clone(), second_device)
+            .expect("second prepared registration identity");
     assert_ne!(first_device, second_device);
-    assert_ne!(first_engine, second_engine);
-    assert_ne!(first_identity, second_identity);
-    assert_eq!(first_device.ordinal(), 2);
-    assert_eq!(second_device.ordinal(), 7);
-    assert_eq!(first_identity.target_identity(), "device:2");
-    assert_eq!(second_identity.target_identity(), "device:7");
+    assert_eq!(first_identity.engine_id, first_engine);
+    assert_eq!(second_identity.engine_id, second_engine);
+    assert_eq!(
+        first_identity.provider_device_identity.target_identity(),
+        "device:2"
+    );
+    assert_eq!(
+        second_identity.provider_device_identity.target_identity(),
+        "device:7"
+    );
 }
 
 #[test]

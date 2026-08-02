@@ -35,10 +35,12 @@ An error like `expected GPU tensor ... use upload_tensor()` means a CUDA
 backend operation received CPU data. Upload first:
 
 ```rust
-use tenferro_gpu::{upload_tensor, CudaBackend, CudaDeviceId};
+use tenferro_gpu::{cuda_devices, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
-let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
+let devices = cuda_devices()?;
+let device = devices.first().ok_or("no CUDA device is visible")?;
+let backend = CudaBackend::new(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let gpu_x = upload_tensor(backend.runtime(), &x).unwrap();
 assert_eq!(gpu_x.shape(), &[2]);
@@ -50,10 +52,12 @@ Host access methods read CPU memory. If a tensor lives on CUDA memory, download
 it before inspecting values:
 
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
+use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
-let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
+let devices = cuda_devices()?;
+let device = devices.first().ok_or("no CUDA device is visible")?;
+let backend = CudaBackend::new(device.id())?;
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
 let gpu_x = upload_tensor(backend.runtime(), &x).unwrap();
 let cpu_x = download_tensor(backend.runtime(), &gpu_x).unwrap();

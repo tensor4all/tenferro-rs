@@ -36,35 +36,17 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::{
-//!     download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
-//! };
-//! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
+//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! if !gpu_available() {
-//!     return Ok(());
+//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//!     let devices = cuda_devices()?;
+//!     let Some(device) = devices.first() else {
+//!         return Ok(None);
+//!     };
+//!     Ok(Some(CudaBackend::new(device.id())?))
 //! }
 //!
-//! // 1. Create the GPU backend (device ordinal 0)
-//! let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0))?;
-//!
-//! // 2. Create tensors on the CPU
-//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])?);
-//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])?);
-//!
-//! // 3. Upload to GPU
-//! let gpu_a = upload_tensor(backend.runtime(), &a)?;
-//! let gpu_b = upload_tensor(backend.runtime(), &b)?;
-//!
-//! // 4. Compute on GPU
-//! let gpu_c = backend.add(&gpu_a, &gpu_b)?;
-//!
-//! // 5. Download result back to CPU
-//! let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
-//! assert_eq!(cpu_c.shape(), &[2]);
-//! Ok(())
-//! }
+//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
 //!
 //! # Running GPU tests

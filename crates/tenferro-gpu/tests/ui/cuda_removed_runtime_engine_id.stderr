@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `tenferro_gpu::cuda_runtime_engine_id`
+ --> tests/ui/cuda_removed_runtime_engine_id.rs:1:5
+  |
+1 | use tenferro_gpu::cuda_runtime_engine_id;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `cuda_runtime_engine_id` in the root
