@@ -255,6 +255,80 @@ fn assert_slice_close_c64(actual: &[Complex64], expected: &[Complex64], tol: f64
     }
 }
 
+fn assert_relative_error_f64(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    let error_sq = actual
+        .iter()
+        .zip(expected)
+        .map(|(lhs, rhs)| (lhs - rhs).powi(2))
+        .sum::<f64>();
+    let expected_sq = expected.iter().map(|value| value.powi(2)).sum::<f64>();
+    let relative_error = error_sq.sqrt() / expected_sq.sqrt().max(1.0);
+    assert!(
+        relative_error <= tol,
+        "relative error {relative_error:e} exceeds tolerance {tol:e}"
+    );
+}
+
+fn assert_relative_error_c64(actual: &[Complex64], expected: &[Complex64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    let error_sq = actual
+        .iter()
+        .zip(expected)
+        .map(|(lhs, rhs)| (*lhs - *rhs).norm_sqr())
+        .sum::<f64>();
+    let expected_sq = expected.iter().map(|value| value.norm_sqr()).sum::<f64>();
+    let relative_error = error_sq.sqrt() / expected_sq.sqrt().max(1.0);
+    assert!(
+        relative_error <= tol,
+        "relative error {relative_error:e} exceeds tolerance {tol:e}"
+    );
+}
+
+fn assert_identity_f64(matrix: &[f64], n: usize, tol: f64) {
+    for col in 0..n {
+        for row in 0..n {
+            let expected = if row == col { 1.0 } else { 0.0 };
+            let actual = matrix[col_major_index(n, row, col)];
+            assert!(
+                (actual - expected).abs() <= tol,
+                "isometry residual at ({row}, {col}) is {:e}",
+                actual - expected
+            );
+        }
+    }
+}
+
+fn assert_identity_c64(matrix: &[Complex64], n: usize, tol: f64) {
+    for col in 0..n {
+        for row in 0..n {
+            let expected = if row == col {
+                Complex64::new(1.0, 0.0)
+            } else {
+                Complex64::new(0.0, 0.0)
+            };
+            let residual = matrix[col_major_index(n, row, col)] - expected;
+            assert!(
+                residual.norm() <= tol,
+                "isometry residual at ({row}, {col}) is {residual:?}"
+            );
+        }
+    }
+}
+
+fn assert_singular_values(s: &[f64]) {
+    for (index, value) in s.iter().enumerate() {
+        assert!(*value >= 0.0, "singular value {index} is negative: {value}");
+    }
+    for (index, pair) in s.windows(2).enumerate() {
+        assert!(
+            pair[0] >= pair[1],
+            "singular values are not descending at {index}: {:?}",
+            pair
+        );
+    }
+}
+
 #[test]
 #[ignore]
 fn test_cubecl_cholesky_batched_f64_matches_cpu() {
@@ -450,6 +524,150 @@ fn test_cubecl_svd_values_f64_matches_cpu() {
     let actual = gpu.svd_values(&upload(&gpu, &input)).unwrap();
     let actual = download(&gpu, &actual);
     assert_tensor_close(&actual, &expected, 1e-9);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
+fn test_cubecl_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
+    const M: usize = 8;
+    const N: usize = 1025;
+    let data = (0..N)
+        .flat_map(|col| {
+            (0..M).map(move |row| {
+                let patterned = ((row * 17 + col * 13 + 3) % 31) as f64 / 31.0 - 0.5;
+                patterned + if col == row { 2.0 } else { 0.0 }
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = tensor_f64(vec![M, N], data);
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = gpu.svd(&gpu_input).unwrap();
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    let gpu_values = gpu.svd_values(&gpu_input).unwrap();
+    let values = download(&gpu, &gpu_values);
+
+    assert_eq!(u.shape(), &[M, M]);
+    assert_eq!(s.shape(), &[M]);
+    assert_eq!(vt.shape(), &[M, N]);
+    let u_data = u.as_slice::<f64>().unwrap();
+    let s_data = s.as_slice::<f64>().unwrap();
+    let vt_data = vt.as_slice::<f64>().unwrap();
+    assert_singular_values(s_data);
+    assert_tensor_close(&values, &s, 1e-10);
+
+    let mut scaled_u = u_data.to_vec();
+    for col in 0..M {
+        for row in 0..M {
+            scaled_u[col_major_index(M, row, col)] *= s_data[col];
+        }
+    }
+    let reconstruction = matmul_f64(&scaled_u, vt_data, M, M, N);
+    assert_relative_error_f64(&reconstruction, input.as_slice::<f64>().unwrap(), 1e-10);
+    let utu = matmul_f64(&transpose_f64(u_data, M, M), u_data, M, M, M);
+    assert_identity_f64(&utu, M, 1e-10);
+    let vvt = matmul_f64(vt_data, &transpose_f64(vt_data, M, N), M, N, M);
+    assert_identity_f64(&vvt, M, 1e-10);
+
+    let mut cpu = cpu_backend();
+    let expected_values = cpu.svd_values(&input).unwrap();
+    assert_tensor_close(&values, &expected_values, 1e-9);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU and exercises complex legacy gesvd above 1024"]
+fn test_cubecl_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
+    const M: usize = 8;
+    const N: usize = 1025;
+    let data = (0..N)
+        .flat_map(|col| {
+            (0..M).map(move |row| {
+                let real = ((row * 11 + col * 7 + 5) % 29) as f64 / 29.0 - 0.5;
+                let imag = ((row * 19 + col * 3 + 1) % 23) as f64 / 23.0 - 0.5;
+                Complex64::new(real + if col == row { 2.0 } else { 0.0 }, imag)
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = tensor_c64(vec![M, N], data);
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = gpu.svd(&gpu_input).unwrap();
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    let gpu_values = gpu.svd_values(&gpu_input).unwrap();
+    let values = download(&gpu, &gpu_values);
+
+    let u_data = u.as_slice::<Complex64>().unwrap();
+    let s_data = s.as_slice::<f64>().unwrap();
+    let vt_data = vt.as_slice::<Complex64>().unwrap();
+    assert_singular_values(s_data);
+    assert_tensor_close(&values, &s, 1e-10);
+
+    let mut scaled_u = u_data.to_vec();
+    for col in 0..M {
+        for row in 0..M {
+            scaled_u[col_major_index(M, row, col)] *= s_data[col];
+        }
+    }
+    let reconstruction = matmul_c64(&scaled_u, vt_data, M, M, N);
+    assert_relative_error_c64(
+        &reconstruction,
+        input.as_slice::<Complex64>().unwrap(),
+        1e-10,
+    );
+    let uhu = matmul_c64(&conj_transpose_c64(u_data, M, M), u_data, M, M, M);
+    assert_identity_c64(&uhu, M, 1e-10);
+    let vvh = matmul_c64(vt_data, &conj_transpose_c64(vt_data, M, N), M, N, M);
+    assert_identity_c64(&vvh, M, 1e-10);
+
+    let mut cpu = cpu_backend();
+    let expected_values = cpu.svd_values(&input).unwrap();
+    assert_tensor_close(&values, &expected_values, 1e-9);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
+fn test_cubecl_svd_gesvd_tall_f64_retains_direct_route() {
+    const M: usize = 1025;
+    const N: usize = 8;
+    let data = (0..N)
+        .flat_map(|col| {
+            (0..M).map(move |row| {
+                let patterned = ((row * 13 + col * 17 + 3) % 31) as f64 / 31.0 - 0.5;
+                patterned + if row == col { 2.0 } else { 0.0 }
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = tensor_f64(vec![M, N], data);
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let outputs = gpu.svd(&gpu_input).unwrap();
+    let u = download(&gpu, &outputs[0]);
+    let s = download(&gpu, &outputs[1]);
+    let vt = download(&gpu, &outputs[2]);
+    let u_data = u.as_slice::<f64>().unwrap();
+    let s_data = s.as_slice::<f64>().unwrap();
+    let vt_data = vt.as_slice::<f64>().unwrap();
+    assert_singular_values(s_data);
+
+    let mut scaled_u = u_data.to_vec();
+    for col in 0..N {
+        for row in 0..M {
+            scaled_u[col_major_index(M, row, col)] *= s_data[col];
+        }
+    }
+    let reconstruction = matmul_f64(&scaled_u, vt_data, M, N, N);
+    assert_relative_error_f64(&reconstruction, input.as_slice::<f64>().unwrap(), 1e-10);
+
+    let mut cpu = cpu_backend();
+    let expected_values = cpu.svd_values(&input).unwrap();
+    assert_tensor_close(&s, &expected_values, 1e-9);
 }
 
 #[test]
