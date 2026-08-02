@@ -213,6 +213,46 @@ fn webgpu_registration_installs_native_event_domain_driver() {
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
+fn webgpu_event_domain_rejects_same_origin_incompatible_token_before_launch() {
+    let domain = test_event_domain("incompatible-token");
+    let dependency: Arc<dyn EventToken> = Arc::new(FailingEventToken { origin: domain });
+    let mut launches = 0;
+
+    let error = super::super::event_domain::admit_webgpu_tokens(
+        std::slice::from_ref(&dependency),
+        domain,
+        || {
+            launches += 1;
+            Ok(())
+        },
+    )
+    .expect_err("same-origin non-WebGPU token must be rejected");
+    let tenferro_runtime::Error::EventDomain {
+        source:
+            tenferro_runtime::runtime::EventDomainError::IncompatibleTokenType {
+                operation,
+                node_index,
+                expected,
+                actual,
+                token_type,
+            },
+    } = error
+    else {
+        panic!("same-origin non-WebGPU token must retain its typed admission error");
+    };
+    assert_eq!(
+        operation,
+        tenferro_runtime::runtime::EventDomainOperation::Enqueue
+    );
+    assert_eq!(node_index, None);
+    assert_eq!(expected, domain);
+    assert_eq!(actual, domain);
+    assert_eq!(token_type, "non-WebGPU event token");
+    assert_eq!(launches, 0);
+}
+
+#[test]
+#[cfg(not(target_family = "wasm"))]
 fn webgpu_registration_preserves_a_caller_selected_engine_id() {
     if !webgpu_available() {
         return;
@@ -297,29 +337,6 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     second_completion.wait().expect("first completion wait");
     second_completion.wait().expect("repeat completion wait");
     run.drain().expect("WebGPU event-domain drain");
-
-    let mut forbidden_launches = 0;
-    let mut forbidden = || {
-        forbidden_launches += 1;
-        Ok(())
-    };
-    let dependency_error = run.enqueue(
-        &[Arc::new(FailingEventToken { origin: domain })],
-        &mut forbidden,
-    );
-    assert!(matches!(
-        dependency_error,
-        Err(tenferro_runtime::Error::EventDomain {
-            source: tenferro_runtime::runtime::EventDomainError::IncompatibleTokenType {
-                operation: tenferro_runtime::runtime::EventDomainOperation::Enqueue,
-                expected,
-                actual,
-                token_type: "non-WebGPU event token",
-                ..
-            }
-        }) if expected == domain && actual == domain
-    ));
-    assert_eq!(forbidden_launches, 0);
 
     let mut panic_output = None;
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

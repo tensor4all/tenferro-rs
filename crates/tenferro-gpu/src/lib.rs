@@ -24,6 +24,8 @@ use std::any::Any;
 #[cfg(feature = "cuda")]
 mod cubecl;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod event_domain_admission;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod event_retirement;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;

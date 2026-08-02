@@ -151,6 +151,44 @@ impl ExecutionLocation {
         )
     }
 
+    #[cfg(test)]
+    fn for_test_with_driver(
+        domain: EventDomainId,
+        provider_device_identity: super::ProviderDeviceIdentity,
+        event_domain_driver: Arc<dyn super::EventDomainDriver>,
+    ) -> Self {
+        let engine_id = EngineId::new("tenferro-test.schedule-engine").expect("test engine id");
+        let storage_class =
+            StorageClass::new("tenferro-test.schedule-storage").expect("test storage class");
+        Self::from_test_with_driver(
+            engine_id,
+            provider_device_identity,
+            domain,
+            storage_class,
+            event_domain_driver,
+        )
+    }
+
+    #[cfg(test)]
+    fn from_test_with_driver(
+        engine_id: EngineId,
+        provider_device_identity: super::ProviderDeviceIdentity,
+        event_domain_id: EventDomainId,
+        storage_class: StorageClass,
+        event_domain_driver: Arc<dyn super::EventDomainDriver>,
+    ) -> Self {
+        Self::from_witness(
+            super::snapshot::ExecutableEngineSnapshot::for_test_with_driver(
+                engine_id,
+                provider_device_identity,
+                event_domain_id,
+                storage_class.clone(),
+                event_domain_driver,
+            ),
+            storage_class,
+        )
+    }
+
     pub(crate) fn engine_id(&self) -> &EngineId {
         self.resolved_endpoint.logical().engine_id()
     }
@@ -472,7 +510,9 @@ pub(crate) struct ScheduledCollective {
 
 impl ScheduledCollective {
     #[cfg(test)]
-    pub(crate) fn unsupported_for_test() -> Self {
+    pub(crate) fn unsupported_for_test(
+        event_domain_driver: Arc<dyn super::EventDomainDriver>,
+    ) -> Self {
         let domain = EventDomainId::runtime_created_for_test(
             RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
             RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
@@ -481,13 +521,14 @@ impl ScheduledCollective {
                 NonZeroU64::new(1).expect("registration ordinal"),
             ),
         );
-        let location = ExecutionLocation::for_test(
+        let location = ExecutionLocation::for_test_with_driver(
             domain,
             super::ProviderDeviceIdentity::new(
                 super::ProviderId::new("tenferro.test.schedule").expect("test provider id"),
                 "collective",
             )
             .expect("test provider target"),
+            event_domain_driver,
         );
         Self {
             location,
@@ -950,11 +991,6 @@ impl ScheduledGraph {
                 .len()
                 .checked_mul(std::mem::size_of::<ExecutionLocation>())?,
         ])
-    }
-
-    #[cfg(test)]
-    pub(crate) fn execute_for_test(&self) -> Result<(), UnsupportedScheduledNodeError> {
-        self.preflight()
     }
 
     #[cfg(test)]

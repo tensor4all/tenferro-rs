@@ -6,13 +6,11 @@ use std::sync::Arc;
 use cubecl::stream_id::StreamId;
 use cudarc::driver::result as cuda_result;
 use cudarc::driver::sys::{CUevent, CUevent_flags, CUevent_wait_flags, CUstream};
-use tenferro_runtime::runtime::{
-    EventDomainDriver, EventDomainError, EventDomainId, EventDomainOperation, EventDomainRun,
-    EventToken,
-};
+use tenferro_runtime::runtime::{EventDomainDriver, EventDomainId, EventDomainRun, EventToken};
 use tenferro_runtime::Error as RuntimeError;
 
 use super::CudaRuntime;
+use crate::event_domain_admission::{admit_event_token, admit_event_tokens};
 use crate::event_retirement::{
     best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
 };
@@ -28,6 +26,14 @@ impl CudaEventDomainDriver {
     pub(super) fn new(runtime: CudaRuntime) -> Self {
         Self { runtime }
     }
+}
+
+pub(crate) fn admit_cuda_tokens<R>(
+    dependencies: &[Arc<dyn EventToken>],
+    expected: EventDomainId,
+    launch: impl FnOnce() -> tenferro_runtime::Result<R>,
+) -> tenferro_runtime::Result<R> {
+    admit_event_tokens::<CudaEventToken, R>(dependencies, expected, "non-CUDA event token", launch)
 }
 
 impl EventDomainDriver for CudaEventDomainDriver {
@@ -62,8 +68,10 @@ impl EventDomainRun for CudaEventDomainRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        self.stream_id
-            .executes(|| self.enqueue_on_current_stream(dependencies, launch))
+        admit_cuda_tokens(dependencies, self.domain, || {
+            self.stream_id
+                .executes(|| self.enqueue_on_current_stream(dependencies, launch))
+        })
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
@@ -99,29 +107,11 @@ impl CudaEventDomainRun {
         let stream = raw_stream(&self.runtime).map_err(RuntimeError::from)?;
 
         for dependency in dependencies {
-            let actual = dependency.origin();
-            if actual != self.domain {
-                return Err(RuntimeError::from(
-                    EventDomainError::DependencyDomainMismatch {
-                        operation: EventDomainOperation::Enqueue,
-                        node_index: None,
-                        expected: self.domain,
-                        actual,
-                    },
-                ));
-            }
-            let token = dependency
-                .as_any()
-                .downcast_ref::<CudaEventToken>()
-                .ok_or_else(|| {
-                    RuntimeError::from(EventDomainError::IncompatibleTokenType {
-                        operation: EventDomainOperation::Enqueue,
-                        node_index: None,
-                        expected: self.domain,
-                        actual,
-                        token_type: "non-CUDA event token",
-                    })
-                })?;
+            let token = admit_event_token::<CudaEventToken>(
+                dependency.as_ref(),
+                self.domain,
+                "non-CUDA event token",
+            )?;
             unsafe {
                 cuda_result::stream::wait_event(
                     stream,

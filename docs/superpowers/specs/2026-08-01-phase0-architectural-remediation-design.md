@@ -50,11 +50,11 @@ returns every failure while preserving an execution failure as the primary
 error. Explicit drain followed by provider `Drop` invokes retirement exactly
 once.
 
-`Drop` is a one-shot, non-panicking, best-effort emergency fallback only when
-explicit drain was skipped. It does not retry terminal runs, and its errors may
-be suppressed because `Drop` has no `Result` channel. Phase 0 does not define a
-runtime-wide structured `Drop` diagnostic sink, panic-payload attestation, or an
-untrusted-destructor threat model.
+`Drop` is a one-shot, best-effort emergency fallback only when explicit drain was
+skipped. It does not retry terminal runs, and its errors may be suppressed
+because `Drop` has no `Result` channel. Explicitly caught provider panics retain
+normal Rust panic-payload drop semantics; Phase 0 does not define a runtime-wide
+structured `Drop` diagnostic sink.
 
 Typed machine-readable fields are required only where callers or tests need
 them: missing event-domain drivers or scheduled completions, duplicate transfer

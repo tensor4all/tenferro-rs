@@ -11,6 +11,7 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::Error as RuntimeError;
 
 use super::WebGpuRuntime;
+use crate::event_domain_admission::{admit_event_token, admit_event_tokens};
 use crate::event_retirement::{
     best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
 };
@@ -30,6 +31,19 @@ impl WebGpuEventDomainDriver {
             identity: Arc::new(()),
         }
     }
+}
+
+pub(crate) fn admit_webgpu_tokens<R>(
+    dependencies: &[Arc<dyn EventToken>],
+    expected: EventDomainId,
+    launch: impl FnOnce() -> tenferro_runtime::Result<R>,
+) -> tenferro_runtime::Result<R> {
+    admit_event_tokens::<WebGpuEventToken, R>(
+        dependencies,
+        expected,
+        "non-WebGPU event token",
+        launch,
+    )
 }
 
 impl EventDomainDriver for WebGpuEventDomainDriver {
@@ -66,8 +80,10 @@ impl EventDomainRun for WebGpuEventDomainRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        self.stream_id
-            .executes(|| self.enqueue_on_current_stream(dependencies, launch))
+        admit_webgpu_tokens(dependencies, self.domain, || {
+            self.stream_id
+                .executes(|| self.enqueue_on_current_stream(dependencies, launch))
+        })
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
@@ -98,29 +114,12 @@ impl WebGpuEventDomainRun {
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
         for dependency in dependencies {
-            let actual = dependency.origin();
-            if actual != self.domain {
-                return Err(RuntimeError::from(
-                    EventDomainError::DependencyDomainMismatch {
-                        operation: EventDomainOperation::Enqueue,
-                        node_index: None,
-                        expected: self.domain,
-                        actual,
-                    },
-                ));
-            }
-            let token = dependency
-                .as_any()
-                .downcast_ref::<WebGpuEventToken>()
-                .ok_or_else(|| {
-                    RuntimeError::from(EventDomainError::IncompatibleTokenType {
-                        operation: EventDomainOperation::Enqueue,
-                        node_index: None,
-                        expected: self.domain,
-                        actual,
-                        token_type: "non-WebGPU event token",
-                    })
-                })?;
+            let token = admit_event_token::<WebGpuEventToken>(
+                dependency.as_ref(),
+                self.domain,
+                "non-WebGPU event token",
+            )?;
+            let actual = token.origin();
             if !Arc::ptr_eq(&token.identity, &self.identity) {
                 return Err(RuntimeError::from(
                     EventDomainError::IncompatibleTokenType {

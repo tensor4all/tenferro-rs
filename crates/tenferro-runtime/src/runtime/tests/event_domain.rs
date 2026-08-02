@@ -1,6 +1,5 @@
 use std::any::Any;
 use std::num::NonZeroU64;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -206,14 +205,13 @@ enum ProbeDrainBehavior {
     Return,
     ReturnError,
     PanicStatic,
-    PanicPayloadBomb,
+    PanicNonString,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum ProbeDropBehavior {
     Return,
     PanicStatic,
-    PanicPayloadBomb,
 }
 
 #[derive(Clone, Debug)]
@@ -243,15 +241,6 @@ struct DrainProbeRun {
     drain_behavior: ProbeDrainBehavior,
     drop_behavior: ProbeDropBehavior,
     events: Arc<Mutex<Vec<String>>>,
-}
-
-#[derive(Debug)]
-struct PanickingPanicPayload;
-
-impl Drop for PanickingPanicPayload {
-    fn drop(&mut self) {
-        panic!("panic payload destructor escaped containment");
-    }
 }
 
 impl EventDomainRun for DrainProbeRun {
@@ -285,9 +274,7 @@ impl EventDomainRun for DrainProbeRun {
                 format!("{} drain failure", self.label),
             )),
             ProbeDrainBehavior::PanicStatic => panic!("{} drain panic", self.label),
-            ProbeDrainBehavior::PanicPayloadBomb => {
-                std::panic::panic_any(PanickingPanicPayload);
-            }
+            ProbeDrainBehavior::PanicNonString => std::panic::panic_any(42_u8),
         }
     }
 }
@@ -301,9 +288,6 @@ impl Drop for DrainProbeRun {
         match self.drop_behavior {
             ProbeDropBehavior::Return => {}
             ProbeDropBehavior::PanicStatic => panic!("{} drop panic", self.label),
-            ProbeDropBehavior::PanicPayloadBomb => {
-                std::panic::panic_any(PanickingPanicPayload);
-            }
         }
     }
 }
@@ -594,7 +578,7 @@ fn scheduler_contains_drain_and_box_drop_panics_and_drains_later_runs() -> Resul
     let first_driver: Arc<dyn EventDomainDriver> = Arc::new(DrainProbeDriver {
         label: "first",
         drain_behavior: ProbeDrainBehavior::PanicStatic,
-        drop_behavior: ProbeDropBehavior::PanicPayloadBomb,
+        drop_behavior: ProbeDropBehavior::PanicStatic,
         events: Arc::clone(&events),
     });
     let second_driver: Arc<dyn EventDomainDriver> = Arc::new(DrainProbeDriver {
@@ -728,35 +712,12 @@ fn scheduler_drain_returns_all_failures_in_run_order() -> Result<()> {
 }
 
 #[test]
-fn runtime_owned_event_run_drop_panic_does_not_replace_original_unwind() {
+fn scheduler_reports_non_string_drain_panic_with_safe_message() -> Result<()> {
     let domain = qualified_domain(1, 1, 1, 1);
     let events = Arc::new(Mutex::new(Vec::new()));
     let driver: Arc<dyn EventDomainDriver> = Arc::new(DrainProbeDriver {
-        label: "unwind",
-        drain_behavior: ProbeDrainBehavior::Return,
-        drop_behavior: ProbeDropBehavior::PanicPayloadBomb,
-        events,
-    });
-
-    let panic = catch_unwind(AssertUnwindSafe(|| {
-        let _scheduler = ScheduledEventDomains::for_test(vec![(domain, driver)])
-            .expect("unwind probe scheduler");
-        panic!("original execution panic");
-    }))
-    .expect_err("the original execution panic must remain observable");
-    assert_eq!(
-        panic.downcast_ref::<&str>(),
-        Some(&"original execution panic")
-    );
-}
-
-#[test]
-fn scheduler_forgets_unknown_drain_panic_payload_and_reports_safe_message() -> Result<()> {
-    let domain = qualified_domain(1, 1, 1, 1);
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let driver: Arc<dyn EventDomainDriver> = Arc::new(DrainProbeDriver {
-        label: "unknown-payload",
-        drain_behavior: ProbeDrainBehavior::PanicPayloadBomb,
+        label: "non-string-payload",
+        drain_behavior: ProbeDrainBehavior::PanicNonString,
         drop_behavior: ProbeDropBehavior::Return,
         events,
     });
@@ -764,7 +725,7 @@ fn scheduler_forgets_unknown_drain_panic_payload_and_reports_safe_message() -> R
 
     let error = scheduler
         .drain()
-        .expect_err("unknown drain panic must become a typed cleanup error");
+        .expect_err("non-string drain panic must become a typed cleanup error");
     assert!(matches!(
         error,
         Error::EventDomain {

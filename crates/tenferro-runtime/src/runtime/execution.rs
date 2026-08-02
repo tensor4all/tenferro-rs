@@ -1083,7 +1083,7 @@ pub(crate) struct DuplicateTransferDestinationError {
 }
 
 impl ScheduledEventDomains {
-    fn new(schedule: &ScheduledGraph) -> Result<Self> {
+    pub(crate) fn new(schedule: &ScheduledGraph) -> Result<Self> {
         schedule.preflight().map_err(|source| {
             Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
         })?;
@@ -1448,10 +1448,8 @@ fn event_domain_run_state_error(
 }
 
 fn drop_event_domain_run(run: Box<dyn EventDomainRun>) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(run))) {
-        // The provider Box has been consumed. Do not retry a panicking Drop or
-        // run an arbitrary panic-payload destructor while containing it.
-        std::mem::forget(payload);
+    if catch_unwind(AssertUnwindSafe(|| drop(run))).is_err() {
+        // The provider run has been consumed; its cleanup panic is contained.
     }
 }
 
@@ -1477,13 +1475,7 @@ fn safe_event_domain_panic_message(payload: Box<dyn std::any::Any + Send + 'stat
         Ok(message) => (*message).to_owned(),
         Err(payload) => match payload.downcast::<String>() {
             Ok(message) => *message,
-            Err(payload) => {
-                // An unknown provider-controlled payload may have a panicking
-                // destructor. Keep it from escaping while retaining only the
-                // bounded diagnostic category needed by the cleanup error.
-                std::mem::forget(payload);
-                "non-string panic payload".to_owned()
-            }
+            Err(_) => "non-string panic payload".to_owned(),
         },
     }
 }

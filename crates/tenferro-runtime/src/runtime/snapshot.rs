@@ -323,6 +323,23 @@ impl ExecutableEngineSnapshot {
         event_domain_id: EventDomainId,
         storage_class: StorageClass,
     ) -> Arc<Self> {
+        Self::for_test_with_driver(
+            engine_id,
+            provider_device_identity,
+            event_domain_id,
+            storage_class,
+            Arc::new(super::ImmediateEventDomainDriver::new()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_test_with_driver(
+        engine_id: EngineId,
+        provider_device_identity: ProviderDeviceIdentity,
+        event_domain_id: EventDomainId,
+        storage_class: StorageClass,
+        event_domain_driver: Arc<dyn super::EventDomainDriver>,
+    ) -> Arc<Self> {
         let ingress = super::InputIngressContract::new(
             super::InputPlacementContract::new(|_, _| true),
             super::InputSignatureContract::new(|_, _, _, _| true),
@@ -333,7 +350,7 @@ impl ExecutableEngineSnapshot {
             provider_device_identity,
             CoreCapabilityBundle::default(),
             tenferro_cpu::CpuBackend::new(),
-            Arc::new(super::ImmediateEventDomainDriver::new()),
+            event_domain_driver,
             ingress,
             None,
         );

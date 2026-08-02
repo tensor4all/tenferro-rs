@@ -47,27 +47,28 @@ surface and behavior: `EventToken::origin`, `EventDomainRun::domain`, the
 `Error::EventDomain`, and the scheduler-owned test seam. The compiler did not
 report a test typo after the initial fixture type correction.
 
-The CUDA provider RED command was:
+The original CUDA source-only check was replaced by this hardware-independent
+behavioral check:
 
 ```text
 cargo test -p tenferro-gpu --features cuda --lib \
-  cuda_event_domain_has_no_generic_foreign_token_wait_fallback --no-fail-fast
+  cuda_event_domain_rejects_same_origin_incompatible_token_before_launch \
+  --no-fail-fast
 ```
 
-It ran one test and exited `101` at the assertion because
-`crates/tenferro-gpu/src/cubecl/event_domain.rs` still contains the generic
-foreign-token `_ => dependency.wait()?` fallback.
+It asserts the exact typed rejection fields and that the launch closure is not
+called before any native CUDA work.
 
-The WebGPU provider RED command was:
+The corresponding WebGPU behavioral check is:
 
 ```text
 cargo test -p tenferro-gpu --features webgpu --lib \
-  webgpu_event_domain_has_no_generic_foreign_token_wait_fallback --no-fail-fast
+  webgpu_event_domain_rejects_same_origin_incompatible_token_before_launch \
+  --no-fail-fast
 ```
 
-It ran one test and exited `101` at the assertion because
-`crates/tenferro-gpu/src/webgpu/event_domain.rs` still contains the same
-generic foreign-token fallback.
+It provides the same typed, pre-launch coverage for WebGPU without requiring a
+native adapter.
 
 ## Implementation decisions
 
@@ -105,7 +106,7 @@ compatibility overloads or a default origin.
   again before dependency classification, so a changed run cannot host-wait or
   forward a transfer dependency. It checks again after classification and
   immediately before every `enqueue`, so a stateful provider cannot launch with
-  stale provenance. The malicious stateful-run tests assert typed rejection,
+  stale provenance. The stateful-run tests assert typed rejection,
   zero launch, zero destination enqueue, and zero source host-waits where
   applicable.
 - `EventDomainRun::drain` documents and implements retirement of already-
@@ -116,9 +117,10 @@ compatibility overloads or a default origin.
   `EventDomainError::DrainPanicked`, and rejects every later operation with a
   typed lifecycle source. `ScheduledEventDomains` attempts every started run
   in first-use order and retains every failure in that order through the
-  existing suppressed-error chain. Drop is a one-shot, non-panicking fallback
-  for a skipped explicit drain; it retires only `Pending`, never retries a
-  terminal run, and may suppress its diagnostics because Drop has no `Result`.
+  existing suppressed-error chain. Drop is a one-shot best-effort fallback for
+  a skipped explicit drain; it retires only `Pending`, never retries a terminal
+  run, and may suppress its diagnostics because Drop has no `Result`. Explicitly
+  caught provider panics retain normal Rust panic-payload drop semantics.
 - Returned completion provenance is intentionally validated after the provider
   `enqueue` has returned: the launch has already happened by contract. The
   scheduler validates the token before recording it and before any downstream
@@ -133,8 +135,8 @@ compatibility overloads or a default origin.
 - CUDA and WebGPU retain separate provider-specific explicit drain/error paths.
   Their implicit run, submission-guard, and native-handle cleanup bodies call
   the one crate-private `tenferro-gpu` retirement helper as a one-shot,
-  non-panicking best-effort fallback. Phase 0 has no bespoke structured Drop
-  sink, panic-payload attestation, or untrusted-destructor threat model.
+  best-effort fallback. Explicitly caught provider panics retain normal Rust
+  panic-payload drop semantics; Phase 0 has no bespoke structured Drop sink.
 
 ## A0.2 baseline verification
 
@@ -230,10 +232,10 @@ Additional fresh checks passed:
 ## Residual risk after implementation
 
 Native CUDA/WebGPU event execution and Metal integration still require their
-respective hardware/provider environments. The common non-unwinding and
-one-shot retirement boundaries are in place, but Metal's event adapter will be
-implemented in its own follow-up slice. Drop-only fallback diagnostics are
-intentionally not surfaced; no bespoke provider diagnostic sink, panic-payload
-attestation, or untrusted-destructor threat model is part of this Phase 0
-cleanup. The A0.2 API intentionally has
+respective hardware/provider environments. The common retirement and one-shot
+boundaries are in place, but Metal's event adapter will be implemented in its
+own follow-up slice. Drop-only fallback diagnostics are
+intentionally not surfaced; no bespoke provider diagnostic sink is part of this
+Phase 0 cleanup. Explicitly caught provider panics retain normal Rust
+panic-payload drop semantics. The A0.2 API intentionally has
 no compatibility shim for the replaced unqualified event-token contract.

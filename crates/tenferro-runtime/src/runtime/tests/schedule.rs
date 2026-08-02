@@ -1,14 +1,17 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use super::super::execution::ScheduledEventDomains;
 use super::super::schedule::{
     EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledCollective,
     ScheduledGraph, ScheduledNode, ScheduledNodeKind, ScheduledOperation, ScheduledTransfer,
     UnsupportedScheduledNodeError,
 };
 use super::super::{
-    EngineId, FrozenTransferRegistry, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
+    EngineId, EventDomainDriver, EventDomainRun, FrozenTransferRegistry,
+    ImmediateEventDomainDriver, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
     ResolvedTransferRoute, RuntimeEpoch, RuntimeId, StorageClass, TransferProvider,
     TransferRequest,
 };
@@ -80,6 +83,18 @@ fn registry(routes: &[(&ExecutionLocation, &ExecutionLocation)]) -> FrozenTransf
             })
             .collect::<BTreeMap<_, _>>(),
     )
+}
+
+#[derive(Debug)]
+struct BeginRunProbe {
+    begin_runs: Arc<AtomicUsize>,
+}
+
+impl EventDomainDriver for BeginRunProbe {
+    fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
+        self.begin_runs.fetch_add(1, Ordering::SeqCst);
+        ImmediateEventDomainDriver::new().begin_run(domain)
+    }
 }
 
 fn instruction(
@@ -357,20 +372,28 @@ fn transfer_node_bridges_distinct_event_domains() {
 }
 
 #[test]
-fn collective_node_is_representable_but_execution_is_unsupported() {
+fn collective_node_is_rejected_by_production_preflight_before_begin_run() {
+    let begin_runs = Arc::new(AtomicUsize::new(0));
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(BeginRunProbe {
+        begin_runs: Arc::clone(&begin_runs),
+    });
     let graph = ScheduledGraph::for_test(vec![ScheduledNode::Collective(
-        ScheduledCollective::unsupported_for_test(),
+        ScheduledCollective::unsupported_for_test(driver),
     )]);
 
     assert!(graph.contains_collective());
     assert!(graph.validate().is_ok());
-    assert!(matches!(
-        graph.execute_for_test(),
-        Err(UnsupportedScheduledNodeError {
-            node_index: 0,
-            node_kind: ScheduledNodeKind::Collective,
-        })
-    ));
+    let error = ScheduledEventDomains::new(&graph)
+        .expect_err("unsupported collective must fail during production preflight");
+    let crate::Error::RuntimeStateSource { source, .. } = error else {
+        panic!("unsupported collective must be wrapped as RuntimeStateSource");
+    };
+    let unsupported = source
+        .downcast_ref::<UnsupportedScheduledNodeError>()
+        .expect("typed unsupported scheduled node source");
+    assert_eq!(unsupported.node_index, 0);
+    assert_eq!(unsupported.node_kind, ScheduledNodeKind::Collective);
+    assert_eq!(begin_runs.load(Ordering::SeqCst), 0);
 }
 
 #[test]

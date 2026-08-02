@@ -203,13 +203,14 @@ cases named by Phase 0 Task D1:
   callers/tests. Other explanatory `runtime_state` messages remain unchanged.
 - Explicit scheduler drain remains the normal diagnostic path: it attempts
   every run in deterministic order and preserves execution as primary. `Drop`
-  is only a one-shot, non-panicking emergency fallback when explicit drain was
+  is only a one-shot best-effort emergency fallback when explicit drain was
   skipped; Drop-only errors may be suppressed because `Drop` has no `Result`.
-  Phase 0 adds no structured Drop sink, panic-payload attestation, or
-  untrusted-destructor threat model.
+  Explicitly caught provider panics retain normal Rust panic-payload drop
+  semantics; Phase 0 adds no structured Drop sink.
 - The two obsolete CUDA/WebGPU foreign-token source-substring tests were
-  removed and their direct provider tests now assert typed rejection before
-  launch. Unrelated historical source checks remain outside this task.
+  removed and their hardware-independent provider admission tests now assert
+  typed rejection before launch. Unrelated historical source checks remain
+  outside this task.
 
 The two-device hardware execution test and any broader repository-wide audit
 remain deferred to later phases.
