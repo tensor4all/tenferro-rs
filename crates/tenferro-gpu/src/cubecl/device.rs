@@ -284,6 +284,7 @@ impl CudaDeviceError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::hash_map::DefaultHasher;
     use std::error::Error as _;
     use std::hash::{Hash, Hasher};
@@ -292,20 +293,76 @@ mod tests {
 
     use super::{discover_with, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, DiscoveryDriver};
 
+    #[derive(Copy, Clone)]
+    enum FakeDriverScenario {
+        Success,
+        InitializeFailure,
+        CountFailure,
+        NameFailure(CudaDeviceId),
+    }
+
     struct FakeDriver {
         names: Vec<String>,
+        scenario: FakeDriverScenario,
+        calls: RefCell<Vec<&'static str>>,
+        attempted_ordinals: RefCell<Vec<CudaDeviceId>>,
+    }
+
+    impl FakeDriver {
+        fn new(names: Vec<String>, scenario: FakeDriverScenario) -> Self {
+            Self {
+                names,
+                scenario,
+                calls: RefCell::new(Vec::new()),
+                attempted_ordinals: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn success(names: Vec<String>) -> Self {
+            Self::new(names, FakeDriverScenario::Success)
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.borrow().clone()
+        }
+
+        fn attempted_ordinals(&self) -> Vec<CudaDeviceId> {
+            self.attempted_ordinals.borrow().clone()
+        }
     }
 
     impl DiscoveryDriver for FakeDriver {
         fn initialize(&self) -> Result<(), BoxError> {
-            Ok(())
+            self.calls.borrow_mut().push("initialize");
+            match self.scenario {
+                FakeDriverScenario::InitializeFailure => {
+                    Err(Box::new(std::io::Error::other("fake initialize failure")))
+                }
+                FakeDriverScenario::Success
+                | FakeDriverScenario::CountFailure
+                | FakeDriverScenario::NameFailure(_) => Ok(()),
+            }
         }
 
         fn device_count(&self) -> Result<u32, BoxError> {
-            Ok(self.names.len() as u32)
+            self.calls.borrow_mut().push("device_count");
+            match self.scenario {
+                FakeDriverScenario::CountFailure => {
+                    Err(Box::new(std::io::Error::other("fake device count failure")))
+                }
+                FakeDriverScenario::Success
+                | FakeDriverScenario::InitializeFailure
+                | FakeDriverScenario::NameFailure(_) => Ok(self.names.len() as u32),
+            }
         }
 
         fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError> {
+            self.calls.borrow_mut().push("device_name");
+            self.attempted_ordinals.borrow_mut().push(device);
+            if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
+            {
+                return Err(Box::new(std::io::Error::other("fake device name failure")));
+            }
             Ok(self.names[device.ordinal() as usize].clone())
         }
     }
@@ -344,16 +401,14 @@ mod tests {
 
     #[test]
     fn discovery_of_zero_devices_returns_empty() {
-        let driver = FakeDriver { names: Vec::new() };
+        let driver = FakeDriver::success(Vec::new());
 
         assert!(discover_with(&driver).unwrap().is_empty());
     }
 
     #[test]
     fn discovery_preserves_ordinal_order_and_is_deterministic() {
-        let driver = FakeDriver {
-            names: vec!["NVIDIA A100".into(), "NVIDIA H100".into()],
-        };
+        let driver = FakeDriver::success(vec!["NVIDIA A100".into(), "NVIDIA H100".into()]);
         let expected = vec![
             CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA A100"),
             CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA H100"),
@@ -365,6 +420,80 @@ mod tests {
         assert_eq!(first, expected);
         assert_eq!(first, second);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+
+    #[test]
+    fn discovery_initialize_failure_returns_provider_neutral_error() {
+        let driver = FakeDriver::new(Vec::new(), FakeDriverScenario::InitializeFailure);
+
+        let error = discover_with(&driver).expect_err("initialize failure should be returned");
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Discovery {
+                operation: "initialize_driver",
+                source,
+            } if source.downcast_ref::<std::io::Error>().is_some()
+                && source.to_string() == "fake initialize failure"
+        ));
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("fake initialize failure")
+        );
+        assert_eq!(driver.calls(), vec!["initialize"]);
+    }
+
+    #[test]
+    fn discovery_count_failure_returns_provider_neutral_error() {
+        let driver = FakeDriver::new(vec!["NVIDIA A100".into()], FakeDriverScenario::CountFailure);
+
+        let error = discover_with(&driver).expect_err("count failure should be returned");
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Discovery {
+                operation: "enumerate_devices",
+                source,
+            } if source.downcast_ref::<std::io::Error>().is_some()
+                && source.to_string() == "fake device count failure"
+        ));
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("fake device count failure")
+        );
+        assert_eq!(driver.calls(), vec!["initialize", "device_count"]);
+    }
+
+    #[test]
+    fn discovery_name_failure_returns_error_without_partial_devices() {
+        let failed_device = CudaDeviceId::from_ordinal(1);
+        let driver = FakeDriver::new(
+            vec!["NVIDIA A100".into(), "NVIDIA H100".into()],
+            FakeDriverScenario::NameFailure(failed_device),
+        );
+
+        let error = discover_with(&driver).expect_err("name failure should be returned");
+
+        assert!(matches!(
+            &error,
+            CudaDeviceError::Discovery {
+                operation: "get_device_name",
+                source,
+            } if source.downcast_ref::<std::io::Error>().is_some()
+                && source.to_string() == "fake device name failure"
+        ));
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("fake device name failure")
+        );
+        assert_eq!(
+            driver.attempted_ordinals(),
+            vec![CudaDeviceId::from_ordinal(0), failed_device]
+        );
+        assert_eq!(
+            driver.calls(),
+            vec!["initialize", "device_count", "device_name", "device_name"]
+        );
     }
 
     #[test]
