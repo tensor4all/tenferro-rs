@@ -34,14 +34,6 @@ fn caller_selected_devices_and_engine_ids_flow_through_prepared_registration_ide
     let second_engine =
         EngineId::new("tenferro.test.cuda.selected.second.v1").expect("second test engine ID");
 
-    for (device, name) in [
-        (first_device, "NVIDIA A100"),
-        (second_device, "NVIDIA H100"),
-    ] {
-        super::super::device::select_device(device, vec![CudaDeviceInfo::new(device, name)])
-            .expect("the fake discovery record should admit its selected device");
-    }
-
     let first_identity =
         super::prepare_cuda_registration_identity(first_engine.clone(), first_device)
             .expect("first prepared registration identity");
@@ -69,8 +61,7 @@ fn unavailable_selection_preserves_requested_id_and_discovered_records() {
         CudaDeviceInfo::new(CudaDeviceId::from_ordinal(7), "NVIDIA H100"),
     ];
 
-    let error = super::super::device::select_device(requested, discovered.clone())
-        .expect_err("the fake discovery list must reject an unavailable device");
+    let error = super::super::device::unavailable_device_error(requested, discovered.clone());
 
     assert!(matches!(
         error,

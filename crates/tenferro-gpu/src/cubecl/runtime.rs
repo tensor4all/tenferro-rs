@@ -7,10 +7,11 @@ use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
 use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
-use cudarc::driver::sys::{CUcontext, CUdevice};
+use cudarc::driver::result::DriverError;
+use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 
-use super::device::{cuda_devices, select_device, CudaDeviceError, CudaDeviceId};
+use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId};
 
 /// Returns `true` if a CUDA device is available for CubeCL.
 ///
@@ -153,33 +154,37 @@ impl CudaRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`CudaDeviceError::Discovery`] when device discovery fails,
-    /// [`CudaDeviceError::Unavailable`] when the selected device is not
-    /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
-    /// context, or CubeCL client initialization fails.
+    /// Returns [`CudaDeviceError::Discovery`] when fallback discovery for an
+    /// invalid selected ordinal fails, [`CudaDeviceError::Unavailable`] when
+    /// that ordinal is not available, or [`CudaDeviceError::Initialization`]
+    /// when CUDA driver, runtime, context, or CubeCL client initialization
+    /// fails.
     pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
-        let discovered = cuda_devices()?;
-        select_device(device_id, discovered)?;
         let device_ordinal = usize::try_from(device_id.ordinal()).map_err(|source| {
             cuda_initialization_error(device_id, "convert_device_ordinal", source)
         })?;
         let cuda_ordinal = i32::try_from(device_id.ordinal()).map_err(|source| {
             cuda_initialization_error(device_id, "convert_cuda_ordinal", source)
         })?;
-        // INVARIANT: CUDA ordinals are device identifiers, not tensor extents;
-        // an unrepresentable ordinal becomes a CUDA invalid-device error.
-        cudarc::runtime::result::device::set(cuda_ordinal)
-            .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         cudarc::driver::result::init()
             .map_err(|source| cuda_initialization_error(device_id, "initialize_driver", source))?;
-        let cuda_device = cudarc::driver::result::device::get(cuda_ordinal)
-            .map_err(|source| cuda_initialization_error(device_id, "get_device", source))?;
+        let cuda_device = match cudarc::driver::result::device::get(cuda_ordinal) {
+            Ok(cuda_device) => cuda_device,
+            Err(source) if is_invalid_device_lookup(source) => {
+                return Err(unavailable_device_error(device_id, cuda_devices()?));
+            }
+            Err(source) => {
+                return Err(cuda_initialization_error(device_id, "get_device", source));
+            }
+        };
         let primary_context = CudaPrimaryContext::retain(cuda_device).map_err(|source| {
             cuda_initialization_error(device_id, "retain_primary_context", source)
         })?;
         unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }.map_err(
             |source| cuda_initialization_error(device_id, "set_current_context", source),
         )?;
+        cudarc::runtime::result::device::set(cuda_ordinal)
+            .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
@@ -292,6 +297,10 @@ impl CudaRuntimeState {
     }
 }
 
+fn is_invalid_device_lookup(source: DriverError) -> bool {
+    source.0 == CUresult::CUDA_ERROR_INVALID_DEVICE
+}
+
 fn cuda_initialization_error<E>(
     device: CudaDeviceId,
     operation: &'static str,
@@ -319,8 +328,19 @@ impl Drop for CudaRuntimeState {
 
 #[cfg(test)]
 mod identity_tests {
-    use super::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
+    use super::{gpu_available, is_invalid_device_lookup, CudaRuntime, CudaRuntimeIdentity};
     use crate::CudaBackend;
+    use cudarc::driver::{result::DriverError, sys::CUresult};
+
+    #[test]
+    fn selected_device_lookup_classifies_only_cuda_invalid_device() {
+        assert!(is_invalid_device_lookup(DriverError(
+            CUresult::CUDA_ERROR_INVALID_DEVICE
+        )));
+        assert!(!is_invalid_device_lookup(DriverError(
+            CUresult::CUDA_ERROR_INVALID_VALUE
+        )));
+    }
 
     #[test]
     fn cuda_runtime_identity_is_clone_stable_and_instance_scoped() {

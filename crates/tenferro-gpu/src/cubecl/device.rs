@@ -237,17 +237,13 @@ pub fn cuda_devices() -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
     discover_with(&CudaDriverApi)
 }
 
-pub(crate) fn select_device(
+pub(crate) fn unavailable_device_error(
     requested: CudaDeviceId,
     discovered: Vec<CudaDeviceInfo>,
-) -> Result<(), CudaDeviceError> {
-    if discovered.iter().any(|device| device.id() == requested) {
-        Ok(())
-    } else {
-        Err(CudaDeviceError::Unavailable {
-            requested,
-            discovered: discovered.into_boxed_slice(),
-        })
+) -> CudaDeviceError {
+    CudaDeviceError::Unavailable {
+        requested,
+        discovered: discovered.into_boxed_slice(),
     }
 }
 
@@ -399,7 +395,7 @@ mod tests {
     use tenferro_tensor::BoxError;
 
     use super::{
-        discover_with, select_device, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
+        discover_with, unavailable_device_error, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
         DiscoveryDriver,
     };
 
@@ -517,8 +513,7 @@ mod tests {
             CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
         ];
 
-        let error = select_device(requested, discovered.clone())
-            .expect_err("an undiscovered device must be rejected");
+        let error = unavailable_device_error(requested, discovered.clone());
 
         assert!(matches!(
             error,
