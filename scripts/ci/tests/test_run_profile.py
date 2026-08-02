@@ -1,4 +1,5 @@
 import io
+import shlex
 import tomllib
 import unittest
 from pathlib import Path
@@ -146,6 +147,63 @@ class RunProfileTests(unittest.TestCase):
             lines.index("+ python3 scripts/test-storage-ownership-contracts-v2.py"),
             lines.index("+ python3 scripts/check-storage-ownership-contracts.py"),
         )
+
+    def test_ci_config_base_is_appended_once_and_shell_quoted(self) -> None:
+        output = io.StringIO()
+        base = "refs/heads/base branch;not-a-command"
+        try:
+            run_profiles(
+                ["ci-config"],
+                dry_run=True,
+                output=output,
+                storage_ownership_base=base,
+            )
+        except TypeError as error:
+            self.fail(f"run_profiles does not accept a storage ownership base: {error}")
+
+        checker_lines = [
+            line
+            for line in output.getvalue().splitlines()
+            if "scripts/check-storage-ownership-contracts.py" in line
+        ]
+        self.assertEqual(
+            checker_lines,
+            [
+                "+ python3 scripts/check-storage-ownership-contracts.py "
+                f"--base-commit {shlex.quote(base)}"
+            ],
+        )
+
+    def test_storage_ownership_base_requires_ci_config(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "storage ownership base requires the ci-config profile"
+        ):
+            run_profiles(
+                ["fmt"],
+                dry_run=True,
+                output=io.StringIO(),
+                storage_ownership_base="base-commit",
+            )
+
+    def test_hosted_ci_config_supplies_event_base_with_full_history(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        ci_config_job = workflow.split("\n  ci-config:\n", maxsplit=1)[1]
+
+        self.assertIn("fetch-depth: 0", ci_config_job)
+        self.assertIn("EVENT_NAME: ${{ github.event_name }}", ci_config_job)
+        self.assertIn(
+            "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", ci_config_job
+        )
+        self.assertIn("PUSH_BASE_SHA: ${{ github.event.before }}", ci_config_job)
+        self.assertIn('if [ "${EVENT_NAME}" = pull_request ]; then', ci_config_job)
+        self.assertIn('elif [ "${EVENT_NAME}" = push ]; then', ci_config_job)
+        self.assertIn('BASE_SHA="${PR_BASE_SHA}"', ci_config_job)
+        self.assertIn('BASE_SHA="${PUSH_BASE_SHA}"', ci_config_job)
+        invocation = (
+            "python3 scripts/ci/run_profile.py ci-config "
+            '--storage-ownership-base "${BASE_SHA}"'
+        )
+        self.assertEqual(ci_config_job.count(invocation), 1)
 
     def test_full_profile_expands_named_profiles_once(self) -> None:
         expanded = expand_profiles(["full"])

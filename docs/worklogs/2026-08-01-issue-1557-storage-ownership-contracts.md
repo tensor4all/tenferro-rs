@@ -134,8 +134,14 @@ own log. Full tracked-tree cleanliness can reject a candidate with unrelated
 tracked edits, which is intentional because tracked source and build metadata
 are transitive inputs to cargo commands.
 
-CI base wiring is intentionally not part of this bootstrap amendment because
-`origin/main` still contains the v1 ledger. Retaining a v1 exception would be a
-compatibility shim. Immediately after this v2 bootstrap merges, CI must wire
-promotion validation to a v2 base and enforce it without exceptions. P1 is not
-fully complete until that follow-up wiring lands.
+The post-bootstrap CI follow-up gives the `ci-config` checkout full history and
+passes exactly one event-derived base to its existing production checker:
+`pull_request.base.sha` for pull requests or `github.event.before` for pushes.
+There is no second checker execution, v1 detection, fallback, or compatibility
+exception. Local `ci-config` runs remain structural when no base is supplied.
+
+This enforcement branch cannot be published until #1593 merges because its
+first hosted comparison must have a schema-v2 base. Once sequenced after that
+merge, the wiring closes the P1 CI-enforcement residual. The P1 baseline, P0
+control-plane artifact, and P2 root-claims artifact remain genuine future
+work.
