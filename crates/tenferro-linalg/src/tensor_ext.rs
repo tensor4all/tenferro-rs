@@ -107,13 +107,16 @@ pub type TypedEig<T> = (
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_linalg::TensorLinalgExt;
-/// use tenferro_tensor::Tensor;
+/// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-/// let mut backend = CpuBackend::new();
-/// let (_u, singular_values, _vt) = a.svd(&mut backend)?;
+/// let mut host = CpuBackend::new();
+/// let (_u, singular_values, _vt) = host.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |backend| a.svd(backend))
+///         .expect("CpuBackend must expose a CpuExecSession")
+/// })?;
 /// assert_eq!(singular_values.as_slice::<f64>()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -260,13 +263,18 @@ pub trait TensorLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_linalg::TensorReadLinalgExt;
-/// use tenferro_tensor::{Tensor, TensorRead};
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 ///
 /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-/// let mut backend = CpuBackend::new();
-/// let (_q, r) = TensorRead::from_tensor(&input).qr_read(&mut backend)?;
+/// let mut host = CpuBackend::new();
+/// let (_q, r) = host.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |backend| {
+///         TensorRead::from_tensor(&input).qr_read(backend)
+///     })
+///     .expect("CpuBackend must expose a CpuExecSession")
+/// })?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -453,16 +461,19 @@ pub trait TensorReadLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_linalg::TypedTensorLinalgExt;
-/// use tenferro_tensor::TypedTensor;
+/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
 ///
 /// let input = TypedTensor::<f64>::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![2.0, 0.0, 0.0, 4.0],
 /// )?;
-/// let mut backend = CpuBackend::new();
-/// let (_u, singular_values, _vt) = input.svd(&mut backend)?;
+/// let mut host = CpuBackend::new();
+/// let (_u, singular_values, _vt) = host.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |backend| input.svd(backend))
+///         .expect("CpuBackend must expose a CpuExecSession")
+/// })?;
 /// assert_eq!(singular_values.as_slice()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
