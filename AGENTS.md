@@ -32,6 +32,29 @@ Before touching AD rules, oracle replay, or linearized boundary code, review `RE
 
 The workspace contains active implementations alongside evolving APIs. Implementation work is allowed unless a task explicitly says otherwise.
 
+## Proportionate Safety And Validation
+
+Tenferro is scientific-computing software, not a security product or a trust
+boundary. Preserve Rust memory safety, aliasing and lifecycle soundness,
+numerical correctness, reproducibility, and explicit device behavior, but do
+not add security machinery for a malicious maintainer, repository checkout,
+local build tool, or CI runner unless a concrete task explicitly introduces
+that untrusted boundary.
+
+Prefer the simplest design that covers reachable failures. Every additional
+validation step should name the correctness failure or operational mistake it
+prevents. Avoid cryptographic anti-tamper protocols, nonce/challenge
+handshakes, redundant identity checks, and repeated validation whose only
+purpose is defending against trusted local tooling forging its own output.
+
+For a tracked artifact, an exact Git commit plus repository-relative path is
+normally sufficient to identify its contents when execution uses a tracked
+worktree that is clean against that commit. Add a content checksum only at a
+concrete untracked or cross-system artifact boundary where Git identity is
+unavailable or insufficient, and document that boundary. These proportionality
+rules do not relax validation required before unsafe memory access, mutable
+aliasing, asynchronous device retirement, or numerical execution.
+
 ## Repository Rule Source
 
 Keep cross-repository implementation rules in `tensor4all-agent-rules`; do not

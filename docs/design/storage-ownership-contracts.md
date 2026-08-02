@@ -98,29 +98,21 @@ requested range/ids, and resolved span identity, without raw addresses.
 ## Phase 1 verification ledger
 
 The machine-readable production registry is
-`scripts/storage-ownership-contracts.toml`. After the atomic migration, that
-file is the sole machine authority for the production graph and obligations.
-The Python tuples in `scripts/test-storage-ownership-contracts-v2.py`
-(`UNITS`, `EDGES`, and the obligation expectations) are independent verifier
-expectations used to detect drift; they are not a second production registry.
-The graph and tables in this document are explanatory documentation. The v2
-checker and runner are `scripts/check-storage-ownership-contracts.py` and
-`scripts/run-storage-ownership-contracts.py`; both are deliberately absent in
-their v2 form in this RED checkpoint (the first path still contains the
-superseded v1 checker). The executable RED specification is
-`scripts/test-storage-ownership-contracts-v2.py`; it must remain checked in
-and must invoke the exact production manifest as well as adversarial temporary
-repositories.
+`scripts/storage-ownership-contracts.toml`. It is the sole machine authority
+for the production graph, obligations, commands, and lifecycle state. The
+graph in this document is explanatory; the v2 checker and runner execute the
+same tagged rows and do not maintain parallel active/deferred tables. The
+checked-in v2 test suite derives counts from the manifest and checks the
+contractual active/deferred IDs without becoming another production registry.
 
-The checked-in production manifest, v1 checker, v1 test suite, and full v1
-fixture are current superseded deletion debt. They are owned by the immediate
-atomic checker implementation checkpoint and are not an accepted compatibility
-surface. That checkpoint must replace the manifest with exact v2 registry
-content, make the checker v2-only, delete/replace the v1 suite, and leave only
-the minimal schema-only legacy fixture for rejection. The RED contract records
-that migration deterministically rather than accepting a compatibility
-parser. After migration, the production manifest must equal the independent
-v2 verifier expectation exactly before checker success is required.
+The checker is v2-only, the old v1 test authority is deleted, and the retained
+v1 fixture contains only its schema marker so that an old manifest is rejected
+without a compatibility parser. The real design-document checker is an active
+P1 obligation. The current production state deliberately activates only
+`p1-ledger`, `p1-contract-document`, and `p1-api-parity`; P0 control-plane,
+the P1 element-access baseline, and P2 root claims remain deferred until their
+real artifacts and verifiers land. No missing deferred artifact is fabricated
+to make this phase terminal.
 
 ### One canonical graph
 
@@ -199,6 +191,8 @@ shared only when its complete typed value and artifact binding are identical.
 A promotion compares a base and candidate manifest. For every promoted row it
 must preserve the same obligation ID, artifact value, command value, and
 registry ownership, changing only the tagged state from deferred to active.
+The complete registry value—units, gates, edges, and cohorts—must be exactly
+unchanged between base and candidate; graph edits are not promotions.
 Every member obligation of an atomic cohort must make that transition in the
 same candidate; partial cohort activation is rejected. A changed artifact,
 command, ID, unit, or gate is a new obligation, not a promotion.
@@ -207,114 +201,72 @@ Every registered unit owns at least one required obligation. A unit is
 complete only when all of its required obligations are active and the
 candidate-bound receipt contains a successful execution result for every one
 of them. An empty obligation set is invalid rather than vacuously complete.
+If any obligation in a target unit is active, every obligation in each direct
+incoming source unit must already be active. This prerequisite is derived from
+the registry edges and obligation tagged states, without a transitive or
+parallel lifecycle table. In particular, P2 cannot activate while the P1
+element-access baseline remains deferred.
 In particular, CUTOVER cannot activate until P0 and P5 are each complete by
 this rule; merely naming them as cohort prerequisites is not proof.
 
-The runner emits a candidate-bound receipt containing:
+The trusted runner emits a small candidate-bound execution log:
 
 ```json
 {
   "schema": "tenferro.storage-ownership-receipt.v1",
-  "base_commit": "...",
-  "candidate_commit": "...",
-  "base_manifest_sha256": "...",
-  "candidate_manifest_sha256": "...",
+  "candidate_commit": "HEAD from git rev-parse",
+  "base_commit": null,
   "executions": [
     {
-      "obligation_id": "...",
-      "artifact_id": "...",
-      "artifact_sha256": "...",
-      "command_id": "...",
-      "command_sha256": "...",
-      "candidate_commit": "...",
-      "exit_code": 0,
-      "argv": ["/resolved/python", "/resolved/marker.py", "/resolved/artifact"],
-      "cwd": "/resolved/repository",
-      "artifact_path": "/resolved/artifact",
-      "executable": {
-        "requested": "python3",
-        "resolved": "/resolved/python",
-        "sha256": "..."
-      },
-      "observation_nonce": "...",
-      "observation_challenge": "..."
+      "obligation_id": "p1-ledger",
+      "argv": ["python3", "scripts/check-storage-ownership-contracts.py"],
+      "cwd": ".",
+      "artifact_path": "scripts/storage-ownership-contracts.toml",
+      "exit_code": 0
     }
   ]
 }
 ```
 
-The receipt top-level key set is exactly `schema`, `base_commit`,
-`candidate_commit`, `base_manifest_sha256`, `candidate_manifest_sha256`, and
-`executions`. None is optional, and no `terminal`, status, or other parallel
-state field is permitted. The RED suite removes each required field in turn
-and adds one `terminal` field; every mutation requires `E_RECEIPT_SHAPE` with
-exactly string fields `field`, `expected`, and `actual` plus a non-empty human
-message. Missing fields report `expected = "present"`, `actual = "missing"`;
-the extra field reports `expected = "absent"`, `actual = "present"`.
+The top-level fields are exactly `schema`, `candidate_commit`, `base_commit`,
+and `executions`. `base_commit` is a fixed field and is null when no
+transition comparison was requested. Each execution contains only its
+obligation ID, canonical manifest argv, repository-relative cwd and artifact
+path, and process exit status. Executions are sorted by obligation ID. Command
+and artifact IDs are derived from the candidate row and are not repeated in the
+receipt. Git object IDs are opaque strings returned by Git; no length or format
+is assumed.
 
-The runner executes each active typed command exactly once, passes the exact
-artifact binding, and records one result per active obligation. Every
-execution must bind the manifest-derived `obligation_id`, `artifact_id`, and
-`command_id`, repeat the actual candidate commit, and carry the
-manifest-derived artifact and command digests. `argv` is the child's normalized
-observed process argv: its first element is the canonical resolved path chosen
-by `shutil.which(requested, path=current-PATH)`, with the requested executable
-separately recorded and its resolved path plus SHA-256 identity in
-`executable`; `cwd` and
-`artifact_path` are resolved absolute paths observed by the child.
-`observation_nonce` and `observation_challenge` bind that observation to its
-command, cwd, artifact, and bytes. The receipt also carries the exact
-base/candidate manifest digests. It does not execute deferred commands.
-The checker validates the receipt; it does not manufacture command results.
-Both tools resolve `candidate_commit` from `git rev-parse HEAD` and
-load the base manifest from the same repository-relative manifest path at the
-actual `base_commit` Git object. The supplied base must be an ancestor of
-HEAD. Thus matching fake strings in the CLI and receipt cannot substitute for
-repository history. The checker resolves every artifact and command path with
-filesystem-aware traversal and symlink checks. Terminal status is derived
-only from zero deferred obligations, complete atomic promotions, and one
-successful candidate-bound receipt result for every required obligation. No
-boolean terminal switch can make a manifest complete.
+The runner executes every active typed argv exactly once and never executes a
+deferred row. The checker derives terminal state from the tagged rows and
+successful executions; a receipt cannot declare terminality. Candidate identity
+is `git rev-parse HEAD`, and an optional base must be an ancestor of that
+candidate. Promotion changes only deferred state and preserves the row's
+obligation, unit, gates, artifact, and command values. Atomic cohort members
+must transition together and their prerequisites must already be active. The
+registry itself is immutable across the promotion comparison.
 
-Digest canonicalization is part of the receipt contract: manifest digests are
-SHA-256 over the exact manifest bytes, artifact digests are SHA-256 over the
-resolved repository file bytes, and command digests are SHA-256 over the
-UTF-8, sorted-key, compact JSON encoding of the typed command value. A receipt
-with a correct-looking ID but a digest for another candidate is invalid. The
-verification harness independently recomputes all four digest classes and
-mutates artifact bytes, the base-manifest digest, and candidate files after a
-receipt. An in-repository symlink is retargeted after receipt. A separate
-machine-readable capability test is required before the symlink cases; an
-unsupported host is an explicit failure/event, never a skipped or optional
-green result. On capable hosts the checker must reject the changed resolved
-artifact bytes.
+This is a trusted-runner execution log, not a security attestation. Repository
+source, maintainers, build tools, and the CI runner are trusted. For a tracked
+manifest, verifier, command target, or artifact, the candidate commit and
+repository-relative path identify the bytes. Before executing or accepting a
+receipt, the tools require the tracked tree to match candidate `HEAD` using a
+single Git cleanliness check. Untracked or ignored receipt output, build
+targets, logs, and unrelated user files are allowed. The check is operational
+provenance, not anti-tamper machinery, and is not applied to a globally empty
+worktree.
 
-Each fixture child writes one `tenferro.storage-ownership-observation.v1`
-JSON object under the temporary repository's observation directory. It records
-the raw child-visible process argv, the separately named interpreter/process
-image, a normalized argv for exact comparison, resolved cwd, resolved artifact
-path and bytes digest, executable identity, and a fresh nonce/challenge.
-Executable identity uses portable `shutil.which`/path resolution and a bytes
-SHA-256; it does not depend on Linux `/proc`. The RED
-suite requires exactly one observation for every active obligation, unique
-nonces/challenges, exact command/artifact/cwd matches, and no deferred
-observations. Missing, duplicate, forged, or swapped observations use the
-precise `E_RECEIPT_OBSERVATION_BINDING` fields `obligation_id`, `field`,
-`expected`, and `actual`. Receipt mutations of `argv`, `cwd`, executable
-identity, artifact path, nonce, or challenge use
-`E_RECEIPT_EXECUTION_BINDING` with the same exact field set.
+The checker confines the manifest, artifact, cwd, and path-bearing argv values
+to the repository before execution. Resolution follows ordinary filesystem
+paths and rejects a path whose symlink resolves outside the repository. There
+is no post-receipt retarget protocol. No content checksum is part of this
+tracked-artifact contract; a checksum would be justified only for a concrete
+untracked or cross-system artifact boundary, which Phase 1 does not introduce.
 
-The generic runner path also exercises the existing canonical `cargo-test`
-obligation: a temporary repository provides an executable `bin/cargo` PATH shim
-only in the runner subprocess environment. The shim accepts and records the
-untouched canonical `cargo test -p tenferro-runtime --test
-execution_engine_identity` argv and emits the same child-observation schema;
-all other active fixture obligations remain Python markers. No fixture command
-kind, test mode, production shim path, or weakened production allowlist is
-introduced, and the checker must continue to reject Python argv or the shim
-path for that production cargo kind. The nonce/challenge demonstrates an
-independently emitted child observation under this test model; it is not a
-cryptographic defense against a malicious runner that forges child output.
+The generic runner test supplies a temporary repository with the real active
+Python verifiers and a local `cargo` executable that records the exact argv.
+This tests structured argv execution and exit-status propagation without adding
+a production command mode, child protocol, or runner escape hatch.
 
 The structural shape is intentionally explicit. A production row has one
 artifact, one command, and one tagged state; the state is not split into
@@ -333,7 +285,7 @@ state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activ
 Promotion changes only `state.kind` from `deferred` to `active`. The artifact
 ID/path/kind, command ID/kind/argv/cwd/path arguments, unit, and gates remain
 byte-for-byte identical. A changed value is a new obligation and cannot be
-accepted as a promotion. The RED specification fixes the checker invocation
+accepted as a promotion. The v2 specification fixes the checker invocation
 for base/candidate comparison and the receipt fields so that a later checker
 cannot silently weaken this rule.
 
@@ -343,14 +295,17 @@ The v2 checker accepts `--root`, repository-relative `--manifest`, optional
 same repository-relative `--manifest`, `--base-commit`, `--receipt-out`, and
 `--diagnostics-json`.
 Neither tool accepts a caller-supplied candidate commit: candidate identity is
-HEAD. Neither tool may infer a different manifest or command target from the
+HEAD. An optional base revision is canonicalized with Git using
+`git rev-parse --verify <revision>^{commit}` before promotion comparison; the
+receipt stores that resulting opaque object ID, never a branch or revision
+alias. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
 Availability is an explicit CLI contract, not source inspection or path
-existence. Both future tools must accept `--contract-schema`, exit successfully
+existence. Both tools accept `--contract-schema`, exit successfully
 without loading a manifest, write exactly one JSON object to stdout, and write
-nothing to stderr. The RED verifier invokes the script with the current Python
+nothing to stderr. The v2 suite invokes the script with the current Python
 interpreter and accepts the result only when its parsed object equals the
 corresponding contract below including the complete `options` list; comments,
 unused constants, an existing file, non-JSON output, extra keys, stderr noise,
@@ -416,135 +371,41 @@ Checker and runner failures have a stable machine-readable envelope when
 ```
 
 `code` and the identifying `fields` are compatibility-stable within schema
-v1; human `message` text is not. The RED suite therefore asserts codes and
+v1; human `message` text is not. The v2 suite therefore asserts codes and
 relevant IDs/paths plus a non-empty human message, without freezing message
 wording. Each one-fault case requires the exact one-code set and the exact
-field-key shape registered by the RED harness; duplicate codes, unknown codes,
+field-key shape registered by the suite; duplicate codes, unknown codes,
 extra envelope keys, missing or empty `message`, or extra identifying fields
 are failures. This prevents a checker from passing a negative case by emitting
 every known code or an unrelated diagnostic.
 
-The v2 diagnostic code registry is grouped by failed invariant: `E_SCHEMA_VERSION`,
-`E_SCHEMA_PARALLEL_TABLE`, `E_SCHEMA_UNKNOWN_TABLE`,
-`E_OBLIGATION_TAGGED_STATE`, `E_UNIT_OBLIGATION_MISSING`,
-`E_GRAPH_P2_PREREQUISITE`, `E_GRAPH_DUPLICATE_EDGE`,
-`E_GRAPH_UNKNOWN_UNIT`, `E_COHORT_DEFINITION`,
-`E_COHORT_PARTIAL_PROMOTION`, `E_COHORT_PREREQUISITE_INCOMPLETE`,
-`E_OBSOLETE_OWNERSHIP_TABLE`, `E_ARTIFACT_SYNTHETIC_TERMINAL`,
-`E_ARTIFACT_DUPLICATE_TARGET`, `E_ARTIFACT_MISSING`, `E_PATH_ESCAPE`,
-`E_PATH_SYMLINK_ESCAPE`, `E_DEFERRED_ARTIFACT_EXISTS`,
-`E_COMMAND_KIND`, `E_COMMAND_ARGV`, `E_COMMAND_ARGV_BINDING`,
-`E_COMMAND_ARGV_LENGTH`,
-`E_COMMAND_CWD_ESCAPE`, `E_COMMAND_PATH_ESCAPE`,
-`E_COMMAND_ARGV_PATH_ESCAPE`, `E_COMMAND_CWD_SYMLINK_ESCAPE`,
-`E_COMMAND_ARGV_SYMLINK_ESCAPE`, `E_COMMAND_ARTIFACT_BINDING`,
-`E_COMMAND_TARGET_BINDING`, `E_COMMAND_ID_CONFLICT`, `E_COMMAND_FAILED`,
-`E_PROMOTION_IDENTITY`, `E_RECEIPT_COMMIT`, `E_RECEIPT_SHAPE`,
-`E_RECEIPT_MANIFEST_DIGEST`,
-`E_RECEIPT_DIGEST`, `E_RECEIPT_PATH_IDENTITY`, `E_RECEIPT_EXECUTION_BINDING`,
-`E_RECEIPT_INCOMPLETE`, and
-`E_RECEIPT_OBSERVATION_BINDING`, `E_TERMINAL_DECLARED`. Command kinds have an
-exact allow-listed `argv` vector:
-`E_COMMAND_ARGV_BINDING` has exactly `command_id`, `index`, `expected`, and
-`actual`; the RED suite exercises every index of every canonical command
-vector. `E_COMMAND_ARGV_LENGTH` has exactly `command_id`, `expected`, and
-`actual`, where `expected` and `actual` are integer vector lengths. The RED
-suite checks both one missing final argument and one appended extra argument
-for every canonical command ID. `E_COMMAND_CWD_ESCAPE` has exactly `command_id` and `cwd`, and
-covers absolute cwd values and cwd values whose normalized path escapes the
-repository. `E_COMMAND_ARGV_PATH_ESCAPE` has exactly `command_id`, `index`,
-and `argument`; every path-bearing argv element is canonicalized independently
-of `path_args`, so lying by omitting an argv value from `path_args` cannot make
-it safe. `E_COMMAND_CWD_SYMLINK_ESCAPE` has exactly `command_id` and `cwd`;
-`E_COMMAND_ARGV_SYMLINK_ESCAPE` has exactly `command_id`, `index`, and
-`argument`. These symlink diagnostics are also required on post-receipt
-revalidation when a previously internal command path is retargeted outside
-the repository. A previously internal command path retargeted to a different
-in-repository executable with identical bytes is instead an
-`E_RECEIPT_PATH_IDENTITY` case with `field = "argv[1].resolved_path"` in the
-RED fixture; confinement and content digest checks must both pass first. The
-execution-binding code has exactly `obligation_id`,
-`field`, `expected`, and `actual` fields and is used for a swapped or forged
-execution identity. Receipt-level manifest digest failures use
-`E_RECEIPT_MANIFEST_DIGEST` with exactly `field`, `expected`, and `actual`;
-obligation-level artifact or command digest failures use `E_RECEIPT_DIGEST`
-with exactly `obligation_id`, `field`, `expected`, and `actual`. Resolved cwd,
-command argv, or artifact identity changes after receipt use
-`E_RECEIPT_PATH_IDENTITY` with that same obligation-scoped field set; its
-`expected` value is the receipt-time resolved identity and its `actual` value
-is the post-receipt resolved identity, not merely a content digest. For both
-manifest and obligation-level digest diagnostics, `expected` is the current
-canonical recomputation and `actual` is the recorded receipt claim. Adding a
-code is compatible;
-changing the meaning or required identifying fields of an existing code
-requires a diagnostic schema revision.
+The v2 diagnostic registry covers schema shape, tagged lifecycle state,
+registry graph/cohort and direct-prerequisite rules, artifact/path confinement,
+exact command allowlists, promotion identity and registry immutability,
+command exit status, receipt shape and candidate binding, tracked-tree
+provenance, and derived terminality. Each diagnostic has one stable code, an
+exact identifying field set, and a non-empty human message. In particular,
+command argv binding reports the command ID, index, expected value, and actual
+value; path failures are emitted before command identity comparisons; and
+receipt execution binding reports the obligation ID, field, expected value,
+and actual value. The suite asserts the structured envelope and the relevant
+fields without freezing human wording.
 
-The RED suite includes both a structured temporary repository for adversarial
-path, graph, promotion, and command-binding cases and an integration case that
-invokes the checked-in production manifest. Temporary repositories contain
-real files and real symlinks; they do not stand in for the production gate.
+The v2 suite uses temporary repositories for reachable path, graph, promotion,
+command, receipt, and exit-status mistakes, plus an integration case for the
+checked-in production manifest. Counts are derived from the parsed manifest;
+the suite does not preserve a migration-event registry or historical totals.
+It verifies that only the three currently implementable P1 rows are active.
+P0 control-plane, the real-measurement P1 baseline, and P2 root claims remain
+deferred, and the remaining future rows are not executed or materialized.
+Fake active artifacts are rejected because they would turn missing scientific
+evidence into a green lifecycle state rather than proving the underlying work.
 
-The command-argv RED cases mutate every argv index for every distinct canonical
-command ID and separately remove the final argument or append an extra
-argument. If a future manifest shares an ID, every occurrence is mutated
-together, so the expected binding or length diagnostic cannot be masked by
-`E_COMMAND_ID_CONFLICT`; the tests assert exact fields and check the complete
-coordinate and length-case coverage sets and multiplicities.
-
-After the frozen legacy predicate is false, the atomic migration assertion
-lexically inventories every regular `scripts/**/*.py` and `scripts/**/*.toml`
-file, including renamed or moved tooling. Exact storage-v1 schema signatures
-remain forbidden wherever found. Generic words such as `fixtures`, `legacy`,
-`v1`, or compatibility flags are examined only when the file path or source
-also carries a storage-ownership tooling anchor; they are not global filename
-or vocabulary bans. Old parser/model/table/suite signatures use the same
-storage-specific co-occurrence rule. The exact old suite path is always
-forbidden, while the canonical checker path is required and its v2 identity is
-proved by the exact CLI schema probe rather than source spelling. This
-inventory is text-only deletion-debt evidence: it does not parse, load, or
-execute a v1 manifest and is not a v1 compatibility parser.
-
-The only allowances are exact path+token entries for the schema-only negative
-fixture, the canonical checker path, and explicitly enumerated legacy
-rejection constants/test strings in this v2 RED suite. Each allowance has a
-purpose and frozen occurrence count; a new occurrence or missing occurrence
-is an allowlist-drift failure. Temporary-tree tests cover clean v2 tooling,
-renamed checker/suite/TOML/parser/shim surfaces with explicit storage anchors,
-and unrelated tooling that legitimately uses fixture, legacy, v1, and
-compatibility vocabulary without producing a violation.
-
-The exact-legacy branch raises the typed migration RED before this inventory
-runs. Any partial migration therefore enters the post-migration assertions and
-is an unexpected failure. The atomic implementation commit must delete the
-four frozen v1 SHA-256 values, `LEGACY_V1_QUARTET_SHA256`,
-`_legacy_tooling_is_current`, `MIGRATION_CAUSE`, the literal migration-cause
-slug, and its `RED_EXPECTED_FAILURES` event; none is a compatibility path. An
-independent post-migration source assertion constructs the string/hash removal
-targets from split pieces so it does not preserve them itself. A separate exact
-runtime membership assertion rejects the migration test's registry event
-regardless of source spelling. Mutation self-tests prove that retaining any
-one source target or the registry event is detected.
-
-The RED command emits a machine-readable
-`tenferro.storage-ownership-red-report.v1` record. Its expected-failure set is
-keyed by test and subtest parameters and records both a named cause and the
-expected exception type. The runner compares observed failure/error/subtest/
-skip events with that exact set as a multiset, preserves duplicate
-multiplicity, and requires equal total event counts. An unlisted event,
-duplicate event, wrong exception/cause, skipped required test, or missing
-expected event makes the RED harness itself fail, so an implementation cannot
-relabel an unexpected regression as intentional.
-
-The base RED snapshot has completed P0, P1, and P2. All 15 entries in the
-canonical deferred-obligation tuple remain deferred. For every entry the RED
-suite verifies exact obligation ID, unit, gates, artifact ID/path/kind,
-deferred owner/activation phase and in-place promotion identity, plus command
-ID/kind/argv/cwd/path arguments and artifact binding before considering
-execution. The expected artifact-missing subtest registry is derived directly
-from that tuple. If an artifact exists, only the already-validated canonical
-argv is executed from its exact canonical cwd; a fabricated file alone cannot
-promote the obligation, and changed artifact or command identity is rejected.
-No command from a noncanonical manifest is executed.
+Command tests cover exact typed argv and repository path confinement, including
+the ordering rule that a path escape is reported before a later command-identity
+comparison. The runner integration uses the real active Python verifiers and a
+temporary local cargo executable to prove that the canonical argv is executed;
+this fixture is not a production command mode or a lifecycle authority.
 
 P4 and P5 remain deferred;
 the CUTOVER candidate activates every required P4/P5 obligation and obtains
@@ -1279,19 +1140,19 @@ Phase 4 proves the constant-count boundary with an instrumented fake provider
 (`p4-traversal-resolution-counts`). Phase 10 adds a source-contract proof
 (`p10-element-hot-path-structure`) and verifies release traversal performance
 against both a direct-slice control and the immutable Phase 1 pre-redesign
-receipt (`p10-storage-traversal-performance`). Timing alone is not a sound CI
+report (`p10-storage-traversal-performance`). Timing alone is not a sound CI
 proof; the deterministic counters and structural checks are mandatory even
 when a machine-dependent benchmark comparison is reported.
 
-Before redesign work resumes, the P1 owner checks out the exact pre-redesign
-source commit and runs the release capture utility once. That one-time command
-records `element_access` direct-slice, contiguous owner/view, and representative
-strided results in `docs/testing/storage-element-access-baseline.json`, then
-adds the immutable report in the P1 ledger commit. The report records the
-measured source commit, benchmark source digest, capture command/tool digest,
-optimized toolchain/profile, machine/CPU, pinned thread configuration, sample
-settings, and machine-readable results. The active canonical command is
-deliberately a read-only verifier:
+The P1 element-access baseline remains deferred in this phase. At the next P1
+checkpoint, the owner checks out the exact pre-redesign source commit and runs
+the release capture utility once. That command records `element_access`
+direct-slice, contiguous owner/view, and representative strided results in
+`docs/testing/storage-element-access-baseline.json`, then adds the measured
+report to the ledger. The report records the measured source commit,
+benchmark source path, capture command/tool path, optimized toolchain/profile,
+machine/CPU, pinned thread configuration, sample settings, and machine-readable
+results. The active canonical command is deliberately a read-only verifier:
 
 ```text
 python3 scripts/verify-storage-element-access-baseline.py \
@@ -1299,17 +1160,12 @@ python3 scripts/verify-storage-element-access-baseline.py \
 ```
 
 It never benchmarks or rewrites the report. On every later candidate it checks
-the existing bytes, loads the measured commit with `git show`, rehashes that
-commit's benchmark source and capture tool, and validates the complete report
-schema/configuration. Thus an active obligation can run repeatedly without
-moving the baseline. The v2 runner digest-binds the report once at the P1
-ledger commit and the gate coordinator persists that original receipt as
-`.storage-ownership-receipts/p1-element-access-baseline.json`; later candidate
-receipts use candidate-specific paths and must not overwrite it. P10 takes the
-immutable report and original receipt explicitly and fails if the receipt's
-candidate, artifact digest, obligation ID, command identity, or report
-configuration does not match. A benchmark added after the redesign or an
-unmeasured `--no-run` build cannot impersonate the baseline.
+the tracked report at its exact repository-relative path and uses the recorded
+measurement commit and source paths as provenance. The exact Git commit plus
+path identifies tracked bytes; no content checksum or saved baseline receipt
+is required. P10 consumes the baseline report and its commit/path provenance
+directly. A benchmark added after the redesign or an unmeasured `--no-run`
+build cannot replace the deferred measured artifact.
 
 ### Ordering rules
 
@@ -1348,7 +1204,7 @@ the descriptor against that value's own claim/pin as defense in depth (I7):
 
 There is no second receiver or free span to compare. A test-only corruption
 hook may alter a private descriptor after resolution, but it cannot replace
-the resolved root, claim, pin, or the pin-state access vtable. RED must assert
+the resolved root, claim, pin, or the pin-state access vtable. Tests must assert
 that no safe signature contains an independently supplied provider/dispatch
 receiver together with a resolved capability or span.
 
@@ -2045,14 +1901,14 @@ The v2 ledger carries these executable obligations:
 
 | Obligation | Phase | Artifact and proof |
 |---|---|---|
-| `p1-element-access-baseline` | P1 | capture once against the exact pre-redesign commit, digest-bind the machine-readable direct-slice/contiguous/strided report and original receipt, then run only the read-only verifier on later candidates |
+| `p1-element-access-baseline` | P1 | remain deferred until the real measured direct-slice/contiguous/strided report and verifier land; later candidates use its exact Git commit and repository-relative path |
 | `p3-static-rank-preservation` | P3 | compile/API contract for owner, immutable view, and mutable view preserving `R` |
 | `p3-as-view-zero-allocation` | P3 | warmed allocator/refcount/provider-clone/layout-clone counters plus borrow-only source contract for owner/view-mut reborrows, including dynamic rank |
 | `p4-traversal-resolution-counts` | P4 | fake provider counters proving resolve/map/lease/dispatch counts are independent of element count |
 | `p4-prepared-access-api` | P4 | compile/runtime and source contract for typed failure, enum-authoritative preparation, contiguous slice/iterator access, and incremental strided iteration |
 | `p6-reinterpret-rank-policy` | P6 | behavior and compile contract for every rank-changing reinterpretation |
 | `p10-element-hot-path-structure` | P10 | source-contract check that provider/capability resolution is outside element loops |
-| `p10-storage-traversal-performance` | P10 | release contiguous and representative strided report that explicitly verifies and consumes the P1 result JSON and its digest-bound receipt |
+| `p10-storage-traversal-performance` | P10 | release contiguous and representative strided report that explicitly verifies and consumes the P1 result JSON plus its measured commit/path provenance |
 | `p10-static-rank-codegen` | P10 | release codegen/assembly report for a contiguous static-rank typed loop |
 | `p12-element-access-guide` | P12 | executable content check for the guide and required rustdoc cost claims |
 | `p12-element-access-examples` | P12 | release runnable owner/view/view-mut traversal tutorial |
@@ -2208,7 +2064,7 @@ Common validation commands:
 | 8 (#1564) | GPU backend design, device guide, Apple tutorials; synchronization/map transitions vs transfers; one owner with multiple access endpoints | common commands |
 | 9 (#1565) | detached vs scoped ownership, outcome recovery, detach vs cancel, extraction; G3 state tables kept current | common commands |
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
-| 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate SHA | common commands |
+| 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
 
 The Phase 12 element-access section must distinguish O(rank) checked random
@@ -2221,7 +2077,7 @@ states whether the operation allocates, dispatches through a provider,
 synchronizes, performs per-element bounds/stride work, preserves static rank,
 or can transfer/materialize. The source-blind reviewer must be able to select
 the zero-overhead path without reading implementation source.
-| 13 (#1567) | final worklog linking candidate SHA, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
+| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 ## G7. AD value retention
 
@@ -2417,10 +2273,11 @@ phase issues carry the full inventories; this index is the cross-reference.
 ## Relationship to phase issues
 
 - #1556 and #1557 are independent roots of the canonical DAG; #1557 owns the
-  v2 ledger and its executable RED/green gate.
-- The active P1 `p1-element-access-baseline` receipt is created before the
-  redesign and is immutable evidence consumed by P10. It is a measurement
-  anchor, not a production compatibility shim or retained implementation path.
+  v2 ledger and its executable test gate.
+- `p1-element-access-baseline` is deferred until the real measured report and
+  verifier exist. Its later tracked report will be identified by its measured
+  Git commit and repository-relative path; this task does not benchmark or
+  capture it.
 - #1558 owns the root pin, non-`Clone` claim, and the single typed provider
   bridge. #1560 owns access/retirement. #1561 owns groups and generational
   descriptors. None waits for the public host cutover.
