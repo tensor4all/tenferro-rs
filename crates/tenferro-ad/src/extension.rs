@@ -31,13 +31,14 @@ pub use tenferro_runtime::extension::{
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::{Tensor, TensorValue};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let value = TensorValue::from_tensor(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 /// );
 /// let eager = adopt_untracked_eager_value(ctx, value);
 /// assert_eq!(eager.shape(), &[1]);
 /// assert!(!eager.tracks_grad());
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 #[must_use]
 pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -> EagerTensor {
@@ -54,13 +55,14 @@ pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::Tensor;
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 ///     ctx,
 /// ).unwrap();
 /// let _ = &x;
 /// let _apply = apply_eager;
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 /// # Errors
 ///
