@@ -221,7 +221,7 @@ fn webgpu_event_domain_rejects_same_origin_incompatible_token_before_launch() {
     let error = super::super::event_domain::admit_webgpu_tokens(
         std::slice::from_ref(&dependency),
         domain,
-        || {
+        |_| {
             launches += 1;
             Ok(())
         },

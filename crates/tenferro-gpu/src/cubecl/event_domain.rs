@@ -10,7 +10,7 @@ use tenferro_runtime::runtime::{EventDomainDriver, EventDomainId, EventDomainRun
 use tenferro_runtime::Error as RuntimeError;
 
 use super::CudaRuntime;
-use crate::event_domain_admission::{admit_event_token, admit_event_tokens};
+use crate::event_domain_admission::admit_event_tokens;
 use crate::event_retirement::{
     best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
 };
@@ -28,10 +28,10 @@ impl CudaEventDomainDriver {
     }
 }
 
-pub(crate) fn admit_cuda_tokens<R>(
-    dependencies: &[Arc<dyn EventToken>],
+pub(super) fn admit_cuda_tokens<'a, R>(
+    dependencies: &'a [Arc<dyn EventToken>],
     expected: EventDomainId,
-    launch: impl FnOnce() -> tenferro_runtime::Result<R>,
+    launch: impl FnOnce(&[&'a CudaEventToken]) -> tenferro_runtime::Result<R>,
 ) -> tenferro_runtime::Result<R> {
     admit_event_tokens::<CudaEventToken, R>(dependencies, expected, "non-CUDA event token", launch)
 }
@@ -68,7 +68,7 @@ impl EventDomainRun for CudaEventDomainRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        admit_cuda_tokens(dependencies, self.domain, || {
+        admit_cuda_tokens(dependencies, self.domain, |dependencies| {
             self.stream_id
                 .executes(|| self.enqueue_on_current_stream(dependencies, launch))
         })
@@ -98,7 +98,7 @@ impl EventDomainRun for CudaEventDomainRun {
 impl CudaEventDomainRun {
     fn enqueue_on_current_stream(
         &mut self,
-        dependencies: &[Arc<dyn EventToken>],
+        dependencies: &[&CudaEventToken],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
         self.runtime
@@ -106,16 +106,11 @@ impl CudaEventDomainRun {
             .map_err(RuntimeError::from)?;
         let stream = raw_stream(&self.runtime).map_err(RuntimeError::from)?;
 
-        for dependency in dependencies {
-            let token = admit_event_token::<CudaEventToken>(
-                dependency.as_ref(),
-                self.domain,
-                "non-CUDA event token",
-            )?;
+        for &dependency in dependencies {
             unsafe {
                 cuda_result::stream::wait_event(
                     stream,
-                    token.event.raw(),
+                    dependency.event.raw(),
                     CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
                 )
             }
@@ -200,7 +195,7 @@ impl Drop for SubmissionCleanupGuard<'_> {
 }
 
 #[derive(Debug)]
-struct CudaEventToken {
+pub(super) struct CudaEventToken {
     domain: EventDomainId,
     event: Arc<CudaEventHandle>,
 }

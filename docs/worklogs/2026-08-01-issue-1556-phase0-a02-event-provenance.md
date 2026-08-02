@@ -229,6 +229,25 @@ Additional fresh checks passed:
 - `cargo check -p tenferro-gpu --features cuda` and `--features webgpu`.
 - `cargo fmt --all -- --check` and `git diff --check`.
 
+## Typed event-admission cost follow-up
+
+At `f1037ae0`, the CUDA and WebGPU providers admitted each dependency through
+the shared origin/type boundary and then repeated the same origin check and
+`Any` downcast inside their native enqueue helpers. The private admission
+boundary now collects the validated `&T` references in
+`SmallVec<[&T; 4]>` and passes the borrowed typed slice into the provider
+closure. The CUDA wait loop and WebGPU queue-identity loop consume those typed
+references directly; no second origin/type admission or dynamic fallback is
+performed. The collection remains inline through four dependencies and spills
+only for a larger dependency list.
+
+This is a fixed per-dependency validation reduction, not a standalone
+end-to-end performance claim. The change adds no unsafe code, dynamic
+indirection, or test-only state, and preserves the existing typed-error and
+zero-launch checks. No separate benchmark was added because the issue is the
+elimination of an immediately visible duplicate boundary operation and the
+native hardware paths remain hardware-gated.
+
 ## Residual risk after implementation
 
 Native CUDA/WebGPU event execution and Metal integration still require their

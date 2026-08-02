@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use smallvec::SmallVec;
 use tenferro_runtime::runtime::{
     EventDomainError, EventDomainId, EventDomainOperation, EventToken,
 };
@@ -33,14 +34,19 @@ pub(crate) fn admit_event_token<'a, T: 'static>(
     })
 }
 
-pub(crate) fn admit_event_tokens<T: 'static, R>(
-    dependencies: &[Arc<dyn EventToken>],
+pub(crate) fn admit_event_tokens<'a, T: 'static, R>(
+    dependencies: &'a [Arc<dyn EventToken>],
     expected: EventDomainId,
     token_type: &'static str,
-    launch: impl FnOnce() -> Result<R>,
+    launch: impl FnOnce(&[&'a T]) -> Result<R>,
 ) -> Result<R> {
+    let mut admitted = SmallVec::<[&'a T; 4]>::new();
     for dependency in dependencies {
-        admit_event_token::<T>(dependency.as_ref(), expected, token_type)?;
+        admitted.push(admit_event_token::<T>(
+            dependency.as_ref(),
+            expected,
+            token_type,
+        )?);
     }
-    launch()
+    launch(&admitted)
 }

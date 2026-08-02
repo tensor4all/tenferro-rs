@@ -11,7 +11,7 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::Error as RuntimeError;
 
 use super::WebGpuRuntime;
-use crate::event_domain_admission::{admit_event_token, admit_event_tokens};
+use crate::event_domain_admission::admit_event_tokens;
 use crate::event_retirement::{
     best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
 };
@@ -33,10 +33,10 @@ impl WebGpuEventDomainDriver {
     }
 }
 
-pub(crate) fn admit_webgpu_tokens<R>(
-    dependencies: &[Arc<dyn EventToken>],
+pub(super) fn admit_webgpu_tokens<'a, R>(
+    dependencies: &'a [Arc<dyn EventToken>],
     expected: EventDomainId,
-    launch: impl FnOnce() -> tenferro_runtime::Result<R>,
+    launch: impl FnOnce(&[&'a WebGpuEventToken]) -> tenferro_runtime::Result<R>,
 ) -> tenferro_runtime::Result<R> {
     admit_event_tokens::<WebGpuEventToken, R>(
         dependencies,
@@ -80,7 +80,7 @@ impl EventDomainRun for WebGpuEventDomainRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        admit_webgpu_tokens(dependencies, self.domain, || {
+        admit_webgpu_tokens(dependencies, self.domain, |dependencies| {
             self.stream_id
                 .executes(|| self.enqueue_on_current_stream(dependencies, launch))
         })
@@ -110,17 +110,12 @@ impl EventDomainRun for WebGpuEventDomainRun {
 impl WebGpuEventDomainRun {
     fn enqueue_on_current_stream(
         &mut self,
-        dependencies: &[Arc<dyn EventToken>],
+        dependencies: &[&WebGpuEventToken],
         launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
     ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        for dependency in dependencies {
-            let token = admit_event_token::<WebGpuEventToken>(
-                dependency.as_ref(),
-                self.domain,
-                "non-WebGPU event token",
-            )?;
-            let actual = token.origin();
-            if !Arc::ptr_eq(&token.identity, &self.identity) {
+        for &dependency in dependencies {
+            let actual = dependency.domain;
+            if !Arc::ptr_eq(&dependency.identity, &self.identity) {
                 return Err(RuntimeError::from(
                     EventDomainError::IncompatibleTokenType {
                         operation: EventDomainOperation::Enqueue,
@@ -214,7 +209,7 @@ impl Drop for SubmissionCleanupGuard<'_> {
 }
 
 #[derive(Debug)]
-struct WebGpuEventToken {
+pub(super) struct WebGpuEventToken {
     domain: EventDomainId,
     identity: Arc<()>,
     submission: WgpuSubmission,
