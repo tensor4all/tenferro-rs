@@ -1051,11 +1051,7 @@ fn execute_scheduled_slots<'input>(
         (Err(primary), Err(cleanup)) => {
             staged.clear();
             located.clear();
-            Err(Error::runtime_state_source(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                ScheduledExecutionCleanupError { primary, cleanup },
-            ))
+            Err(scheduled_execution_cleanup_error(primary, cleanup))
         }
     }
 }
@@ -1263,40 +1259,56 @@ impl ScheduledEventDomains {
     }
 
     pub(crate) fn drain(&mut self) -> Result<()> {
-        let mut first_error = None;
+        let mut failures = Vec::new();
         for run in &mut self.runs {
-            let domain = run.requested_domain();
-            match catch_unwind(AssertUnwindSafe(|| run.drain())) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    first_error.get_or_insert(error);
-                }
-                Err(payload) => {
-                    first_error.get_or_insert(event_domain_error(
-                        EventDomainError::DrainPanicked {
-                            operation: EventDomainOperation::Drain,
-                            domain,
-                            message: safe_event_domain_panic_message(payload),
-                        },
-                    ));
-                }
+            if let Err(error) = run.drain() {
+                failures.push(error);
             }
         }
-        first_error.map_or(Ok(()), Err)
+        let mut failures = failures.into_iter();
+        let Some(mut error) = failures.next() else {
+            return Ok(());
+        };
+        for failure in failures {
+            error = Error::with_suppressed(error, failure);
+        }
+        Err(error)
+    }
+}
+
+#[derive(Debug)]
+enum RuntimeOwnedEventDomainRunState {
+    Pending(Box<dyn EventDomainRun>),
+    Retired,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EventDomainRunTerminalState {
+    Retired,
+    Failed,
+}
+
+impl fmt::Display for EventDomainRunTerminalState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Retired => formatter.write_str("retired"),
+            Self::Failed => formatter.write_str("failed"),
+        }
     }
 }
 
 #[derive(Debug)]
 struct RuntimeOwnedEventDomainRun {
     requested_domain: super::EventDomainId,
-    inner: Option<Box<dyn EventDomainRun>>,
+    state: RuntimeOwnedEventDomainRunState,
 }
 
 impl RuntimeOwnedEventDomainRun {
     fn new(requested_domain: super::EventDomainId, inner: Box<dyn EventDomainRun>) -> Self {
         Self {
             requested_domain,
-            inner: Some(inner),
+            state: RuntimeOwnedEventDomainRunState::Pending(inner),
         }
     }
 
@@ -1305,10 +1317,19 @@ impl RuntimeOwnedEventDomainRun {
     }
 
     fn domain(&self, operation: EventDomainOperation) -> Result<super::EventDomainId> {
-        self.inner
-            .as_deref()
-            .map(EventDomainRun::domain)
-            .ok_or_else(|| event_domain_run_state_error(operation))
+        match &self.state {
+            RuntimeOwnedEventDomainRunState::Pending(run) => Ok(run.domain()),
+            RuntimeOwnedEventDomainRunState::Retired => Err(event_domain_run_state_error(
+                operation,
+                self.requested_domain,
+                EventDomainRunTerminalState::Retired,
+            )),
+            RuntimeOwnedEventDomainRunState::Failed => Err(event_domain_run_state_error(
+                operation,
+                self.requested_domain,
+                EventDomainRunTerminalState::Failed,
+            )),
+        }
     }
 
     fn enqueue(
@@ -1316,38 +1337,106 @@ impl RuntimeOwnedEventDomainRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Arc<dyn EventToken>> {
-        self.inner
-            .as_deref_mut()
-            .ok_or_else(|| event_domain_run_state_error(EventDomainOperation::Enqueue))?
-            .enqueue(dependencies, launch)
+        match &mut self.state {
+            RuntimeOwnedEventDomainRunState::Pending(run) => run.enqueue(dependencies, launch),
+            RuntimeOwnedEventDomainRunState::Retired => Err(event_domain_run_state_error(
+                EventDomainOperation::Enqueue,
+                self.requested_domain,
+                EventDomainRunTerminalState::Retired,
+            )),
+            RuntimeOwnedEventDomainRunState::Failed => Err(event_domain_run_state_error(
+                EventDomainOperation::Enqueue,
+                self.requested_domain,
+                EventDomainRunTerminalState::Failed,
+            )),
+        }
     }
 
     fn drain(&mut self) -> Result<()> {
-        self.inner
-            .as_deref_mut()
-            .ok_or_else(|| event_domain_run_state_error(EventDomainOperation::Drain))?
-            .drain()
+        let run = match std::mem::replace(&mut self.state, RuntimeOwnedEventDomainRunState::Failed)
+        {
+            RuntimeOwnedEventDomainRunState::Pending(run) => run,
+            RuntimeOwnedEventDomainRunState::Retired => {
+                self.state = RuntimeOwnedEventDomainRunState::Retired;
+                return Err(event_domain_run_state_error(
+                    EventDomainOperation::Drain,
+                    self.requested_domain,
+                    EventDomainRunTerminalState::Retired,
+                ));
+            }
+            RuntimeOwnedEventDomainRunState::Failed => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                return Err(event_domain_run_state_error(
+                    EventDomainOperation::Drain,
+                    self.requested_domain,
+                    EventDomainRunTerminalState::Failed,
+                ));
+            }
+        };
+        let domain = self.requested_domain;
+        let mut run = run;
+        let drain_result = catch_unwind(AssertUnwindSafe(|| run.drain()));
+        drop_event_domain_run(run);
+        match drain_result {
+            Ok(Ok(())) => {
+                self.state = RuntimeOwnedEventDomainRunState::Retired;
+                Ok(())
+            }
+            Ok(Err(error)) => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                Err(error)
+            }
+            Err(payload) => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                Err(event_domain_error(EventDomainError::DrainPanicked {
+                    operation: EventDomainOperation::Drain,
+                    domain,
+                    message: safe_event_domain_panic_message(payload),
+                }))
+            }
+        }
     }
 }
 
-fn event_domain_run_state_error(operation: EventDomainOperation) -> Error {
-    Error::runtime_state(
+/// Internal error returned when a runtime-owned event run is used after
+/// explicit retirement or failure.
+#[derive(Debug, thiserror::Error)]
+#[error("{operation} used event-domain run {domain:?} after it reached terminal state {state}")]
+pub(crate) struct EventDomainRunLifecycleError {
+    operation: EventDomainOperation,
+    domain: super::EventDomainId,
+    state: EventDomainRunTerminalState,
+}
+
+fn event_domain_run_state_error(
+    operation: EventDomainOperation,
+    domain: super::EventDomainId,
+    state: EventDomainRunTerminalState,
+) -> Error {
+    Error::runtime_state_source(
         "Runtime::run_compiled",
         ErrorPhase::Execution,
-        format!("{operation} used an event-domain run after ownership was consumed"),
+        EventDomainRunLifecycleError {
+            operation,
+            domain,
+            state,
+        },
     )
+}
+
+fn drop_event_domain_run(run: Box<dyn EventDomainRun>) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(run))) {
+        // The provider Box has been consumed. Do not retry a panicking Drop or
+        // run an arbitrary panic-payload destructor while containing it.
+        std::mem::forget(payload);
+    }
 }
 
 impl Drop for RuntimeOwnedEventDomainRun {
     fn drop(&mut self) {
-        let Some(run) = self.inner.take() else {
-            return;
-        };
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(run))) {
-            // Do not run an arbitrary panic-payload destructor while
-            // containing the provider's Drop panic; the Box has already been
-            // consumed and must never be retried.
-            std::mem::forget(payload);
+        let state = std::mem::replace(&mut self.state, RuntimeOwnedEventDomainRunState::Failed);
+        if let RuntimeOwnedEventDomainRunState::Pending(run) = state {
+            drop_event_domain_run(run);
         }
     }
 }
@@ -1380,12 +1469,8 @@ fn safe_event_domain_panic_message(payload: Box<dyn std::any::Any + Send + 'stat
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("scheduled execution failed ({primary}); event-domain cleanup also failed ({cleanup})")]
-struct ScheduledExecutionCleanupError {
-    #[source]
-    primary: Error,
-    cleanup: Error,
+fn scheduled_execution_cleanup_error(primary: Error, cleanup: Error) -> Error {
+    Error::with_suppressed(primary, cleanup)
 }
 
 fn instruction_execution<'a>(
@@ -1928,6 +2013,7 @@ impl StdError for SharedPrepareError {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::error::Error as StdError;
     use std::hash::Hasher;
     use std::num::NonZeroU64;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2335,6 +2421,36 @@ mod tests {
         assert!(
             observed_unlocked_state.load(Ordering::SeqCst),
             "executor state lock must not be held while extension runtime callbacks execute"
+        );
+    }
+
+    #[test]
+    fn scheduled_execution_cleanup_error_preserves_primary_error() {
+        let primary = Error::runtime_state(
+            "primary-execution",
+            ErrorPhase::Execution,
+            "primary execution failure",
+        );
+        let cleanup = Error::runtime_state(
+            "event-domain-cleanup",
+            ErrorPhase::Execution,
+            "cleanup failure",
+        );
+        let primary_display = primary.to_string();
+
+        let combined = super::scheduled_execution_cleanup_error(primary, cleanup);
+        let primary_error = combined.primary().expect("primary execution error");
+        let cleanup_error = combined.suppressed().expect("cleanup error");
+        assert_eq!(primary_error.to_string(), primary_display);
+        assert_eq!(
+            cleanup_error.to_string(),
+            "event-domain-cleanup (Execution): runtime state failure: cleanup failure"
+        );
+        assert_eq!(
+            StdError::source(&combined)
+                .expect("primary error in the standard source chain")
+                .to_string(),
+            primary_display
         );
     }
 

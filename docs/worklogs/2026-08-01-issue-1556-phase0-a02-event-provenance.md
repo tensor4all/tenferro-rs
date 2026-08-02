@@ -7,7 +7,8 @@ Implement the accepted Phase 0 A0.2 event-provenance contract on top of
 provider-neutral token admission, the scheduler-owned transfer host bridge,
 and immediate/CUDA/WebGPU event-domain adapters. Typed CUDA device discovery,
 storage ownership/allocation/lease changes, and fixed-ID cleanup remain out of
-scope.
+scope. The follow-up recorded below is limited to the private runtime-owned
+event-run lifecycle in `runtime/execution.rs` and its existing runtime tests.
 
 ## Context read
 
@@ -108,13 +109,15 @@ compatibility overloads or a default origin.
   applicable.
 - `EventDomainRun::drain` documents and implements retirement of already-
   progressing work without depending on another run's drain. Explicit drain
-  returns typed provider errors. The runtime-owned run wrapper catches each
-  external provider drain panic as `EventDomainError::DrainPanicked`, retains
-  the first cleanup error, and continues later runs. Its Drop takes the Box and
-  attempts deallocation exactly once inside a panic boundary, so a provider Drop
-  panic cannot skip later run cleanup or replace an original unwind panic. If
-  explicit drain is skipped, Drop performs equivalent best-effort retirement and
-  no explicit or implicit path may unwind.
+  returns typed provider errors. The runtime-owned run wrapper now uses the
+  tagged states `Pending(Box<dyn EventDomainRun>)`, `Retired`, and `Failed`.
+  It consumes `Pending` before provider code, catches a provider drain panic as
+  `EventDomainError::DrainPanicked`, and rejects every later operation with a
+  typed lifecycle source. `ScheduledEventDomains` attempts every started run
+  in first-use order and retains every failure in that order through the
+  existing suppressed-error chain. Drop retires only `Pending`; the consumed
+  provider box is never retried, and the minimal panic boundary prevents a
+  provider Drop panic from replacing an existing unwind.
 - Returned completion provenance is intentionally validated after the provider
   `enqueue` has returned: the launch has already happened by contract. The
   scheduler validates the token before recording it and before any downstream
@@ -126,7 +129,7 @@ compatibility overloads or a default origin.
   complete body—including backend cleanup and diagnostic formatting. The
   helper has one deterministic injected-panic test and is ready for Metal.
 
-## Verification
+## A0.2 baseline verification
 
 The final verification results are:
 
@@ -152,10 +155,52 @@ The final verification results are:
 
 No storage ownership or allocation behavior is part of this slice.
 
+## Follow-up: event-run lifecycle cleanup
+
+The RED tests were added to the existing runtime event-domain module:
+
+```text
+cargo test -p tenferro-runtime --lib \
+  scheduler_run_drain_is_terminal_and_does_not_call_provider_again --no-fail-fast
+cargo test -p tenferro-runtime --lib \
+  scheduler_drain_returns_all_failures_in_run_order --no-fail-fast
+```
+
+The first failed because a successful run could be drained again. The second
+failed because later provider failures were attempted but discarded after the
+first error. The tests also cover the `Retired`, `Failed`, and contained-panic
+terminal paths, provider-call counts, deterministic drain order, and typed
+lifecycle errors. The execution test
+`scheduled_execution_cleanup_error_preserves_primary_error` verifies that the
+primary execution error remains the standard source while cleanup stays
+attached to the typed suppression aggregate. No source-substring tests were
+added.
+
+The implementation is intentionally private and small: the lifecycle enum is
+owned by `RuntimeOwnedEventDomainRun`, ordered cleanup failures are folded with
+`Error::with_suppressed`. When execution and cleanup both fail, the same typed
+aggregate keeps the execution error as the standard source and attaches the
+ordered cleanup aggregate as suppressed metadata.
+
+Fresh GREEN verification for this follow-up:
+
+- `cargo fmt --all -- --check`, `git diff --check`, and
+  `cargo check -p tenferro-runtime`: passed.
+- `cargo test -p tenferro-runtime --lib --no-fail-fast`: 386 passed.
+- `cargo test -p tenferro-runtime --tests --no-fail-fast`: 386 unit tests and
+  118 integration tests passed.
+- The focused primary/cleanup integration filter passed both tests.
+- `cargo clippy -p tenferro-runtime --all-targets -- -D warnings` remains
+  blocked by two pre-existing warnings in unchanged
+  `runtime/engine_registration.rs` and `runtime/snapshot.rs`; this cleanup
+  does not alter those files.
+
 ## Residual risk after implementation
 
 Native CUDA/WebGPU event execution and Metal integration still require their
 respective hardware/provider environments. The common non-unwinding retirement
 boundary is in place, but Metal's event adapter will be implemented in its own
-follow-up slice. The A0.2 API intentionally has no compatibility shim for the
+follow-up slice. Provider Drop panic payloads remain intentionally swallowed by
+the minimal Drop boundary; no broader provider diagnostic sink is part of this
+Phase 0 cleanup. The A0.2 API intentionally has no compatibility shim for the
 replaced unqualified event-token contract.

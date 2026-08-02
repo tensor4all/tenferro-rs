@@ -4,7 +4,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::super::execution::ScheduledEventDomains;
+use super::super::execution::{EventDomainRunLifecycleError, ScheduledEventDomains};
 use super::super::schedule::{
     EventCompletion, EventDependency, EventDomainId, EventSlotId, ExecutionLocation, ScheduledNode,
     ScheduledOperation, ScheduledTransfer,
@@ -202,6 +202,7 @@ impl EventDomainRun for ChangingEventDomainRun {
 #[derive(Clone, Copy, Debug)]
 enum ProbeDrainBehavior {
     Return,
+    ReturnError,
     PanicStatic,
     PanicPayloadBomb,
 }
@@ -276,6 +277,11 @@ impl EventDomainRun for DrainProbeRun {
             .push(format!("{}:drain", self.label));
         match self.drain_behavior {
             ProbeDrainBehavior::Return => Ok(()),
+            ProbeDrainBehavior::ReturnError => Err(Error::runtime_state(
+                "event-domain-test",
+                crate::ErrorPhase::Execution,
+                format!("{} drain failure", self.label),
+            )),
             ProbeDrainBehavior::PanicStatic => panic!("{} drain panic", self.label),
             ProbeDrainBehavior::PanicPayloadBomb => {
                 std::panic::panic_any(PanickingPanicPayload);
@@ -587,6 +593,102 @@ fn scheduler_contains_drain_and_box_drop_panics_and_drains_later_runs() -> Resul
     assert!(events.iter().any(|event| event == "second:drain"));
     assert!(events.iter().any(|event| event == "first:drop"));
     assert!(events.iter().any(|event| event == "second:drop"));
+    Ok(())
+}
+
+#[test]
+fn scheduler_run_drain_is_terminal_and_does_not_call_provider_again() -> Result<()> {
+    for (label, drain_behavior, expected_first_error) in [
+        ("retired", ProbeDrainBehavior::Return, false),
+        ("failed", ProbeDrainBehavior::ReturnError, true),
+        ("panicked", ProbeDrainBehavior::PanicStatic, true),
+    ] {
+        let domain = qualified_domain(1, 1, 1, label.len() as u64);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let driver: Arc<dyn EventDomainDriver> = Arc::new(DrainProbeDriver {
+            label,
+            drain_behavior,
+            drop_behavior: ProbeDropBehavior::Return,
+            events: Arc::clone(&events),
+        });
+        let mut scheduler = ScheduledEventDomains::for_test(vec![(domain, driver)])?;
+
+        let first = scheduler.drain();
+        assert_eq!(first.is_err(), expected_first_error);
+
+        let second = scheduler
+            .drain()
+            .expect_err("a terminal run must reject a second drain");
+        assert!(matches!(
+            &second,
+            Error::RuntimeStateSource { source, .. }
+                if source
+                    .downcast_ref::<EventDomainRunLifecycleError>()
+                    .is_some()
+        ));
+
+        let events = events.lock().expect("drain probe event log lock");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| *event == &format!("{label}:drain"))
+                .count(),
+            1,
+            "provider drain must run once for {label}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn scheduler_drain_returns_all_failures_in_run_order() -> Result<()> {
+    let first = qualified_domain(1, 1, 1, 1);
+    let second = qualified_domain(1, 1, 1, 2);
+    let third = qualified_domain(1, 1, 1, 3);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let drivers: Vec<(EventDomainId, Arc<dyn EventDomainDriver>)> = [
+        ("first", first, ProbeDrainBehavior::ReturnError),
+        ("second", second, ProbeDrainBehavior::PanicStatic),
+        ("third", third, ProbeDrainBehavior::ReturnError),
+    ]
+    .into_iter()
+    .map(|(label, domain, drain_behavior)| {
+        (
+            domain,
+            Arc::new(DrainProbeDriver {
+                label,
+                drain_behavior,
+                drop_behavior: ProbeDropBehavior::Return,
+                events: Arc::clone(&events),
+            }) as Arc<dyn EventDomainDriver>,
+        )
+    })
+    .collect();
+    let mut scheduler = ScheduledEventDomains::for_test(drivers)?;
+
+    let error = scheduler
+        .drain()
+        .expect_err("all injected cleanup failures must be returned");
+    let message = error.to_string();
+    let first_failure = message.find("first drain failure").expect("first failure");
+    let second_failure = message.find("second drain panic").expect("second failure");
+    let third_failure = message.find("third drain failure").expect("third failure");
+    assert!(first_failure < second_failure && second_failure < third_failure);
+
+    let events = events.lock().expect("drain probe event log lock");
+    let drain_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.ends_with(":drain"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        drain_events,
+        [
+            "first:drain".to_owned(),
+            "second:drain".to_owned(),
+            "third:drain".to_owned(),
+        ]
+    );
     Ok(())
 }
 
