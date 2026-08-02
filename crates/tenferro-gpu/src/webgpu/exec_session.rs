@@ -31,6 +31,27 @@ impl WebGpuExecSession<'_> {
     }
 }
 
+/// Visit a WebGPU execution session through the erased backend-session surface.
+///
+/// The callback receives only the lifetime-bound session capability. The
+/// owning [`WebGpuBackend`] never crosses this boundary.
+#[doc(hidden)]
+pub fn with_webgpu_exec_session<B, R>(
+    session: &mut B,
+    f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R,
+) -> Option<R>
+where
+    B: BackendSession + ?Sized,
+{
+    if session.session_type_name() != std::any::type_name::<WebGpuExecSession<'static>>() {
+        return None;
+    }
+    let data = unsafe { session.session_data_mut() };
+    // SAFETY: the type-name check and BackendSession erased-pointer contract
+    // identify the value as WebGpuExecSession for this scoped visit.
+    Some(unsafe { f(&mut *(data.cast::<WebGpuExecSession<'static>>())) })
+}
+
 macro_rules! delegate {
     ($trait:path {
         $(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $ret:ty;)*

@@ -2,10 +2,10 @@ use std::mem::MaybeUninit;
 
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuExecSession;
 use tenferro_tensor::{
-    AllocationDomainId, BackendSessionHost, Buffer, DType, DeviceKind, HostAccessError, MemoryKind,
-    Placement, SharedTensorAllocationDomain, Tensor, TensorRead, TensorView, TypedTensor,
+    AllocationDomainId, Buffer, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
+    SharedTensorAllocationDomain, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -15,7 +15,7 @@ use crate::{
     transform_len, validate_c2r_spectrum_len, FftBackend, FftNorm, FftOperation, FftPlanSpec,
 };
 
-impl FftBackend for CpuBackend {
+impl FftBackend for CpuExecSession<'_> {
     fn validate_fft_read_input(
         &self,
         op: &'static str,
@@ -32,14 +32,14 @@ impl FftBackend for CpuBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         validate_spec_input(input, spec)?;
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-        let allocation_domain = self.shared_allocation_domain().cloned();
-        self.with_backend_session(|_exec| match allocation_domain.as_deref() {
+        let allocation_domain = self.shared_allocation_domain();
+        match allocation_domain.as_deref() {
             Some(domain) => execute_managed_fft_with_plans(input, spec, domain, &mut plans),
             None => {
                 validate_host_fft_input(fft_op_name(spec.operation()), input)?;
                 execute_fft_with_plans(input, spec, &mut plans)
             }
-        })
+        }
     }
 }
 

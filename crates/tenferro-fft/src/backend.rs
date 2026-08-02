@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{BackendSession, Tensor, TensorRead};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -106,7 +106,7 @@ impl<'a> FftExecutionCache<'a> {
 ///     let _ = input.fft(None, -1, FftNorm::Backward, backend);
 /// }
 /// ```
-pub trait FftBackend: TensorBackend {
+pub trait FftBackend: BackendSession {
     /// Validate a borrowed runtime input before the extension read path
     /// materializes it into a compact tensor.
     ///

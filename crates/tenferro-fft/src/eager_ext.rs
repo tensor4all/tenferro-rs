@@ -1,15 +1,14 @@
 use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager_with_extension_context;
-use tenferro_ad::{EagerBackend, EagerTensor};
+use tenferro_ad::extension::apply_eager_with_extension_session;
+use tenferro_ad::EagerTensor;
 use tenferro_runtime::{ErrorPhase, ExtensionModule};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::DType;
 
 use crate::{
-    execute_fft_extension_reads, extension_module, fft_op_name, prepare_runtime_fft_op,
-    require_runtime_dtype, runtime_forward_fft_operation, FftBackend, FftExecutionCache, FftNorm,
-    FftOperation, FftPlanSpec,
+    execute_fft_extension_reads_session, extension_module, prepare_runtime_fft_op,
+    require_runtime_dtype, runtime_forward_fft_operation, FftNorm, FftOperation,
 };
 
 /// FFT extension methods for [`EagerTensor`].
@@ -174,8 +173,8 @@ fn apply_eager_fft(
     let execute_op = Arc::clone(&op);
     let module = eager_cpu_extension_module()?;
     let mut outputs =
-        apply_eager_with_extension_context(op, &[input], module, move |_op, input_reads, ctx| {
-            execute_fft_extension_reads(&execute_op, input_reads, ctx)
+        apply_eager_with_extension_session(op, &[input], module, move |_op, input_reads, ctx| {
+            execute_fft_extension_reads_session(&execute_op, input_reads, ctx)
         })?
         .into_iter();
     match (outputs.next(), outputs.next()) {
@@ -205,25 +204,4 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
         ErrorPhase::Execution,
         source,
     )
-}
-
-impl FftBackend for EagerBackend {
-    fn execute_fft(
-        &mut self,
-        input: &Tensor,
-        spec: &FftPlanSpec,
-        cache: FftExecutionCache<'_>,
-    ) -> tenferro_tensor::Result<Tensor> {
-        #[allow(unreachable_patterns)]
-        match self {
-            Self::Cpu(backend) => backend.execute_fft(input, spec, cache),
-            _ => Err(tenferro_tensor::Error::unsupported(
-                fft_op_name(spec.operation()),
-                format!(
-                    "the selected eager backend has no FFT capability for placement {:?}",
-                    input.placement()
-                ),
-            )),
-        }
-    }
 }

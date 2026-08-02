@@ -33,7 +33,7 @@ mod structural;
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
 #[doc(hidden)]
-pub use exec_session::WebGpuExecSession;
+pub use exec_session::{with_webgpu_exec_session, WebGpuExecSession};
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
 pub use runtime::{webgpu_available, WebGpuRuntime, WebGpuRuntimeIdentity};
 pub use runtime_adapter::{
