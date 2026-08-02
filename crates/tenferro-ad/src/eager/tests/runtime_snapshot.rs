@@ -189,7 +189,10 @@ fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
 #[test]
 fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
+    reset_refreshes();
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
+    let before_registration = cpu.registration_identity.clone();
     let before_epoch = runtime.runtime.snapshot().unwrap().epoch();
 
     runtime
@@ -198,12 +201,19 @@ fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     let after_extension_epoch = runtime.runtime.snapshot().unwrap().epoch();
     assert_ne!(after_extension_epoch, before_epoch);
 
-    runtime.with_execution_session(|_| ()).unwrap();
+    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok(()))
+        .unwrap();
 
+    assert_eq!(refreshes(), 1);
+    assert_eq!(cpu.registration_identity, before_registration);
     assert_eq!(
-        runtime.runtime.snapshot().unwrap().epoch(),
-        after_extension_epoch
+        cpu.snapshot
+            .engine(&cpu_engine_id())
+            .expect("CPU engine registered")
+            .registration_identity(),
+        before_registration
     );
+    assert_eq!(cpu.epoch, after_extension_epoch);
 }
 
 #[test]

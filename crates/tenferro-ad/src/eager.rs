@@ -1278,8 +1278,9 @@ impl EagerRuntime {
     /// Enter one backend execution session and run provider-neutral operations.
     ///
     /// The callback receives only a lifetime-bound, non-owning backend session.
-    /// Runtime registration is reconciled while the eager backend owner is
-    /// locked, before the callback is invoked.
+    /// The backend and its engine registration are fixed when the eager runtime
+    /// is constructed. Extension modules are installed separately and remain
+    /// available to later extension operations.
     ///
     /// # Examples
     ///
@@ -1300,10 +1301,9 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend,
-    /// registration, or runtime lock is poisoned, or if registration
-    /// reconciliation fails before the callback can run. Backend operations
-    /// retain their typed tensor/backend errors inside the callback result.
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
+    /// lock is poisoned. Backend operations retain their typed tensor/backend
+    /// errors inside the callback result.
     pub fn with_execution_session<R: Send>(
         &self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
@@ -1312,17 +1312,18 @@ impl EagerRuntime {
         Ok(backend.with_backend_session(f))
     }
 
-    // Lock ordering: the eager backend owner is locked and registration is
-    // reconciled first; the extension-cache lock is acquired only after that
-    // gate and remains held through the borrowed session callback.
+    // Lock ordering: the eager backend owner is locked first; the
+    // extension-cache lock is acquired only after it and remains held through
+    // the borrowed session callback.
     /// Run an extension-owned eager operation with a borrowed backend session
     /// and the eager runtime's extension cache store.
     ///
-    /// The eager backend owner is locked and runtime registration is reconciled
-    /// before the extension-cache lock is acquired. The callback receives an
+    /// The eager backend owner is locked before the extension-cache lock is
+    /// acquired. The callback receives an
     /// [`tenferro_runtime::ExtensionExecutionContext`] so cache access and
     /// backend execution share one lifetime-bound context without exposing the
-    /// owning eager backend.
+    /// owning eager backend. The backend and its engine registration remain
+    /// fixed for the eager runtime's lifetime.
     ///
     /// # Examples
     ///
@@ -1344,9 +1345,8 @@ impl EagerRuntime {
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
-    /// or extension-cache lock is poisoned, or if runtime registration
-    /// reconciliation fails before the callback runs. Errors returned by the
-    /// callback remain in its result value.
+    /// or extension-cache lock is poisoned. Errors returned by the callback
+    /// remain in its result value.
     pub fn with_extension_execution_context<R: Send>(
         &self,
         f: impl FnOnce(

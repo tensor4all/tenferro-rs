@@ -32,7 +32,7 @@ pub(crate) enum EagerBackend {
 /// The fallible provider-specific registration produced from the exact eager
 /// backend. `NoEngine` is used by the test-only recording backend, whose
 /// tensor operations are intentionally not installed as a runtime engine.
-pub(crate) enum EagerBackendRegistration {
+enum EagerBackendRegistration {
     #[cfg(test)]
     NoEngine,
     Install(EngineRegistration),
@@ -114,7 +114,7 @@ pub(crate) fn eager_runtime_for_backend(
     builder.build()
 }
 
-pub(crate) fn eager_engine_registration_for_backend(
+fn eager_engine_registration_for_backend(
     backend: &EagerBackend,
 ) -> Result<EagerBackendRegistration, RuntimeConfigError> {
     match backend {
