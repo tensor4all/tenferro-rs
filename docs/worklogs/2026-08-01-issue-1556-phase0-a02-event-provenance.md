@@ -8,7 +8,8 @@ provider-neutral token admission, the scheduler-owned transfer host bridge,
 and immediate/CUDA/WebGPU event-domain adapters. Typed CUDA device discovery,
 storage ownership/allocation/lease changes, and fixed-ID cleanup remain out of
 scope. The follow-up recorded below is limited to the private runtime-owned
-event-run lifecycle in `runtime/execution.rs` and its existing runtime tests.
+event-run lifecycle in `runtime/execution.rs`, the CUDA/WebGPU provider run
+lifecycle, and their existing private tests.
 
 ## Context read
 
@@ -123,6 +124,12 @@ compatibility overloads or a default origin.
   scheduler validates the token before recording it and before any downstream
   launch; dependency/run/wait provenance failures remain pre-launch checks, but
   malformed returned completions cannot undo the same-node launch.
+- CUDA and WebGPU event-domain runs now carry the shared private
+  `Pending`/`Retired`/`Failed` lifecycle. Explicit retirement consumes
+  `Pending` before invoking native provider code; success reaches `Retired`,
+  while a typed error or contained panic reaches `Failed`. Drop invokes the
+  existing non-unwinding retirement helper only for `Pending`, preventing the
+  runtime wrapper's provider-box drop from submitting a second barrier.
 - CUDA and WebGPU retain separate provider-specific explicit drain/error paths.
   Their implicit run, submission-guard, and native-handle cleanup bodies call
   the one crate-private `tenferro-gpu` retirement helper, which catches the
@@ -176,11 +183,14 @@ primary execution error remains the standard source while cleanup stays
 attached to the typed suppression aggregate. No source-substring tests were
 added.
 
-The implementation is intentionally private and small: the lifecycle enum is
-owned by `RuntimeOwnedEventDomainRun`, ordered cleanup failures are folded with
+The implementation is intentionally private and small: the runtime lifecycle
+is owned by `RuntimeOwnedEventDomainRun`, the provider lifecycle is shared by
+the CUDA/WebGPU runs, and ordered cleanup failures are folded with
 `Error::with_suppressed`. When execution and cleanup both fail, the same typed
 aggregate keeps the execution error as the standard source and attaches the
-ordered cleanup aggregate as suppressed metadata.
+ordered cleanup aggregate as suppressed metadata. The provider lifecycle
+helper's counter tests prove that explicit drain followed by Drop and implicit
+Drop each invoke the retirement closure exactly once.
 
 Fresh GREEN verification for this follow-up:
 
@@ -195,12 +205,34 @@ Fresh GREEN verification for this follow-up:
   `runtime/engine_registration.rs` and `runtime/snapshot.rs`; this cleanup
   does not alter those files.
 
+## Provider retirement one-shot follow-up
+
+The provider-side RED command,
+`cargo test -p tenferro-gpu --features cuda --lib event_retirement --no-fail-fast`,
+failed at compilation because the new lifecycle test seam was not yet
+implemented. After the shared `Pending`/`Retired`/`Failed` state and both
+provider integrations were added, the focused CUDA and WebGPU commands each
+passed all four retirement-helper tests. The complete CUDA library feature
+run passed 87 runnable tests with 118 hardware-dependent tests ignored. The
+complete WebGPU library run compiled and passed the retirement and other
+non-adapter tests, but three existing adapter-probing tests exceeded 60 seconds
+in this environment and the run was terminated; the bounded WebGPU retirement
+command and WebGPU `cargo check` both passed.
+
+Additional fresh checks passed:
+
+- `cargo test -p tenferro-runtime --lib event_domain --no-fail-fast`: 20 passed.
+- `cargo test -p tenferro-runtime --test integration runtime_event_domains
+  --no-fail-fast`: 4 passed.
+- `cargo check -p tenferro-gpu --features cuda` and `--features webgpu`.
+- `cargo fmt --all -- --check` and `git diff --check`.
+
 ## Residual risk after implementation
 
 Native CUDA/WebGPU event execution and Metal integration still require their
-respective hardware/provider environments. The common non-unwinding retirement
-boundary is in place, but Metal's event adapter will be implemented in its own
-follow-up slice. Provider Drop panic payloads remain intentionally swallowed by
-the minimal Drop boundary; no broader provider diagnostic sink is part of this
-Phase 0 cleanup. The A0.2 API intentionally has no compatibility shim for the
-replaced unqualified event-token contract.
+respective hardware/provider environments. The common non-unwinding and
+one-shot retirement boundaries are in place, but Metal's event adapter will be
+implemented in its own follow-up slice. Provider Drop panic payloads remain
+intentionally swallowed by the minimal Drop boundary; no broader provider
+diagnostic sink is part of this Phase 0 cleanup. The A0.2 API intentionally has
+no compatibility shim for the replaced unqualified event-token contract.

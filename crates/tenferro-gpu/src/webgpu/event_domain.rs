@@ -11,7 +11,9 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::Error as RuntimeError;
 
 use super::WebGpuRuntime;
-use crate::event_retirement::best_effort_retirement;
+use crate::event_retirement::{
+    best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
+};
 
 const EVENT_OP: &str = "webgpu_event_domain";
 
@@ -40,6 +42,7 @@ impl EventDomainDriver for WebGpuEventDomainDriver {
             domain,
             identity: Arc::clone(&self.identity),
             stream_id: StreamId::current(),
+            state: EventDomainRunState::Pending,
         }))
     }
 }
@@ -50,6 +53,7 @@ struct WebGpuEventDomainRun {
     domain: EventDomainId,
     identity: Arc<()>,
     stream_id: StreamId,
+    state: EventDomainRunState,
 }
 
 impl EventDomainRun for WebGpuEventDomainRun {
@@ -67,11 +71,18 @@ impl EventDomainRun for WebGpuEventDomainRun {
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
+        if !take_pending_retirement(&mut self.state) {
+            return Ok(());
+        }
         match catch_unwind(AssertUnwindSafe(|| {
             self.stream_id
                 .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
         })) {
-            Ok(result) => result,
+            Ok(Ok(())) => {
+                self.state = EventDomainRunState::Retired;
+                Ok(())
+            }
+            Ok(Err(error)) => Err(error),
             Err(_) => Err(RuntimeError::from(crate::Error::backend_source(
                 EVENT_OP,
                 WebGpuEventDomainPanic,
@@ -142,15 +153,17 @@ impl WebGpuEventDomainRun {
 
 impl Drop for WebGpuEventDomainRun {
     fn drop(&mut self) {
-        best_effort_retirement(|| {
-            if let Err(error) = self
-                .stream_id
-                .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
-            {
-                eprintln!(
-                    "tenferro-gpu: failed to drain WebGPU event-domain run during Drop: {error}"
-                );
-            }
+        retire_pending(&mut self.state, || {
+            best_effort_retirement(|| {
+                if let Err(error) = self
+                    .stream_id
+                    .executes(|| retire_webgpu_run(&self.runtime, self.stream_id))
+                {
+                    eprintln!(
+                        "tenferro-gpu: failed to drain WebGPU event-domain run during Drop: {error}"
+                    );
+                }
+            });
         });
     }
 }

@@ -13,7 +13,9 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::Error as RuntimeError;
 
 use super::CudaRuntime;
-use crate::event_retirement::best_effort_retirement;
+use crate::event_retirement::{
+    best_effort_retirement, retire_pending, take_pending_retirement, EventDomainRunState,
+};
 
 const EVENT_OP: &str = "cuda_event_domain";
 
@@ -37,6 +39,7 @@ impl EventDomainDriver for CudaEventDomainDriver {
             runtime: self.runtime.clone(),
             domain,
             stream_id: StreamId::current(),
+            state: EventDomainRunState::Pending,
         }))
     }
 }
@@ -46,6 +49,7 @@ struct CudaEventDomainRun {
     runtime: CudaRuntime,
     domain: EventDomainId,
     stream_id: StreamId,
+    state: EventDomainRunState,
 }
 
 impl EventDomainRun for CudaEventDomainRun {
@@ -63,11 +67,18 @@ impl EventDomainRun for CudaEventDomainRun {
     }
 
     fn drain(&mut self) -> tenferro_runtime::Result<()> {
+        if !take_pending_retirement(&mut self.state) {
+            return Ok(());
+        }
         match catch_unwind(AssertUnwindSafe(|| {
             self.stream_id
                 .executes(|| retire_cuda_run(&self.runtime).map_err(RuntimeError::from))
         })) {
-            Ok(result) => result,
+            Ok(Ok(())) => {
+                self.state = EventDomainRunState::Retired;
+                Ok(())
+            }
+            Ok(Err(error)) => Err(error),
             Err(_) => Err(RuntimeError::from(crate::Error::backend_source(
                 EVENT_OP,
                 CudaEventDomainPanic,
@@ -139,13 +150,15 @@ impl CudaEventDomainRun {
 
 impl Drop for CudaEventDomainRun {
     fn drop(&mut self) {
-        best_effort_retirement(|| {
-            let result = self.stream_id.executes(|| retire_cuda_run(&self.runtime));
-            if let Err(error) = result {
-                eprintln!(
-                    "tenferro-gpu: failed to drain CUDA event-domain run during Drop: {error}"
-                );
-            }
+        retire_pending(&mut self.state, || {
+            best_effort_retirement(|| {
+                let result = self.stream_id.executes(|| retire_cuda_run(&self.runtime));
+                if let Err(error) = result {
+                    eprintln!(
+                        "tenferro-gpu: failed to drain CUDA event-domain run during Drop: {error}"
+                    );
+                }
+            });
         });
     }
 }

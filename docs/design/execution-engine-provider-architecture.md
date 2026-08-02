@@ -1807,14 +1807,17 @@ After the first enqueue or launch failure, the scheduler admits no later node
 and drains every run that was started. It also drains after successful output
 execution and collects outputs only after draining. Input, intermediate,
 transfer, and output storage remains retained until this drain completes.
-Every provider run is held behind a private runtime-owned wrapper. The wrapper
-takes ownership of the returned `Box<dyn EventDomainRun>` immediately after
-`begin_run`; its Drop path takes and attempts that Box exactly once inside a
-panic boundary, discarding a provider Drop panic without retrying it. Explicit
-drain similarly catches each individual public-provider `drain` panic, converts
-it to a typed `EventDomainError::DrainPanicked` carrying the domain and a safe
-panic message, continues retiring later runs, and returns the first cleanup
-error.
+Every run is attempted in deterministic first-use order, and every drain
+failure is retained in that order through the suppressed-error aggregate. If
+execution and cleanup both fail, the execution error remains primary and the
+cleanup aggregate is suppressed. Every provider run is held behind a private
+runtime-owned wrapper. The wrapper takes ownership of the returned
+`Box<dyn EventDomainRun>` immediately after `begin_run`; its Drop path takes and
+attempts that Box exactly once inside a panic boundary, discarding a provider
+Drop panic without retrying it. Explicit drain similarly catches each
+individual public-provider `drain` panic, converts it to a typed
+`EventDomainError::DrainPanicked` carrying the domain and a safe panic message,
+and continues retiring later runs.
 `EventDomainRun::drain` observes work that is already progressing: it does not
 depend on another event-domain run being drained before this run can start.
 It is a retirement boundary on both success and error; a driver may report
@@ -1828,9 +1831,11 @@ including provider panics, while their implicit run, submission-guard, and
 native-handle retirement bodies—including cleanup and diagnostic formatting—
 are contained by the single crate-private non-unwinding helper in
 `tenferro-gpu`. That helper is intentionally provider-neutral so Metal can
-reuse the same Drop contract. If execution and explicit cleanup both fail, the
-execution error remains the typed source and the cleanup failure is included in
-the diagnostic.
+reuse the same Drop contract. CUDA and WebGPU event-domain runs use the
+private `Pending`/`Retired`/`Failed` lifecycle: retirement consumes `Pending`
+before provider code, and terminal states perform no second provider
+retirement. If execution and explicit cleanup both fail, the execution error
+remains the typed source and the cleanup aggregate is suppressed.
 
 Scheduled operation, transfer, and barrier nodes use this path in production.
 The current schedule builder does not yet emit explicit barriers, and
