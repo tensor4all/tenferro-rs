@@ -786,7 +786,11 @@ impl Runtime {
         super::preparation::prepare_compiled_for(self, &self.0.caches, program, signature, options)
     }
 
-    /// Run a compiled graph through runtime-owned prepared execution.
+    /// Run a compiled graph synchronously with borrowed tensor inputs.
+    ///
+    /// The borrows remain valid until this call returns; this surface never
+    /// detaches work. Asynchronous [`Self::submit`] accepts only the owning
+    /// [`super::execution::ExecutionInputs`] package.
     ///
     /// # Examples
     ///
