@@ -10,13 +10,17 @@ accepted Task 2 correction candidate is the base:
 
 The implementation commit is
 `199e0b94657d9408103c7b92531d41eab7cb5df8`; the P2 ledger/design activation
-candidate is exact commit
-`f26820c57c6e836ea5f10ed7ad5c9e026b672b6`.
+commit is `f26820c57c6e836ea5f10ed7ad5c9e026b672b6`; the ledger artifact
+binding fix is `8c556863c60f76f3b4028ad5a53cbd939a3e8285`. The evidence commit
+containing this updated worklog follows those source commits.
 
 Only `p2-root-claims` is promoted. P3/P4/P5 and all later rows remain
 deferred. The implementation contains no claim/hold table, quarantine,
 recovery, destructor catch-unwind, persistent split/group, provider access,
 legacy bridge, compatibility, cryptographic, or repeated-validation machinery.
+The G1 ownership sketch was reconciled with this exact P2 shape: the pin is
+separate from the identity-bearing claim, and ref/mut capabilities borrow the
+owner rather than an `Arc` projection.
 
 ## Design
 
@@ -46,13 +50,14 @@ legacy bridge, compatibility, cryptographic, or repeated-validation machinery.
 ## Candidate-scoped verification
 
 All commands below were run from the candidate branch at or after
-`f26820c57c6e836ea5f10ed7ad5c9e026b672b6`:
+`8c556863c60f76f3b4028ad5a53cbd939a3e8285`:
 
 - `cargo fmt --all --check` and `git diff --check` — passed;
 - `cargo test -p tenferro-tensor --lib` — 228 passed;
 - `cargo test -p tenferro-tensor --test storage_compile_contract` — 9 UI
   fixtures passed;
-- `cargo test -p tenferro-tensor --test storage_root_claims` — passed;
+- `cargo test -p tenferro-tensor --test storage_root_claims` — passed and
+  delegated to the private four-test root-claims proof surface;
 - `cargo clippy -p tenferro-tensor --all-targets -- -D warnings` — passed;
 - `cargo llvm-cov -p tenferro-tensor --lib --summary-only` — storage files
   covered above 90% lines (diagnostics 98.53%, identity 98.15%, root 94.23%,
@@ -61,8 +66,10 @@ All commands below were run from the candidate branch at or after
 - `python3 scripts/check-storage-ownership-contracts.py` — ledger OK;
 - `python3 scripts/check-storage-design-docs.py` — passed;
 - `python3 scripts/repository-rules-review.py --base origin/main --head
-  f26820c57c6e836ea5f10ed7ad5c9e026b672b6 --output-json
+  8c556863c60f76f3b4028ad5a53cbd939a3e8285 --output-json
   /tmp/p2-task3-rules-review.json` — pass, zero findings.
 
-Fresh independent specification and quality reviews are required against this
-exact candidate before the next phase starts.
+Fresh independent specification and quality reviews are required against the
+final exact evidence commit (the docs-only commit immediately following the
+source candidate above) before the next phase starts. The final review command
+binds to `git rev-parse HEAD`; no source changes occur in the evidence commit.
