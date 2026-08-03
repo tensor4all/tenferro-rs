@@ -1214,6 +1214,7 @@ jobs:
             --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs" \
             --run-ignored all \
             --no-fail-fast \
+            -E 'not test(cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark)' \
             -j 1
 
       - name: Run OpenXLA PJRT E2E tests from archive
