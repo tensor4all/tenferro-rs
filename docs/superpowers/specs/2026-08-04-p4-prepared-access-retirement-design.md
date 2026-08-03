@@ -146,12 +146,12 @@ private proof module through Cargo's library test harness:
 
 | Obligation | Artifact | Private proof |
 |---|---|---|
-| `p4-production-borrow-contract` | `tests/storage_borrow_contract.rs` | checked borrow/recovery and compile-fail fixtures |
+| `p4-production-borrow-contract` | `tests/storage_borrow_contract.rs` | checked private borrow lifetime and unchanged failure carrier |
 | `p4-access-retirement` | `tests/storage_prepared_validation.rs` | invalid layouts rejected before preparation |
 | `p4-provider-release-lifecycle` | `tests/storage_provider_event_retirement.rs` | proven/unproven exactly-once retention |
 | `p4-traversal-resolution-counts` | `tests/storage_traversal_resolution.rs` | fake-provider counts independent of element count |
 | `p4-prepared-access-api` | `tests/storage_prepared_access.rs` | enum API, typed contiguous/strided traversal, no replacement inputs |
-| UI borrow cases | `tests/ui/storage/fail/*.rs` | owner/view/write borrow restrictions |
+| Existing UI borrow cases | `tests/ui/storage/fail/*.rs` | public owner/view/write borrow restrictions; private P4 types are exercised by the nested library harness |
 
 The integration artifacts are test-only bindings to private proofs, not a
 second production authority or a runtime repeated-validation path. The P4
