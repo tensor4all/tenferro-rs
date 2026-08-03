@@ -14,8 +14,9 @@ commit is `f26820c57c6e836ea5f10ed7ad5c9e026b672b6`; the ledger artifact
 binding fix is `8c556863c60f76f3b4028ad5a53cbd939a3e8285`. The evidence commit
 containing this updated worklog follows those source commits.
 
-Only `p2-root-claims` is promoted. P3/P4/P5 and all later rows remain
-deferred. The implementation contains no claim/hold table, quarantine,
+The selected `p2-root-claims` row is promoted on top of the already active P0
+and P1 rows. P3/P4/P5 and all later rows remain deferred. The implementation
+contains no claim/hold table, quarantine,
 recovery, destructor catch-unwind, persistent split/group, provider access,
 legacy bridge, compatibility, cryptographic, or repeated-validation machinery.
 The G1 ownership sketch was reconciled with this exact P2 shape: the pin is
