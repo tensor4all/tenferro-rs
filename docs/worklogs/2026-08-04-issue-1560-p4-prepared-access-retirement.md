@@ -20,7 +20,9 @@ returns a diagnostic outcome without an owner or recovery operation.
 - `BackendAllocation` now exposes borrowed byte mappings at the existing
   private provider boundary. `StorageRef` and `StorageMut` pass the checked
   root-bound span once; provider mapping guards remain borrowed by prepared
-  host access and no provider `Arc` is cloned.
+  host access and no provider `Arc` is cloned. Provider mappings must retain
+  stable exact-span length and initialized valid `TensorScalar` representations;
+  typed preparation checks the returned pointer alignment before access.
 - `CheckedRead` and `CheckedWrite` retain the rank-preserving checked layout,
   dtype/size/alignment, exact span, and mutable injectivity proof. Preparation
   consumes that state into nested `PreparedRead`/`PreparedWrite` host or
