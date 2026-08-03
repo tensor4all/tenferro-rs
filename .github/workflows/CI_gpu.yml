@@ -486,11 +486,13 @@ jobs:
           NEXTEST_TEST_THREADS: "1"
         run: |
           set -euo pipefail
+          # trybuild starts nested Cargo and is compile-only; regular CI owns it.
           cargo nextest run \
             --archive-file "${CUDA_ARCHIVE}" \
             --workspace-remap "${GITHUB_WORKSPACE}" \
             --run-ignored all \
             --no-fail-fast \
+            -E 'not (test(eager_backend_capability_boundary) | test(execution_session_capability_cannot_project_or_escape_owner_borrow))' \
             -j 1
       - name: Run OpenXLA PJRT E2E tests from archive
         env:

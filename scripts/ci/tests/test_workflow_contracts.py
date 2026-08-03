@@ -362,6 +362,18 @@ class WorkflowContractTests(unittest.TestCase):
                 for match in re.finditer(r"cargo nextest archive[\s\S]{0,280}", text):
                     self.assertNotIn("--release", match.group(0))
 
+    def test_gpu_archive_run_excludes_compile_only_trybuild_tests(self) -> None:
+        filter_expression = (
+            "-E 'not (test(eager_backend_capability_boundary) | "
+            "test(execution_session_capability_cannot_project_or_escape_owner_borrow))'"
+        )
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertIn(filter_expression, read(path))
+
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (
             ".github/workflows/runpod-gpu-test.yml",
