@@ -1485,16 +1485,16 @@ group unchanged.
 
 ## G3. Submission
 
-Two complementary APIs (#1555, "Runtime ownership and asynchronous
-execution"; #1565). Detached execution returns an owned group-based result;
-scoped execution returns the hybrid borrowed/owned result defined below.
+G3 has two submission surfaces: detached ownership and scoped borrowing.
+Detached inputs own their allocation group. Scoped inputs are borrowed,
+read-only views whose lifetime is tied to the scope.
 
-### Signatures
+### Detached submission
 
 ```rust
 pub struct ExecutionInputs {
     group: AllocationGroup,
-    bindings: Box<[ValueId]>, // graph input i reads descriptor bindings[i]
+    bindings: Box<[DescriptorSlot]>,
 }
 
 pub fn submit(
@@ -1504,59 +1504,44 @@ pub fn submit(
 ) -> Result<ExecutionHandle, SubmitRejected>;
 
 pub struct SubmitRejected {
-    error: Error,
-    inputs: ExecutionInputs, // the exact unaccepted package
-}
-
-pub struct ExecutionFailure {
-    cause: ExecutionError,
+    cause: SubmitError,
     inputs: ExecutionInputs,
-}
-
-pub struct CancelledExecution {
-    inputs: ExecutionInputs,
-}
-
-pub struct QuarantinedExecution {
-    cause: RetirementError,
-    quarantine: QuarantineId,
-    affected: Box<[AllocationKey]>, // diagnostic identity, never owners
 }
 
 pub enum ExecutionOutcome {
     Completed(ExecutionBundle),
-    Failed(ExecutionFailure),       // recovered inputs, typed cause
-    Cancelled(CancelledExecution),  // recovered inputs
-    Quarantined(QuarantinedExecution), // runtime registry retains resources
+    RetiredFailed {
+        cause: ExecutionError,
+        inputs: ExecutionInputs,
+    },
+    RetiredCancelled {
+        inputs: ExecutionInputs,
+    },
+    CompletionUnproven {
+        cause: CompletionError,
+        diagnostic_keys: Box<[DiagnosticKey]>,
+    },
 }
 
 pub struct ExecutionBundle {
     group: AllocationGroup,
-    outputs: Box<[ExecutionOutput]>,
-    retained_inputs: Box<[Option<ValueId>]>,
+    outputs: Box<[FreshOutput]>,
 }
+```
 
-pub enum ExecutionOutput {
-    Tensor(ValueId),
-    Metadata(OutputMetadata),
-}
+`SubmitRejected` returns the exact owning `ExecutionInputs` that were not
+admitted. After admission, `Completed`, `RetiredFailed`, and
+`RetiredCancelled` expose their resources only after provider retirement.
+`ExecutionBundle` exposes fresh outputs only after that retirement.
 
-impl SubmitRejected {
-    pub fn into_parts(self) -> (Error, ExecutionInputs);
-}
+`CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
+returns an owner or other owning resource. The provider-private permanent
+record retains the consumed `Arc` roots for that outcome. No public result can
+recover those roots.
 
-impl ExecutionFailure {
-    pub fn into_parts(self) -> (ExecutionError, ExecutionInputs);
-}
+### Scoped submission
 
-impl CancelledExecution {
-    pub fn into_inputs(self) -> ExecutionInputs;
-}
-
-impl QuarantinedExecution {
-    pub fn into_parts(self) -> (RetirementError, QuarantineId, Box<[AllocationKey]>);
-}
-
+```rust
 pub fn scope<'env, R>(
     &self,
     f: impl for<'s> FnOnce(&'s SubmitScope<'s, 'env>) -> R,
@@ -1576,146 +1561,33 @@ impl<'s, 'env> ScopedHandle<'s, 'env> {
 
 pub enum ScopedExecutionOutcome<'env> {
     Completed(ScopedExecutionBundle<'env>),
-    Failed(ScopedExecutionFailure<'env>),
-    Cancelled(ScopedCancelledExecution<'env>),
-    Quarantined(ScopedQuarantinedExecution<'env>),
-}
-
-pub struct ScopedExecutionBundle<'env> {
-    allocations: Box<[ScopedAllocation<'env>]>,
-    values: GenerationalDescriptors,
-    outputs: Box<[ScopedOutput]>,
-}
-
-pub enum ScopedOutput {
-    Tensor(ValueId),
-    Metadata(OutputMetadata), // genuinely storage-free graph result
-}
-
-enum ScopedAllocation<'env> {
-    Borrowed(StorageRef<'env>),
-    Owned(OwnedStorage),
+    RetiredFailed {
+        cause: ExecutionError,
+        inputs: ScopedReadInputs<'env>,
+    },
+    RetiredCancelled {
+        inputs: ScopedReadInputs<'env>,
+    },
 }
 
 pub struct ScopedSubmitRejected<'env> {
-    error: Error,
+    cause: SubmitError,
     inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedExecutionFailure<'env> {
-    cause: ExecutionError,
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedCancelledExecution<'env> {
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedQuarantinedExecution<'env> {
-    cause: RetirementError,
-    quarantine: QuarantineId,
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopeExitError<R> {
-    value: R,
-    unobserved: Box<[ScopedTaskFailure]>,
-}
-
-impl<'env> ScopedSubmitRejected<'env> {
-    pub fn into_parts(self) -> (Error, ScopedReadInputs<'env>);
-}
-
-impl<'env> ScopedExecutionFailure<'env> {
-    pub fn into_parts(self) -> (ExecutionError, ScopedReadInputs<'env>);
-}
-
-impl<'env> ScopedCancelledExecution<'env> {
-    pub fn into_inputs(self) -> ScopedReadInputs<'env>;
-}
-
-impl<'env> ScopedQuarantinedExecution<'env> {
-    pub fn into_parts(
-        self,
-    ) -> (RetirementError, QuarantineId, ScopedReadInputs<'env>);
-}
-
-impl<R> ScopeExitError<R> {
-    pub fn into_parts(self) -> (R, Box<[ScopedTaskFailure]>);
 }
 ```
 
-- Repeated or aliased bindings reference descriptors; they never duplicate
-  owners.
-- `ExecutionBundle` fields are private. Tensor `output()` returns a borrowed
-  view; `output_mut()` exclusively borrows the whole bundle; extraction
-  follows G2. Identity, metadata-only tensor transforms, repeated-input, and
-  duplicate-output graphs keep exactly one owner per physical allocation,
-  with no hidden copy. A genuinely storage-free output uses
-  `ExecutionOutput::Metadata`, parallel to scoped execution.
-- `ScopedReadInputs` borrows immutable tensor/group views for `'env` and
-  declares its access mode explicitly. Provider read leases are still
-  acquired (G1), because logically read-only host and device uses can
-  conflict on some providers. G3 contains no scoped writable-input contract;
-  scoped submission is read-only and no writable scoped row may be inferred
-  from this surface.
-- `ScopedHandle<'s, 'env>` cannot escape the scope (higher-ranked `'s`). Its
-  `wait` result contains no `'s` borrow and may leave the scope, but remains
-  bounded by the original input lifetime `'env`.
-- A completed scoped bundle is deliberately hybrid. Identity,
-  metadata-only, repeated-input, and duplicate-output results are
-  tensor descriptors whose slot is `ScopedAllocation::Borrowed`; newly
-  computed tensor results use `ScopedAllocation::Owned`. A genuinely
-  storage-free result is `ScopedOutput::Metadata` and never receives a fake
-  allocation slot. `output()` borrows the bundle and returns a view bounded
-  by both that borrow and `'env`. Extraction is available only for an
-  `Owned` slot satisfying G2; requesting extraction from a `Borrowed` slot
-  returns `BorrowedOutput` and never copies.
-- `ScopedSubmitRejected<'env>` returns the exact unadmitted
-  `ScopedReadInputs<'env>` with its typed cause. After
-  admission, `ScopedExecutionFailure<'env>` and
-  `ScopedCancelledExecution<'env>` retain the exact borrowed input
-  descriptors for diagnosis; caller ownership was never transferred. Partial
-  or uninitialized owned outputs remain private and are retired and dropped
-  or quarantined before either outcome becomes observable. Consuming
-  accessors return the error and exact input package; private fields are not
-  the recovery contract.
-- Scope exit joins and retires every admitted task whose handle was not
-  waited. Dropping a handle abandons observation, not execution. A waited
-  `ScopedExecutionBundle<'env>` may be returned from the closure because it
-  contains only `'env` borrows plus its own fresh owners, never a scope
-  borrow.
-- Scope exit is an explicit synchronous `join_and_retire_all` transition, not
-  a `Drop` side effect. The read-only scope-owned task registry still joins
-  every task and retires every lease before ending the `'env` borrow. If the
-  closure panics, the implementation catches the unwind long enough to
-  perform the same synchronous join/retirement, records secondary failures,
-  and then resumes the original panic. `Drop` is diagnostic cleanup only and
-  never establishes safety or retirement.
-- A normal scope exit reports every unobserved task failure through
-  `ScopeExitError<R>` while preserving the closure result. If the closure
-  panics, the scope guard still drains, records secondary failures in the
-  documented runtime error sink, and resumes the original panic; it never
-  replaces that panic with a second one.
-- If retirement cannot be proven, `Quarantined` is a distinct terminal
-  outcome, not `Retired`. Before a scoped borrow can end, provider state for
-  every affected root is atomically marked quarantined. All later safe map,
-  enqueue, extraction, and deallocation attempts return `Quarantined`; the
-  quarantine registry retains the root resource and context. Thus dropping
-  a scoped error cannot expose borrowed storage to work of unknown status.
-- The detached runtime is the only G3 asynchronous path that owns writable
-  inputs: `submit` consumes `ExecutionInputs`, whose `AllocationGroup` owns
-  its `OwnedStorage` values after admission. Those owners move into the
-  retirement record with the leases; no detached record stores a Rust borrow.
-  A static `UseLease` alone never makes an owner externally writable while
-  device work remains.
-- A direct borrowed device-write API is synchronous in its public lifetime
-  shape: it may use `WriteBinding<'a>` internally, but it must join and retire
-  all device work before returning and therefore cannot place `'a` in a
-  `'static` retirement record. It returns the exact borrowed input on
-  pre-admission failure. This is distinct from the read-only scoped API and
-  detached owning submission; there is no scoped write API in this contract.
+`ScopedReadInputs<'env>` contains borrowed read-only inputs. Rejection returns
+the exact borrows that were not admitted. An admitted scope always joins and
+drains every submission before any input borrow ends. `wait` and scope exit
+observe only post-retirement results; scoped submission has no
+`CompletionUnproven` outcome.
 
+A provider that cannot guarantee join and drain before the scope borrow ends
+must reject before admission or not provide scoped submission. Fresh scoped
+outputs are created and exposed only after retirement. Dropping a handle or
+scope never establishes safety, completion, or retirement. Panic capture is
+allowed only at the existing thread/FFI boundary; submission adds no panic
+catching of its own.
 ### Lifecycle
 
 States: `Prepared` (validation/planning), `Admitted` (worker owns inputs),
