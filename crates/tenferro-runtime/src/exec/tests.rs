@@ -734,7 +734,7 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
         dtype: DType::F64,
         output_shapes: Vec::new().into(),
         output_extents: Vec::new().into(),
-        last_use: Vec::new().into(),
+        last_use: Vec::new(),
     };
     let operations = vec![PreparedOperationPlan::metadata(
         metadata_only_prepared_operation(),

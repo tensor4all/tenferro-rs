@@ -2629,6 +2629,15 @@ mod tests {
 
     #[test]
     fn tensor_backend_executor_bridge_does_not_require_clone_source_contract() {
+        type ContractConstructor<B> = fn(
+            ProviderDeviceIdentity,
+            CoreCapabilityBundle,
+            B,
+            Arc<dyn EventDomainDriver>,
+            InputIngressContract,
+            Option<Arc<dyn RuntimeCacheOwner>>,
+        ) -> ExecutableEngineContract;
+
         fn factory_accepts_backend_without_clone_bound<B>()
         where
             B: TensorBackend + Send + Sync + 'static,
@@ -2641,14 +2650,7 @@ mod tests {
         where
             B: TensorBackend + Send + Sync + 'static,
         {
-            let _constructor: fn(
-                ProviderDeviceIdentity,
-                CoreCapabilityBundle,
-                B,
-                Arc<dyn EventDomainDriver>,
-                InputIngressContract,
-                Option<Arc<dyn RuntimeCacheOwner>>,
-            ) -> ExecutableEngineContract = ExecutableEngineContract::new::<B>;
+            let _constructor: ContractConstructor<B> = ExecutableEngineContract::new::<B>;
         }
 
         factory_accepts_backend_without_clone_bound::<CpuBackend>();

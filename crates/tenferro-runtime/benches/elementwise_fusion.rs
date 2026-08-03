@@ -3,8 +3,6 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::Runtime;
 use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Tensor, TracedTensor};
 
-type CompiledProgram = CompiledGraph;
-
 fn cpu_runtime() -> Runtime {
     let mut builder = Runtime::builder();
     builder
@@ -20,19 +18,18 @@ fn input_tensor(n: usize, scale: f64) -> Tensor {
     Tensor::from_vec_col_major(vec![n], data).expect("benchmark tensor")
 }
 
-fn compile_add_mul(n: usize) -> CompiledProgram {
+fn compile_add_mul(n: usize) -> CompiledGraph {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("b placeholder");
     let sum = (&a + &b).expect("sum graph");
     let out = (&sum * &a).expect("multiply graph");
     let mut compiler = GraphCompiler::new();
-    let program = compiler
+    compiler
         .compile_with_input_specs(&out, &[(&a, DType::F64, &[n]), (&b, DType::F64, &[n])])
-        .expect("compiled add-mul graph");
-    program
+        .expect("compiled add-mul graph")
 }
 
-fn compile_broadcast_mul(rows: usize, cols: usize) -> CompiledProgram {
+fn compile_broadcast_mul(rows: usize, cols: usize) -> CompiledGraph {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
@@ -43,16 +40,15 @@ fn compile_broadcast_mul(rows: usize, cols: usize) -> CompiledProgram {
         .expect("rhs broadcast graph");
     let out = (&a_bc * &b_bc).expect("multiply graph");
     let mut compiler = GraphCompiler::new();
-    let program = compiler
+    compiler
         .compile_with_input_specs(
             &out,
             &[(&a, DType::F64, &[rows]), (&b, DType::F64, &[cols])],
         )
-        .expect("compiled broadcast-multiply graph");
-    program
+        .expect("compiled broadcast-multiply graph")
 }
 
-fn compile_broadcast_mul_add(rows: usize, cols: usize) -> CompiledProgram {
+fn compile_broadcast_mul_add(rows: usize, cols: usize) -> CompiledGraph {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
@@ -64,13 +60,12 @@ fn compile_broadcast_mul_add(rows: usize, cols: usize) -> CompiledProgram {
     let product = (&a_bc * &b_bc).expect("multiply graph");
     let out = (&product + &a_bc).expect("add graph");
     let mut compiler = GraphCompiler::new();
-    let program = compiler
+    compiler
         .compile_with_input_specs(
             &out,
             &[(&a, DType::F64, &[rows]), (&b, DType::F64, &[cols])],
         )
-        .expect("compiled broadcast-multiply-add graph");
-    program
+        .expect("compiled broadcast-multiply-add graph")
 }
 
 fn bench_runtime_add_mul(c: &mut Criterion) {

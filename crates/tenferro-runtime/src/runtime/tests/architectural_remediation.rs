@@ -9,34 +9,32 @@ use super::super::{
     RuntimeConfigError, RuntimeInputContract, StorageClass,
 };
 
-fn registration_metadata(
-    engine_name: &str,
-) -> Result<
-    (
-        EngineId,
-        ProviderDeviceIdentity,
-        ExecutionContextIdentity,
-        HardwareClassId,
-        Arc<[StorageClass]>,
-        StorageClass,
-    ),
-    RuntimeConfigError,
-> {
+struct RegistrationMetadata {
+    engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
+    context_identity: ExecutionContextIdentity,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+}
+
+fn registration_metadata(engine_name: &str) -> Result<RegistrationMetadata, RuntimeConfigError> {
     let storage =
         StorageClass::new("tenferro.test.remediation.host").map_err(RuntimeConfigError::from)?;
-    Ok((
-        EngineId::new(engine_name).map_err(RuntimeConfigError::from)?,
-        ProviderDeviceIdentity::new(
+    Ok(RegistrationMetadata {
+        engine_id: EngineId::new(engine_name).map_err(RuntimeConfigError::from)?,
+        provider_device_identity: ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.remediation.provider")
                 .map_err(RuntimeConfigError::from)?,
             "device:0",
         )
         .map_err(RuntimeConfigError::from)?,
-        ExecutionContextIdentity::of::<tenferro_cpu::CpuBackend>(),
-        HardwareClassId::new("tenferro.test.remediation.host").map_err(RuntimeConfigError::from)?,
-        Arc::from(vec![storage.clone()]),
-        storage,
-    ))
+        context_identity: ExecutionContextIdentity::of::<tenferro_cpu::CpuBackend>(),
+        hardware_class: HardwareClassId::new("tenferro.test.remediation.host")
+            .map_err(RuntimeConfigError::from)?,
+        storage_classes: Arc::from(vec![storage.clone()]),
+        default_storage_class: storage,
+    })
 }
 
 fn ingress_contract() -> InputIngressContract {
@@ -50,14 +48,14 @@ fn ingress_contract() -> InputIngressContract {
 
 #[test]
 fn registration_state_is_a_single_preparation_or_executable_witness() {
-    let (
+    let RegistrationMetadata {
         engine_id,
         provider_device_identity,
         context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
-    ) = registration_metadata("tenferro.test.remediation.preparation-only").unwrap();
+    } = registration_metadata("tenferro.test.remediation.preparation-only").unwrap();
     let preparation_only = EngineRegistration::preparation_only(
         ProviderPreparationBinding::new(
             engine_id,
@@ -75,14 +73,14 @@ fn registration_state_is_a_single_preparation_or_executable_witness() {
         EngineRegistrationState::PreparationOnly { .. }
     ));
 
-    let (
+    let RegistrationMetadata {
         engine_id,
         provider_device_identity,
-        _context_identity,
+        context_identity: _context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
-    ) = registration_metadata("tenferro.test.remediation.executable").unwrap();
+    } = registration_metadata("tenferro.test.remediation.executable").unwrap();
     let executable = EngineRegistration::executable(
         ProviderExecutableBinding::new(
             engine_id,
@@ -109,14 +107,14 @@ fn registration_state_is_a_single_preparation_or_executable_witness() {
 #[test]
 fn frozen_executable_selection_returns_one_complete_witness(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (
+    let RegistrationMetadata {
         engine_id,
         provider_device_identity,
         context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
-    ) = registration_metadata("tenferro.test.remediation.frozen-witness")?;
+    } = registration_metadata("tenferro.test.remediation.frozen-witness")?;
     let registration = EngineRegistration::executable(ProviderExecutableBinding::new(
         engine_id.clone(),
         hardware_class,
@@ -160,14 +158,14 @@ fn frozen_executable_selection_returns_one_complete_witness(
 #[test]
 fn production_reconfiguration_assigns_identity_before_freeze(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (
+    let RegistrationMetadata {
         engine_id,
         provider_device_identity,
         context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
-    ) = registration_metadata("tenferro.test.remediation.identity").unwrap();
+    } = registration_metadata("tenferro.test.remediation.identity").unwrap();
     let registration = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
         engine_id.clone(),
         provider_device_identity,
@@ -186,14 +184,14 @@ fn production_reconfiguration_assigns_identity_before_freeze(
         .expect("engine in initial snapshot")
         .registration_identity();
 
-    let (
+    let RegistrationMetadata {
         engine_id,
         provider_device_identity,
         context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
-    ) = registration_metadata("tenferro.test.remediation.identity").unwrap();
+    } = registration_metadata("tenferro.test.remediation.identity").unwrap();
     let replacement = EngineRegistration::preparation_only(ProviderPreparationBinding::new(
         engine_id.clone(),
         provider_device_identity,
