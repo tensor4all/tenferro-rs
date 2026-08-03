@@ -1353,10 +1353,14 @@ pub struct AllocationGroup {
 pub struct DescriptorSlot(u32); // opaque; meaningful only under its group borrow
 
 struct DescriptorRecord {
-    allocation: AllocationSlot,       // index into `allocations`
+    allocation: AllocationSlot, // index into `allocations`
     dtype: DType,
-    layout: TensorLayout,
+    layout: ValidatedLayoutMetadata,
+    byte_range: ValidatedRootBoundRange,
     placement: Placement,
+    storage: ValidatedStorageMetadata,
+    provider: ValidatedProviderMetadata,
+    write_injectivity: Option<WriteInjectivityProof>,
 }
 ```
 
@@ -1370,7 +1374,9 @@ Construction preconditions (safe constructors):
 - every descriptor references an occupied allocation entry. Before publishing
   the record, safe construction validates its dtype, checked layout and byte
   range, alignment, placement, storage, and provider compatibility against
-  that entry's exact root-bound span;
+  that entry's exact root-bound span, then retains the validated
+  layout/range/storage/provider metadata in `DescriptorRecord`. This metadata
+  is non-owning and non-authoritative;
 - descriptors may alias freely, including exact duplicates;
 - descriptor slots are append-only. Insertion always appends a new table
   entry; removing a descriptor leaves its entry vacant for the rest of the
@@ -1405,20 +1411,23 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
   cannot expose storage or a provider binding. Slot resolution checks only
   the local table position and occupancy; it does not repeat the descriptor's
   construction-time invariant validation.
-- After any operation-specific checks such as write injectivity or pairwise
-  disjointness, the access path constructs the G1 prepared-access object once.
-  Provider map and enqueue consume that prepared object and do not repeat
-  bounds, layout, storage, or provider validation.
+- An access path combines the retained metadata with its Rust borrow and any
+  operation-specific proof, then constructs the G1 prepared-access object
+  once. Provider map and enqueue consume that prepared object and do not
+  repeat bounds, layout, range, storage, or provider validation.
 - `view` borrows the group shared; any number of aliasing read views may
   coexist. The returned view is bounded by that borrow.
 - `view_mut` exclusively borrows the whole group; one mutable view exists at
   a time. The Rust borrow is the write authority; the slot is only the record
   selected by that borrow.
 - `split_mut` resolves all requested slots under one exclusive group borrow,
-  rejects duplicate slots, and returns N simultaneous mutable views only
-  after the central disjointness proof (below). Children are non-cloneable
-  and hold the exclusive borrow of the group; the root is inaccessible while
-  any child lives.
+  reads their retained validated metadata, and returns N simultaneous mutable
+  views only after the central disjointness proof (below). It performs no
+  layout, range, storage, provider, map, or enqueue revalidation. Its only
+  additional proofs are write injectivity when a record does not already
+  retain that proof, and pairwise disjointness for the requested mutable
+  views. Children are non-cloneable and hold the exclusive borrow of the
+  group; the root is inaccessible while any child lives.
 - `try_extract` resolves `slot` under `&mut AllocationGroup`. It succeeds
   only when the selected record is the sole descriptor in this group that
   refers to its `AllocationSlot`; the record is removed and its owned
@@ -1436,31 +1445,41 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
 
 ### Central disjointness proof
 
-One audited module owns the proof. Normative validation order (#1561):
+One audited module owns the proof. Normative order (#1561):
 
-1. validate each layout with checked shape/stride/offset arithmetic;
-2. resolve dtype-sized byte ranges against the exact root-bound claim span;
-3. prove each mutable layout internally injective;
-4. partition requests by allocation key and root span;
+1. resolve each requested occupied descriptor slot under the exclusive group
+   borrow;
+2. read its retained validated layout, root-bound byte range, storage, and
+   provider metadata without recomputing those facts;
+3. use the retained write-injectivity proof, or compute that proof once when
+   the record does not already contain it;
+4. partition requests by their retained allocation slot and root span;
 5. treat empty descriptors as non-overlapping;
-6. prove pairwise disjoint reachable byte envelopes;
+6. prove pairwise disjointness of the retained reachable byte envelopes;
 7. derive non-cloneable disjoint mutable child capabilities whose lifetimes
    remain bounded by the exclusive group borrow.
 
+After slot resolution, `split_mut` performs only the write-injectivity proof
+for records that do not retain one and requested-view pairwise disjointness.
+It neither maps nor enqueues storage. A later map or enqueue consumes prepared
+access and does not repeat construction-time validation.
+
 Conservative rejection is required rather than element enumeration:
 interleaved strided requests whose byte envelopes overlap return
-`NotProvablyDisjoint`. Error variants: invalid layout, foreign allocation,
-internal overlap, pairwise overlap, not provably disjoint, overflow,
-unsupported provider span. Every error leaves the group unchanged.
+`NotProvablyDisjoint`. Error variants are invalid or empty descriptor slot,
+non-injective write layout when no retained proof exists, pairwise overlap,
+and not provably disjoint. Construction-time layout, range, storage, and
+provider errors cannot originate from `split_mut`. Every error leaves the
+group unchanged.
 
 ### State table
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| construct group | owning (consumes owners) | none | none | owners returned to caller or dropped exactly once, per constructor contract | no partially observable group | owners' G1 rules |
+| construct group | owning (consumes owners) | none | none | typed invariant-validation error returns owners or drops them exactly once, per constructor contract | no partially observable record; validated layout/range/storage/provider metadata is published only after all checks pass | owners' G1 rules |
 | `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
 | `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
-| `split_mut` | exclusive | requested slots are resolved under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
+| `split_mut` | exclusive | requested slots consume retained metadata under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | no map/enqueue; no repeated validation | invalid/empty slot, non-injective write layout when its proof was absent, pairwise overlap, or not provably disjoint; group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
 | `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; the descriptor slot is never reused; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
 | `into_tensor` | owning | consuming group resolves one local slot and discards other records | none | group returned unchanged with reason | unselected records and claims follow G1 drop rules | selected owner follows G1 |
 
@@ -2362,7 +2381,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | Gate | Enforcement | Owning phases |
 |---|---|---|
 | G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
-| G2 group, splitting, extraction | N-way split cases (N=0,1,>2, empty, reverse-stride, overflow); permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters | #1561 |
+| G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
 | G3 submission terminal semantics | rejection carriers return identical allocation keys; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and quarantine outcomes; cancellation/panic/detach/unobserved-error suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
