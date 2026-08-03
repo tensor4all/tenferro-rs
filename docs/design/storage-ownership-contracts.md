@@ -1691,7 +1691,7 @@ safety does not depend on panic catching or `Drop`.
 | `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain | execution failure or worker/provider panic enters `Draining` | panic is typed at the existing worker/thread/FFI boundary; reaper retains ownership | not yet |
 | `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
 | `Draining` -> `Retired(Failed)` | owning (worker/reaper) | none | completion proven | returns exact input owners with the typed execution or panic cause | n/a | returned owners follow G1 |
-| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains the `Arc` roots | retained by that permanent record |
+| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains the event, `Arc` roots, and provider context | retained permanently because completion and safe event destruction are unproven |
 | scoped call rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns exact borrowed inputs; non-host or asynchronous providers are unsupported | no work is admitted | caller-owned borrows remain valid |
 | scoped admitted call | shared | input borrows remain for `'env` | host/CPU work executes and retires synchronously before return | returns only completed or failed after retirement | no work survives to an unwind point; no panic-catch or `Drop` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
 
@@ -1917,7 +1917,7 @@ constructor resolves the storage capability, validates checked
 shape/stride/offset arithmetic, bounds, span containment, alignment, layout
 injectivity for writes, provider compatibility, mapping, and synchronization
 before constructing or publishing `CheckedLayout`, `PreparedHostRead`, or
-`PreparedHostWrite`. Failure rolls back any partial mapping/registration and
+`PreparedHostWrite`. Failure releases any temporary provider mapping and
 returns the unchanged input capability with a typed `AccessError`; no prepared
 object or iterator exists on failure. The constructor consumes the checked
 layout into exactly one `PreparedHost*` enum variant. Matching that variant is
@@ -2171,9 +2171,9 @@ Common validation commands:
 |---|---|---|
 | 0 (#1556) | runtime/API docs for discovery, caller-selected engine IDs, endpoint routing; examples must not assume CUDA device 0 or a fixed engine ID | common commands |
 | 1 (#1557) | this document; the per-phase ownership table itself | common commands |
-| 2 (#1558) | internal architecture/safety rustdoc for the unsafe allocation boundary; the legacy-bridge inventory | common commands |
+| 2 (#1558) | internal architecture/safety rustdoc for the unsafe allocation boundary and direct root/span ownership model | common commands |
 | 3 (#1559) | `docs/spec/tensor-semantics.md` section III rewritten in the PR that removes public `Buffer<T>`; rustdoc/examples broken by clone/Buffer removal; final owner/view migration notes | common commands |
-| 4 (#1560) | G1 state tables kept current; API rustdoc for guards/leases; waits documented as synchronization points, explicitly not copies | common commands |
+| 4 (#1560) | G1 state tables kept current; API rustdoc for prepared host access and provider event retirement; waits documented as synchronization points, explicitly not copies | common commands |
 | 5 (#1561) | storage design updates for immutable aliasing, conservative disjointness, N-way borrow lifetimes, extraction | common commands |
 | 6 (#1562) | reinterpretation rustdoc; the reserved section of the views guide (representation view vs numeric cast, supported pairs) | common commands |
 | 7 (#1563) | CUDA design doc, device guide, unsafe interop rustdoc, synchronization/reclamation behavior, explicit duplication examples | common commands |
