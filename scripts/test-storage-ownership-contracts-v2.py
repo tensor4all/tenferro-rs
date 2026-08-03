@@ -36,6 +36,7 @@ ACTIVE_IDS = frozenset(
         "p4-provider-release-lifecycle",
         "p4-traversal-resolution-counts",
         "p4-prepared-access-api",
+        "p5-allocation-group",
     }
 )
 DEFERRED_CORRECTIONS: dict[str, str] = {}
