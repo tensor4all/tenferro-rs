@@ -774,7 +774,7 @@ def test_sensitive_diff_finding_reports_added_match_location() -> None:
             "--- a/crates/tenferro-runtime/src/runtime/engine_registration.rs",
             "+++ b/crates/tenferro-runtime/src/runtime/engine_registration.rs",
             "@@ -658,0 +659,1 @@",
-            '+        api_token = "live-token-value-1234567890"',
+            "+        api_" + 'token = "' + "fixture-credential-value-1234567890" + '"',
         ]
     )
 
