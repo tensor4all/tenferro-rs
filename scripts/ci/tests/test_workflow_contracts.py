@@ -372,8 +372,18 @@ class WorkflowContractTests(unittest.TestCase):
             ".github/workflows/runpod-gpu-test.yml",
             ".github/workflows/CI_gpu.yml",
         ):
+            text = read(path)
+            cuda_tests = text[
+                text.index("      - name: Run CUDA tests from archive") :
+                text.index("      - name: Run OpenXLA PJRT E2E tests from archive")
+            ]
+            filter_lines = [
+                line.strip()
+                for line in cuda_tests.splitlines()
+                if line.strip().startswith("-E ")
+            ]
             with self.subTest(path=path):
-                self.assertIn(CUDA_ARCHIVE_TEST_FILTER, read(path))
+                self.assertEqual(filter_lines, [f"{CUDA_ARCHIVE_TEST_FILTER} \\"])
 
         for path in (
             "crates/tenferro-ad/tests/integration/eager_backend_capability_contract.rs",
@@ -389,7 +399,10 @@ class WorkflowContractTests(unittest.TestCase):
         structural_tests = read(
             "crates/tenferro-gpu/src/cubecl/tests/structural_tests.rs"
         )
-        self.assertIn(f"fn {benchmark}()", structural_tests)
+        self.assertRegex(
+            structural_tests,
+            rf"#\[ignore[^\]]*\]\s*fn {benchmark}\(\)",
+        )
         for path in (
             ".github/workflows/runpod-gpu-test.yml",
             ".github/workflows/CI_gpu.yml",
@@ -399,8 +412,13 @@ class WorkflowContractTests(unittest.TestCase):
                 text.index("      - name: Run CUDA tests from archive") :
                 text.index("      - name: Run OpenXLA PJRT E2E tests from archive")
             ]
+            filter_lines = [
+                line.strip()
+                for line in cuda_tests.splitlines()
+                if line.strip().startswith("-E ")
+            ]
             with self.subTest(path=path):
-                self.assertEqual(cuda_tests.count(CUDA_ARCHIVE_TEST_FILTER), 1)
+                self.assertEqual(filter_lines, [f"{CUDA_ARCHIVE_TEST_FILTER} \\"])
 
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (
