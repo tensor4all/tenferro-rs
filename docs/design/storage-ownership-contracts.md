@@ -1522,9 +1522,6 @@ pub enum ExecutionOutcome {
         cause: ExecutionError,
         inputs: ExecutionInputs,
     },
-    RetiredCancelled {
-        inputs: ExecutionInputs,
-    },
     CompletionUnproven {
         cause: CompletionError,
         diagnostic_keys: Box<[DiagnosticKey]>,
@@ -1540,15 +1537,30 @@ pub enum ExecutionOutput {
     Tensor(DescriptorSlot),
     Metadata(OutputMetadata),
 }
+
+pub enum OutputRef<'a> {
+    Tensor(TensorView<'a>),
+    Metadata(&'a OutputMetadata),
+}
+
+impl ExecutionBundle {
+    pub fn output(&self, output: usize)
+        -> Result<OutputRef<'_>, OutputAccessError>;
+    pub fn try_extract(&mut self, output: usize)
+        -> Result<Tensor, OutputExtractError>;
+    pub fn into_parts(self) -> (AllocationGroup, Box<[ExecutionOutput]>);
+}
 ```
 
 `SubmitRejected` returns the exact owning `ExecutionInputs` that were not
-admitted. After admission, `Completed`, `RetiredFailed`, and
-`RetiredCancelled` expose their resources only after provider retirement.
-`ExecutionBundle` exposes outputs only after that retirement. A tensor output
-slot is resolved in the returned group. It may be an existing identity or
-repeated slot, or a slot newly inserted for a fresh allocation; neither case
-copies storage. `Metadata` is genuinely storage-free.
+admitted. After admission, `Completed` and `RetiredFailed` expose their
+resources only after provider retirement. `ExecutionBundle::output` returns a
+borrowed tensor view or metadata reference. A tensor output slot is resolved
+in the returned group and may be an existing identity or repeated slot, or a
+slot newly inserted for a fresh allocation; neither case copies storage.
+`try_extract` delegates tensor extraction to G2, and `into_parts` consumes the
+bundle while preserving its group and output map. `Metadata` is genuinely
+storage-free.
 
 `CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
 returns an owner or other owning resource. The provider-private permanent
@@ -1578,9 +1590,6 @@ pub enum ScopedExecutionOutcome<'env> {
         cause: ExecutionError,
         inputs: ScopedReadInputs<'env>,
     },
-    RetiredCancelled {
-        inputs: ScopedReadInputs<'env>,
-    },
 }
 
 pub struct ScopedSubmitRejected<'env> {
@@ -1602,61 +1611,81 @@ pub enum ScopedOutput<'env> {
     Owned(DescriptorSlot),
     Metadata(OutputMetadata),
 }
+
+pub enum ScopedOutputExtractError {
+    BorrowedOutput,
+    Output(OutputExtractError),
+}
+
+impl<'env> ScopedExecutionBundle<'env> {
+    pub fn output(&self, output: usize)
+        -> Result<OutputRef<'_>, OutputAccessError>;
+    pub fn try_extract(&mut self, output: usize)
+        -> Result<Tensor, ScopedOutputExtractError>;
+    pub fn into_parts(self)
+        -> (AllocationGroup, Box<[ScopedOutput<'env>]>);
+}
 ```
 
 `ScopedReadInputs<'env>` contains only immutable `TensorView<'env>` bindings;
 there is no writable binding shape. Rejection returns the exact borrowed
 package that was not admitted. Once admitted, `execute_scoped_read_only` is
-synchronous to retirement and returns only `Completed`, `RetiredFailed`, or
-`RetiredCancelled` after all provider work has retired.
+synchronous to retirement and returns only `Completed` or `RetiredFailed`
+after all provider work has retired.
 
 A completed scoped bundle distinguishes borrowed and owned tensor results.
 Identity and repeated outputs are `Borrowed` descriptor views bounded by
 `'env`; fresh results are inserted into `owned` and named by group-local
 `Owned` slots. `Metadata` is storage-free. None of these paths copies or
 materializes input storage, and fresh owned outputs become observable only
-after retirement.
+after retirement. `output` reborrows either tensor form as an immutable view.
+`try_extract` delegates `Owned` slots to G2; a `Borrowed` output returns
+`ScopedOutputExtractError::BorrowedOutput` and never copies. `into_parts`
+consumes the bundle and preserves the owned group and output map.
 
-A provider that cannot guarantee join and drain before an input borrow ends
-must reject before admission or not provide scoped read-only execution. The
-call has no return or unwind edge to the caller while borrowed device work is
-outstanding. Safety follows from synchronous retirement, never from `Drop` or
-a submission-layer panic catch.
+Scoped read-only execution supports only host/CPU providers whose operation is
+synchronous through retirement. CUDA, WebGPU, Metal, and any provider that can
+leave asynchronous work live across unwind are rejected before admission or
+report the operation unsupported. No borrowed device work is outstanding at
+any unwind point. Safety follows from the synchronous-provider contract,
+never from panic catching or `Drop`.
 
 ### Lifecycle
 
 Detached execution follows `Prepared` -> `Admitted`/`Running` -> `Draining`
--> `Retired(Completed | Failed | Cancelled)` or `CompletionUnproven`. The
-public terminal variants are `Completed`, `RetiredFailed`,
-`RetiredCancelled`, and `CompletionUnproven`.
+-> `Retired(Completed | Failed)` or `CompletionUnproven`. The public terminal
+variants are `Completed`, `RetiredFailed`, and `CompletionUnproven`.
 
 `Prepared` covers validation and planning. Rejection returns the exact
 unadmitted owners. Admission consumes `ExecutionInputs`; the worker or reaper
-owns its inputs and leases until a terminal outcome. Cancellation is
-cooperative and can take effect only before enqueue; enqueued work drains.
+owns its inputs and leases until a terminal outcome.
 
-`Retired(Failed | Cancelled)` returns the exact input owners only after
-completion is proven. `CompletionUnproven` returns no owner: a provider-private
-permanent record retains the `Arc` roots and exposes only its typed cause and
-diagnostics. There is no quarantine, poison, registry, retry, or recovery path.
+A detached worker or provider panic is contained at the existing worker,
+thread, or FFI boundary and enters `Draining`. If completion is proven,
+`RetiredFailed` returns the exact input owners with a typed panic cause. If
+completion cannot be proven, `CompletionUnproven` returns only its typed cause
+and diagnostics while a provider-private permanent record retains the `Arc`
+roots. No public recovery path returns those owners.
 
 Dropping a detached handle detaches observation; the reaper owns resources
 until the terminal outcome.
 
-Scoped read-only execution is synchronous. Rejection returns the exact
-borrowed inputs. An admitted call joins and drains before return, so no work
-is outstanding at unwind; safety does not depend on `Drop` or `catch_unwind`.
+Scoped read-only execution is limited to synchronous host/CPU providers.
+Rejection returns the exact borrowed inputs; accelerator and asynchronous
+providers reject before admission or do not support this call. An admitted
+call retires before return, so no borrowed work is outstanding at unwind and
+safety does not depend on panic catching or `Drop`.
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
 | `Prepared` -> submit result | owning (consumes `ExecutionInputs`) | none | validation and planning only | `SubmitRejected` returns the exact unadmitted owners | no admitted work or provider retention | owners return to the caller under G1 |
-| `Admitted` -> `Running` | owning (worker) | none | leases acquired before enqueue | pre-enqueue cancellation or admission failure enters the terminal contract | handle drop detaches observation; reaper retains owners and leases | only at a terminal outcome |
-| `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain; cancellation never revokes enqueued work | execution failure or cancellation enters `Draining` | worker/reaper retains ownership | not yet |
+| `Admitted` -> `Running` | owning (worker) | none | leases acquired before enqueue | post-admission preparation or enqueue failure enters `Draining` | handle drop detaches observation; reaper retains owners and leases | only at a terminal outcome |
+| `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain | execution failure or worker/provider panic enters `Draining` | panic is typed at the existing worker/thread/FFI boundary; reaper retains ownership | not yet |
 | `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
-| `Draining` -> `Retired(Failed | Cancelled)` | owning (worker/reaper) | none | completion proven | returns exact input owners only then | n/a | returned owners follow G1 |
-| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only `CompletionError` and diagnostics | permanent record retains the `Arc` roots | retained by that permanent record |
-| scoped submit rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns the exact borrowed inputs with the cause | no work is admitted | caller-owned borrows remain valid |
-| scoped admitted call | shared | input borrows remain for `'env` | joins and drains before return | returns only completed/failed/cancelled after retirement | no work is outstanding at unwind; no `Drop` or `catch_unwind` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
+| `Draining` -> `Retired(Failed)` | owning (worker/reaper) | none | completion proven | returns exact input owners with the typed execution or panic cause | n/a | returned owners follow G1 |
+| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains the `Arc` roots | retained by that permanent record |
+| scoped call rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns exact borrowed inputs; non-host or asynchronous providers are unsupported | no work is admitted | caller-owned borrows remain valid |
+| scoped admitted call | shared | input borrows remain for `'env` | host/CPU work executes and retires synchronously before return | returns only completed or failed after retirement | no work survives to an unwind point; no panic-catch or `Drop` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
 
 ## G4. Method distribution
 
@@ -2095,7 +2124,7 @@ Common validation commands:
 | 6 (#1562) | reinterpretation rustdoc; the reserved section of the views guide (representation view vs numeric cast, supported pairs) | common commands |
 | 7 (#1563) | CUDA design doc, device guide, unsafe interop rustdoc, synchronization/reclamation behavior, explicit duplication examples | common commands |
 | 8 (#1564) | GPU backend design, device guide, Apple tutorials; synchronization/map transitions vs transfers; one owner with multiple access endpoints | common commands |
-| 9 (#1565) | detached vs scoped ownership, outcome recovery, detach vs cancel, extraction; G3 state tables kept current | common commands |
+| 9 (#1565) | detached vs synchronous scoped ownership, outcome recovery, handle detachment, extraction; G3 state tables kept current | common commands |
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
@@ -2372,7 +2401,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 |---|---|---|
 | G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
-| G3 submission terminal semantics | executable checks prove `SubmitRejected` returns the exact owning `ExecutionInputs` and `ScopedSubmitRejected` returns the exact borrowed `ScopedReadInputs<'env>`; synchronous scoped retirement before normal return or unwind, with no safety dependence on `Drop` or `catch_unwind`; scoped outputs bounded by `'env`; detached `CompletionUnproven` returns no owners while provider-private `Arc` roots remain permanently retained; cancellation/detach/terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
+| G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; output view, metadata, consuming-parts, G2 extraction, and zero-copy scoped `BorrowedOutput` cases; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
