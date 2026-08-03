@@ -150,12 +150,12 @@ contractual active/deferred IDs without becoming another production registry.
 The checker is v2-only, the old v1 test authority is deleted, and the retained
 v1 fixture contains only its schema marker so that an old manifest is rejected
 without a compatibility parser. The real design-document checker is an active
-P1 obligation. The current production state activates the already reconciled
-P0 `p0-control-plane` row, the four P1 rows
+P1 obligation. The current production state activates the four P1 rows
 (`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
-`p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row. P0
-and all later rows remain deferred until their real artifacts and verifiers
-land. No missing deferred artifact is fabricated to make this phase terminal.
+`p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row; the
+already reconciled P0 `p0-control-plane` row is active as their prerequisite.
+All later rows remain deferred until their real artifacts and verifiers land.
+No missing deferred artifact is fabricated to make this phase terminal.
 
 ### One canonical graph
 
@@ -456,8 +456,8 @@ The v2 suite uses temporary repositories for reachable path, graph, promotion,
 command, receipt, and exit-status mistakes, plus an integration case for the
 checked-in production manifest. Counts are derived from the parsed manifest;
 the suite does not preserve a migration-event registry or historical totals.
-It verifies the already active P0 row, the four currently implementable P1
-rows (including the measured element-access baseline), and the selected P2
+It verifies the active P0 prerequisite, the four currently implementable P1 rows
+(including the measured element-access baseline), and the selected P2
 root-claims test command. The remaining future rows remain deferred and are not
 executed or materialized. Fake active artifacts are rejected because they would
 turn missing scientific evidence into a green lifecycle state rather than
