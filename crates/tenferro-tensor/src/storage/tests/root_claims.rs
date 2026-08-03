@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::{AllocationDomainId, AllocationId, BackendId};
 
+use super::super::root::import_host_vec;
 use super::super::{
     import_unique_root, AllocationKey, BackendAllocation, ByteRange, ProviderCapabilities,
     ProviderKind, RequestedIdentity, RootBoundSpan, RootResourceExtent, StorageOperation,
@@ -135,4 +136,40 @@ fn root_span_is_the_full_checked_extent() {
     assert_eq!(span.byte_offset(), extent.byte_offset());
     assert_eq!(span.byte_len(), extent.byte_len());
     assert_eq!(span.guaranteed_alignment(), extent.guaranteed_alignment());
+}
+
+#[test]
+fn host_vec_import_retains_exact_bytes_and_drops_once() {
+    let owner = import_host_vec(vec![1_i32, 2, 3]).expect("host root import");
+    let span = owner.root_span();
+    let read = owner.as_ref();
+    let mapping = read
+        .map_read(span, crate::DType::I32)
+        .expect("host read mapping");
+    assert_eq!(mapping.bytes().len(), 12);
+    let values = unsafe { std::slice::from_raw_parts(mapping.bytes().as_ptr() as *const i32, 3) };
+    assert_eq!(values, &[1, 2, 3]);
+    drop(mapping);
+    drop(owner);
+}
+
+#[test]
+fn host_vec_write_mapping_updates_the_owned_vector() {
+    let mut owner = import_host_vec(vec![1_i32, 2]).expect("host root import");
+    let span = owner.root_span();
+    {
+        let write = owner.as_mut();
+        let mut mapping = write
+            .map_write(span, crate::DType::I32)
+            .expect("host write mapping");
+        mapping
+            .bytes_mut()
+            .copy_from_slice(&[3, 0, 0, 0, 4, 0, 0, 0]);
+    }
+    let read = owner.as_ref();
+    let mapping = read
+        .map_read(span, crate::DType::I32)
+        .expect("host read mapping");
+    let values = unsafe { std::slice::from_raw_parts(mapping.bytes().as_ptr() as *const i32, 2) };
+    assert_eq!(values, &[3, 4]);
 }
