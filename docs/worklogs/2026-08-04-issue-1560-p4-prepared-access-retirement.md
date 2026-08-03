@@ -15,6 +15,11 @@ state, retry/recovery registry, cryptographic evidence, or repeated
 map/enqueue validation. Unproven completion retains one private record and
 returns a diagnostic outcome without an owner or recovery operation.
 
+The source candidate for this evidence is
+`b2651200047d27ae4fd4c0fe187b9765b743fd2b`. The evidence commit containing
+this worklog follows that source candidate; the final checks are bound to the
+resulting exact `HEAD`.
+
 ## Implementation
 
 - `BackendAllocation` now exposes borrowed byte mappings at the existing
@@ -57,17 +62,23 @@ artifacts.
 
 ## Verification
 
-The final evidence commit records the exact candidate `HEAD`. Required checks
-are:
+At the source candidate, and again after the evidence commit, the following
+checks passed:
 
-```text
-cargo fmt --all --check
-git diff --check
-cargo test -p tenferro-tensor --all-targets --quiet
-cargo clippy -p tenferro-tensor --all-targets -- -D warnings
-python3 scripts/test-storage-ownership-contracts-v2.py
-python3 scripts/check-storage-ownership-contracts.py
-python3 scripts/check-storage-design-docs.py
-```
+- `cargo fmt --all --check`
+- `git diff --check`
+- `cargo test -p tenferro-tensor --all-targets --quiet`
+- `cargo clippy -p tenferro-tensor --all-targets -- -D warnings`
+- `cargo llvm-cov -p tenferro-tensor --lib --summary-only` (prepared 91.58%
+  lines, retirement 100.00%, root 97.17%, span 94.58%)
+- `cargo +nightly miri test -p tenferro-tensor --lib
+  storage::tests::prepared_access --quiet` (8 tests passed)
+- `python3 scripts/test-storage-ownership-contracts-v2.py` (24/24 passed)
+- `python3 scripts/check-storage-ownership-contracts.py`
+- `python3 scripts/check-storage-design-docs.py`
+
+The exact-head repository-rules review was also run. Its private storage-kernel
+unsafe boundary is the issue-authorized seam required by #1558/#1560; the
+public tensor graph and AD paths remain safe.
 
 P3/P5/P9 remain deferred after this phase; no cutover is implied by P4.
