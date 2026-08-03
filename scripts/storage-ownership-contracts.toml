@@ -225,7 +225,7 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p4-production-borrow-contract"
 unit = "P4"
 gates = ["G1", "G4"]
-artifact = { id = "artifact-production-borrow-contract", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_borrow_contract.rs" }
+artifact = { id = "artifact-production-borrow-contract", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_borrow_contract.rs" }
 command = { id = "cmd-production-borrow-contract", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_borrow_contract"], cwd = ".", path_args = [], artifact_id = "artifact-production-borrow-contract" }
 state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."

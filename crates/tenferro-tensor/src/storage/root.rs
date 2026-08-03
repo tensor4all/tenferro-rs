@@ -33,6 +33,11 @@ impl ProviderCapabilities {
 /// Implementors must own exactly one provider allocation and its destructor,
 /// report stable truthful metadata, and uphold `Send`/`Sync` for the boxed
 /// value. The storage core does not recover from a violated provider contract.
+/// Mapping hooks must return guards that remain valid for the complete borrow
+/// of the imported root, retain the provider allocation for that borrow, and
+/// expose initialized valid `TensorScalar` representations with stable exact
+/// span length. Typed preparation checks the returned pointer alignment before
+/// any typed access.
 // INVARIANT: #1555/#1558/#1560 place the sole provider/mapping unsafe boundary
 // in this private storage kernel; public tensor graph and AD paths remain safe.
 pub(crate) unsafe trait BackendAllocation:
