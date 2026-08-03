@@ -13,9 +13,9 @@ the executable contract ledger.
 
 Add the already-declared `execution_engine_identity` integration-test target
 and promote only `p0-control-plane` to `active`. The test uses public runtime
-and CPU adapter APIs. It verifies caller-selected engine IDs, distinct provider
-and event-domain identities, typed duplicate registration failure, endpoint-pair
-routing, and foreign-event rejection.
+APIs. It verifies caller-selected engine IDs, distinct provider and event-domain
+identities, typed duplicate registration failure, endpoint-pair routing, and
+foreign-event rejection.
 
 No production API, compatibility path, registry, generation, recovery state,
 cryptographic evidence, repeated validation, or hostile-runner protocol is

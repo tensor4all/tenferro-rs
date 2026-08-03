@@ -8,8 +8,8 @@ use tenferro_runtime::{
     EngineRegistration, EngineRegistrationMetadata, Error, EventDomainDriver, EventDomainError,
     EventDomainId, EventDomainOperation, EventToken, ExecutionContextIdentity, HardwareClassId,
     ImmediateEventDomainDriver, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity,
-    ProviderId, Runtime, RuntimeConfigBuilder, RuntimeConfigError, StorageClass, TransferEndpoint,
-    TransferProvider, TransferRequest,
+    ProviderId, RegistrationKey, Runtime, RuntimeConfigBuilder, RuntimeConfigError, StorageClass,
+    TransferEndpoint, TransferProvider, TransferRequest,
 };
 
 #[derive(Debug)]
@@ -38,12 +38,14 @@ struct TwoEngineFixture {
     builder: RuntimeConfigBuilder,
     first_id: EngineId,
     second_id: EngineId,
+    third_id: EngineId,
     storage: StorageClass,
 }
 
 fn two_engine_fixture() -> Result<TwoEngineFixture, RuntimeConfigError> {
     let first_id = EngineId::new("tenferro.test.phase0.device0")?;
     let second_id = EngineId::new("tenferro.test.phase0.device1")?;
+    let third_id = EngineId::new("tenferro.test.phase0.device2")?;
     let storage = StorageClass::new("tenferro.test.phase0.storage")?;
     let mut builder = Runtime::builder();
     builder.register_engine(registration(first_id.clone(), "device:0", storage.clone())?)?;
@@ -52,10 +54,12 @@ fn two_engine_fixture() -> Result<TwoEngineFixture, RuntimeConfigError> {
         "device:1",
         storage.clone(),
     )?)?;
+    builder.register_engine(registration(third_id.clone(), "device:2", storage.clone())?)?;
     Ok(TwoEngineFixture {
         builder,
         first_id,
         second_id,
+        third_id,
         storage,
     })
 }
@@ -120,14 +124,20 @@ fn caller_selected_engines_have_distinct_physical_and_event_identity(
     let second = snapshot
         .engine(&fixture.second_id)
         .expect("second caller-selected engine");
+    let third = snapshot
+        .engine(&fixture.third_id)
+        .expect("third caller-selected engine");
 
     assert_eq!(first.engine_id(), &fixture.first_id);
     assert_eq!(second.engine_id(), &fixture.second_id);
+    assert_eq!(third.engine_id(), &fixture.third_id);
     assert_ne!(
         first.provider_device_identity(),
         second.provider_device_identity()
     );
     assert_ne!(first.event_domain_id(), second.event_domain_id());
+    assert_ne!(first.event_domain_id(), third.event_domain_id());
+    assert_ne!(second.event_domain_id(), third.event_domain_id());
     Ok(())
 }
 
@@ -136,17 +146,48 @@ fn transfer_routes_are_keyed_by_the_complete_endpoint_pair() -> Result<(), Box<d
     let mut fixture = two_engine_fixture()?;
     let first = TransferEndpoint::new(fixture.first_id.clone(), fixture.storage.clone());
     let second = TransferEndpoint::new(fixture.second_id.clone(), fixture.storage.clone());
+    let third = TransferEndpoint::new(fixture.third_id.clone(), fixture.storage.clone());
     fixture.builder.register_transfer_provider(
         first.clone(),
         second.clone(),
         Arc::new(UnusedTransferProvider),
     )?;
-    fixture
+    fixture.builder.register_transfer_provider(
+        first.clone(),
+        third.clone(),
+        Arc::new(UnusedTransferProvider),
+    )?;
+    fixture.builder.register_transfer_provider(
+        second.clone(),
+        first.clone(),
+        Arc::new(UnusedTransferProvider),
+    )?;
+    fixture.builder.register_transfer_provider(
+        third,
+        first.clone(),
+        Arc::new(UnusedTransferProvider),
+    )?;
+
+    let error = fixture
         .builder
-        .register_transfer_provider(second, first, Arc::new(UnusedTransferProvider))?;
+        .register_transfer_provider(
+            first.clone(),
+            second.clone(),
+            Arc::new(UnusedTransferProvider),
+        )
+        .expect_err("only an exact duplicate endpoint pair must conflict");
+    assert!(matches!(
+        error,
+        RuntimeConfigError::ConflictingRegistration {
+            key: RegistrationKey::TransferProvider {
+                source,
+                destination,
+            }
+        } if source == first && destination == second
+    ));
 
     let runtime = fixture.builder.build()?;
-    assert_eq!(runtime.snapshot()?.transfer_provider_count(), 2);
+    assert_eq!(runtime.snapshot()?.transfer_provider_count(), 4);
     Ok(())
 }
 

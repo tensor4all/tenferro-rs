@@ -23,6 +23,9 @@ protocol, repeated validation, or cryptographic evidence.
 - GREEN: `python3 scripts/test-storage-ownership-contracts-v2.py` passed 24/24.
 - GREEN: `cargo test -p tenferro-runtime --test execution_engine_identity`
   passed 3/3.
+- MUTATION: temporarily replacing the transfer key with a source-only key made
+  the endpoint-pair test fail at the second shared-source route; restoring the
+  complete pair returned the target to 3/3.
 - The ledger checker, design checker, API-parity test, element-access baseline,
   and formatting check passed before the candidate commit.
 
