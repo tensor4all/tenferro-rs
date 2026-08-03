@@ -754,6 +754,17 @@ def test_contains_sensitive_text_ignores_env_lookup_code() -> None:
     assert not mod.contains_sensitive_text(text)
 
 
+def test_contains_sensitive_text_distinguishes_identifiers_from_quoted_credentials() -> None:
+    mod = load_module()
+    quoted_credential = '"' + "live-token-value-1234567890" + '"'
+
+    assert not mod.contains_sensitive_text("+        self.candidate_token = candidate_token")
+    assert not mod.contains_sensitive_text(
+        '+        token_type: "WebGPU event token from another queue"'
+    )
+    assert mod.contains_sensitive_text(f"+        api_token = {quoted_credential}")
+
+
 def test_summarize_llm_review_computes_dropped_count() -> None:
     mod = load_module()
     summary = mod.summarize_llm_review(
@@ -828,6 +839,7 @@ def main() -> int:
         test_redact_sensitive_text_masks_common_secret_forms,
         test_sensitive_diff_finding_checks_added_lines_only,
         test_contains_sensitive_text_ignores_env_lookup_code,
+        test_contains_sensitive_text_distinguishes_identifiers_from_quoted_credentials,
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,

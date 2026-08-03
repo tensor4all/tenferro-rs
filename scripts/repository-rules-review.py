@@ -66,13 +66,12 @@ SEVERITY_ALIASES = {
     "info": "warn",
     "informational": "warn",
 }
-STRICT_SECRET_ASSIGNMENT = re.compile(
+QUOTED_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b"
     r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
     r"private[_-]?key)[\w.-]*"
     r"\s*[:=]\s*"
-    r"(?!os\.environ|re\.compile|\[REDACTED_SECRET\]|tuple\[)"
-    r"[A-Za-z0-9_./+=:@-]{12,}"
+    r'''(?:"[^\s"\r\n]{12,}"|'[^\s'\r\n]{12,}')'''
 )
 
 ALWAYS_SECTIONS = frozenset(
@@ -544,7 +543,7 @@ def redact_file_diffs(file_diffs: dict[str, str]) -> dict[str, str]:
 
 def contains_sensitive_text(text: str) -> bool:
     return any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS) or bool(
-        STRICT_SECRET_ASSIGNMENT.search(text)
+        QUOTED_SECRET_ASSIGNMENT.search(text)
     )
 
 
