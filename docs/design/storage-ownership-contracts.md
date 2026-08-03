@@ -76,9 +76,10 @@ Terminology:
 - **Prepared access**: the result of pairing a Rust capability with retained
   construction-time descriptor proofs and completing access-time provider
   mapping/synchronization. It carries the `CheckedLayout` and Rust borrow
-  required by the access; the hot loop consumes it through
-  the `iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor
-  path.
+  required by the access. Its host variant exposes the hot loop through the
+  `iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor
+  path; its device variant retains provider-ready binding state and exposes no
+  host pointer or iterator.
 - **Completion-unproven retention**: the typed-error path used when a
   provider cannot prove completion. A provider-private `UnprovenRetirement`
   owns provider retirement bindings, the event, `Arc<RootResource>`, and
@@ -556,22 +557,29 @@ struct CheckedInjectiveDescriptor<R: TensorRank> {
 struct CheckedRead<'a, R: TensorRank>(private::CheckedReadBundle<'a, R>);
 struct CheckedWrite<'a, R: TensorRank>(private::CheckedWriteBundle<'a, R>);
 
+enum AccessTarget {
+    Host,
+    Device,
+}
+
 enum PreparedRead<'a, T, R: TensorRank> {
-    Contiguous(PreparedContiguousRead<'a, T, R>),
-    Strided(PreparedStridedRead<'a, T, R>),
+    Host(PreparedHostRead<'a, T, R>),
+    Device(PreparedDeviceRead<'a, T, R>),
 }
 
 enum PreparedWrite<'a, T, R: TensorRank> {
-    Contiguous(PreparedContiguousWrite<'a, T, R>),
-    Strided(PreparedStridedWrite<'a, T, R>),
+    Host(PreparedHostWrite<'a, T, R>),
+    Device(PreparedDeviceWrite<'a, T, R>),
 }
 
 fn prepare_read<'a, T, R: TensorRank>(
     checked: CheckedRead<'a, R>,
+    target: AccessTarget,
 ) -> Result<PreparedRead<'a, T, R>, (CheckedRead<'a, R>, AccessError)>;
 
 fn prepare_write<'a, T, R: TensorRank>(
     checked: CheckedWrite<'a, R>,
+    target: AccessTarget,
 ) -> Result<PreparedWrite<'a, T, R>, (CheckedWrite<'a, R>, AccessError)>;
 ```
 
@@ -605,10 +613,14 @@ safe constructors. Consequently a descriptor cannot be paired with another
 root without entering the audited unsafe storage module, and ordinary access
 does not need a root-identity comparison or repeated range validation.
 
-Mapping, binding, and enqueue consume the prepared object. They may perform the
-provider's actual timeline admission or synchronization, but do not accept a
-replacement descriptor, range, key, provider, or access mode and do not repeat
-the static checks above. This is an API-shape requirement, not a convention.
+Host mapping or device preparation consumes the checked object and publishes
+the matching `Prepared*::Host` or `Prepared*::Device` variant. The device
+payload retains the checked capability/layout plus the provider's opaque
+prepared mapping or binding state; it does not contain or construct a host
+guard. Subsequent binding and enqueue consume that device payload. None of
+these operations accepts a replacement descriptor, range, key, provider, or
+access mode or repeats the static checks above. This is an API-shape
+requirement, not a convention.
 
 ### Contiguous and strided hot paths
 
@@ -617,9 +629,12 @@ prepared access exposes the already checked typed range as a slice and an
 `iter_contiguous()`-equivalent slice iterator. A strided prepared access owns a
 precomputed incremental plan:
 
-The authoritative `PreparedRead`/`PreparedWrite` enums select exactly one
-contiguous or strided state. Their variant payloads and traversal methods are
-specified once in G4 below; there is no optional second traversal surface.
+The authoritative `PreparedRead`/`PreparedWrite` enums select exactly one host
+or device state. Within the host variant, `PreparedHostRead` and
+`PreparedHostWrite` select exactly one contiguous or strided traversal state.
+Their payloads and traversal methods are specified once in G4 below. Device
+payloads retain `CheckedLayout` for launch/binding but expose no host pointer,
+slice, or iterator. There is no optional second traversal surface.
 
 The exact names may change in the owning phase, but equivalent code generation
 and verification properties are mandatory. Contiguous inner loops perform only
@@ -630,9 +645,11 @@ dtype, map, synchronize, allocate, decode a flat index into coordinates, or
 repeat layout arithmetic. Fixed-rank plans remain monomorphized; dynamic-rank
 cursor state is allocated or initialized once outside the element loop.
 
-`CheckedInjectiveLayout` is the proof used by the private mutable iterator to
-yield each writable element at most once. The iterator owns the sole mutable
-borrow of its prepared guard. Independent booleans such as `is_checked`,
+`CheckedInjectiveDescriptor` retains descriptor-level write injectivity, and
+`CheckedInjectiveStrided` carries the corresponding traversal proof used by
+the private mutable strided iterator to yield each writable element at most
+once. The iterator owns the sole mutable borrow of its prepared guard.
+Independent booleans such as `is_checked`,
 `is_mapped`, `is_contiguous`, and `is_writable` do not encode lifecycle state;
 the prepared enum/newtype variants do.
 
@@ -684,8 +701,8 @@ drains to a proven retired failure or the same ownerless
 |---|---|---|---|---|---|---|
 | owner -> shared view | shared | tied to owner borrow | none | infallible | borrow rules remain authoritative | owner/root lifetime |
 | owner -> mutable view | exclusive | tied to exclusive owner borrow | none | infallible | borrow rules remain authoritative | owner/root lifetime |
-| checked shared pairing -> prepared read | shared | capability and checked descriptor carried by prepared object | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary mapping released | owner/root lifetime |
-| checked exclusive pairing -> prepared write | exclusive | capability and checked injective descriptor carried by prepared object | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary mapping released | owner/root lifetime |
+| checked shared pairing -> prepared host/device read | shared | capability and checked descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
+| checked exclusive pairing -> prepared host/device write | exclusive | capability and checked injective descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
 | prepared host access -> synchronous return | shared/exclusive | guard lives through call | provider work retires before return | typed retired error | no work survives return/unwind | after guard and owner release |
 | prepared device access -> pre-admission rejection | owning | no caller borrow escapes | no enqueue occurred | exact unchanged package | no retirement record exists | caller retains owners |
 | possible enqueue -> draining | task-owned | no caller borrow | event domains drain | no immediate owner return | worker/reaper owns retirement bindings, event, roots, context | not yet |
@@ -1186,10 +1203,21 @@ must show a slice-equivalent inner loop without storage/provider abstraction
 work.
 
 Phase 4 implements the authoritative G1 `CheckedLayout`, `PreparedRead`, and
-`PreparedWrite` hierarchy with these variant payloads and methods. It does not
-define a second host-preparation surface:
+`PreparedWrite` hierarchy. The host variants use these nested traversal
+variants and payloads; the device variants are shown afterward. This is one
+preparation hierarchy, not a second host-preparation surface:
 
 ```rust
+enum PreparedHostRead<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousRead<'a, T, R>),
+    Strided(PreparedStridedRead<'a, T, R>),
+}
+
+enum PreparedHostWrite<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousWrite<'a, T, R>),
+    Strided(PreparedStridedWrite<'a, T, R>),
+}
+
 struct PreparedContiguousRead<'a, T, R: TensorRank> {
     guard: HostReadGuard<'a, T>,
     element_range: core::ops::Range<usize>,
@@ -1210,6 +1238,18 @@ struct PreparedStridedRead<'a, T, R: TensorRank> {
 struct PreparedStridedWrite<'a, T, R: TensorRank> {
     guard: HostWriteGuard<'a, T>,
     plan: CheckedInjectiveStrided<R>,
+}
+
+struct PreparedDeviceRead<'a, T, R: TensorRank> {
+    checked: CheckedRead<'a, R>,
+    provider_state: ProviderPreparedRead<'a>,
+    _scalar: PhantomData<T>,
+}
+
+struct PreparedDeviceWrite<'a, T, R: TensorRank> {
+    checked: CheckedWrite<'a, R>,
+    provider_state: ProviderPreparedWrite<'a>,
+    _scalar: PhantomData<T>,
 }
 
 struct StrideCursor<R: TensorRank> {
@@ -1235,13 +1275,13 @@ struct PreparedStridedIterMut<'i, T, R: TensorRank> {
 impl<'a, T, R: TensorRank> TypedTensorView<'a, T, R> {
     fn prepare_host(
         self,
-    ) -> Result<PreparedRead<'a, T, R>, (Self, AccessError)>;
+    ) -> Result<PreparedHostRead<'a, T, R>, (Self, AccessError)>;
 }
 
 impl<'a, T, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     fn prepare_host_mut(
         self,
-    ) -> Result<PreparedWrite<'a, T, R>, (Self, AccessError)>;
+    ) -> Result<PreparedHostWrite<'a, T, R>, (Self, AccessError)>;
 }
 
 impl<'a, T, R: TensorRank> PreparedContiguousRead<'a, T, R> {
@@ -1278,7 +1318,16 @@ These view methods are public convenience wrappers around the private G1
 create the opaque checked bundle from the view's co-located capability and
 descriptor, call that transition, and reconstruct the unchanged view when it
 returns the checked bundle with an error. Both paths publish the same
-`PreparedRead`/`PreparedWrite` enum values.
+`PreparedRead::Host`/`PreparedWrite::Host` payloads and return those payloads
+without introducing another lifecycle state.
+
+`PreparedDeviceRead` and `PreparedDeviceWrite` are the device payloads of the
+same G1 hierarchy. Their opaque `ProviderPrepared*` state represents only the
+provider mapping/binding work selected for the descriptor's placement. The
+embedded checked bundle retains the capability and `CheckedLayout`; these
+payloads neither map host memory nor contain a `HostReadGuard` or
+`HostWriteGuard`. CUDA, WebGPU, and Metal therefore prepare device bindings
+without manufacturing a host-visible access path.
 
 `RankIndex<R>` is the rank-preserving cursor representation: inline for fixed
 rank and initialized once outside iteration for dynamic rank.
@@ -1291,10 +1340,10 @@ root-span containment, alignment, provider compatibility, and write
 injectivity required here. The fallible `prepare_host*` constructor consumes
 that checked capability/descriptor pairing without recomputing those proofs;
 it performs only access-time mapping and synchronization before publishing
-`PreparedRead` or `PreparedWrite`. Failure releases any temporary
+`PreparedHostRead` or `PreparedHostWrite`. Failure releases any temporary
 provider mapping and returns the unchanged view with a typed `AccessError`; no
 prepared object or iterator exists on failure. The constructor selects exactly
-one `Prepared*` enum variant from the retained `CheckedLayout`. Matching
+one `PreparedHost*` enum variant from the retained `CheckedLayout`. Matching
 that variant performs no validation or provider work.
 
 `as_slice*` and `iter_contiguous*` perform only typed slice access after one
@@ -1302,9 +1351,10 @@ range extraction outside the loop. `PreparedStridedIter*::next` performs only
 typed pointer/slice access, the necessary incremental stride/carry updates,
 and loop termination. It does not decode a flat index into coordinates or
 repeat bounds, layout, span, alignment, capability, provider, map, or
-synchronization checks. The `Prepared*` and `CheckedLayout` enums are the
-state authorities; independent booleans such as `is_checked`, `is_contiguous`,
-`is_mapped`, and `is_writable` must not encode these states.
+synchronization checks. The `PreparedRead`/`PreparedWrite`, `PreparedHost*`,
+and `CheckedLayout` enums are the state authorities; independent booleans such
+as `is_checked`, `is_contiguous`, `is_mapped`, and `is_writable` must not
+encode these states.
 
 `iter_strided*` borrows its prepared guard for `'i`, takes the already checked
 base pointer, and initializes `StrideCursor` once; it performs no validation,
@@ -1381,23 +1431,24 @@ The v2 ledger carries these executable obligations:
 
 ### Prepared binding
 
-G5 uses the exact `CheckedRead`, `CheckedWrite`, `PreparedRead`, and
-`PreparedWrite` types defined by G1; it does not redefine a second preparation
-surface. Descriptor construction has already established the static
+G5 consumes the exact `PreparedDeviceRead` and `PreparedDeviceWrite` variant
+payloads of the G1 `PreparedRead` and `PreparedWrite` hierarchy; it does not
+redefine a second preparation surface. Descriptor construction has already established the static
 bounds/layout/dtype/root-span/alignment/storage/provider proofs and write
 injectivity. Preparation consumes those retained proofs with the matching Rust
 capability and performs only access-time provider mapping, synchronization, or
-timeline admission. An immutable owner or view yields `PreparedRead`; only an
-owner or mutable view borrowed exclusively can yield `PreparedWrite`.
+timeline admission. An immutable owner or view can yield
+`PreparedRead::Device`; only an owner or mutable view borrowed exclusively can
+yield `PreparedWrite::Device`.
 
 ```rust
 fn bind_read<'a, T, R: TensorRank>(
-    prepared: PreparedRead<'a, T, R>,
-) -> Result<DeviceRead<'a, T, R>, (PreparedRead<'a, T, R>, BindError)>;
+    prepared: PreparedDeviceRead<'a, T, R>,
+) -> Result<DeviceRead<'a, T, R>, (PreparedDeviceRead<'a, T, R>, BindError)>;
 
 fn bind_write<'a, T, R: TensorRank>(
-    prepared: PreparedWrite<'a, T, R>,
-) -> Result<DeviceWrite<'a, T, R>, (PreparedWrite<'a, T, R>, BindError)>;
+    prepared: PreparedDeviceWrite<'a, T, R>,
+) -> Result<DeviceWrite<'a, T, R>, (PreparedDeviceWrite<'a, T, R>, BindError)>;
 ```
 
 The checked access already borrows the root that owns its provider context.
@@ -1408,8 +1459,9 @@ package, so the same relationship remains valid through event retirement.
 Binding consumes provider-ready prepared access. Neither binding nor enqueue
 repeats these checks or compares a second request, key, or range; those values
 are carried by the prepared object, and the binding/enqueue signatures accept
-no replacement values. `PreparedRead`, `PreparedWrite`, `DeviceRead`, and
-`DeviceWrite` are distinct sealed states, not boolean state combinations.
+no replacement values. The host/device and host traversal variants plus
+`DeviceRead` and `DeviceWrite` are distinct sealed states, not boolean state
+combinations.
 
 There is no shared-to-exclusive conversion. A provider handle, `Arc`,
 event, raw pointer, or refcount cannot become `StorageMut`, an owner claim, or
@@ -1460,7 +1512,7 @@ work. A failure is pre-admission only when it occurs before that call or the
 provider result proves that no work was enqueued. `SubmitRejected` and
 `BorrowedSubmitRejected` are reserved for that proven case and return the exact
 unchanged owning package or borrowed bindings. Binding failure likewise
-returns the exact unchanged `PreparedRead` or `PreparedWrite` because binding
+returns the exact unchanged `PreparedDeviceRead` or `PreparedDeviceWrite` because binding
 precedes the enqueue-capable call.
 
 Once enqueue may have happened, the task retains the package and bindings and
@@ -1507,9 +1559,9 @@ retirement is proven, the record releases its retained bindings, event, root
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| checked shared pairing -> `PreparedRead` | shared | `StorageRef` and checked descriptor borrow carried by prepared access; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary mapping released | owner follows G1 |
-| checked exclusive pairing -> `PreparedWrite` | exclusive | `StorageMut` and checked injective descriptor borrow carried by prepared access; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary mapping released | owner follows G1 |
-| `Prepared*` -> device binding | prepared shared / exclusive | binding keeps its capability and provider lifetime | binding work only; no second check or request/key/range comparison | exact prepared object | unadmitted binding drops without changing ownership | no device resource is released before binding drop |
+| checked shared pairing -> `PreparedRead::Device` | shared | `StorageRef` and checked descriptor borrow carried by device payload; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary provider state released | owner follows G1 |
+| checked exclusive pairing -> `PreparedWrite::Device` | exclusive | `StorageMut` and checked injective descriptor borrow carried by device payload; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary provider state released | owner follows G1 |
+| `PreparedDevice*` -> device binding | prepared shared / exclusive | binding keeps its capability and provider lifetime | binding work only; no second check or request/key/range comparison | exact device payload | unadmitted binding drops without changing ownership | no device resource is released before binding drop |
 | prepared submission -> proven pre-admission rejection | owning / borrowed | package or bindings have not crossed the enqueue-capable call | no enqueue occurred | exact unchanged package/bindings | no event-retirement record exists | caller retains ownership |
 | enqueue may have happened -> G3 `Draining` | owning task | task-local prepared bindings; no caller lifetime | event domains drain | no immediate owner return | worker/reaper retains package, retirement bindings, event, roots, and context | only after proven event retirement |
 | G3 `Draining` -> `RetiredFailed` | owning worker/reaper | none | completion proven | returns owners with typed failure | retirement-held bindings/event/root/context references release exactly once | returned owners follow G1 |
@@ -1824,7 +1876,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
 | G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; borrowed output-view coverage; consuming `into_output`/`into_owned_output` cases prove repeated and duplicate-output aliases plus the remaining map disappear together, failures return the exact bundle, and scoped borrowed/metadata rejection never copies; source checks reject extracted-state flags; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
-| G5 raw handles, reclamation | executable prepared-once resolution counts; API/source checks that prepared access reaches provider context through its borrowed root without an extra `Arc` clone and bind accepts only prepared access without a provider argument or lifetime; source checks that bind/enqueue accept no replacement request/key/range and perform no repeated static validation; acquisition and compile-fail checks that shared owner/immutable view yields only `PreparedRead`, while only exclusive owner/mutable view yields `PreparedWrite`; source inventory proving raw handles, `Arc`, and refcounts cannot mint write authority; provider-matrix checks that asynchronous providers accept detached owning submission only and reject borrowed submission before admission; exact-return tests limited to failures proving no enqueue occurred, with post-boundary failures routed through G3 terminal outcomes; proven-retirement tests releasing bindings/event/roots/context exactly once; `CompletionUnproven` tests returning no owners and permanently retaining bindings/event/roots/provider context; raw-binder source inventory and unsafe-interop rustdoc checks for binding lifetime, synchronization duties, and post-retirement invalidity | #1558, #1563, #1564 |
+| G5 raw handles, reclamation | executable prepared-once resolution counts; API/source checks that device-prepared access reaches provider context through its borrowed root without an extra `Arc` clone, contains no host guard, and bind accepts only the G1 device variant payload without a provider argument or lifetime; source checks that bind/enqueue accept no replacement request/key/range and perform no repeated static validation; acquisition and compile-fail checks that shared owner/immutable view yields only read preparation, while only exclusive owner/mutable view yields write preparation; source inventory proving raw handles, `Arc`, and refcounts cannot mint write authority; provider-matrix checks that asynchronous providers accept detached owning submission only and reject borrowed submission before admission; exact-return tests limited to failures proving no enqueue occurred, with post-boundary failures routed through G3 terminal outcomes; proven-retirement tests releasing bindings/event/roots/context exactly once; `CompletionUnproven` tests returning no owners and permanently retaining bindings/event/roots/provider context; raw-binder source inventory and unsafe-interop rustdoc checks for binding lifetime, synchronization duties, and post-retirement invalidity | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
 | G7 AD retention | byte-preserving duplicate/transfer copy counters separated from allocation/kernel-write counters (zero retention events in both); ordered Arc-uniqueness-before-G2 tests with `IntoValueError<Self>` preservation; `take_grad` three-outcome extraction tests; acquired-record validity and local-key-miss tests; checkpoint retained-group exclusion/interior-release test; compile-fail mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
