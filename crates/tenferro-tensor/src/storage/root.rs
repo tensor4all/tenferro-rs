@@ -144,6 +144,10 @@ impl OwnedStorage {
     pub(crate) fn as_mut(&mut self) -> StorageMut<'_> {
         StorageMut { owner: self }
     }
+
+    pub(crate) fn into_root_pin(self) -> RootResourcePin {
+        self.pin
+    }
 }
 
 impl<'a> StorageRef<'a> {
@@ -155,8 +159,23 @@ impl<'a> StorageRef<'a> {
         self.owner.claim.span
     }
 
-    pub(super) fn allocation(&self) -> &dyn BackendAllocation {
-        &*self.owner.pin.0.allocation
+    pub(super) fn map_read(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderReadMapping<'a>, AccessError> {
+        let mapping = self.owner.pin.0.allocation.map_read(span, dtype)?;
+        if mapping.bytes().len() != span.byte_len() {
+            return Err(AccessError::LengthMismatch {
+                expected: span.byte_len(),
+                actual: mapping.bytes().len(),
+            });
+        }
+        // SAFETY: the shared owner borrow lasts for `'a`; the mapping cannot
+        // outlive the allocation it borrows, and no mutable access is exposed.
+        Ok(unsafe {
+            std::mem::transmute::<ProviderReadMapping<'_>, ProviderReadMapping<'a>>(mapping)
+        })
     }
 }
 
@@ -169,7 +188,24 @@ impl<'a> StorageMut<'a> {
         self.owner.claim.span
     }
 
-    pub(super) fn allocation(&self) -> &dyn BackendAllocation {
-        &*self.owner.pin.0.allocation
+    pub(super) fn map_write(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderWriteMapping<'a>, AccessError> {
+        let mapping = self.owner.pin.0.allocation.map_write(span, dtype)?;
+        if mapping.len() != span.byte_len() {
+            let actual = mapping.len();
+            return Err(AccessError::LengthMismatch {
+                expected: span.byte_len(),
+                actual,
+            });
+        }
+        // SAFETY: the checked write owns the exclusive `'a` borrow represented
+        // by this `StorageMut`; callers do not use that reference while the
+        // returned mapping is alive.
+        Ok(unsafe {
+            std::mem::transmute::<ProviderWriteMapping<'_>, ProviderWriteMapping<'a>>(mapping)
+        })
     }
 }
