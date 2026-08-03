@@ -99,6 +99,50 @@ pub enum Error {
     Internal(String),
 }
 
+/// Owns the original tensor when a consuming representation reinterpretation
+/// cannot publish its checked descriptor.
+///
+/// Reinterpretation never falls back to an allocation or a copy.  Call
+/// [`Self::into_owner`] to recover the unchanged input and [`Self::error`] to
+/// inspect the typed failure.
+///
+#[derive(Debug)]
+pub struct ReinterpretError<T> {
+    owner: Box<T>,
+    error: Error,
+}
+
+impl<T> ReinterpretError<T> {
+    pub(crate) fn new(owner: T, error: Error) -> Self {
+        Self {
+            owner: Box::new(owner),
+            error,
+        }
+    }
+
+    /// Recover the unchanged original owner.
+    pub fn into_owner(self) -> T {
+        *self.owner
+    }
+
+    /// Borrow the typed failure without consuming the owner.
+    pub fn error(&self) -> &Error {
+        &self.error
+    }
+
+    pub(crate) fn into_parts(self) -> (T, Error) {
+        (*self.owner, self.error)
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Display for ReinterpretError<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "tensor reinterpretation failed: {}", self.error)
+    }
+}
+
+impl<T: std::fmt::Debug + 'static> std::error::Error for ReinterpretError<T> {}
+
 impl Error {
     /// Construct an incompatible-shapes validation error.
     ///

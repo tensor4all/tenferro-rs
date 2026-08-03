@@ -151,6 +151,8 @@ pub enum GroupError {
     DTypeMismatch { expected: DType, actual: DType },
     #[error("descriptor rank mismatch: expected {expected}, actual {actual}")]
     RankMismatch { expected: usize, actual: usize },
+    #[error("allocation slot {allocation} has more than one live descriptor")]
+    AliasedAllocation { allocation: usize },
 }
 
 /// N-way mutable split errors. Every error leaves the group unchanged.
@@ -482,6 +484,122 @@ impl AllocationGroup {
         let slot = u32::try_from(descriptor_index).map_err(|_| GroupError::IndexOverflow)?;
         self.descriptors.push(Some(record));
         Ok(DescriptorSlot(slot))
+    }
+
+    /// Replace one uniquely-owned descriptor with a sealed representation
+    /// reinterpretation while retaining the same allocation root.
+    ///
+    /// The group is returned unchanged with the typed error when validation
+    /// fails, so consuming owner callers can recover the original tensor.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn reinterpret_descriptor<T: TensorScalar, U: TensorScalar>(
+        mut self,
+        slot: DescriptorSlot,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> Result<Self, (Self, GroupError)> {
+        let (descriptor_index, descriptor) = match self.resolve_descriptor(slot) {
+            Ok((index, descriptor)) => (index, descriptor.clone()),
+            Err(error) => return Err((self, error)),
+        };
+        if descriptor.dtype != T::dtype() {
+            return Err((
+                self,
+                GroupError::DTypeMismatch {
+                    expected: descriptor.dtype,
+                    actual: T::dtype(),
+                },
+            ));
+        }
+        let allocation = descriptor.allocation;
+        let references = self
+            .descriptors
+            .iter()
+            .flatten()
+            .filter(|candidate| candidate.allocation == allocation)
+            .count();
+        if references != 1 {
+            return Err((
+                self,
+                GroupError::AliasedAllocation {
+                    allocation: allocation.index(),
+                },
+            ));
+        }
+
+        let root = descriptor.root;
+        let span = descriptor.span;
+        let target_element_size = std::mem::size_of::<U>();
+        if target_element_size == 0 || !span.byte_len().is_multiple_of(target_element_size) {
+            return Err((
+                self,
+                GroupError::InvalidDescriptor {
+                    message: format!(
+                        "byte span {} is not divisible by target element size {}",
+                        span.byte_len(),
+                        target_element_size
+                    ),
+                },
+            ));
+        }
+        let layout = match TensorLayout::<DynRank>::from_parts(
+            shape.into(),
+            strides.into(),
+            offset,
+            span.byte_len() / target_element_size,
+        ) {
+            Ok(layout) => layout,
+            Err(error) => {
+                return Err((
+                    self,
+                    GroupError::InvalidDescriptor {
+                        message: error.to_string(),
+                    },
+                ))
+            }
+        };
+        let write_injective = descriptor.write_injective;
+        let envelope = match reachable_envelope(&span, &layout, target_element_size) {
+            Ok(envelope) => envelope,
+            Err(error) => return Err((self, error)),
+        };
+        let (checked, _) = match validate_descriptor::<U, DynRank>(
+            &root,
+            span,
+            layout.shape().iter().copied().collect(),
+            layout.strides().iter().copied().collect(),
+            layout.offset(),
+            write_injective,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err((
+                    self,
+                    GroupError::InvalidDescriptor {
+                        message: error.to_string(),
+                    },
+                ))
+            }
+        };
+        let element_count = match logical_element_count(layout.shape()) {
+            Ok(count) => count,
+            Err(error) => return Err((self, error)),
+        };
+        self.descriptors[descriptor_index] = Some(DescriptorRecord {
+            allocation,
+            root,
+            span,
+            layout,
+            dtype: U::dtype(),
+            element_size: target_element_size,
+            element_count,
+            provider: descriptor.provider,
+            envelope,
+            write_injective,
+            checked,
+        });
+        Ok(self)
     }
 
     pub(crate) fn view<T: TensorScalar, R: TensorRank>(

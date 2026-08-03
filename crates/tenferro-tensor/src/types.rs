@@ -3,11 +3,13 @@ use num_traits::{One, Zero};
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem::{align_of, needs_drop, offset_of, size_of};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::config::SliceConfig;
+use crate::error::ReinterpretError;
 pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
 use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
@@ -28,6 +30,199 @@ fn shape_vec(shape: &[usize]) -> ShapeVec {
 
 fn stride_vec(strides: &[isize]) -> StrideVec {
     strides.iter().copied().collect()
+}
+
+fn representation_pair_error(
+    op: &'static str,
+    from: DType,
+    to: DType,
+    message: impl Into<String>,
+) -> crate::Error {
+    crate::Error::unsupported_dtype_conversion(op, from, to, message)
+}
+
+fn validate_representation_pair(op: &'static str, from: DType, to: DType) -> crate::Result<()> {
+    let valid = match (from, to) {
+        (DType::C32, DType::F32) | (DType::F32, DType::C32) => {
+            size_of::<Complex32>() == 2 * size_of::<f32>()
+                && align_of::<Complex32>() == align_of::<f32>()
+                && offset_of!(Complex32, re) == 0
+                && offset_of!(Complex32, im) == size_of::<f32>()
+                && !needs_drop::<Complex32>()
+                && !needs_drop::<f32>()
+        }
+        (DType::C64, DType::F64) | (DType::F64, DType::C64) => {
+            size_of::<Complex64>() == 2 * size_of::<f64>()
+                && align_of::<Complex64>() == align_of::<f64>()
+                && offset_of!(Complex64, re) == 0
+                && offset_of!(Complex64, im) == size_of::<f64>()
+                && !needs_drop::<Complex64>()
+                && !needs_drop::<f64>()
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(representation_pair_error(
+            op,
+            from,
+            to,
+            "only the sealed Complex<f32><->f32 and Complex<f64><->f64 representations are supported",
+        ))
+    }
+}
+
+fn reinterpret_complex_to_real_layout(
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    complex_buffer_len: usize,
+    op: &'static str,
+) -> crate::Result<TensorLayout<DynRank>> {
+    let real_buffer_len = complex_buffer_len
+        .checked_mul(2)
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    let mut real_shape = Vec::with_capacity(
+        shape
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
+    );
+    real_shape.push(2);
+    real_shape.extend_from_slice(shape);
+    let real_strides = strides
+        .iter()
+        .map(|&stride| {
+            stride
+                .checked_mul(2)
+                .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    let mut all_strides = Vec::with_capacity(
+        real_strides
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
+    );
+    all_strides.push(1);
+    all_strides.extend(real_strides);
+    let real_offset = offset
+        .checked_mul(2)
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    TensorLayout::from_parts(
+        real_shape.into(),
+        all_strides.into(),
+        real_offset,
+        real_buffer_len,
+    )
+    .map_err(|err| tensor_layout_error(op, err))
+}
+
+fn reinterpret_real_to_complex_layout(
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    real_buffer_len: usize,
+    op: &'static str,
+) -> crate::Result<TensorLayout<DynRank>> {
+    if shape.first().copied() != Some(2) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "shape",
+            "the leading extent must be 2 for a complex reinterpretation",
+        ));
+    }
+    if strides.first().copied() != Some(1) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "strides",
+            "the leading stride must be 1 for a complex reinterpretation",
+        ));
+    }
+    if offset % 2 != 0 {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "offset",
+            "the offset must be divisible by 2 for a complex reinterpretation",
+        ));
+    }
+    let complex_strides = strides[1..]
+        .iter()
+        .map(|&stride| {
+            if stride % 2 != 0 {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "strides",
+                    "all non-leading strides must be divisible by 2",
+                ));
+            }
+            Ok(stride / 2)
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    let complex_buffer_len = real_buffer_len / 2;
+    TensorLayout::from_parts(
+        shape[1..].to_vec().into(),
+        complex_strides.into(),
+        offset / 2,
+        complex_buffer_len,
+    )
+    .map_err(|err| tensor_layout_error(op, err))
+}
+
+fn reinterpret_host_slice<'a, T: TensorScalar, U: TensorScalar>(
+    data: &'a [T],
+    op: &'static str,
+) -> crate::Result<&'a [U]> {
+    let byte_len = data
+        .len()
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    if !byte_len.is_multiple_of(size_of::<U>()) {
+        return Err(crate::Error::validation(
+            op,
+            ValidationError::ViewOutOfBounds,
+        ));
+    }
+    if data.as_ptr().align_offset(align_of::<U>()) != 0 {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "alignment",
+            "the source allocation is not aligned for the target representation",
+        ));
+    }
+    // SAFETY: `validate_representation_pair` seals the only supported pairs;
+    // sizes, alignment, field order, and drop properties are checked before
+    // exposing the borrowed target slice.
+    Ok(unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<U>(), byte_len / size_of::<U>()) })
+}
+
+fn reinterpret_host_slice_mut<'a, T: TensorScalar, U: TensorScalar>(
+    data: &'a mut [T],
+    op: &'static str,
+) -> crate::Result<&'a mut [U]> {
+    let byte_len = data
+        .len()
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    if !byte_len.is_multiple_of(size_of::<U>()) {
+        return Err(crate::Error::validation(
+            op,
+            ValidationError::ViewOutOfBounds,
+        ));
+    }
+    if data.as_mut_ptr().align_offset(align_of::<U>()) != 0 {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "alignment",
+            "the source allocation is not aligned for the target representation",
+        ));
+    }
+    // SAFETY: the mutable source borrow is unique and the sealed pair has no
+    // padding or drop glue, so the target slice covers the same bytes exactly.
+    Ok(unsafe {
+        std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<U>(), byte_len / size_of::<U>())
+    })
 }
 
 /// Memory location for tensor storage.
@@ -774,6 +969,35 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
             .into_host_vec::<T>(self.slot)
             .map_err(|error| crate::Error::runtime_state("TypedTensor::into_vec_col_major", error))
     }
+
+    #[allow(clippy::result_large_err)]
+    fn reinterpret<T: TensorScalar, U: TensorScalar>(
+        self,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> Result<OwnedTensorGroup<DynRank>, (Self, crate::Error)> {
+        let OwnedTensorGroup {
+            group,
+            slot,
+            _rank: _,
+        } = self;
+        match group.reinterpret_descriptor::<T, U>(slot, shape, strides, offset) {
+            Ok(group) => Ok(OwnedTensorGroup {
+                group,
+                slot,
+                _rank: PhantomData,
+            }),
+            Err((group, error)) => Err((
+                OwnedTensorGroup {
+                    group,
+                    slot,
+                    _rank: PhantomData,
+                },
+                group_error("TypedTensor::reinterpret", error),
+            )),
+        }
+    }
 }
 
 fn group_error(op: &'static str, error: GroupError) -> crate::Error {
@@ -1508,6 +1732,144 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         )?;
         Ok(TypedTensorView {
             buffer: self.buffer.clone(),
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorView<'a, Complex32, R> {
+    /// Borrow this complex view as an interleaved real view without copying.
+    ///
+    /// The result has dynamic rank because reinterpretation prepends the
+    /// component axis `[2, ...]`. Only `Complex32 <-> f32` is sealed in this
+    /// API; this is representation reinterpretation, not numeric conversion.
+    pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'a, f32, DynRank>> {
+        let op = "TypedTensorView::as_real_view";
+        validate_representation_pair(op, DType::C32, DType::F32)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        let buffer = match &self.buffer {
+            TensorStorageRef::Host(data) => {
+                TensorStorageRef::Host(reinterpret_host_slice::<Complex32, f32>(data, op)?)
+            }
+            TensorStorageRef::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorView {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorView<'a, Complex64, R> {
+    /// Borrow this complex view as an interleaved real view without copying.
+    ///
+    /// The result has dynamic rank because reinterpretation prepends the
+    /// component axis `[2, ...]`. Only `Complex64 <-> f64` is sealed in this
+    /// API; this is representation reinterpretation, not numeric conversion.
+    pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'a, f64, DynRank>> {
+        let op = "TypedTensorView::as_real_view";
+        validate_representation_pair(op, DType::C64, DType::F64)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        let buffer = match &self.buffer {
+            TensorStorageRef::Host(data) => {
+                TensorStorageRef::Host(reinterpret_host_slice::<Complex64, f64>(data, op)?)
+            }
+            TensorStorageRef::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorView {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorView<'a, f32, R> {
+    /// Borrow this interleaved real view as a complex view without copying.
+    ///
+    /// The source must have a leading extent and stride of `2` and `1`, and
+    /// every remaining stride plus the offset must be divisible by `2`.
+    pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'a, Complex32, DynRank>> {
+        let op = "TypedTensorView::as_complex_view";
+        validate_representation_pair(op, DType::F32, DType::C32)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        let buffer = match &self.buffer {
+            TensorStorageRef::Host(data) => {
+                TensorStorageRef::Host(reinterpret_host_slice::<f32, Complex32>(data, op)?)
+            }
+            TensorStorageRef::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorView {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorView<'a, f64, R> {
+    /// Borrow this interleaved real view as a complex view without copying.
+    ///
+    /// The source must have a leading extent and stride of `2` and `1`, and
+    /// every remaining stride plus the offset must be divisible by `2`.
+    pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'a, Complex64, DynRank>> {
+        let op = "TypedTensorView::as_complex_view";
+        validate_representation_pair(op, DType::F64, DType::C64)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        let buffer = match &self.buffer {
+            TensorStorageRef::Host(data) => {
+                TensorStorageRef::Host(reinterpret_host_slice::<f64, Complex64>(data, op)?)
+            }
+            TensorStorageRef::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorView {
+            buffer,
             layout,
             placement: self.placement.clone(),
         })
@@ -2422,6 +2784,162 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 placement,
             }),
         }
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex32, R> {
+    /// Borrow this mutable complex view as an interleaved real view.
+    ///
+    /// This changes only the typed descriptor and borrows the same host
+    /// allocation. The result has dynamic rank because the component axis is
+    /// prepended. Backend-native buffers are rejected until their provider
+    /// phase supplies the corresponding mapping capability.
+    pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f32, DynRank>> {
+        let op = "TypedTensorViewMut::as_real_view_mut";
+        validate_representation_pair(op, DType::C32, DType::F32)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let buffer = match &mut self.buffer {
+            TensorStorageRefMut::Host(data) => {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex32, f32>(data, op)?)
+            }
+            TensorStorageRefMut::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex64, R> {
+    /// Borrow this mutable complex view as an interleaved real view.
+    ///
+    /// This changes only the typed descriptor and borrows the same host
+    /// allocation. The result has dynamic rank because the component axis is
+    /// prepended. Backend-native buffers are rejected until their provider
+    /// phase supplies the corresponding mapping capability.
+    pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f64, DynRank>> {
+        let op = "TypedTensorViewMut::as_real_view_mut";
+        validate_representation_pair(op, DType::C64, DType::F64)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let buffer = match &mut self.buffer {
+            TensorStorageRefMut::Host(data) => {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex64, f64>(data, op)?)
+            }
+            TensorStorageRefMut::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorViewMut<'a, f32, R> {
+    /// Borrow this mutable interleaved real view as a complex view.
+    ///
+    /// The source must have a leading extent and stride of `2` and `1`, and
+    /// all remaining strides plus the offset must be divisible by `2`.
+    pub fn as_complex_view_mut(
+        &mut self,
+    ) -> crate::Result<TypedTensorViewMut<'_, Complex32, DynRank>> {
+        let op = "TypedTensorViewMut::as_complex_view_mut";
+        validate_representation_pair(op, DType::F32, DType::C32)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let buffer = match &mut self.buffer {
+            TensorStorageRefMut::Host(data) => {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f32, Complex32>(data, op)?)
+            }
+            TensorStorageRefMut::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
+    }
+}
+
+impl<'a, R: TensorRank> TypedTensorViewMut<'a, f64, R> {
+    /// Borrow this mutable interleaved real view as a complex view.
+    ///
+    /// The source must have a leading extent and stride of `2` and `1`, and
+    /// all remaining strides plus the offset must be divisible by `2`.
+    pub fn as_complex_view_mut(
+        &mut self,
+    ) -> crate::Result<TypedTensorViewMut<'_, Complex64, DynRank>> {
+        let op = "TypedTensorViewMut::as_complex_view_mut";
+        validate_representation_pair(op, DType::F64, DType::C64)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            self.buffer.len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let buffer = match &mut self.buffer {
+            TensorStorageRefMut::Host(data) => {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f64, Complex64>(data, op)?)
+            }
+            TensorStorageRefMut::Backend(_) => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "backend representation reinterpretation is enabled by the provider phases",
+                ))
+            }
+        };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement: self.placement.clone(),
+        })
     }
 }
 
@@ -3574,6 +4092,30 @@ impl<'a> TensorView<'a> {
             Self::Bool(t) => t.shape(),
             Self::C32(t) => t.shape(),
             Self::C64(t) => t.shape(),
+        }
+    }
+
+    /// Reinterpret a complex view as its sealed real representation.
+    pub fn as_real_view(&self) -> crate::Result<Self> {
+        match self {
+            Self::C32(t) => t.as_real_view().map(Self::F32),
+            Self::C64(t) => t.as_real_view().map(Self::F64),
+            _ => Err(crate::Error::unsupported(
+                "TensorView::as_real_view",
+                "only complex views have a sealed real representation",
+            )),
+        }
+    }
+
+    /// Reinterpret a real view as its sealed complex representation.
+    pub fn as_complex_view(&self) -> crate::Result<Self> {
+        match self {
+            Self::F32(t) => t.as_complex_view().map(Self::C32),
+            Self::F64(t) => t.as_complex_view().map(Self::C64),
+            _ => Err(crate::Error::unsupported(
+                "TensorView::as_complex_view",
+                "only real views have a sealed complex representation",
+            )),
         }
     }
 
@@ -5757,7 +6299,575 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     }
 }
 
+impl<R: TensorRank> TypedTensor<Complex32, R> {
+    /// Borrow this tensor as an interleaved `f32` view without copying.
+    pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'_, f32, DynRank>> {
+        self.as_view().as_real_view()
+    }
+
+    /// Borrow this tensor mutably as an interleaved `f32` view without copying.
+    pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f32, DynRank>> {
+        let op = "TypedTensor::as_real_view_mut";
+        validate_representation_pair(op, DType::C32, DType::F32)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.layout.strides(),
+            self.layout.offset(),
+            self.buffer_len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let placement = self.placement.clone();
+        let buffer =
+            if self.group.is_some() {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex32, f32>(
+                    self.group_host_slice_mut(),
+                    op,
+                )?)
+            } else {
+                match &mut self.buffer {
+                    StorageBuffer::Host(data) => TensorStorageRefMut::Host(
+                        reinterpret_host_slice_mut::<Complex32, f32>(data, op)?,
+                    ),
+                    StorageBuffer::Backend(_) => return Err(crate::Error::unsupported(
+                        op,
+                        "backend representation reinterpretation is enabled by the provider phases",
+                    )),
+                }
+            };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement,
+        })
+    }
+
+    /// Consume this tensor and reinterpret its owner as `f32` without copying.
+    ///
+    /// A failed operation returns the unchanged owner through
+    /// [`ReinterpretError::into_owner`].
+    pub fn into_real(self) -> Result<TypedTensor<f32, DynRank>, ReinterpretError<Self>> {
+        let op = "TypedTensor::into_real";
+        if let Err(error) = validate_representation_pair(op, DType::C32, DType::F32) {
+            return Err(ReinterpretError::new(self, error));
+        }
+        let source_shape = self.shape().to_vec();
+        let source_strides = self.layout.strides().to_vec();
+        let source_offset = self.layout.offset();
+        let target_layout = match reinterpret_complex_to_real_layout(
+            &source_shape,
+            &source_strides,
+            source_offset,
+            self.buffer_len(),
+            op,
+        ) {
+            Ok(layout) => layout,
+            Err(error) => return Err(ReinterpretError::new(self, error)),
+        };
+        let TypedTensor {
+            buffer,
+            group,
+            layout: source_layout,
+            placement,
+        } = self;
+        match group {
+            Some(group) => match group.reinterpret::<Complex32, f32>(
+                target_layout.shape().to_vec(),
+                target_layout.strides().to_vec(),
+                target_layout.offset(),
+            ) {
+                Ok(group) => Ok(TypedTensor {
+                    buffer: StorageBuffer::Host(Vec::new()),
+                    group: Some(group),
+                    layout: target_layout,
+                    placement,
+                }),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        buffer,
+                        group: Some(group),
+                        layout: source_layout,
+                        placement,
+                    },
+                    error,
+                )),
+            },
+            None => Err(ReinterpretError::new(
+                TypedTensor {
+                    buffer,
+                    group: None,
+                    layout: source_layout,
+                    placement,
+                },
+                crate::Error::unsupported(
+                    op,
+                    "consuming reinterpretation requires an allocation-group owner",
+                ),
+            )),
+        }
+    }
+}
+
+impl<R: TensorRank> TypedTensor<Complex64, R> {
+    /// Borrow this tensor as an interleaved `f64` view without copying.
+    pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'_, f64, DynRank>> {
+        self.as_view().as_real_view()
+    }
+
+    /// Borrow this tensor mutably as an interleaved `f64` view without copying.
+    pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f64, DynRank>> {
+        let op = "TypedTensor::as_real_view_mut";
+        validate_representation_pair(op, DType::C64, DType::F64)?;
+        let layout = reinterpret_complex_to_real_layout(
+            self.shape(),
+            self.layout.strides(),
+            self.layout.offset(),
+            self.buffer_len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let placement = self.placement.clone();
+        let buffer =
+            if self.group.is_some() {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex64, f64>(
+                    self.group_host_slice_mut(),
+                    op,
+                )?)
+            } else {
+                match &mut self.buffer {
+                    StorageBuffer::Host(data) => TensorStorageRefMut::Host(
+                        reinterpret_host_slice_mut::<Complex64, f64>(data, op)?,
+                    ),
+                    StorageBuffer::Backend(_) => return Err(crate::Error::unsupported(
+                        op,
+                        "backend representation reinterpretation is enabled by the provider phases",
+                    )),
+                }
+            };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement,
+        })
+    }
+
+    /// Consume this tensor and reinterpret its owner as `f64` without copying.
+    ///
+    /// A failed operation returns the unchanged owner through
+    /// [`ReinterpretError::into_owner`].
+    pub fn into_real(self) -> Result<TypedTensor<f64, DynRank>, ReinterpretError<Self>> {
+        let op = "TypedTensor::into_real";
+        if let Err(error) = validate_representation_pair(op, DType::C64, DType::F64) {
+            return Err(ReinterpretError::new(self, error));
+        }
+        let source_shape = self.shape().to_vec();
+        let source_strides = self.layout.strides().to_vec();
+        let source_offset = self.layout.offset();
+        let target_layout = match reinterpret_complex_to_real_layout(
+            &source_shape,
+            &source_strides,
+            source_offset,
+            self.buffer_len(),
+            op,
+        ) {
+            Ok(layout) => layout,
+            Err(error) => return Err(ReinterpretError::new(self, error)),
+        };
+        let TypedTensor {
+            buffer,
+            group,
+            layout: source_layout,
+            placement,
+        } = self;
+        match group {
+            Some(group) => match group.reinterpret::<Complex64, f64>(
+                target_layout.shape().to_vec(),
+                target_layout.strides().to_vec(),
+                target_layout.offset(),
+            ) {
+                Ok(group) => Ok(TypedTensor {
+                    buffer: StorageBuffer::Host(Vec::new()),
+                    group: Some(group),
+                    layout: target_layout,
+                    placement,
+                }),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        buffer,
+                        group: Some(group),
+                        layout: source_layout,
+                        placement,
+                    },
+                    error,
+                )),
+            },
+            None => Err(ReinterpretError::new(
+                TypedTensor {
+                    buffer,
+                    group: None,
+                    layout: source_layout,
+                    placement,
+                },
+                crate::Error::unsupported(
+                    op,
+                    "consuming reinterpretation requires an allocation-group owner",
+                ),
+            )),
+        }
+    }
+}
+
+impl<R: TensorRank> TypedTensor<f32, R> {
+    /// Borrow this tensor as a complex view without copying.
+    pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'_, Complex32, DynRank>> {
+        self.as_view().as_complex_view()
+    }
+
+    /// Borrow this tensor mutably as a complex view without copying.
+    pub fn as_complex_view_mut(
+        &mut self,
+    ) -> crate::Result<TypedTensorViewMut<'_, Complex32, DynRank>> {
+        let op = "TypedTensor::as_complex_view_mut";
+        validate_representation_pair(op, DType::F32, DType::C32)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.layout.strides(),
+            self.layout.offset(),
+            self.buffer_len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let placement = self.placement.clone();
+        let buffer =
+            if self.group.is_some() {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f32, Complex32>(
+                    self.group_host_slice_mut(),
+                    op,
+                )?)
+            } else {
+                match &mut self.buffer {
+                    StorageBuffer::Host(data) => TensorStorageRefMut::Host(
+                        reinterpret_host_slice_mut::<f32, Complex32>(data, op)?,
+                    ),
+                    StorageBuffer::Backend(_) => return Err(crate::Error::unsupported(
+                        op,
+                        "backend representation reinterpretation is enabled by the provider phases",
+                    )),
+                }
+            };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement,
+        })
+    }
+
+    /// Consume this tensor and reinterpret its owner as `Complex32` without copying.
+    ///
+    /// The compact source must have an even physical element count. A failed
+    /// operation returns the unchanged owner through
+    /// [`ReinterpretError::into_owner`].
+    pub fn into_complex(self) -> Result<TypedTensor<Complex32, DynRank>, ReinterpretError<Self>> {
+        let op = "TypedTensor::into_complex";
+        if let Err(error) = validate_representation_pair(op, DType::F32, DType::C32) {
+            return Err(ReinterpretError::new(self, error));
+        }
+        if !self.buffer_len().is_multiple_of(2) {
+            return Err(ReinterpretError::new(
+                self,
+                crate::Error::invalid_argument(
+                    op,
+                    "buffer",
+                    "the owned real buffer must contain an even number of elements",
+                ),
+            ));
+        }
+        let source_shape = self.shape().to_vec();
+        let source_strides = self.layout.strides().to_vec();
+        let source_offset = self.layout.offset();
+        let target_layout = match reinterpret_real_to_complex_layout(
+            &source_shape,
+            &source_strides,
+            source_offset,
+            self.buffer_len(),
+            op,
+        ) {
+            Ok(layout) => layout,
+            Err(error) => return Err(ReinterpretError::new(self, error)),
+        };
+        let TypedTensor {
+            buffer,
+            group,
+            layout: source_layout,
+            placement,
+        } = self;
+        match group {
+            Some(group) => match group.reinterpret::<f32, Complex32>(
+                target_layout.shape().to_vec(),
+                target_layout.strides().to_vec(),
+                target_layout.offset(),
+            ) {
+                Ok(group) => Ok(TypedTensor {
+                    buffer: StorageBuffer::Host(Vec::new()),
+                    group: Some(group),
+                    layout: target_layout,
+                    placement,
+                }),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        buffer,
+                        group: Some(group),
+                        layout: source_layout,
+                        placement,
+                    },
+                    error,
+                )),
+            },
+            None => Err(ReinterpretError::new(
+                TypedTensor {
+                    buffer,
+                    group: None,
+                    layout: source_layout,
+                    placement,
+                },
+                crate::Error::unsupported(
+                    op,
+                    "consuming reinterpretation requires an allocation-group owner",
+                ),
+            )),
+        }
+    }
+}
+
+impl<R: TensorRank> TypedTensor<f64, R> {
+    /// Borrow this tensor as a complex view without copying.
+    pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'_, Complex64, DynRank>> {
+        self.as_view().as_complex_view()
+    }
+
+    /// Borrow this tensor mutably as a complex view without copying.
+    pub fn as_complex_view_mut(
+        &mut self,
+    ) -> crate::Result<TypedTensorViewMut<'_, Complex64, DynRank>> {
+        let op = "TypedTensor::as_complex_view_mut";
+        validate_representation_pair(op, DType::F64, DType::C64)?;
+        let layout = reinterpret_real_to_complex_layout(
+            self.shape(),
+            self.layout.strides(),
+            self.layout.offset(),
+            self.buffer_len(),
+            op,
+        )?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let placement = self.placement.clone();
+        let buffer =
+            if self.group.is_some() {
+                TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f64, Complex64>(
+                    self.group_host_slice_mut(),
+                    op,
+                )?)
+            } else {
+                match &mut self.buffer {
+                    StorageBuffer::Host(data) => TensorStorageRefMut::Host(
+                        reinterpret_host_slice_mut::<f64, Complex64>(data, op)?,
+                    ),
+                    StorageBuffer::Backend(_) => return Err(crate::Error::unsupported(
+                        op,
+                        "backend representation reinterpretation is enabled by the provider phases",
+                    )),
+                }
+            };
+        Ok(TypedTensorViewMut {
+            buffer,
+            layout,
+            placement,
+        })
+    }
+
+    /// Consume this tensor and reinterpret its owner as `Complex64` without copying.
+    ///
+    /// The compact source must have an even physical element count. A failed
+    /// operation returns the unchanged owner through
+    /// [`ReinterpretError::into_owner`].
+    pub fn into_complex(self) -> Result<TypedTensor<Complex64, DynRank>, ReinterpretError<Self>> {
+        let op = "TypedTensor::into_complex";
+        if let Err(error) = validate_representation_pair(op, DType::F64, DType::C64) {
+            return Err(ReinterpretError::new(self, error));
+        }
+        if !self.buffer_len().is_multiple_of(2) {
+            return Err(ReinterpretError::new(
+                self,
+                crate::Error::invalid_argument(
+                    op,
+                    "buffer",
+                    "the owned real buffer must contain an even number of elements",
+                ),
+            ));
+        }
+        let source_shape = self.shape().to_vec();
+        let source_strides = self.layout.strides().to_vec();
+        let source_offset = self.layout.offset();
+        let target_layout = match reinterpret_real_to_complex_layout(
+            &source_shape,
+            &source_strides,
+            source_offset,
+            self.buffer_len(),
+            op,
+        ) {
+            Ok(layout) => layout,
+            Err(error) => return Err(ReinterpretError::new(self, error)),
+        };
+        let TypedTensor {
+            buffer,
+            group,
+            layout: source_layout,
+            placement,
+        } = self;
+        match group {
+            Some(group) => match group.reinterpret::<f64, Complex64>(
+                target_layout.shape().to_vec(),
+                target_layout.strides().to_vec(),
+                target_layout.offset(),
+            ) {
+                Ok(group) => Ok(TypedTensor {
+                    buffer: StorageBuffer::Host(Vec::new()),
+                    group: Some(group),
+                    layout: target_layout,
+                    placement,
+                }),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        buffer,
+                        group: Some(group),
+                        layout: source_layout,
+                        placement,
+                    },
+                    error,
+                )),
+            },
+            None => Err(ReinterpretError::new(
+                TypedTensor {
+                    buffer,
+                    group: None,
+                    layout: source_layout,
+                    placement,
+                },
+                crate::Error::unsupported(
+                    op,
+                    "consuming reinterpretation requires an allocation-group owner",
+                ),
+            )),
+        }
+    }
+}
+
 impl Tensor {
+    /// Borrow a complex tensor as its sealed interleaved real representation.
+    pub fn as_real_view(&self) -> crate::Result<TensorView<'_>> {
+        match self {
+            Tensor::C32(tensor) => tensor.as_real_view().map(TensorView::F32),
+            Tensor::C64(tensor) => tensor.as_real_view().map(TensorView::F64),
+            other => Err(crate::Error::unsupported_dtype_conversion(
+                "Tensor::as_real_view",
+                other.dtype(),
+                DType::F32,
+                "only complex tensors have a sealed real representation view",
+            )),
+        }
+    }
+
+    /// Borrow a complex tensor mutably as its sealed interleaved real representation.
+    pub fn as_real_view_mut(&mut self) -> crate::Result<TensorViewMut<'_>> {
+        match self {
+            Tensor::C32(tensor) => tensor.as_real_view_mut().map(TensorViewMut::F32),
+            Tensor::C64(tensor) => tensor.as_real_view_mut().map(TensorViewMut::F64),
+            other => Err(crate::Error::unsupported_dtype_conversion(
+                "Tensor::as_real_view_mut",
+                other.dtype(),
+                DType::F32,
+                "only complex tensors have a sealed real representation view",
+            )),
+        }
+    }
+
+    /// Consume a complex tensor and reinterpret its owner as real without copying.
+    pub fn into_real(self) -> Result<Self, ReinterpretError<Self>> {
+        match self {
+            Tensor::C32(tensor) => tensor.into_real().map(Tensor::F32).map_err(|error| {
+                let (owner, error) = error.into_parts();
+                ReinterpretError::new(Tensor::C32(owner), error)
+            }),
+            Tensor::C64(tensor) => tensor.into_real().map(Tensor::F64).map_err(|error| {
+                let (owner, error) = error.into_parts();
+                ReinterpretError::new(Tensor::C64(owner), error)
+            }),
+            tensor => Err(ReinterpretError::new(
+                tensor,
+                crate::Error::unsupported(
+                    "Tensor::into_real",
+                    "only complex tensors have a sealed real representation",
+                ),
+            )),
+        }
+    }
+
+    /// Borrow an interleaved real tensor as its sealed complex representation.
+    pub fn as_complex_view(&self) -> crate::Result<TensorView<'_>> {
+        match self {
+            Tensor::F32(tensor) => tensor.as_complex_view().map(TensorView::C32),
+            Tensor::F64(tensor) => tensor.as_complex_view().map(TensorView::C64),
+            other => Err(crate::Error::unsupported_dtype_conversion(
+                "Tensor::as_complex_view",
+                other.dtype(),
+                DType::C32,
+                "only real tensors can have a sealed complex representation view",
+            )),
+        }
+    }
+
+    /// Borrow an interleaved real tensor mutably as its sealed complex representation.
+    pub fn as_complex_view_mut(&mut self) -> crate::Result<TensorViewMut<'_>> {
+        match self {
+            Tensor::F32(tensor) => tensor.as_complex_view_mut().map(TensorViewMut::C32),
+            Tensor::F64(tensor) => tensor.as_complex_view_mut().map(TensorViewMut::C64),
+            other => Err(crate::Error::unsupported_dtype_conversion(
+                "Tensor::as_complex_view_mut",
+                other.dtype(),
+                DType::C32,
+                "only real tensors can have a sealed complex representation view",
+            )),
+        }
+    }
+
+    /// Consume a real tensor and reinterpret its owner as complex without copying.
+    pub fn into_complex(self) -> Result<Self, ReinterpretError<Self>> {
+        match self {
+            Tensor::F32(tensor) => tensor.into_complex().map(Tensor::C32).map_err(|error| {
+                let (owner, error) = error.into_parts();
+                ReinterpretError::new(Tensor::F32(owner), error)
+            }),
+            Tensor::F64(tensor) => tensor.into_complex().map(Tensor::C64).map_err(|error| {
+                let (owner, error) = error.into_parts();
+                ReinterpretError::new(Tensor::F64(owner), error)
+            }),
+            tensor => Err(ReinterpretError::new(
+                tensor,
+                crate::Error::unsupported(
+                    "Tensor::into_complex",
+                    "only real tensors have a sealed complex representation",
+                ),
+            )),
+        }
+    }
+
     /// Make an explicit owning copy of this dtype-erased tensor.
     pub fn duplicate(&self) -> crate::Result<Self> {
         match self {
