@@ -511,3 +511,17 @@ fn vacant_allocation_entries_are_rejected_without_panicking() {
         ))
     ));
 }
+
+#[test]
+fn host_group_constructor_retains_typed_layout_and_prepared_access() {
+    let (group, slot) =
+        AllocationGroup::from_host_vec::<i32, DynRank>(vec![2, 2].into(), vec![1, 2, 3, 4])
+            .expect("host group");
+    let view = group.view::<i32, DynRank>(slot).expect("read view");
+    assert_eq!(view.descriptor().layout().shape(), &[2, 2]);
+    let prepared = view.prepare_host_read().expect("prepared read");
+    assert_eq!(
+        prepared.as_slice().expect("compact host slice"),
+        &[1, 2, 3, 4]
+    );
+}

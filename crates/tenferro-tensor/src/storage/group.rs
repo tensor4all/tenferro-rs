@@ -4,7 +4,11 @@ use std::ptr::NonNull;
 
 use crate::{DType, DynRank, TensorLayout, TensorRank, TensorScalar};
 
-use super::prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
+use super::prepared::{
+    prepare_read, prepare_write, validate_descriptor, AccessError, AccessTarget, CheckedDescriptor,
+    CheckedRead, CheckedWrite, PreparedRead, PreparedWrite, ProviderReadMapping,
+    ProviderWriteMapping, WriteInjectivityProof,
+};
 use super::root::{OwnedStorage, ProviderKind};
 use super::span::{ByteRange, RootBoundSpan};
 
@@ -79,6 +83,7 @@ pub(crate) struct DescriptorRecord {
     provider: ProviderKind,
     envelope: Option<ByteRange>,
     write_injective: bool,
+    checked: CheckedDescriptor<DynRank>,
 }
 
 impl DescriptorRecord {
@@ -202,6 +207,18 @@ impl<T: TensorScalar, R: TensorRank> GroupReadView<'_, T, R> {
                 .map_read(self.descriptor.span, self.descriptor.dtype)
         }
     }
+
+    pub(crate) fn prepare_host_read(&self) -> Result<PreparedRead<'_, T, DynRank>, AccessError> {
+        prepare_read(
+            CheckedRead::from_validated(
+                // SAFETY: the pointer is bounded by the group's shared borrow.
+                unsafe { self.owner.as_ref().as_ref() },
+                self.descriptor.checked.clone(),
+            ),
+            AccessTarget::Host,
+        )
+        .map_err(|failure| failure.1)
+    }
 }
 
 /// A non-cloneable mutable descriptor child bounded by the group's exclusive
@@ -238,11 +255,57 @@ impl<T: TensorScalar, R: TensorRank> GroupWriteView<'_, T, R> {
                 .map_write(self.descriptor.span, self.descriptor.dtype)
         }
     }
+
+    pub(crate) fn prepare_host_write(
+        &mut self,
+    ) -> Result<PreparedWrite<'_, T, DynRank>, AccessError> {
+        let checked = CheckedWrite::from_validated(
+            // SAFETY: the pointer is bounded by this child group's exclusive borrow.
+            unsafe { self.owner.as_mut().as_mut() },
+            self.descriptor.checked.clone(),
+            WriteInjectivityProof,
+        );
+        prepare_write(checked, AccessTarget::Host).map_err(|failure| failure.1)
+    }
 }
 
 impl AllocationGroup {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn from_host_vec<T: TensorScalar, R: TensorRank>(
+        shape: R::Shape,
+        data: Vec<T>,
+    ) -> Result<(Self, DescriptorSlot), GroupError> {
+        let owner =
+            super::root::import_host_vec(data).map_err(|error| GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            })?;
+        let span = owner.root_span();
+        let mut group = Self::new();
+        let allocation = group.insert_owner(owner)?;
+        let layout =
+            TensorLayout::<R>::compact(shape).map_err(|error| GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            })?;
+        let input = DescriptorInput::new(
+            ByteRange::new(0, span.byte_len()),
+            R::shape_from_vec(layout.shape().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            R::strides_from_vec(layout.strides().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            layout.offset(),
+            true,
+        );
+        let slot = group.insert_descriptor::<T, R>(allocation, input)?;
+        Ok((group, slot))
     }
 
     pub(crate) fn insert_owner(
@@ -325,6 +388,17 @@ impl AllocationGroup {
             false
         };
         let envelope = reachable_envelope(&span, &layout, element_size)?;
+        let (checked, _) = validate_descriptor::<T, DynRank>(
+            &root,
+            span,
+            layout.shape().iter().copied().collect(),
+            layout.strides().iter().copied().collect(),
+            layout.offset(),
+            false,
+        )
+        .map_err(|error| GroupError::InvalidDescriptor {
+            message: error.to_string(),
+        })?;
         let record = DescriptorRecord {
             allocation,
             root,
@@ -336,6 +410,7 @@ impl AllocationGroup {
             provider: owner.as_ref().provider_kind(),
             envelope,
             write_injective,
+            checked,
         };
 
         let descriptor_index = self.descriptors.len();
