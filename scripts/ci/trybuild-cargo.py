@@ -8,7 +8,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tomllib
 
 
 def augment_rustflags_config(argument: str, extra: list[str]) -> str:
@@ -23,7 +22,7 @@ def augment_rustflags_config(argument: str, extra: list[str]) -> str:
     if not separator or not is_rustflags:
         return argument
 
-    rustflags = tomllib.loads(f"rustflags = {value}")["rustflags"]
+    rustflags = json.loads(value)
     if not isinstance(rustflags, list) or not all(
         isinstance(flag, str) for flag in rustflags
     ):

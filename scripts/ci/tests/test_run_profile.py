@@ -357,6 +357,31 @@ Path(os.environ["TRYBUILD_CARGO_CAPTURE"]).write_text(
         self.assertIn("--offline", result["args"])
         self.assertIsNone(result["cargo"])
 
+    def test_trybuild_cargo_runs_without_tomllib(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            (temp / "tomllib.py").write_text(
+                'raise ModuleNotFoundError("No module named tomllib")\n'
+            )
+            fake_cargo = temp / "cargo"
+            fake_cargo.write_text("#!/bin/sh\nexit 0\n")
+            fake_cargo.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
+            environment["PYTHONPATH"] = str(temp)
+            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = "-l dylib=openblas"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
+                    "check",
+                    '--config=build.rustflags=["--cfg","trybuild"]',
+                ],
+                check=True,
+                env=environment,
+            )
+
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
         self.assertIn("--ci-profile", source)
