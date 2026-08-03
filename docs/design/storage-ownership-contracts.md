@@ -2208,83 +2208,123 @@ not an accepted migration.
 ### Ownership root
 
 - Each autodiff context (eager tape, traced execution, checkpoint store)
-  owns retained primal allocations through one retention group:
+  owns retained primal allocations through a directly owned group/container
+  record. The exact names remain implementation choices; the ownership shape
+  is normative:
 
   ```rust
   struct TapeRetention {
-      group: AllocationGroup,
-      index: HashMap<ValueKey, ValueId>,
+      tape: Arc<TapeRecord>,
+      retained: HashMap<ValueKey, Arc<AdValueRecord>>,
+  }
+
+  struct AdValueRecord {
+      descriptor: DescriptorRef,       // read-only group-local descriptor
+      container: Arc<RetentionContainer>,
+  }
+
+  struct RetentionContainer {
+      group: AllocationGroup,         // directly owns group/root resources
+  }
+
+  struct TapeRecord {
+      container: Arc<RetentionContainer>,
   }
   ```
 
-- An `EagerTensor` (and any traced value handle) is a node handle plus a
-  descriptor reference. Cloning a handle clones neither storage nor
-  ownership: handles are read-only descriptor handles and can never mint a
-  storage owner or a write capability. Handle types may remain `Clone`
-  because they are not owner-like; the non-`Clone` rule (I1) applies to
-  owners and capabilities.
-- Every descriptor reference is registered against a generational `ValueId`.
-  The liveness set includes the tape, checkpoint records, execution bundles,
-  and every public handle clone. This bookkeeping may use reference counts,
-  but those counts govern descriptor-slot liveness only; they never prove
-  storage uniqueness or authorize a write. A slot is reclaimed or reused
-  only after all liveness roots are gone, and reuse increments the generation
-  so stale handles fail rather than resolving to a new value.
-- Public handles pin the retention table and its group as liveness roots,
-  without gaining access authority. Dropping a tape/context releases only
-  its own root; owners needed by surviving public handles remain in the table
-  until those handles are dropped or one last handle successfully extracts
-  the value.
-- Retention policy: an operation output is retained iff a registered
+- An `EagerTensor` (and any traced value handle) contains an `Arc<AdValueRecord>`
+  plus non-owning node metadata. Cloning a handle clones only that `Arc`:
+  storage, the descriptor, and the write authority are not cloned. The
+  record directly retains the `Arc<RetentionContainer>` that owns the group
+  and its root resources. A tape or checkpoint retains the same kind of
+  record/container directly; no external table is needed to keep an
+  allocation alive.
+- Handle types may remain `Clone` because they are read-only descriptor
+  references, not owners or capabilities. A handle has no method that returns
+  an owner, creates a write lease, or produces a mutable view. The non-`Clone`
+  rule (I1) applies to owners and capabilities.
+- `ValueKey` is only a local associative key inside a tape/checkpoint
+  container. It is never used to reconstruct a descriptor, prove uniqueness,
+  or authorize access.
+- A descriptor record contains only read-only metadata and shared container
+  ownership. It does not allocate a per-element storage/provider object or
+  repeat layout/provider validation.
+- Handle drop is ordinary `Arc`/container lifetime. Dropping a tape/context
+  releases its owning reference; a surviving handle keeps its directly
+  retained descriptor record, container, group, and root resources alive.
+  When the last reference disappears, normal ownership/drop of the container
+  releases the allocation according to G1/G2. Lifetime is represented only by
+  these direct owners; no side table participates in release.
+- Mutable access is available only from an exclusive owning
+  `&mut RetentionContainer`/`&mut TapeRecord` path. The shared handle type
+  cannot be used to obtain that borrow. If an owning `Arc` cannot be made
+  unique because a handle, tape, checkpoint, or execution record still
+  retains it, the mutable operation is unavailable and returns a typed
+  uniqueness error; the caller may request an explicit duplicate instead.
+  No implicit duplication is provided.
+- Retention policy: an operation output is retained iff a declared
   VJP/JVP rule declares it needed for backward, or the user explicitly
   requests retention. Values nobody declares needed are not retained.
-- When the caller wants a standalone owner of a retained value, the paths
-  are exactly the G2 paths: `try_extract` after every other registered root
-  (tape, checkpoint, execution, and sibling public handles) is absent, or an
-  explicit duplicate (classified below). There is no hidden copy path.
+- When the caller wants a standalone owner of a retained value, the only
+  paths are the G2 paths: consume the handle and uniquely unwrap the direct
+  descriptor/container ownership, then move the selected owner out of the
+  group, or make an explicit duplicate (classified below). There is no hidden
+  copy path and no external identifier check.
 
 ### Public API replacement
 
 The `Arc<Tensor>`-returning surface is replaced. No retention adapter appears
 in any public or crate-private runtime boundary; the cutover lands directly on
-the group-qualified descriptor model.
+the group-qualified descriptor model. The sketch intentionally exposes the
+ownership shape, not final public names.
 
 | Current | Replacement sketch | Semantics |
 |---|---|---|
 | `materialized(&self) -> Result<Arc<Tensor>>` | `value(&self) -> Result<ValueGuard<'_>>` | materializes if lazy, then exposes a borrowed `TensorView`; host bytes go through G1 guards |
 | owned copy of a value | `duplicate_value(&self) -> Result<Tensor>` | explicit copy, reason `ExplicitDuplicate` |
-| owned move of a value | `into_value(self) -> Result<Tensor, (Self, ValueStillReferenced)>` | extraction via G2; succeeds only after consuming the last public handle and when tape, checkpoint, execution bundle, and sibling-handle liveness roots are absent; failure returns the handle |
+| owned move of a value | `into_value(self) -> Result<Tensor, (Self, ValueStillReferenced)>` | consumes the handle and performs the G2 direct-ownership extraction; success requires unique descriptor/container ownership, and failure returns the handle |
 | backward result `Vec<Arc<Tensor>>`, `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>` | `Gradients` bundle (a G2 group specialization) with `grad(&self, key) -> Option<TensorView<'_>>` and `take_grad(&mut self, key) -> Option<Tensor>` | one owner per gradient allocation; extraction when unique |
-| traced attached-data maps `HashMap<ValueKey, Arc<Tensor>>` | `ExecutionInputs` bindings over group descriptors (G3) | no shared owners in the runtime boundary |
+| traced attached-data maps `HashMap<ValueKey, Arc<Tensor>>` | `ExecutionInputs` bindings over directly retained group descriptors (G3) | no shared tensor owners or mutable authority in the runtime boundary |
+
+`ValueGuard` borrows the record's prepared descriptor view and can request the
+G1 host-read guard. A guard does not retain a second owner or perform a new
+layout/provider validation. `duplicate_value` is the explicit destination
+allocation and data movement path. `into_value` is the consuming path; an
+`Arc::try_unwrap`-equivalent structural uniqueness test is the authority for
+extraction, not a counter or identifier lookup.
 
 ### Checkpoint semantics
 
 - Boundary values (checkpoint region inputs and outputs) are retained as
-  descriptors in the checkpoint group.
+  descriptor records whose direct container reference keeps the checkpoint
+  group and required root resources alive.
 - Interior values are deliberately discarded at record time; checkpointing
   must not accidentally retain every intermediate. A contract test asserts
-  the checkpoint adds no liveness root for an interior value. Its allocation
-  is released after the boundary is recorded only when no tape, execution,
-  or external handle root independently keeps it live.
+  that the checkpoint creates no descriptor record for an interior value. Its
+  allocation is released after the boundary is recorded when no tape,
+  execution, checkpoint, or external handle directly retains the container.
 - Backward recomputation executes the stored subgraph and produces fresh
   owners; its allocations are classified `CheckpointRecomputeOutput`,
   distinct from retention (which allocates nothing) and from explicit
   duplicates.
+- A checkpoint record and a tape record retain their required containers
+  directly. Releasing one record is ordinary ownership drop and cannot
+  invalidate a descriptor record still held by a handle.
 
 ### Reinterpretation and aliases
 
 - A retained complex/real reinterpretation of a retained value is another
-  descriptor of the same slot in the same group (G2 duplicate-descriptor
-  semantics), never a second owner.
-- Mutable reinterpretation requires an exclusive or owning capability. While
-  any tape, checkpoint, execution bundle, or sibling handle descriptor
-  references a span, the owner lives in the retention group, so no caller can
-  hold the owner: consuming or mutable reinterpretation of that allocation
-  is unreachable, and `try_extract` fails with a typed
-  `ValueStillReferenced` reason (`Tape`, `Checkpoint`, `Execution`, or
-  `SiblingHandle`). This exclusion is structural (borrow/owner placement),
-  verified by compile-fail plus runtime extraction and stale-generation
-  tests.
+  read-only descriptor reference to the same group allocation, with the same
+  direct container record and no second owner.
+- Mutable reinterpretation requires an exclusive or owning capability. A
+  handle cannot supply it. If a tape, checkpoint, execution record, or sibling
+  handle still retains the container, the unique owning path cannot be
+  obtained and `try_extract` returns a typed `ValueStillReferenced` reason
+  (`Tape`, `Checkpoint`, `Execution`, or `SiblingHandle`). This is a direct
+  ownership/borrow property, verified by structural-uniqueness tests and
+  compile-fail tests for mutable access through a shared handle. An explicit
+  duplicate is the only alternative; reinterpretation never duplicates
+  implicitly.
 
 ### Copy and allocation accounting
 
@@ -2324,21 +2364,34 @@ enum AllocationReason {
 - Aggregate pre-migration versus post-migration copy counts are not an
   acceptance criterion.
 
-### Atomic cutover and provider bridge
+### Contract tests
+
+- A direct-lifetime test drops the tape/context while a cloned handle remains,
+  reads through that handle, then observes release only after the final direct
+  record/container reference is dropped.
+- Structural-uniqueness tests cover a sibling handle, tape record,
+  checkpoint record, and execution record. Each shared case rejects
+  `into_value` without changing any owner; the unique case unwraps the
+  descriptor/container and moves one owner through G2.
+- Compile-fail tests show that a shared handle has no mutable view or owner
+  projection, and that mutable reinterpretation requires an exclusive owning
+  borrow. An explicit duplicate test verifies that duplication is requested by
+  the caller and that retention itself never copies.
+- A checkpoint test records boundary descriptors but no interior descriptor,
+  then checks direct container release and fresh recomputation ownership.
+- Forward/backward CPU and designated asynchronous-provider tests compare the
+  reason-classified copy/allocation multisets and require zero events caused
+  by retention.
+
+### Atomic cutover
 
 Public host ownership (#1559) and final detached/scoped runtime plus direct
 group-based AD retention (#1565) form one atomic promotion cohort. They land
-the final `AllocationGroup`, lease, retirement, and descriptor-liveness
-semantics together. There is no interim AD-retention adapter, minimal
-consuming-submit bridge, or pre-retirement synchronization adapter.
-
-Exactly one typed, inventoried crate-private provider bridge may keep an
-unmigrated accelerator provider buildable. The bridge is implemented against
-the final root-bound claim, access, authority-free lease, and retirement
-contracts; it cannot expose an owner-like shared handle, mint a claim, or
-authorize a write. #1563 and #1564 remove the bridge as their provider paths
-are migrated. If the bridge cannot satisfy the final contract, provider
-migration moves earlier instead of adding a second seam.
+the final `AllocationGroup`, lease, retirement, and descriptor-ownership
+semantics together. There is no interim AD-retention adapter, compatibility
+path. Each provider consumes the final prepared access and event-retirement
+contracts directly when its owning phase lands, with no additional ownership
+seam.
 
 ### Validation lanes
 
@@ -2356,22 +2409,20 @@ migration moves earlier instead of adding a second seam.
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| record op output into tape | owning (retention table takes the output owner into its group) | none | none | op error: no retention entry | unwind releases the tape root but preserves independent roots | after the last liveness root, via G1/G2 |
-| clone `EagerTensor` handle | none (descriptor liveness only) | none | none | n/a; clone does not resolve storage | clone registers another liveness root; drop unregisters it | descriptor slot only after all roots disappear; never storage authority |
-| drop last descriptor handle while tape/checkpoint retains | none | none | none | n/a | public-handle root disappears; retention root remains | not until all remaining roots disappear |
-| tape/context drop while public handle remains | owning tape root only | none | outstanding work follows G1 | n/a | table/group pin transfers no authority; public-handle root remains | not until last independent root disappears |
-| tape retains/releases descriptor | owning tape bookkeeping / none on release | none | none | invalid or stale ID is typed error | update is atomic; release cannot invalidate sibling roots | only after all roots disappear |
-| checkpoint retains/releases boundary descriptor | owning checkpoint bookkeeping / none on release | none | none | invalid or stale ID is typed error | no interior root is added implicitly | only after all roots disappear |
-| `value()` guard | shared | tape group (shared) for guard lifetime | G1 host-read rules if host bytes requested | error, tape unchanged | guard drop ends borrow | n/a |
-| backward execution | shared reads of retained descriptors; new owners for grads | tape group shared during execution | G3 rules | typed failure, tape unchanged, grads dropped after retirement | per G3 panic row | grads owned by `Gradients` bundle |
+| record op output into tape | owning (tape/container takes the output owner into its group) | none | none | op error: no retained record | unwind drops the partially constructed direct owner exactly once | container/group ownership follows G1/G2 |
+| clone `EagerTensor` handle | none (read-only `Arc<AdValueRecord>` reference) | none | none | n/a; clone does not resolve or validate storage | ordinary `Arc` clone; no owner or write authority is created | record/container remains while any direct owner exists |
+| drop a handle while tape/checkpoint retains | none | none | none | n/a | ordinary `Arc` drop; tape/checkpoint record remains independent | allocation remains under direct container ownership |
+| tape/context drop while a handle remains | none | none | outstanding work follows G1 | n/a | tape's owning record drops; the handle's record retains the container/group/root | normal container drop after the last direct owner |
+| tape retains/releases descriptor record | owning tape/container reference / none on release | none | none | invalid descriptor reference is a typed error; no storage is changed | direct record ownership is updated atomically; no external bookkeeping is required | group/container drops when no direct owner remains |
+| checkpoint retains/releases boundary record | owning checkpoint/container reference / none on release | none | none | invalid boundary reference is a typed error | interior values get no record; releasing a boundary record cannot invalidate a surviving handle | boundary allocation follows direct ownership |
+| `value()` guard | shared | record/container borrow for guard lifetime | G1 host-read rules if host bytes requested | error, record/container unchanged | guard drop ends the borrow | n/a |
+| backward execution | shared reads of retained descriptors; new owners for grads | tape/container shared during execution | G3 rules | typed failure, tape unchanged, grads dropped after retirement | per G3 panic row | grads owned by `Gradients` bundle |
 | `take_grad` | exclusive on `Gradients` | none after return | none | `None`/typed reason, bundle unchanged | n/a | extracted owner per G1 |
-| `into_value` while any other root remains | owning attempt (consumes one handle) | none | none | `ValueStillReferenced` identifies tape/checkpoint/execution/sibling handle; consumed handle is returned or remains usable | no liveness root is lost on failure | n/a |
-| `into_value` as last root | owning (consumes last handle and group slot) | none | none | stale/invalid descriptor leaves group unchanged | generation tombstoned; owner moves exactly once | extracted owner per G1 |
-| stale-handle access after tombstone/reuse | none | none | none | deterministic `StaleValueId`; no storage is touched | no state change | unchanged |
-| reuse descriptor slot | owning group bookkeeping | none | none | n/a | generation increments before publication | new slot follows its own roots; old IDs remain stale |
-| checkpoint record | owning (boundary owners/descriptors into checkpoint group) | none | none | error: no partial checkpoint | no checkpoint root is added for interiors; independent roots remain valid | boundary owners after last liveness root |
-| checkpoint recompute (backward) | shared reads of boundary; fresh owners for recomputed values | checkpoint group shared | G3 rules | typed failure after retirement | per G3 | recomputed owners dropped after use |
-| tape drop | owning tape root | none | retirement per G1 for owners with no other roots and in-flight work | n/a | quarantine path per G1; independent handle/checkpoint roots remain | after retirement and the last liveness root, exactly once |
+| `into_value` while another direct owner exists | owning attempt (consumes one handle) | none | none | `ValueStillReferenced` identifies tape/checkpoint/execution/sibling handle; the original handle is returned | failed uniqueness leaves all direct owners unchanged | n/a |
+| `into_value` with unique direct ownership | owning (consumes the handle and uniquely unwraps its record/container) | none | none | G2 extraction error leaves the owner in the returned handle/container | owner moves exactly once; no identity transition is published | extracted owner per G1 |
+| checkpoint record | owning (boundary records retain their direct containers) | none | none | error: no partial checkpoint record is published | no interior record is created; independent handles remain valid | boundary containers after direct owners drop |
+| checkpoint recompute (backward) | shared reads of boundary; fresh owners for recomputed values | checkpoint container shared | G3 rules | typed failure after retirement | per G3 | recomputed owners dropped after use |
+| tape drop | owning tape/container reference | none | retirement per G1 for in-flight work | n/a | direct records and event-retirement ownership follow G1; ordinary ownership only | after the last direct owner, exactly once |
 
 ## Contract test index
 
@@ -2386,7 +2437,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
-| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); generational stale-handle and all-liveness-root extraction tests; checkpoint interior-release test; mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
+| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); direct-Arc lifetime and structural-uniqueness extraction tests; checkpoint interior-release test; compile-fail mutable-reinterpret exclusion; explicit-duplicate/implicit-copy test; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
 ## Relationship to phase issues
 
