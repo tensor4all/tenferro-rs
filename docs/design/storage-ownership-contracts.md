@@ -77,8 +77,14 @@ Terminology:
   vs endpoints").
 - **Retirement**: the point when all provider events covering an access have
   completed and retained resources may be released. Invariant I6.
-- **Quarantine**: the terminal state for resources whose retirement cannot be
-  proven; they are retained and reported, never freed speculatively.
+- **Prepared access**: the result of `prepare_read` or `prepare_write` after
+  the one access-boundary validation. It carries the validated `CheckedLayout`
+  and the Rust borrow required by the access; the hot loop consumes it through
+  `iter_contiguous`.
+- **Completion-unproven retention**: the typed-error path used when a
+  provider cannot prove completion. The provider event and its
+  `Arc<RootResource>` are intentionally retained or leaked until safe
+  retirement is established; this is not a quarantine state.
 
 State-table columns. Every state-transition row in this document answers the
 six review-checklist questions from #1557, abbreviated as:
@@ -441,6 +447,35 @@ source-blind documentation audit checks stale public language. None of these
 is allowed to manufacture ownership proof from an allocation ID or a lock.
 
 ## G1. Span access and retirement
+
+### Controlling permanent model
+
+This subsection is the controlling G1 contract. The permanent lifetime root is
+`Arc<RootResource>`, which keeps the physical allocation and the provider
+resources it retains alive. `OwnedSpanClaim` is the unique authority for an
+owned span and is deliberately non-`Clone` (and non-`Copy`). Writes are
+authorized only by ordinary Rust exclusive borrows (`&mut`/`StorageMut`), never
+by a registry, lease, event, retry, or callback.
+
+`prepare_read` and `prepare_write` are the access-preparation boundary. Each
+validates the requested span, layout, and access mode exactly once, then
+returns prepared access carrying `CheckedLayout`. The hot loop consumes that
+checked metadata through `iter_contiguous`; it does not revalidate, decode
+coordinates, or perform registry lookups per element.
+
+Providers retain the completion event, together with the `Arc<RootResource>`
+that it protects, until the event proves completion. If completion is
+unproven, the operation returns the typed `CompletionUnproven` error and
+intentionally retains or leaks the allocation and event resources; speculative
+release is forbidden. This is completion-unproven retention.
+
+The permanent model explicitly removes quarantine / poison / `catch_unwind` /
+registry / retry / legacy bridge / repeated validation. Later G1
+implementation sketches in this document that still describe quarantine,
+poison, unwind containment, registries, retries, legacy bridges, or
+revalidation are **superseded pending deletion in this same PR**. This commit
+is internally authoritative but not final; until those sketches are deleted,
+this subsection controls.
 
 ### Types and acquisition surface
 
