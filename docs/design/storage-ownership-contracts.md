@@ -72,15 +72,17 @@ Terminology:
   vs endpoints").
 - **Retirement**: the point when all provider events covering an access have
   completed and retained resources may be released. Invariant I6.
-- **Prepared access**: the result of `prepare_read` or `prepare_write` after
-  the one access-boundary validation. It carries the validated `CheckedLayout`
-  and the Rust borrow required by the access; the hot loop consumes it through
+- **Prepared access**: the result of pairing a Rust capability with retained
+  construction-time descriptor proofs and completing access-time provider
+  mapping/synchronization. It carries the `CheckedLayout` and Rust borrow
+  required by the access; the hot loop consumes it through
   the `iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor
   path.
 - **Completion-unproven retention**: the typed-error path used when a
   provider cannot prove completion. A provider-private `UnprovenRetirement`
-  owns the event, `Arc<RootResource>`, and provider context until completion is
-  proven or those resources are intentionally made a permanent leak; this is
+  owns provider retirement bindings, the event, `Arc<RootResource>`, and
+  provider context until completion is proven or those resources are
+  intentionally made a permanent leak; this is
   not a quarantine state.
 
 State-table columns. Every state-transition row in this document answers the
@@ -645,21 +647,28 @@ prepared bindings into a task-owned retirement record:
 ```rust
 struct RetirementRecord {
     event: ProviderEvent,
+    bindings: Box<[ProviderRetirementBinding]>,
     roots: Box<[Arc<RootResource>]>,
     provider: Arc<ProviderContext>,
 }
 ```
 
-The record owns every event, root, and context needed until completion is
-proven. Dropping a user-visible completion handle only detaches observation;
-the worker or provider reaper retains the record. After proven completion, the
-record releases event and root/context references exactly once and publishes a
-completed or typed failed outcome.
+Enqueue consumes each `DeviceRead`/`DeviceWrite` into a
+`ProviderRetirementBinding` that owns any mapping, reservation, or raw-binding
+lifetime the provider requires after enqueue. The record owns every binding,
+event, root, and context needed until completion is proven. A provider may use
+a smaller retirement payload only when its unsafe enqueue contract documents
+and tests that submission transferred all required lifetime into the event or
+queue itself. Dropping a user-visible completion handle only detaches
+observation; the worker or provider reaper retains the record. After proven
+completion, the record releases bindings, event, and root/context references
+exactly once and publishes a completed or typed failed outcome.
 
 If completion cannot be proven, the public outcome contains diagnostics and no
-owner. A provider-private record permanently retains the event, roots, and
-provider context because neither memory reuse nor event destruction is known to
-be safe. This is a terminal leak-for-soundness case, not a recoverable state.
+owner. A provider-private record permanently retains the bindings, event,
+roots, and provider context because neither binding/event destruction nor
+memory reuse is known to be safe. This is a terminal leak-for-soundness case,
+not a recoverable state.
 There is no retry API, global recovery table, or safe extraction path from it.
 
 Soundness does not depend on `Drop` or a callback running: `mem::forget` may
@@ -678,9 +687,9 @@ drains to a proven retired failure or the same ownerless
 | checked exclusive pairing -> prepared write | exclusive | capability and checked injective descriptor carried by prepared object | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary mapping released | owner/root lifetime |
 | prepared host access -> synchronous return | shared/exclusive | guard lives through call | provider work retires before return | typed retired error | no work survives return/unwind | after guard and owner release |
 | prepared device access -> pre-admission rejection | owning | no caller borrow escapes | no enqueue occurred | exact unchanged package | no retirement record exists | caller retains owners |
-| possible enqueue -> draining | task-owned | no caller borrow | event domains drain | no immediate owner return | worker/reaper owns event, roots, context | not yet |
-| draining -> retired completed/failed | task-owned | none | completion proven | typed result; owners only after retirement | record releases once | normal root lifetime |
-| draining -> completion unproven | provider-private | none | completion not proven | diagnostics only, no owner | permanently retains event, roots, context | never by this outcome |
+| possible enqueue -> draining | task-owned | no caller borrow | event domains drain | no immediate owner return | worker/reaper owns retirement bindings, event, roots, context | not yet |
+| draining -> retired completed/failed | task-owned | none | completion proven | typed result; owners only after retirement | record releases bindings/event/roots/context once | normal root lifetime |
+| draining -> completion unproven | provider-private | none | completion not proven | diagnostics only, no owner | permanently retains bindings, event, roots, context | never by this outcome |
 
 ### Acceptance evidence
 
@@ -701,7 +710,7 @@ G1 is accepted only with executable evidence for all of the following:
   storage clone/refcount work, and no dynamic layout clone;
 - event tests cover immediate handle drop, successful completion, execution
   failure, panic after possible enqueue, and completion-unproven retention of
-  event, roots, and provider context;
+  provider retirement bindings, event, roots, and provider context;
 - CPU, CUDA, WebGPU, and Metal use the same capability and retirement contract,
   with explicit unsupported errors where a provider cannot offer a mode.
 
@@ -1036,15 +1045,16 @@ variants are `Completed`, `RetiredFailed`, and `CompletionUnproven`.
 
 `Prepared` covers validation and planning. Rejection returns the exact
 unadmitted owners. Admission consumes `ExecutionInputs`; the worker or reaper
-owns its inputs, prepared bindings, events, roots, and provider contexts until
+owns its inputs, provider retirement bindings, events, roots, and provider contexts until
 a terminal outcome.
 
 A detached worker or provider panic is contained at the existing worker,
 thread, or FFI boundary and enters `Draining`. If completion is proven,
 `RetiredFailed` returns the exact input owners with a typed panic cause. If
 completion cannot be proven, `CompletionUnproven` returns only its typed cause
-and diagnostics while a provider-private permanent record retains the `Arc`
-roots. No public recovery path returns those owners.
+and diagnostics while a provider-private permanent record retains the
+retirement bindings, event, `Arc` roots, and provider context. No public
+recovery path returns those owners.
 
 Dropping a detached handle detaches observation; the reaper owns resources
 until the terminal outcome.
@@ -1062,7 +1072,7 @@ safety does not depend on panic catching or `Drop`.
 | `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain | execution failure or worker/provider panic enters `Draining` | panic is typed at the existing worker/thread/FFI boundary; reaper retains ownership | not yet |
 | `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
 | `Draining` -> `Retired(Failed)` | owning (worker/reaper) | none | completion proven | returns exact input owners with the typed execution or panic cause | n/a | returned owners follow G1 |
-| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains the event, `Arc` roots, and provider context | retained permanently because completion and safe event destruction are unproven |
+| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains retirement bindings, event, `Arc` roots, and provider context | retained permanently because completion and safe binding/event destruction are unproven |
 | scoped call rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns exact borrowed inputs; non-host or asynchronous providers are unsupported | no work is admitted | caller-owned borrows remain valid |
 | scoped admitted call | shared | input borrows remain for `'env` | host/CPU work executes and retires synchronously before return | returns only completed or failed after retirement | no work survives to an unwind point; no panic-catch or `Drop` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
 
@@ -1465,8 +1475,8 @@ Once enqueue may have happened, the task retains the package and bindings and
 enters G3 `Draining`; an immediate error never returns them. On a post-boundary
 failure, ownership returns only as G3 `RetiredFailed` after completion is
 proven. If completion cannot be proven, `CompletionUnproven` returns diagnostics
-without owners while the provider-private permanent record retains the event,
-roots, and provider context.
+without owners while the provider-private permanent record retains the
+retirement bindings, event, roots, and provider context.
 
 A borrowed operation is optional: if offered, it is synchronous through
 retirement and is supported only by a provider that guarantees no asynchronous
@@ -1477,27 +1487,28 @@ before admission.
 
 ### Event retirement
 
-After detached admission, a provider-private retirement record owns the event,
-the `Arc<RootResource>` roots, and the provider context until completion is
-proven.
+After detached admission, a provider-private retirement record owns the
+provider retirement bindings, event, the `Arc<RootResource>` roots, and the
+provider context until completion is proven.
 
 ```rust
 struct RetirementRecord {
     event: ProviderEvent,
+    bindings: Box<[ProviderRetirementBinding]>,
     roots: Box<[Arc<RootResource>]>,
     context: Arc<ProviderContext>,
 }
 ```
 
 `CompletionUnproven` returns only its typed cause and diagnostics. Its
-provider-private record permanently retains the event, root `Arc`s, and
-provider context because event destruction while completion remains unproven
-is not known to be safe. It does not
+provider-private record permanently retains the bindings, event, root `Arc`s,
+and provider context because binding/event destruction while completion
+remains unproven is not known to be safe. It does not
 free speculatively and exposes no safe recovery path. There is no
 quarantine/poison state, access or retirement registry, or retry transition.
 Completion handles may be dropped without changing this retention. When event
-retirement is proven, the record releases its retained event, root `Arc`s, and
-context reference exactly once before publishing `Completed` or
+retirement is proven, the record releases its retained bindings, event, root
+`Arc`s, and context reference exactly once before publishing `Completed` or
 `RetiredFailed`.
 
 ### Raw-handle state table
@@ -1508,12 +1519,12 @@ context reference exactly once before publishing `Completed` or
 | checked exclusive pairing -> `PreparedWrite` | exclusive | `StorageMut` and checked injective descriptor borrow carried by prepared access; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary mapping released | owner follows G1 |
 | `Prepared*` -> device binding | prepared shared / exclusive | binding keeps its capability and provider lifetime | binding work only; no second check or request/key/range comparison | exact prepared object | unadmitted binding drops without changing ownership | no device resource is released before binding drop |
 | prepared submission -> proven pre-admission rejection | owning / borrowed | package or bindings have not crossed the enqueue-capable call | no enqueue occurred | exact unchanged package/bindings | no event-retirement record exists | caller retains ownership |
-| enqueue may have happened -> G3 `Draining` | owning task | task-local prepared bindings; no caller lifetime | event domains drain | no immediate owner return | worker/reaper retains package, event, roots, and context | only after proven event retirement |
-| G3 `Draining` -> `RetiredFailed` | owning worker/reaper | none | completion proven | returns owners with typed failure | retirement-held event/root/context references release exactly once | returned owners follow G1 |
-| G3 `Draining` -> `Completed` | owning worker/reaper | none | completion proven | returns completed bundle | retirement-held event/root/context references release exactly once | returned bundle follows G1 |
+| enqueue may have happened -> G3 `Draining` | owning task | task-local prepared bindings; no caller lifetime | event domains drain | no immediate owner return | worker/reaper retains package, retirement bindings, event, roots, and context | only after proven event retirement |
+| G3 `Draining` -> `RetiredFailed` | owning worker/reaper | none | completion proven | returns owners with typed failure | retirement-held bindings/event/root/context references release exactly once | returned owners follow G1 |
+| G3 `Draining` -> `Completed` | owning worker/reaper | none | completion proven | returns completed bundle | retirement-held bindings/event/root/context references release exactly once | returned bundle follows G1 |
 | asynchronous provider rejects borrowed submission | borrowed | unchanged bindings | none; rejection precedes admission | unsupported with exact unchanged bindings | no work survives | caller retains bindings |
 | admitted synchronous borrowed operation -> retired result | shared / exclusive | binding borrow remains until return | provider work retires before return | returns bindings only in retired completed/failed outcome | provider contract leaves no async work across unwind | after synchronous retirement |
-| retirement -> `CompletionUnproven` | provider-private owning record | no public borrow | completion cannot be proven | diagnostics only; no owner is returned | record permanently retains event/root `Arc`s/provider context | event, roots, and context are never released by this outcome |
+| retirement -> `CompletionUnproven` | provider-private owning record | no public borrow | completion cannot be proven | diagnostics only; no owner is returned | record permanently retains bindings/event/root `Arc`s/provider context | bindings, event, roots, and context are never released by this outcome |
 
 ## G6. Documentation ownership
 
@@ -1817,11 +1828,11 @@ phase issues carry the full inventories; this index is the cross-reference.
 
 | Gate | Enforcement | Owning phases |
 |---|---|---|
-| G1 prepared access and retirement | deterministic transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write preparation from shared); invalid-descriptor rejection before prepared-object construction; immediate-drop-after-enqueue; Miri on host guard slices; permanent event/root/context retention when completion is unproven; constant prepare/map/bind/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
+| G1 prepared access and retirement | deterministic transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write preparation from shared); invalid-descriptor rejection before prepared-object construction; immediate-drop-after-enqueue; Miri on host guard slices; permanent binding/event/root/context retention when completion is unproven; constant prepare/map/bind/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
 | G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; borrowed output-view coverage; consuming `into_output`/`into_owned_output` cases prove repeated and duplicate-output aliases plus the remaining map disappear together, failures return the exact bundle, and scoped borrowed/metadata rejection never copies; source checks reject extracted-state flags; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
-| G5 raw handles, reclamation | executable prepared-once resolution counts; API/source checks that prepared access reaches provider context through its borrowed root without an extra `Arc` clone and bind accepts only prepared access without a provider argument or lifetime; source checks that bind/enqueue accept no replacement request/key/range and perform no repeated static validation; acquisition and compile-fail checks that shared owner/immutable view yields only `PreparedRead`, while only exclusive owner/mutable view yields `PreparedWrite`; source inventory proving raw handles, `Arc`, and refcounts cannot mint write authority; provider-matrix checks that asynchronous providers accept detached owning submission only and reject borrowed submission before admission; exact-return tests limited to failures proving no enqueue occurred, with post-boundary failures routed through G3 terminal outcomes; proven-retirement tests releasing event/roots/context exactly once; `CompletionUnproven` tests returning no owners and permanently retaining event/roots/provider context; raw-binder source inventory and unsafe-interop rustdoc checks for binding lifetime, synchronization duties, and post-retirement invalidity | #1558, #1563, #1564 |
+| G5 raw handles, reclamation | executable prepared-once resolution counts; API/source checks that prepared access reaches provider context through its borrowed root without an extra `Arc` clone and bind accepts only prepared access without a provider argument or lifetime; source checks that bind/enqueue accept no replacement request/key/range and perform no repeated static validation; acquisition and compile-fail checks that shared owner/immutable view yields only `PreparedRead`, while only exclusive owner/mutable view yields `PreparedWrite`; source inventory proving raw handles, `Arc`, and refcounts cannot mint write authority; provider-matrix checks that asynchronous providers accept detached owning submission only and reject borrowed submission before admission; exact-return tests limited to failures proving no enqueue occurred, with post-boundary failures routed through G3 terminal outcomes; proven-retirement tests releasing bindings/event/roots/context exactly once; `CompletionUnproven` tests returning no owners and permanently retaining bindings/event/roots/provider context; raw-binder source inventory and unsafe-interop rustdoc checks for binding lifetime, synchronization duties, and post-retirement invalidity | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
 | G7 AD retention | byte-preserving duplicate/transfer copy counters separated from allocation/kernel-write counters (zero retention events in both); ordered Arc-uniqueness-before-G2 tests with `IntoValueError<Self>` preservation; `take_grad` three-outcome extraction tests; acquired-record validity and local-key-miss tests; checkpoint retained-group exclusion/interior-release test; compile-fail mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 

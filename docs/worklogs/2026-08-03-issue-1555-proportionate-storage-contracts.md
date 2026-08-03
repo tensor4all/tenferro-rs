@@ -16,13 +16,14 @@ tooling or reconstructing authority at runtime.
   freshly created owner. IDs, handles, reference counts, and events never grant
   write authority.
 - Bounds, checked layout arithmetic, dtype, exact root-bound span, alignment,
-  storage/provider compatibility, and write injectivity are validated once at
-  the prepared-access boundary.
+  storage/provider compatibility, and write injectivity are validated once
+  when a checked descriptor is constructed. Prepared access consumes those
+  retained proofs and performs only access-time provider work.
 - Contiguous traversal is typed slice access. Strided traversal performs only
   typed pointer access and precomputed stride/carry increments in its loop.
-- Detached asynchronous work owns its resources through proven event
-  retirement. If completion cannot be proven, a provider-private record retains
-  the event, roots, and provider context permanently and exposes diagnostics,
+- Detached asynchronous work owns its provider retirement bindings, event,
+  roots, and context through proven retirement. If completion cannot be proven,
+  a provider-private record retains them permanently and exposes diagnostics,
   not owners or a recovery protocol.
 - Group descriptor slots are structural and append-only. AD handles directly
   retain read-only records/containers. Neither uses a global liveness registry
