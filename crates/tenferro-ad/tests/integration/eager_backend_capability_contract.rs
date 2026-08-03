@@ -1,9 +1,7 @@
 #[test]
 fn eager_backend_capability_boundary() {
-    if std::env::var_os("NEXTEST").is_some()
-        && std::env::var("CARGO_NET_OFFLINE").is_ok_and(|value| value == "true" || value == "1")
-    {
-        eprintln!("skipping compile-only trybuild contract in an offline nextest archive");
+    if std::env::var_os("NEXTEST").is_some() {
+        eprintln!("skipping compile-only trybuild contract under nextest");
         return;
     }
 

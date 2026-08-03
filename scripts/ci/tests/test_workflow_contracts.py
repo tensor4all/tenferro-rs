@@ -379,9 +379,9 @@ class WorkflowContractTests(unittest.TestCase):
             "crates/tenferro-gpu/tests/integration/session_contract.rs",
         ):
             source = read(path)
-            with self.subTest(offline_guard=path):
+            with self.subTest(nextest_archive_guard=path):
                 self.assertIn('var_os("NEXTEST")', source)
-                self.assertIn('var("CARGO_NET_OFFLINE")', source)
+                self.assertNotIn('var("CARGO_NET_OFFLINE")', source)
 
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (

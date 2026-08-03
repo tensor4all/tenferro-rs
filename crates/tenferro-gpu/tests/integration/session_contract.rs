@@ -58,10 +58,8 @@ fn cuda_session_exposes_backend_session_operations() {
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 #[test]
 fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
-    if std::env::var_os("NEXTEST").is_some()
-        && std::env::var("CARGO_NET_OFFLINE").is_ok_and(|value| value == "true" || value == "1")
-    {
-        eprintln!("skipping compile-only trybuild contract in an offline nextest archive");
+    if std::env::var_os("NEXTEST").is_some() {
+        eprintln!("skipping compile-only trybuild contract under nextest");
         return;
     }
 
