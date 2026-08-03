@@ -42,6 +42,8 @@ ACTIVE_IDS = frozenset(
         "p3-as-view-zero-allocation",
         "p3-auto-trait-contract",
         "p9-submission",
+        "p6-reinterpret",
+        "p6-reinterpret-rank-policy",
     }
 )
 DEFERRED_CORRECTIONS: dict[str, str] = {}
@@ -682,8 +684,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         revised = base_manifest.replace("revision = 2", "revision = 3", 1)
         revised = _replace_once(
             revised,
-            'gates = ["G1", "G2", "G4"]\nartifact = { id = "artifact-reinterpret"',
-            'gates = ["G4"]\nartifact = { id = "artifact-reinterpret"',
+            'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-cuda-provider"',
+            'gates = ["G3"]\nartifact = { id = "artifact-cuda-provider"',
         )
         temporary, root, base, _ = _git_repository(
             base_manifest, _fixture_files(base_manifest)
@@ -754,8 +756,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 )
                 candidate = _replace_once(
                     candidate,
-                    'gates = ["G1", "G2", "G4"]\nartifact = { id = "artifact-reinterpret"',
-                    'gates = ["G4"]\nartifact = { id = "artifact-reinterpret"',
+                    'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-cuda-provider"',
+                    'gates = ["G3"]\nartifact = { id = "artifact-cuda-provider"',
                 )
                 temporary, root, base, _ = _git_repository(
                     base_manifest, _fixture_files(base_manifest)
@@ -786,7 +788,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                         self,
                         result,
                         "E_PROMOTION_REGISTRY" if revision == 4 else "E_PROMOTION_IDENTITY",
-                        {"component": "revision"} if revision == 4 else {"obligation_id": "p6-reinterpret"},
+                        {"component": "revision"} if revision == 4 else {"obligation_id": "p7-cuda"},
                     )
                 finally:
                     temporary.cleanup()
@@ -840,6 +842,16 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             _manifest_text(),
             "p9-submission",
             '{ kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }',
+        )
+        manifest = _replace_row_state(
+            manifest,
+            "p6-reinterpret",
+            '{ kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }',
+        )
+        manifest = _replace_row_state(
+            manifest,
+            "p6-reinterpret-rank-policy",
+            '{ kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }',
         )
         files = _fixture_files(manifest)
         result = _run_checker(manifest, files=files, extra=("--diagnostics-json",))

@@ -326,7 +326,7 @@ unit = "P6"
 gates = ["G1", "G2", "G4"]
 artifact = { id = "artifact-reinterpret", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_reinterpret.rs" }
 command = { id = "cmd-reinterpret", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret"], cwd = ".", path_args = [], artifact_id = "artifact-reinterpret" }
-state = { kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -335,7 +335,7 @@ unit = "P6"
 gates = ["G4"]
 artifact = { id = "artifact-reinterpret-rank-policy", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_reinterpret_rank.rs" }
 command = { id = "cmd-reinterpret-rank-policy", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret_rank"], cwd = ".", path_args = [], artifact_id = "artifact-reinterpret-rank-policy" }
-state = { kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

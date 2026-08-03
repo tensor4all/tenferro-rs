@@ -76,7 +76,7 @@ pub use capability::{
 pub use config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-pub use error::{BoxError, Error, Result};
+pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
     CpuDomainId, DType, DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError,

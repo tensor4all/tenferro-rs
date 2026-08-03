@@ -265,7 +265,7 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<ProviderReadMapping<'_>, AccessError> {
-        if dtype != T::dtype() {
+        if !supported_representation(T::dtype(), dtype) {
             return Err(AccessError::DTypeMismatch {
                 expected: T::dtype(),
                 actual: dtype,
@@ -277,7 +277,13 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         let crate::StorageBuffer::Host(data) = data else {
             return Err(AccessError::Unsupported { backend: "host" });
         };
-        let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
+        let range = host_byte_range(
+            self.extent,
+            span,
+            data.len(),
+            std::mem::size_of::<T>(),
+            dtype_size(dtype),
+        )?;
         Ok(ProviderReadMapping::from_guard(HostByteReadGuard {
             data,
             range,
@@ -289,7 +295,7 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<ProviderWriteMapping<'_>, AccessError> {
-        if dtype != T::dtype() {
+        if !supported_representation(T::dtype(), dtype) {
             return Err(AccessError::DTypeMismatch {
                 expected: T::dtype(),
                 actual: dtype,
@@ -301,11 +307,111 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         let crate::StorageBuffer::Host(data) = data else {
             return Err(AccessError::Unsupported { backend: "host" });
         };
-        let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
+        let range = host_byte_range(
+            self.extent,
+            span,
+            data.len(),
+            std::mem::size_of::<T>(),
+            dtype_size(dtype),
+        )?;
         Ok(ProviderWriteMapping::from_guard(HostByteWriteGuard {
             data,
             range,
         }))
+    }
+}
+
+impl<T: TensorScalar> HostAllocation<T> {
+    fn host_slice_as<U: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&[U], AccessError> {
+        if dtype != U::dtype() || !supported_representation(T::dtype(), dtype) {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let data = unsafe { &*self.data.get() };
+        let crate::StorageBuffer::Host(data) = data else {
+            return Err(AccessError::Unsupported { backend: "host" });
+        };
+        let range = host_byte_range(
+            self.extent,
+            span,
+            data.len(),
+            size_of::<T>(),
+            size_of::<U>(),
+        )?;
+        let bytes = host_bytes(data, range);
+        if bytes.as_ptr().align_offset(align_of::<U>()) != 0 {
+            return Err(AccessError::Provider {
+                message: format!("host reinterpretation is not aligned for {:?}", dtype),
+            });
+        }
+        let count = bytes.len() / size_of::<U>();
+        // SAFETY: the sealed representation pair has equal size/alignment,
+        // the byte range is element-aligned, and the host root borrow outlives
+        // the returned slice.
+        Ok(unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<U>(), count) })
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    fn host_slice_as_mut<U: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&mut [U], AccessError> {
+        if dtype != U::dtype() || !supported_representation(T::dtype(), dtype) {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let data = unsafe { &mut *self.data.get() };
+        let crate::StorageBuffer::Host(data) = data else {
+            return Err(AccessError::Unsupported { backend: "host" });
+        };
+        let range = host_byte_range(
+            self.extent,
+            span,
+            data.len(),
+            size_of::<T>(),
+            size_of::<U>(),
+        )?;
+        let bytes = host_bytes_mut(data, range);
+        if bytes.as_ptr().align_offset(align_of::<U>()) != 0 {
+            return Err(AccessError::Provider {
+                message: format!("host reinterpretation is not aligned for {:?}", dtype),
+            });
+        }
+        let count = bytes.len() / size_of::<U>();
+        // SAFETY: the sealed representation pair has equal size/alignment,
+        // the byte range is element-aligned, and the caller holds the unique
+        // group mutable capability.
+        Ok(unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<U>(), count) })
+    }
+}
+
+fn supported_representation(source: DType, target: DType) -> bool {
+    source == target
+        || matches!(
+            (source, target),
+            (DType::C32, DType::F32)
+                | (DType::F32, DType::C32)
+                | (DType::C64, DType::F64)
+                | (DType::F64, DType::C64)
+        )
+}
+
+fn dtype_size(dtype: DType) -> usize {
+    match dtype {
+        DType::F32 | DType::I32 => size_of::<f32>(),
+        DType::F64 | DType::I64 => size_of::<f64>(),
+        DType::Bool => size_of::<bool>(),
+        DType::C32 => size_of::<num_complex::Complex32>(),
+        DType::C64 => size_of::<num_complex::Complex64>(),
     }
 }
 
@@ -450,13 +556,48 @@ impl RootResourcePin {
             Self::Backend(root) => root.map_write(span, dtype),
         }
     }
+
+    fn host_slice<T: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&[T], AccessError> {
+        match self {
+            Self::HostF32(root) => root.host_slice_as(span, dtype),
+            Self::HostF64(root) => root.host_slice_as(span, dtype),
+            Self::HostI32(root) => root.host_slice_as(span, dtype),
+            Self::HostI64(root) => root.host_slice_as(span, dtype),
+            Self::HostBool(root) => root.host_slice_as(span, dtype),
+            Self::HostC32(root) => root.host_slice_as(span, dtype),
+            Self::HostC64(root) => root.host_slice_as(span, dtype),
+            Self::Backend(_) => Err(AccessError::Unsupported { backend: "backend" }),
+        }
+    }
+
+    fn host_slice_mut<T: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&mut [T], AccessError> {
+        match self {
+            Self::HostF32(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostF64(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostI32(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostI64(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostBool(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostC32(root) => root.host_slice_as_mut(span, dtype),
+            Self::HostC64(root) => root.host_slice_as_mut(span, dtype),
+            Self::Backend(_) => Err(AccessError::Unsupported { backend: "backend" }),
+        }
+    }
 }
 
 fn host_byte_range(
     extent: RootResourceExtent,
     span: RootBoundSpan,
     element_count: usize,
-    element_size: usize,
+    allocation_element_size: usize,
+    requested_element_size: usize,
 ) -> Result<Range<usize>, AccessError> {
     let start = span
         .byte_offset()
@@ -470,13 +611,13 @@ fn host_byte_range(
             message: "host mapping span overflows".to_string(),
         })?;
     let total = element_count
-        .checked_mul(element_size)
+        .checked_mul(allocation_element_size)
         .ok_or_else(|| AccessError::Provider {
             message: "host allocation byte length overflows".to_string(),
         })?;
     if end > total
-        || !start.is_multiple_of(element_size)
-        || !span.byte_len().is_multiple_of(element_size)
+        || !start.is_multiple_of(requested_element_size)
+        || !span.byte_len().is_multiple_of(requested_element_size)
     {
         return Err(AccessError::Provider {
             message: "host mapping span is not an element-aligned subrange".to_string(),
@@ -658,36 +799,11 @@ impl<'a> StorageRef<'a> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<&'a [T], AccessError> {
-        if dtype != T::dtype() {
-            return Err(AccessError::DTypeMismatch {
-                expected: T::dtype(),
-                actual: dtype,
-            });
-        }
-        let allocation = self
-            .owner
-            .pin
-            .as_any()
-            .downcast_ref::<HostAllocation<T>>()
-            .ok_or(AccessError::Unsupported {
-                backend: "non-host",
-            })?;
-        let crate::StorageBuffer::Host(data) = (unsafe { &*allocation.data.get() }) else {
-            return Err(AccessError::Unsupported {
-                backend: "non-host",
-            });
-        };
-        let range = host_byte_range(
-            allocation.extent,
-            span,
-            data.len(),
-            std::mem::size_of::<T>(),
-        )?;
-        let start = range.start / std::mem::size_of::<T>();
-        let end = range.end / std::mem::size_of::<T>();
-        // SAFETY: the returned slice is bounded by the shared root borrow and
-        // the vector cannot reallocate after import.
-        Ok(unsafe { std::mem::transmute::<&[T], &'a [T]>(&data[start..end]) })
+        let slice = self.owner.pin.host_slice::<T>(span, dtype)?;
+        // SAFETY: the root owner is borrowed for `'a`; the host allocation is
+        // never resized after import and the representation helper returned a
+        // slice bounded by that root.
+        Ok(unsafe { std::mem::transmute::<&[T], &'a [T]>(slice) })
     }
 }
 
@@ -726,35 +842,9 @@ impl<'a> StorageMut<'a> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<&'a mut [T], AccessError> {
-        if dtype != T::dtype() {
-            return Err(AccessError::DTypeMismatch {
-                expected: T::dtype(),
-                actual: dtype,
-            });
-        }
-        let allocation = self
-            .owner
-            .pin
-            .as_any()
-            .downcast_ref::<HostAllocation<T>>()
-            .ok_or(AccessError::Unsupported {
-                backend: "non-host",
-            })?;
-        let crate::StorageBuffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
-            return Err(AccessError::Unsupported {
-                backend: "non-host",
-            });
-        };
-        let range = host_byte_range(
-            allocation.extent,
-            span,
-            data.len(),
-            std::mem::size_of::<T>(),
-        )?;
-        let start = range.start / std::mem::size_of::<T>();
-        let end = range.end / std::mem::size_of::<T>();
-        // SAFETY: the caller holds the group's exclusive borrow and the vector
-        // cannot reallocate after import.
-        Ok(unsafe { std::mem::transmute::<&mut [T], &'a mut [T]>(&mut data[start..end]) })
+        let slice = self.owner.pin.host_slice_mut::<T>(span, dtype)?;
+        // SAFETY: the caller holds the group's exclusive borrow and the
+        // representation helper bounded the slice by the imported root.
+        Ok(unsafe { std::mem::transmute::<&mut [T], &'a mut [T]>(slice) })
     }
 }
