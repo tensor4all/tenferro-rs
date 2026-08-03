@@ -29,4 +29,3 @@ merged in #1596.
 - `cargo test -p tenferro-runtime --test execution_engine_identity` must pass.
 - The storage ledger checker, design checker, all active obligations, and fast
   repository checks must pass from the committed candidate.
-
