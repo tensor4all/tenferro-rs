@@ -52,8 +52,8 @@ fn relative_range_overflow_precedes_malformed_root_alignment() {
 #[test]
 fn root_bound_spans_retain_exact_root_provenance() {
     let allocation_key = key(AllocationDomainId::fresh(), 3);
-    let extent = RootResourceExtent::try_new(allocation_key, 0, 64, 8)
-        .expect("the root extent is valid");
+    let extent =
+        RootResourceExtent::try_new(allocation_key, 0, 64, 8).expect("the root extent is valid");
     let first = RootResourceIdentity::try_new(extent).expect("first root identity");
     let second = RootResourceIdentity::try_new(extent).expect("second root identity");
     let first_span = first
@@ -79,8 +79,8 @@ fn root_bound_spans_retain_exact_root_provenance() {
 #[test]
 fn child_alignment_is_conservative_and_empty_spans_do_not_overlap() {
     let allocation_key = key(AllocationDomainId::fresh(), 4);
-    let extent = RootResourceExtent::try_new(allocation_key, 0, 64, 16)
-        .expect("the root extent is valid");
+    let extent =
+        RootResourceExtent::try_new(allocation_key, 0, 64, 16).expect("the root extent is valid");
     let root = RootResourceIdentity::try_new(extent).expect("root identity");
     let empty = root
         .bind_relative_range(ByteRange::new(32, 0))
@@ -145,7 +145,8 @@ fn operation_context_retains_requested_metadata_and_bound_resolution() {
         key: allocation_key,
         range: ByteRange::new(16, 8),
     };
-    let context = StorageOperationContext::resolved(StorageOperation::ImportUniqueRoot, requested, span);
+    let context =
+        StorageOperationContext::resolved(StorageOperation::ImportUniqueRoot, requested, span);
     let error = StorageOperationError::new(
         context,
         SpanValidationError::OutsideRootExtent {
@@ -159,6 +160,9 @@ fn operation_context_retains_requested_metadata_and_bound_resolution() {
 
     assert_eq!(error.context().requested(), requested);
     assert_eq!(error.context().resolved_span(), Some(span));
-    assert_eq!(error.source().to_string(), "requested span lies outside the root resource extent");
+    assert_eq!(
+        error.source().to_string(),
+        "requested span lies outside the root resource extent"
+    );
     assert!(error.to_string().contains("import_unique_root"));
 }

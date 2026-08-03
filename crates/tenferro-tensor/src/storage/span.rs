@@ -260,11 +260,10 @@ fn checked_alignment(
     byte_offset: usize,
     guaranteed_alignment: usize,
 ) -> Result<NonZeroUsize, SpanValidationError> {
-    let alignment = NonZeroUsize::new(guaranteed_alignment).ok_or(
-        SpanValidationError::InvalidAlignment {
+    let alignment =
+        NonZeroUsize::new(guaranteed_alignment).ok_or(SpanValidationError::InvalidAlignment {
             alignment: guaranteed_alignment,
-        },
-    )?;
+        })?;
     if !alignment.is_power_of_two() {
         return Err(SpanValidationError::InvalidAlignment {
             alignment: guaranteed_alignment,

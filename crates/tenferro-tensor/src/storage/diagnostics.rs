@@ -113,10 +113,18 @@ impl fmt::Display for StorageOperationContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.resolution {
             OperationResolution::Unresolved => {
-                write!(formatter, "{} for {:?}, unresolved", self.operation, self.requested)
+                write!(
+                    formatter,
+                    "{} for {:?}, unresolved",
+                    self.operation, self.requested
+                )
             }
             OperationResolution::Resolved(span) => {
-                write!(formatter, "{} for {:?}, resolved {:?}", self.operation, self.requested, span)
+                write!(
+                    formatter,
+                    "{} for {:?}, resolved {:?}",
+                    self.operation, self.requested, span
+                )
             }
         }
     }
