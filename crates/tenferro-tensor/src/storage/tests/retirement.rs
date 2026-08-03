@@ -113,13 +113,23 @@ fn package() -> (PreparedPackage, [Arc<AtomicUsize>; 4], Arc<AtomicUsize>) {
     }))
     .expect("root import");
     let package = PreparedPackage::new(
-        vec![Box::new(DropBinding(Arc::clone(&binding_drops)))
-            as Box<dyn ProviderRetirementBinding>]
+        vec![
+            Box::new(DropBinding(Arc::clone(&binding_drops))) as Box<dyn ProviderRetirementBinding>
+        ]
         .into_boxed_slice(),
         vec![owner.into_root_pin()].into_boxed_slice(),
         Box::new(DropContext(Arc::clone(&provider_drops))) as Box<dyn ProviderContext>,
     );
-    (package, [binding_drops, root_drops, provider_drops, Arc::clone(&event_drops)], event_drops)
+    (
+        package,
+        [
+            binding_drops,
+            root_drops,
+            provider_drops,
+            Arc::clone(&event_drops),
+        ],
+        event_drops,
+    )
 }
 
 fn admit(
@@ -128,9 +138,9 @@ fn admit(
     event_drops: Arc<AtomicUsize>,
 ) -> super::super::retirement::RetirementRecord {
     match package.admit(AdmissionDecision::Enqueued(Box::new(DropEvent {
-            kind,
-            drops: event_drops,
-        }))) {
+        kind,
+        drops: event_drops,
+    }))) {
         Ok(record) => record,
         Err(_) => panic!("enqueue admission unexpectedly rejected"),
     }
@@ -140,7 +150,9 @@ fn admit(
 fn proven_retirement_releases_binding_root_and_context_once() {
     let (package, drops, event_drops) = package();
     let record = admit(package, EventKind::Proven, event_drops);
-    assert!(matches!(record.finish(), RetirementOutcome::Completed));
+    let outcome = record.finish();
+    assert!(matches!(outcome, RetirementOutcome::Completed));
+    assert_eq!(format!("{outcome:?}"), "Completed");
     for counter in &drops {
         assert_eq!(counter.load(Ordering::Relaxed), 1);
     }
@@ -152,6 +164,7 @@ fn unproven_retirement_keeps_binding_root_and_context_alive() {
     let record = admit(package, EventKind::Unproven, event_drops);
     let outcome = record.finish();
     assert!(matches!(outcome, RetirementOutcome::CompletionUnproven(_)));
+    assert!(format!("{outcome:?}").contains("CompletionUnproven"));
     for counter in &drops {
         assert_eq!(counter.load(Ordering::Relaxed), 0);
     }
@@ -161,7 +174,9 @@ fn unproven_retirement_keeps_binding_root_and_context_alive() {
 fn proven_provider_failure_still_releases_owned_resources() {
     let (package, drops, event_drops) = package();
     let record = admit(package, EventKind::Failed, event_drops);
-    assert!(matches!(record.finish(), RetirementOutcome::Failed(_)));
+    let outcome = record.finish();
+    assert!(matches!(outcome, RetirementOutcome::Failed(_)));
+    assert!(format!("{outcome:?}").contains("Failed"));
     for counter in &drops {
         assert_eq!(counter.load(Ordering::Relaxed), 1);
     }
@@ -170,14 +185,13 @@ fn proven_provider_failure_still_releases_owned_resources() {
 #[test]
 fn pre_admission_rejection_returns_the_unchanged_prepared_package() {
     let (package, drops, event_drops) = package();
-    let (package, error) = match package.admit(AdmissionDecision::Rejected(
-        AdmissionError::Rejected {
+    let (package, error) =
+        match package.admit(AdmissionDecision::Rejected(AdmissionError::Rejected {
             message: "fake admission rejection".to_owned(),
-        },
-    )) {
-        Err(value) => value,
-        Ok(_) => panic!("rejection must not create a retirement record"),
-    };
+        })) {
+            Err(value) => value,
+            Ok(_) => panic!("rejection must not create a retirement record"),
+        };
     assert!(matches!(error, AdmissionError::Rejected { .. }));
     assert_eq!(event_drops.load(Ordering::Relaxed), 0);
     drop(package);

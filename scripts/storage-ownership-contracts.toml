@@ -227,7 +227,7 @@ unit = "P4"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-production-borrow-contract", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_borrow_contract.rs" }
 command = { id = "cmd-production-borrow-contract", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_borrow_contract"], cwd = ".", path_args = [], artifact_id = "artifact-production-borrow-contract" }
-state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -272,7 +272,7 @@ unit = "P4"
 gates = ["G1", "G3"]
 artifact = { id = "artifact-prepared-validation-boundary", kind = "validation-boundary-test", path = "crates/tenferro-tensor/tests/storage_prepared_validation.rs" }
 command = { id = "cmd-prepared-validation-boundary", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_validation"], cwd = ".", path_args = [], artifact_id = "artifact-prepared-validation-boundary" }
-state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -281,7 +281,7 @@ unit = "P4"
 gates = ["G1", "G3"]
 artifact = { id = "artifact-provider-event-retirement", kind = "provider-test", path = "crates/tenferro-tensor/tests/storage_provider_event_retirement.rs" }
 command = { id = "cmd-provider-event-retirement", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_provider_event_retirement"], cwd = ".", path_args = [], artifact_id = "artifact-provider-event-retirement" }
-state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -290,7 +290,7 @@ unit = "P4"
 gates = ["G1", "G3", "G4"]
 artifact = { id = "artifact-traversal-resolution-counts", kind = "provider-test", path = "crates/tenferro-tensor/tests/storage_traversal_resolution.rs" }
 command = { id = "cmd-traversal-resolution-counts", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_traversal_resolution"], cwd = ".", path_args = [], artifact_id = "artifact-traversal-resolution-counts" }
-state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -299,7 +299,7 @@ unit = "P4"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-prepared-access-api", kind = "api-source-contract", path = "crates/tenferro-tensor/tests/storage_prepared_access.rs" }
 command = { id = "cmd-prepared-access-api", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_access"], cwd = ".", path_args = [], artifact_id = "artifact-prepared-access-api" }
-state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

@@ -31,11 +31,14 @@ ACTIVE_IDS = frozenset(
         "p1-api-parity",
         "p1-element-access-baseline",
         "p2-root-claims",
+        "p4-production-borrow-contract",
+        "p4-access-retirement",
+        "p4-provider-release-lifecycle",
+        "p4-traversal-resolution-counts",
+        "p4-prepared-access-api",
     }
 )
-DEFERRED_CORRECTIONS = {
-    "p4-production-borrow-contract": "P4",
-}
+DEFERRED_CORRECTIONS: dict[str, str] = {}
 
 CHECKER_CLI = {
     "schema": "tenferro.storage-ownership-cli-contract.v1",
@@ -470,7 +473,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         for row in deferred:
             self.assertFalse((ROOT / row["artifact"]["path"]).exists(), row["id"])
 
-        row = next(row for row in deferred if row["id"] == "p4-production-borrow-contract")
+        row = deferred[0]
         files = _fixture_files()
         files[row["artifact"]["path"]] = "not a fabricated production artifact\n"
         result = _run_checker(
@@ -868,7 +871,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 self.assertEqual(execution["artifact_path"], row["artifact"]["path"])
                 self.assertEqual(execution["exit_code"], 0)
             cargo_argv = (root / "cargo-argv").read_text(encoding="utf-8").splitlines()
-            self.assertEqual(cargo_argv, ["test", "-p", "tenferro-tensor", "--test", "storage_root_claims"])
+            last_id = sorted(ACTIVE_IDS)[-1]
+            self.assertEqual(cargo_argv, rows[last_id]["command"]["argv"][1:])
             checked = _checker_with_receipt(root, base, receipt_path)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             self.assertEqual(json.loads(checked.stdout), {"terminal": False})
