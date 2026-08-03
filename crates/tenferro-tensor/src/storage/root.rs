@@ -174,6 +174,10 @@ impl<'a> StorageRef<'a> {
         self.owner.claim.span
     }
 
+    pub(crate) fn provider_kind(&self) -> ProviderKind {
+        self.owner.pin.0.allocation.provider_kind()
+    }
+
     pub(super) fn map_read(
         &self,
         span: RootBoundSpan,
