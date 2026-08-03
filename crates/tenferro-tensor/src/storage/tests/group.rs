@@ -200,10 +200,56 @@ fn construction_retains_checked_metadata_and_rejects_bad_inputs() {
         .expect("valid descriptor");
     let read = group.view::<i32, DynRank>(slot).expect("read view");
     assert_eq!(read.descriptor().dtype(), DType::I32);
+    assert_eq!(read.descriptor().allocation(), allocation);
+    assert_eq!(read.descriptor().span().byte_len(), 16);
     assert_eq!(read.descriptor().element_size(), 4);
     assert_eq!(read.descriptor().element_count(), 4);
+    assert_eq!(read.descriptor().provider(), BackendId::Cpu);
     assert!(read.descriptor().write_injective());
     assert_eq!(read.descriptor().layout().shape(), &[4]);
+    assert!(format!("{read:?}").contains("GroupReadView"));
+    {
+        let write = group.view_mut::<i32, DynRank>(slot).expect("write view");
+        assert_eq!(write.descriptor().allocation(), allocation);
+        assert!(format!("{write:?}").contains("GroupWriteView"));
+    }
+    assert!(matches!(
+        group.view::<i64, DynRank>(slot),
+        Err(GroupError::DTypeMismatch { .. })
+    ));
+    assert!(matches!(
+        group.view::<i32, crate::Rank<2>>(slot),
+        Err(GroupError::RankMismatch { .. })
+    ));
+    assert!(matches!(
+        group.view::<i32, DynRank>(DescriptorSlot::test_raw(u32::MAX)),
+        Err(GroupError::DescriptorSlotOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        group.insert_descriptor::<i32, DynRank>(
+            AllocationSlot::test_raw(u32::MAX),
+            DescriptorInput::new(
+                ByteRange::new(0, 4),
+                vec![1].into(),
+                vec![1].into(),
+                0,
+                true
+            ),
+        ),
+        Err(GroupError::AllocationSlotOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        descriptor::<i32>(&mut group, allocation, 0, 6, vec![1], vec![1], true),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
+    assert!(matches!(
+        descriptor::<i32>(&mut group, allocation, 0, 4, vec![2], vec![1], true),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
+    assert!(matches!(
+        descriptor::<i32>(&mut group, allocation, 0, 8, vec![2], vec![0], true),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
     assert!(matches!(
         descriptor::<i64>(&mut group, allocation, 4, 8, vec![1], vec![1], true),
         Err(GroupError::InvalidDescriptor { .. })
@@ -301,6 +347,14 @@ fn split_mut_rejects_overlap_and_preserves_the_group() {
         group.split_mut::<i32, DynRank>(&[first, first]),
         Err(DisjointViewError::DuplicateSlot { .. })
     ));
+
+    let (other_allocation, _, _) = add_owner(&mut group, 10);
+    let other = descriptor::<i32>(&mut group, other_allocation, 0, 4, vec![1], vec![1], true)
+        .expect("other descriptor");
+    let other_children = group
+        .split_mut::<i32, DynRank>(&[first, other])
+        .expect("other root split");
+    assert_eq!(other_children.len(), 2);
 }
 
 #[test]
@@ -379,4 +433,81 @@ fn consuming_extraction_returns_unchanged_group_on_failure() {
         ExtractError::Group(GroupError::DescriptorSlotOutOfBounds { .. })
     ));
     assert!(group.view::<i32, DynRank>(slot).is_ok());
+}
+
+#[test]
+fn consuming_extraction_moves_the_selected_owner_and_drops_the_remainder() {
+    let mut group = AllocationGroup::new();
+    let (allocation, _, _) = add_owner(&mut group, 11);
+    let slot = descriptor::<i32>(&mut group, allocation, 0, 4, vec![1], vec![1], true)
+        .expect("descriptor");
+    let owner = match group.into_owner(slot) {
+        Ok(owner) => owner,
+        Err(_) => panic!("sole owner extraction must succeed"),
+    };
+    drop(owner);
+}
+
+#[test]
+fn checked_group_helpers_report_overflow_without_panicking() {
+    assert!(matches!(
+        super::super::group::test_logical_element_count(&[usize::MAX, 2]),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
+
+    let key = super::super::AllocationKey::new(
+        AllocationDomainId::fresh(),
+        AllocationId::from_backend_id(12),
+    );
+    let extent = super::super::RootResourceExtent::try_new(key, 0, usize::MAX, 1)
+        .expect("maximum non-overflowing root extent");
+    let identity = super::super::RootResourceIdentity::try_new(extent).expect("valid identity");
+    let layout = crate::TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![1].into(), 0, 2)
+        .expect("small layout");
+    assert!(matches!(
+        super::super::group::test_reachable_envelope(identity.root_span(), layout, usize::MAX),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
+
+    let end_overflow = super::super::RootResourceExtent::try_new(
+        super::super::AllocationKey::new(
+            AllocationDomainId::fresh(),
+            AllocationId::from_backend_id(13),
+        ),
+        usize::MAX,
+        0,
+        1,
+    )
+    .expect("zero-length maximum-offset extent");
+    let end_identity = super::super::RootResourceIdentity::try_new(end_overflow)
+        .expect("valid maximum-offset identity");
+    let one = crate::TensorLayout::<DynRank>::from_parts(vec![1].into(), vec![1].into(), 0, 1)
+        .expect("one-element layout");
+    assert!(matches!(
+        super::super::group::test_reachable_envelope(end_identity.root_span(), one, 1),
+        Err(GroupError::InvalidDescriptor { .. })
+    ));
+}
+
+#[test]
+fn vacant_allocation_entries_are_rejected_without_panicking() {
+    let mut group = AllocationGroup::new();
+    let (allocation, _, _) = add_owner(&mut group, 14);
+    let slot = descriptor::<i32>(&mut group, allocation, 0, 4, vec![1], vec![1], true)
+        .expect("descriptor");
+    group.test_vacate_allocation(allocation);
+    assert!(matches!(
+        group.view::<i32, DynRank>(slot),
+        Err(GroupError::AllocationSlotVacant { .. })
+    ));
+    assert!(matches!(
+        group.view_mut::<i32, DynRank>(slot),
+        Err(GroupError::AllocationSlotVacant { .. })
+    ));
+    assert!(matches!(
+        group.split_mut::<i32, DynRank>(&[slot]),
+        Err(DisjointViewError::Group(
+            GroupError::AllocationSlotVacant { .. }
+        ))
+    ));
 }

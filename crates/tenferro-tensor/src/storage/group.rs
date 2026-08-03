@@ -16,6 +16,11 @@ impl AllocationSlot {
     pub(crate) const fn index(self) -> usize {
         self.0 as usize
     }
+
+    #[cfg(test)]
+    pub(crate) const fn test_raw(raw: u32) -> Self {
+        Self(raw)
+    }
 }
 
 /// A group-local descriptor lookup key. It carries no ownership authority.
@@ -525,6 +530,13 @@ impl AllocationGroup {
             .ok_or(GroupError::DescriptorSlotVacant { slot: index })?;
         Ok((index, descriptor))
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_vacate_allocation(&mut self, slot: AllocationSlot) {
+        if let Some(entry) = self.allocations.get_mut(slot.index()) {
+            *entry = None;
+        }
+    }
 }
 
 fn check_typed<T: TensorScalar, R: TensorRank>(
@@ -621,4 +633,18 @@ fn reachable_envelope(
             message: error.to_string(),
         })?;
     Ok(Some(range))
+}
+
+#[cfg(test)]
+pub(crate) fn test_logical_element_count(shape: &[usize]) -> Result<usize, GroupError> {
+    logical_element_count(shape)
+}
+
+#[cfg(test)]
+pub(crate) fn test_reachable_envelope(
+    span: RootBoundSpan,
+    layout: TensorLayout<DynRank>,
+    element_size: usize,
+) -> Result<Option<ByteRange>, GroupError> {
+    reachable_envelope(&span, &layout, element_size)
 }
