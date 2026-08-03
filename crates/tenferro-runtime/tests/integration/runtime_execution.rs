@@ -285,14 +285,12 @@ fn assemble_cpu_registration(
     state: CpuRegistrationState,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     match state {
-        CpuRegistrationState::PreparationOnly => {
-            assemble_preparation_only_engine_registration(
-                PreparationOnlyEngineRegistrationConfig::new(
-                    metadata,
-                    ExecutionContextIdentity::of::<CpuBackend>(),
-                ),
-            )
-        }
+        CpuRegistrationState::PreparationOnly => assemble_preparation_only_engine_registration(
+            PreparationOnlyEngineRegistrationConfig::new(
+                metadata,
+                ExecutionContextIdentity::of::<CpuBackend>(),
+            ),
+        ),
         CpuRegistrationState::Executable {
             driver,
             cache_owner,
@@ -2822,10 +2820,7 @@ fn runtime_run_compiled_returns_drain_failure_without_outputs() -> Result<(), Bo
         &backend,
         CPU_ENGINE_ID,
         cpu_core_capabilities(&backend),
-        CpuRegistrationState::executable_with_driver(failing_drain_event_domain(
-            "cpu",
-            &event_log,
-        )),
+        CpuRegistrationState::executable_with_driver(failing_drain_event_domain("cpu", &event_log)),
     )?)?;
     let runtime = builder.build()?;
 
@@ -2870,10 +2865,7 @@ fn runtime_run_compiled_unwind_drops_event_run_before_tensor_storage(
         &backend,
         CPU_ENGINE_ID,
         cpu_core_capabilities(&backend),
-        CpuRegistrationState::executable_with_driver(recording_event_domain(
-            "cpu",
-            &event_log,
-        )),
+        CpuRegistrationState::executable_with_driver(recording_event_domain("cpu", &event_log)),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.panic-producer-module")?,
@@ -2959,10 +2951,7 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         core_engine_id,
         source_storage.as_str(),
         cpu_core_capabilities(&core_backend),
-        CpuRegistrationState::executable_with_driver(recording_event_domain(
-            "source",
-            &event_log,
-        )),
+        CpuRegistrationState::executable_with_driver(recording_event_domain("source", &event_log)),
         &format!("test-engine:{core_engine_id}"),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id_for_target(
