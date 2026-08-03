@@ -256,20 +256,20 @@ COMMAND_POLICY = {
     ),
     "cmd-contract-freeze": _policy(
         "doc-check",
-        ("python3", "scripts/check-storage-design-docs.py"),
-        ("scripts/check-storage-design-docs.py", "docs/design/storage-contract-freeze.md"),
+        ("python3", "scripts/check-storage-contract-freeze.py", "--report", "docs/design/storage-contract-freeze.md"),
+        ("scripts/check-storage-contract-freeze.py", "docs/design/storage-contract-freeze.md"),
         "artifact-contract-freeze",
     ),
     "cmd-hardware-matrix": _policy(
         "doc-check",
-        ("python3", "scripts/check-storage-design-docs.py"),
-        ("scripts/check-storage-design-docs.py", "docs/testing/storage-hardware-matrix.md"),
+        ("python3", "scripts/check-storage-hardware-matrix.py", "--report", "docs/testing/storage-hardware-matrix.md"),
+        ("scripts/check-storage-hardware-matrix.py", "docs/testing/storage-hardware-matrix.md"),
         "artifact-hardware-matrix",
     ),
     "cmd-storage-guide": _policy(
         "doc-check",
-        ("python3", "scripts/check-storage-design-docs.py"),
-        ("scripts/check-storage-design-docs.py", "docs/storage-ownership.md"),
+        ("python3", "scripts/check-storage-docs.py", "--include-rendered"),
+        ("scripts/check-storage-docs.py", "docs/storage-ownership.md"),
         "artifact-storage-guide",
     ),
     "cmd-element-access-guide": _policy(
@@ -285,9 +285,9 @@ COMMAND_POLICY = {
         "artifact-element-access-examples",
     ),
     "cmd-storage-closure": _policy(
-        "doc-check",
-        ("python3", "scripts/check-storage-design-docs.py"),
-        ("scripts/check-storage-design-docs.py", "docs/worklogs/storage-redesign-closure.md"),
+        "source-contract",
+        ("python3", "scripts/check-storage-redesign-closure.py", "--report", "docs/worklogs/storage-redesign-closure.md"),
+        ("scripts/check-storage-redesign-closure.py", "docs/worklogs/storage-redesign-closure.md"),
         "artifact-storage-closure",
     ),
 }

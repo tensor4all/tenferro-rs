@@ -896,6 +896,32 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         self.assertNotIn("shell=True", runner_source)
         self.assertNotIn("os.system", runner_source)
 
+        design = (ROOT / "docs/design/storage-ownership-contracts.md").read_text(
+            encoding="utf-8"
+        )
+        for removed_requirement in (
+            "RootResourcePin",
+            "UseLease",
+            "single typed provider bridge",
+            "generational descriptors",
+            "quarantine poisoning",
+            "artifact digest",
+            "manifest digest",
+        ):
+            self.assertNotIn(removed_requirement, design)
+
+        manifest = _manifest_text()
+        for obligation_id in (
+            "p13-freeze",
+            "p11-hardware",
+            "p12-documentation",
+            "p13-closure",
+        ):
+            start = manifest.index(f'id = "{obligation_id}"')
+            end = manifest.find("\n[[obligations]]", start)
+            row = manifest[start:] if end < 0 else manifest[start:end]
+            self.assertNotIn("scripts/check-storage-design-docs.py", row)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -313,7 +313,7 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 [[obligations]]
 id = "p9-submission"
 unit = "P9"
-gates = ["G3"]
+gates = ["G2", "G3", "G7"]
 artifact = { id = "artifact-submit-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/pass/consuming_submission.rs" }
 command = { id = "cmd-submit-compile", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"], cwd = ".", path_args = [], artifact_id = "artifact-submit-compile" }
 state = { kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }
@@ -322,7 +322,7 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 [[obligations]]
 id = "p6-reinterpret"
 unit = "P6"
-gates = ["G4"]
+gates = ["G1", "G2", "G4"]
 artifact = { id = "artifact-reinterpret", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_reinterpret.rs" }
 command = { id = "cmd-reinterpret", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_reinterpret"], cwd = ".", path_args = [], artifact_id = "artifact-reinterpret" }
 state = { kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }
@@ -340,7 +340,7 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 [[obligations]]
 id = "p7-cuda"
 unit = "P7"
-gates = ["G1", "G3"]
+gates = ["G1", "G3", "G5"]
 artifact = { id = "artifact-cuda-provider", kind = "hardware-test", path = "crates/tenferro-cuda/tests/storage_provider.rs" }
 command = { id = "cmd-cuda-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-cuda", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-cuda-provider" }
 state = { kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }
@@ -349,7 +349,7 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 [[obligations]]
 id = "p8-webgpu-metal"
 unit = "P8"
-gates = ["G1", "G3"]
+gates = ["G1", "G3", "G5"]
 artifact = { id = "artifact-webgpu-metal-provider", kind = "hardware-test", path = "crates/tenferro-wgpu/tests/storage_provider.rs" }
 command = { id = "cmd-webgpu-metal-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-wgpu", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-webgpu-metal-provider" }
 state = { kind = "deferred", activation_unit = "P8", promotion = { mode = "activate-in-place" } }
@@ -396,16 +396,16 @@ id = "p13-freeze"
 unit = "P13-A"
 gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
 artifact = { id = "artifact-contract-freeze", kind = "documentation", path = "docs/design/storage-contract-freeze.md" }
-command = { id = "cmd-contract-freeze", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/design/storage-contract-freeze.md"], artifact_id = "artifact-contract-freeze" }
+command = { id = "cmd-contract-freeze", kind = "doc-check", argv = ["python3", "scripts/check-storage-contract-freeze.py", "--report", "docs/design/storage-contract-freeze.md"], cwd = ".", path_args = ["scripts/check-storage-contract-freeze.py", "docs/design/storage-contract-freeze.md"], artifact_id = "artifact-contract-freeze" }
 state = { kind = "deferred", activation_unit = "P13-A", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
 id = "p11-hardware"
 unit = "P11"
-gates = ["G1", "G3"]
+gates = ["G1", "G3", "G5", "G7"]
 artifact = { id = "artifact-hardware-matrix", kind = "documentation", path = "docs/testing/storage-hardware-matrix.md" }
-command = { id = "cmd-hardware-matrix", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/testing/storage-hardware-matrix.md"], artifact_id = "artifact-hardware-matrix" }
+command = { id = "cmd-hardware-matrix", kind = "doc-check", argv = ["python3", "scripts/check-storage-hardware-matrix.py", "--report", "docs/testing/storage-hardware-matrix.md"], cwd = ".", path_args = ["scripts/check-storage-hardware-matrix.py", "docs/testing/storage-hardware-matrix.md"], artifact_id = "artifact-hardware-matrix" }
 state = { kind = "deferred", activation_unit = "P11", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
@@ -414,7 +414,7 @@ id = "p12-documentation"
 unit = "P12"
 gates = ["G6"]
 artifact = { id = "artifact-storage-guide", kind = "documentation", path = "docs/storage-ownership.md" }
-command = { id = "cmd-storage-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/storage-ownership.md"], artifact_id = "artifact-storage-guide" }
+command = { id = "cmd-storage-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-docs.py", "--include-rendered"], cwd = ".", path_args = ["scripts/check-storage-docs.py", "docs/storage-ownership.md"], artifact_id = "artifact-storage-guide" }
 state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
@@ -441,6 +441,6 @@ id = "p13-closure"
 unit = "P13-B"
 gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
 artifact = { id = "artifact-storage-closure", kind = "documentation", path = "docs/worklogs/storage-redesign-closure.md" }
-command = { id = "cmd-storage-closure", kind = "doc-check", argv = ["python3", "scripts/check-storage-design-docs.py"], cwd = ".", path_args = ["scripts/check-storage-design-docs.py", "docs/worklogs/storage-redesign-closure.md"], artifact_id = "artifact-storage-closure" }
+command = { id = "cmd-storage-closure", kind = "source-contract", argv = ["python3", "scripts/check-storage-redesign-closure.py", "--report", "docs/worklogs/storage-redesign-closure.md"], cwd = ".", path_args = ["scripts/check-storage-redesign-closure.py", "docs/worklogs/storage-redesign-closure.md"], artifact_id = "artifact-storage-closure" }
 state = { kind = "deferred", activation_unit = "P13-B", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
