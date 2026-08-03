@@ -6,6 +6,8 @@ mod diagnostics;
 #[allow(dead_code)]
 mod identity;
 #[allow(dead_code)]
+mod root;
+#[allow(dead_code)]
 mod span;
 
 #[cfg(test)]
@@ -14,6 +16,8 @@ pub(crate) use diagnostics::{
 };
 #[cfg(test)]
 pub(crate) use identity::{AllocationKey, RootResourceIdentity};
+#[cfg(test)]
+pub(crate) use root::{import_unique_root, BackendAllocation, ProviderCapabilities, ProviderKind};
 #[cfg(test)]
 pub(crate) use span::{ByteRange, RootBoundSpan, RootResourceExtent, SpanValidationError};
 

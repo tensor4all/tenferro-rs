@@ -241,7 +241,7 @@ impl RootBoundSpan {
         Ok(self.byte_offset <= other.byte_offset && other_end <= self_end)
     }
 
-    fn from_parts(
+    const fn from_parts(
         root_identity: RootResourceIdentity,
         byte_offset: usize,
         byte_len: usize,
@@ -257,6 +257,16 @@ impl RootBoundSpan {
 }
 
 impl RootResourceIdentity {
+    pub(crate) const fn root_span(self) -> RootBoundSpan {
+        let extent = self.extent();
+        RootBoundSpan::from_parts(
+            self,
+            extent.byte_offset(),
+            extent.byte_len(),
+            extent.guaranteed_alignment(),
+        )
+    }
+
     pub(crate) fn bind_relative_range(
         self,
         relative: ByteRange,

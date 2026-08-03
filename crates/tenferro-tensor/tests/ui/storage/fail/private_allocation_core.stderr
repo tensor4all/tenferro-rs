@@ -1,0 +1,17 @@
+error[E0425]: cannot find value `OwnedStorage` in `tenferro_tensor::storage`
+ --> tests/ui/storage/fail/private_allocation_core.rs
+  |
+  |     let _ = tenferro_tensor::storage::OwnedStorage;
+  |                                       ^^^^^^^^^^^^ not found in `tenferro_tensor::storage`
+
+error[E0603]: module `storage` is private
+ --> tests/ui/storage/fail/private_allocation_core.rs
+  |
+  |     let _ = tenferro_tensor::storage::OwnedStorage;
+  |                              ^^^^^^^ private module
+  |
+note: the module `storage` is defined here
+ --> src/lib.rs
+  |
+  | mod storage;
+  | ^^^^^^^^^^^
