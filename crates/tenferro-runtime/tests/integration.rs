@@ -1,5 +1,7 @@
 #[path = "integration/engine_registration_debug.rs"]
 mod engine_registration_debug;
+#[path = "integration/execution_engine_identity.rs"]
+mod execution_engine_identity;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/runtime_error_api.rs"]

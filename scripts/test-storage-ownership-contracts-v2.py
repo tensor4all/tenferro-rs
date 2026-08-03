@@ -25,6 +25,7 @@ DIAGNOSTICS_SCHEMA = "tenferro.storage-ownership-diagnostics.v1"
 
 ACTIVE_IDS = frozenset(
     {
+        "p0-control-plane",
         "p1-ledger",
         "p1-contract-document",
         "p1-api-parity",
@@ -32,7 +33,6 @@ ACTIVE_IDS = frozenset(
     }
 )
 DEFERRED_CORRECTIONS = {
-    "p0-control-plane": "P0",
     "p2-root-claims": "P2",
 }
 
@@ -469,7 +469,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         for row in deferred:
             self.assertFalse((ROOT / row["artifact"]["path"]).exists(), row["id"])
 
-        row = next(row for row in deferred if row["id"] == "p0-control-plane")
+        row = next(row for row in deferred if row["id"] == "p2-root-claims")
         files = _fixture_files()
         files[row["artifact"]["path"]] = "not a fabricated production artifact\n"
         result = _run_checker(
@@ -781,11 +781,11 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 finally:
                     temporary.cleanup()
 
-        base_manifest = _manifest_text()
-        promoted = _replace_row_state(
-            base_manifest.replace("revision = 3", "revision = 4", 1),
+        promoted = _manifest_text()
+        base_manifest = _replace_row_state(
+            promoted.replace("revision = 3", "revision = 2", 1),
             "p0-control-plane",
-            '{ kind = "active" }',
+            '{ kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }',
         )
         files = _fixture_files(promoted)
         row = next(row for row in _manifest_rows(promoted) if row["id"] == "p0-control-plane")
@@ -890,7 +890,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 self,
                 result,
                 "E_COMMAND_FAILED",
-                {"command_id": "cmd-api-parity", "exit_code": 17},
+                {"command_id": "cmd-control-plane", "exit_code": 17},
             )
             self.assertFalse(receipt_path.exists())
         finally:
