@@ -366,6 +366,33 @@ fn event_domain_is_unique_across_runtime_epoch_and_registration_provenance() {
 }
 
 #[test]
+fn event_domain_operation_display_and_immediate_token_access_are_complete() -> Result<()> {
+    for (operation, expected) in [
+        (EventDomainOperation::BeginRun, "begin run"),
+        (EventDomainOperation::Enqueue, "enqueue"),
+        (EventDomainOperation::Drain, "drain"),
+        (EventDomainOperation::TransferBridge, "transfer bridge"),
+        (
+            EventDomainOperation::ValidateCompletion,
+            "validate completion",
+        ),
+    ] {
+        assert_eq!(operation.to_string(), expected);
+    }
+
+    let domain = qualified_domain(1, 1, 1, 1);
+    let mut run = ImmediateEventDomainDriver::new().begin_run(domain)?;
+    let mut launch = || Ok(());
+    let completion = run.enqueue(&[], &mut launch)?;
+    assert_eq!(completion.origin(), domain);
+    assert_eq!(
+        completion.as_any().type_id(),
+        completion.as_ref().as_any().type_id()
+    );
+    Ok(())
+}
+
+#[test]
 fn immediate_driver_rejects_foreign_tokens_without_launching() -> Result<()> {
     let destination = qualified_domain(1, 1, 1, 1);
     let foreign = qualified_domain(2, 1, 1, 1);
