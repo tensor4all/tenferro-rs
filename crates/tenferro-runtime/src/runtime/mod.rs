@@ -34,8 +34,9 @@ pub use capability::{
 pub(crate) use engine_registration::ExecutableEngineContract;
 pub use engine_registration::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
-    EngineRegistration, InputIngressContract, InputPlacementContract, InputSignatureContract,
-    ResidentOutputContract, RuntimeInputContract,
+    EngineRegistration, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
+    InputIngressContract, InputPlacementContract, InputSignatureContract,
+    PreparationOnlyEngineRegistrationConfig, ResidentOutputContract, RuntimeInputContract,
 };
 pub(crate) use engine_registration::{ProviderExecutableBinding, ProviderPreparationBinding};
 pub use error::{

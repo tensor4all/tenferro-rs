@@ -5,8 +5,9 @@ use std::sync::Arc;
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::{
-    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime,
+    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
+    EngineRegistrationMetadata, EventDomainId, ExecutionContextIdentity, HardwareClassId,
+    PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity, ProviderId, Runtime,
     StorageClass,
 };
 #[cfg(not(target_family = "wasm"))]
@@ -54,18 +55,23 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .expect("WebGPU event test engine id");
     let storage = StorageClass::new(format!("tenferro.test.webgpu.storage.{suffix}"))
         .expect("WebGPU event test storage class");
-    let registration = assemble_preparation_only_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         engine_id.clone(),
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.webgpu").expect("WebGPU event test provider"),
             format!("target:{suffix}"),
         )
         .expect("WebGPU event test provider device"),
-        ExecutionContextIdentity::of::<()>(),
         HardwareClassId::new("tenferro.test.webgpu").expect("WebGPU event test hardware class"),
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
+    );
+    let registration = assemble_preparation_only_engine_registration(
+        PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<()>(),
+        ),
     )
     .expect("WebGPU event test registration");
     let mut builder = Runtime::builder();

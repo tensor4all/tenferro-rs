@@ -232,6 +232,210 @@ impl InputIngressContract {
     }
 }
 
+/// Shared provider metadata for one runtime engine registration.
+///
+/// The caller supplies the engine and provider/device identities explicitly.
+/// Storage metadata is validated when the metadata is assembled into either an
+/// executable or preparation-only registration.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use tenferro_runtime::{
+///     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata, HardwareClassId,
+///     ProviderDeviceIdentity, ProviderId, StorageClass,
+/// };
+///
+/// let engine_id = EngineId::new("example.engine.v1")?;
+/// let provider = ProviderDeviceIdentity::new(
+///     ProviderId::new("example.provider")?,
+///     "device:0",
+/// )?;
+/// let hardware = HardwareClassId::new("example.hardware.v1")?;
+/// let storage = StorageClass::new("example.storage.v1")?;
+/// let metadata = EngineRegistrationMetadata::new(
+///     engine_id,
+///     provider,
+///     hardware,
+///     Arc::from([storage.clone()]),
+///     storage,
+///     CoreCapabilityBundle::default(),
+/// );
+/// let _ = metadata;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone)]
+pub struct EngineRegistrationMetadata {
+    engine_id: EngineId,
+    provider_device_identity: ProviderDeviceIdentity,
+    hardware_class: HardwareClassId,
+    storage_classes: Arc<[StorageClass]>,
+    default_storage_class: StorageClass,
+    capabilities: CoreCapabilityBundle,
+}
+
+impl EngineRegistrationMetadata {
+    /// Construct the metadata shared by executable and preparation-only
+    /// registration descriptors.
+    pub fn new(
+        engine_id: EngineId,
+        provider_device_identity: ProviderDeviceIdentity,
+        hardware_class: HardwareClassId,
+        storage_classes: Arc<[StorageClass]>,
+        default_storage_class: StorageClass,
+        capabilities: CoreCapabilityBundle,
+    ) -> Self {
+        Self {
+            engine_id,
+            provider_device_identity,
+            hardware_class,
+            storage_classes,
+            default_storage_class,
+            capabilities,
+        }
+    }
+}
+
+/// Typed configuration for assembling an executable engine registration.
+///
+/// The backend, event domain, ingress contract, and optional cache owner are
+/// kept together with the shared provider metadata until the runtime creates
+/// the complete execution witness.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use tenferro_runtime::{
+///     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata,
+///     ExecutableEngineRegistrationConfig, EventDomainDriver, HardwareClassId,
+///     ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
+///     InputSignatureContract, ProviderDeviceIdentity, ProviderId, ResidentOutputContract,
+///     RuntimeInputContract, StorageClass,
+/// };
+///
+/// fn make_config<B>(backend: B) -> ExecutableEngineRegistrationConfig<B> {
+///     let engine_id = EngineId::new("example.engine.v1").unwrap();
+///     let provider = ProviderDeviceIdentity::new(
+///         ProviderId::new("example.provider").unwrap(),
+///         "device:0",
+///     )
+///     .unwrap();
+///     let hardware = HardwareClassId::new("example.hardware.v1").unwrap();
+///     let storage = StorageClass::new("example.storage.v1").unwrap();
+///     let metadata = EngineRegistrationMetadata::new(
+///         engine_id,
+///         provider,
+///         hardware,
+///         Arc::from([storage.clone()]),
+///         storage,
+///         CoreCapabilityBundle::default(),
+///     );
+///     let ingress = InputIngressContract::new(
+///         InputPlacementContract::new(|_, _| true),
+///         InputSignatureContract::new(|_, _, _, _| true),
+///         RuntimeInputContract::new(|_, _| true),
+///         ResidentOutputContract::new(|_, _| true),
+///     );
+///     let event_domain_driver: Arc<dyn EventDomainDriver> =
+///         Arc::new(ImmediateEventDomainDriver::new());
+///     ExecutableEngineRegistrationConfig::new(
+///         metadata,
+///         backend,
+///         event_domain_driver,
+///         ingress,
+///         None,
+///     )
+/// }
+///
+/// let _ = make_config(());
+/// ```
+pub struct ExecutableEngineRegistrationConfig<B> {
+    metadata: EngineRegistrationMetadata,
+    backend: B,
+    event_domain_driver: Arc<dyn EventDomainDriver>,
+    ingress: InputIngressContract,
+    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+}
+
+impl<B> ExecutableEngineRegistrationConfig<B> {
+    /// Construct an executable registration descriptor.
+    pub fn new(
+        metadata: EngineRegistrationMetadata,
+        backend: B,
+        event_domain_driver: Arc<dyn EventDomainDriver>,
+        ingress: InputIngressContract,
+        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+    ) -> Self {
+        Self {
+            metadata,
+            backend,
+            event_domain_driver,
+            ingress,
+            cache_owner,
+        }
+    }
+}
+
+/// Typed configuration for assembling a preparation-only engine registration.
+///
+/// Preparation-only registrations retain the provider's execution-context
+/// identity but intentionally contain no executable backend or event driver.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use tenferro_runtime::{
+///     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata,
+///     ExecutionContextIdentity, HardwareClassId, PreparationOnlyEngineRegistrationConfig,
+///     ProviderDeviceIdentity, ProviderId, StorageClass,
+/// };
+///
+/// let engine_id = EngineId::new("example.engine.v1")?;
+/// let provider = ProviderDeviceIdentity::new(
+///     ProviderId::new("example.provider")?,
+///     "device:0",
+/// )?;
+/// let hardware = HardwareClassId::new("example.hardware.v1")?;
+/// let storage = StorageClass::new("example.storage.v1")?;
+/// let metadata = EngineRegistrationMetadata::new(
+///     engine_id,
+///     provider,
+///     hardware,
+///     Arc::from([storage.clone()]),
+///     storage,
+///     CoreCapabilityBundle::default(),
+/// );
+/// let config = PreparationOnlyEngineRegistrationConfig::new(
+///     metadata,
+///     ExecutionContextIdentity::of::<()>(),
+/// );
+/// let _ = config;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct PreparationOnlyEngineRegistrationConfig {
+    metadata: EngineRegistrationMetadata,
+    context_identity: ExecutionContextIdentity,
+}
+
+impl PreparationOnlyEngineRegistrationConfig {
+    /// Construct a preparation-only registration descriptor.
+    pub fn new(
+        metadata: EngineRegistrationMetadata,
+        context_identity: ExecutionContextIdentity,
+    ) -> Self {
+        Self {
+            metadata,
+            context_identity,
+        }
+    }
+}
+
 /// The complete execution witness stored by an executable provider binding.
 #[derive(Clone)]
 pub(crate) struct ExecutableEngineContract {
@@ -688,21 +892,33 @@ impl EngineRegistration {
 /// event-driver, and cache-owner values.  The runtime owns the assembly of the
 /// executable witness and its storage metadata so every executable engine
 /// enters the runtime through the same invariant-preserving path.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the descriptor contains empty or duplicate
+/// storage classes, or if its default storage class is not listed in the
+/// supported storage classes.
 pub fn assemble_executable_engine_registration<B>(
-    engine_id: EngineId,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
-    provider_device_identity: ProviderDeviceIdentity,
-    capabilities: CoreCapabilityBundle,
-    backend: B,
-    event_domain_driver: Arc<dyn EventDomainDriver>,
-    ingress: InputIngressContract,
-    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+    config: ExecutableEngineRegistrationConfig<B>,
 ) -> Result<EngineRegistration, RuntimeConfigError>
 where
     B: TensorBackend + Send + Sync + 'static,
 {
+    let ExecutableEngineRegistrationConfig {
+        metadata:
+            EngineRegistrationMetadata {
+                engine_id,
+                provider_device_identity,
+                hardware_class,
+                storage_classes,
+                default_storage_class,
+                capabilities,
+            },
+        backend,
+        event_domain_driver,
+        ingress,
+        cache_owner,
+    } = config;
     let contract = ExecutableEngineContract::new(
         provider_device_identity,
         capabilities,
@@ -726,15 +942,27 @@ where
 /// This is the preparation counterpart of
 /// [`assemble_executable_engine_registration`].  It deliberately cannot
 /// manufacture an execution bridge or a scheduled witness.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the descriptor contains empty or duplicate
+/// storage classes, or if its default storage class is not listed in the
+/// supported storage classes.
 pub fn assemble_preparation_only_engine_registration(
-    engine_id: EngineId,
-    provider_device_identity: ProviderDeviceIdentity,
-    context_identity: ExecutionContextIdentity,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
-    capabilities: CoreCapabilityBundle,
+    config: PreparationOnlyEngineRegistrationConfig,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    let PreparationOnlyEngineRegistrationConfig {
+        metadata:
+            EngineRegistrationMetadata {
+                engine_id,
+                provider_device_identity,
+                hardware_class,
+                storage_classes,
+                default_storage_class,
+                capabilities,
+            },
+        context_identity,
+    } = config;
     let binding = ProviderPreparationBinding::new(
         engine_id,
         provider_device_identity,

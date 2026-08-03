@@ -4,8 +4,9 @@ use std::sync::{Arc, Barrier};
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 use tenferro_runtime::{
     assemble_preparation_only_engine_registration, CoreCapabilityBundle, DType, EngineId,
-    EventDomainId, ExecutionContextIdentity, GraphCompiler, HardwareClassId,
-    ProviderDeviceIdentity, ProviderId, Runtime, StorageClass, TracedTensor,
+    EngineRegistrationMetadata, EventDomainId, ExecutionContextIdentity, GraphCompiler,
+    HardwareClassId, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity, ProviderId,
+    Runtime, StorageClass, TracedTensor,
 };
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
@@ -105,18 +106,23 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .expect("CUDA event test engine id");
     let storage = StorageClass::new(format!("tenferro.test.cuda.storage.{suffix}"))
         .expect("CUDA event test storage class");
-    let registration = assemble_preparation_only_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         engine_id.clone(),
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cuda").expect("CUDA event test provider"),
             format!("target:{suffix}"),
         )
         .expect("CUDA event test provider device"),
-        ExecutionContextIdentity::of::<()>(),
         HardwareClassId::new("tenferro.test.cuda").expect("CUDA event test hardware class"),
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
+    );
+    let registration = assemble_preparation_only_engine_registration(
+        PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<()>(),
+        ),
     )
     .expect("CUDA event test registration");
     let mut builder = Runtime::builder();

@@ -8,15 +8,16 @@ use tenferro_runtime::{
     assemble_executable_engine_registration, CacheOwnerError, CoreCapabilityBundle,
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingPrepareRequest, IndexingRuntime,
-    InputIngressContract, InputPlacementContract, InputSignature, InputSignatureContract,
-    InputSpecializationProjection, InputSpecializationRequirements, LayoutPrepareRequest,
-    LayoutProjection, LayoutRuntime, LayoutSpecialization, MemoryKind, PrepareCapability,
-    PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
-    ProviderContractError, ProviderDeviceIdentity, ProviderId, ReductionPrepareRequest,
-    ReductionRuntime, ResidentOutputContract, RuntimeCacheOwner, RuntimeConfigError,
-    RuntimeInputContract, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, TensorRead, UnsupportedReason,
+    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
+    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
+    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
+    InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
+    LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
+    ProviderId, ReductionPrepareRequest, ReductionRuntime, ResidentOutputContract,
+    RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, SpecializationError,
+    SpecializationProjection, SpecializationRequirements, StorageClass, TensorRead,
+    UnsupportedReason,
 };
 
 use crate::CpuBackend;
@@ -139,18 +140,21 @@ pub fn runtime_engine_registration_with_id(
             candidate == &resident_storage && cpu_runtime_input(input, allocation_domain)
         }),
     );
-    assemble_executable_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         engine_id,
+        provider_device_identity,
         runtime_hardware_class()?,
         Arc::from(vec![storage]),
         default_storage,
-        provider_device_identity,
         capabilities.build(),
+    );
+    assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+        metadata,
         execution_backend,
         Arc::new(ImmediateEventDomainDriver::new()),
         ingress,
         Some(cache_owner),
-    )
+    ))
 }
 
 fn cpu_input_signature(

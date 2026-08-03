@@ -322,11 +322,17 @@ keeping the compiler artifact backend-neutral:
   prepare from the backend-neutral `CompiledGraph` and execute through the
   runtime-owned schedule.
 - `assemble_executable_engine_registration` is the sole assembly path for an
-  executable engine registration. `tenferro-cpu::runtime_engine_registration`
-  supplies the CPU registration's direct core preparation capabilities,
-  cache-owner hooks, backend witness, and event-domain driver through that
-  common path. `tenferro-runtime` still has no production dependency on
-  `tenferro-cpu`.
+  executable engine registration. Providers first construct shared
+  `EngineRegistrationMetadata` with the caller-selected engine and
+  provider/device identities, hardware/storage classes, default storage, and
+  core capabilities. They then wrap it in an
+  `ExecutableEngineRegistrationConfig` containing the backend witness,
+  ingress, event-domain driver, and optional cache owner. Preparation-only
+  providers use the same metadata with a
+  `PreparationOnlyEngineRegistrationConfig` containing only the execution
+  context identity. The runtime consumes these typed descriptors and remains
+  the sole owner of the executable/preparation state split. `tenferro-runtime`
+  still has no production dependency on `tenferro-cpu`.
 - Runtime-owned preparation is now the executable boundary for core operations
   and installed extension modules. Transfers, collectives, and barriers remain
   scheduler-owned node families for later multi-engine work; they are not
@@ -1740,9 +1746,10 @@ The runtime owns a `DeviceRegistry`; each device has a `GpuDeviceRuntime` with:
 - admission-control state.
 
 The current CUDA and WebGPU adapters retain their runtime resources in their
-backend-owned values and pass the required backend witness, capability bundle,
-ingress contracts, cache owner where applicable, and native event-domain driver
-to `assemble_executable_engine_registration`. A GPU provider receives a
+backend-owned values and pass the required typed registration descriptor:
+shared metadata plus the backend witness, ingress contracts, cache owner where
+applicable, and native event-domain driver to
+`assemble_executable_engine_registration`. A GPU provider receives a
 resolved `GpuExecutionContext` containing the selected device, stream or queue,
 scratch access, and dependency events. It does not create or globally select a
 stream.

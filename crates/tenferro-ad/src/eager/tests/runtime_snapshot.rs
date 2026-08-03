@@ -5,10 +5,11 @@ use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignatureContract, LayoutRuntime, ProviderDeviceIdentity,
-    ProviderId, ReductionRuntime, ResidentOutputContract, RuntimeCacheOwner, RuntimeInputContract,
-    StorageClass,
+    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
+    HardwareClassId, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, PreparationOnlyEngineRegistrationConfig,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, ResidentOutputContract,
+    RuntimeCacheOwner, RuntimeInputContract, StorageClass,
 };
 use tenferro_tensor::{BackendSession, ErrorKind};
 
@@ -74,25 +75,22 @@ fn cpu_registration_with(
         format!("domain:{}", execution_info.domain_id().as_u64()),
     )
     .unwrap();
-    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
-        return assemble_preparation_only_engine_registration(
-            cpu_engine_id(),
-            provider_device_identity,
-            context_identity,
-            cpu_hardware_class(),
-            Arc::from([storage.clone()]),
-            storage,
-            capabilities,
-        )
-        .expect("preparation binding");
-    }
-    assemble_executable_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         cpu_engine_id(),
+        provider_device_identity,
         cpu_hardware_class(),
         Arc::from([storage.clone()]),
         storage,
-        provider_device_identity,
         capabilities,
+    );
+    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
+        return assemble_preparation_only_engine_registration(
+            PreparationOnlyEngineRegistrationConfig::new(metadata, context_identity),
+        )
+        .expect("preparation binding");
+    }
+    assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+        metadata,
         backend.clone(),
         Arc::new(tenferro_runtime::ImmediateEventDomainDriver::new()),
         InputIngressContract::new(
@@ -102,7 +100,7 @@ fn cpu_registration_with(
             ResidentOutputContract::new(|_, _| true),
         ),
         Some(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>),
-    )
+    ))
     .expect("executable binding")
 }
 

@@ -5,25 +5,31 @@ use std::sync::Arc;
 
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken, ImmediateEventDomainDriver};
 use tenferro_runtime::{
-    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime,
+    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
+    EngineRegistrationMetadata, EventDomainId, ExecutionContextIdentity, HardwareClassId,
+    PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity, ProviderId, Runtime,
     StorageClass,
 };
 
 fn test_domain(suffix: &str) -> Result<EventDomainId, Box<dyn StdError>> {
     let engine_id = EngineId::new(format!("tenferro.test.event.engine.{suffix}"))?;
     let storage = StorageClass::new(format!("tenferro.test.event.storage.{suffix}"))?;
-    let registration = assemble_preparation_only_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         engine_id.clone(),
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.event")?,
             format!("target:{suffix}"),
         )?,
-        ExecutionContextIdentity::of::<()>(),
         HardwareClassId::new("tenferro.test.event")?,
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
+    );
+    let registration = assemble_preparation_only_engine_registration(
+        PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<()>(),
+        ),
     )?;
     let mut builder = Runtime::builder();
     builder.register_engine(registration)?;

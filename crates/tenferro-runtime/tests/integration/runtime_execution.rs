@@ -17,12 +17,13 @@ use tenferro_runtime::runtime::{
 use tenferro_runtime::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
-    EngineExecutionContractError, EngineId, EngineRegistration, ErasedExecutionContext, Error,
-    ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
-    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
-    IndexingRuntime, InputIngressContract, InputIngressContractError, InputPlacementContract,
-    InputSignatureContract, LayoutRuntime, PrepareCapability, PrepareError, PreparedOperation,
+    EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    ErasedExecutionContext, Error, ErrorPhase, EventDomainId, ExecutableEngineRegistrationConfig,
+    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, GraphCompiler, HardwareClassId, IndexingRuntime, InputIngressContract,
+    InputIngressContractError, InputPlacementContract, InputSignatureContract, LayoutRuntime,
+    PreparationOnlyEngineRegistrationConfig, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
     ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, ResidentOutputContract,
     Runtime, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError,
@@ -227,39 +228,24 @@ fn cpu_ingress_contract(backend: &Arc<CpuBackend>, storage: &StorageClass) -> In
 
 fn assemble_cpu_registration(
     backend: Arc<CpuBackend>,
-    engine_id: EngineId,
-    provider_device_identity: ProviderDeviceIdentity,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
+    metadata: EngineRegistrationMetadata,
     ingress_storage: StorageClass,
-    capabilities: CoreCapabilityBundle,
     event_domain_driver: Option<Arc<dyn EventDomainDriver>>,
     cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     if let Some(event_domain_driver) = event_domain_driver {
-        assemble_executable_engine_registration(
-            engine_id,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            provider_device_identity,
-            capabilities,
+        assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+            metadata,
             backend.as_ref().clone(),
             event_domain_driver,
             cpu_ingress_contract(&backend, &ingress_storage),
             cache_owner,
-        )
+        ))
     } else {
-        assemble_preparation_only_engine_registration(
-            engine_id,
-            provider_device_identity,
+        assemble_preparation_only_engine_registration(PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
             ExecutionContextIdentity::of::<CpuBackend>(),
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            capabilities,
-        )
+        ))
     }
 }
 
@@ -282,18 +268,21 @@ fn cpu_registration(
         .dot_general(dot_general)
         .layout(layout);
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    assemble_cpu_registration(
-        backend,
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(CPU_ENGINE_ID)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        storage,
         capabilities.build(),
+    );
+    assemble_cpu_registration(
+        backend,
+        metadata,
+        storage,
         include_execution_bridge
-            .then(|| Arc::new(ImmediateEventDomainDriver::new()) as Arc<dyn EventDomainDriver>),
-        include_execution_bridge.then(|| cache_owner),
+            .then_some(Arc::new(ImmediateEventDomainDriver::new()) as Arc<dyn EventDomainDriver>),
+        include_execution_bridge.then_some(cache_owner),
     )
 }
 
@@ -1076,18 +1065,15 @@ fn cpu_registration_with_id_and_custom_driver(
     } else {
         None
     };
-    assemble_cpu_registration(
-        backend,
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(engine_id)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        storage,
         capabilities.build(),
-        driver,
-        None,
-    )
+    );
+    assemble_cpu_registration(backend, metadata, storage.clone(), driver, None)
 }
 
 fn cpu_registration_with_storage_id(
@@ -1154,8 +1140,7 @@ fn cpu_registration_with_storage_id_for_target_and_driver(
     }
 
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
-    assemble_cpu_registration(
-        backend,
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
@@ -1164,8 +1149,12 @@ fn cpu_registration_with_storage_id_for_target_and_driver(
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        storage,
         capabilities.build(),
+    );
+    assemble_cpu_registration(
+        backend,
+        metadata,
+        storage.clone(),
         include_execution_bridge
             .then_some(event_domain_driver)
             .flatten(),
@@ -1181,15 +1170,18 @@ fn cpu_registration_with_storage_classes(
     ingress_storage: StorageClass,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
-    assemble_cpu_registration(
-        backend,
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(engine_id)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(storage_classes),
         default_storage,
-        ingress_storage,
         CoreCapabilityBundle::builder().build(),
+    );
+    assemble_cpu_registration(
+        backend,
+        metadata,
+        ingress_storage,
         Some(Arc::new(ImmediateEventDomainDriver::new())),
         None,
     )
@@ -1892,17 +1884,22 @@ fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
 #[test]
 fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), Box<dyn StdError>> {
     let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
-    let registration = assemble_preparation_only_engine_registration(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
         ProviderDeviceIdentity::new(
             ProviderId::new("tenferro.test.cpu")?,
             "test-engine:tenferro-test.engine.missing-ingress.v1",
         )?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
         HardwareClassId::new("tenferro-test.hardware.missing-ingress.v1")?,
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
+    );
+    let registration = assemble_preparation_only_engine_registration(
+        PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<CpuBackend>(),
+        ),
     )?;
     let mut builder = Runtime::builder();
 

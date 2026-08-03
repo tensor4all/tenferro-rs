@@ -5,8 +5,9 @@ use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperation
 use tenferro_runtime::{
     assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
     CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, EngineId,
-    EngineRegistration, ExecutionContextIdentity, HardwareClassId, InputIngressContract,
-    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
+    EngineRegistration, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
+    ExecutionContextIdentity, HardwareClassId, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutProjection, LayoutSpecialization, PrepareCapability,
     PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
     ProviderContractError, ProviderDeviceIdentity, ProviderId, ResidentOutputContract,
@@ -21,7 +22,9 @@ use tenferro_tensor::{
 use super::event_domain::WebGpuEventDomainDriver;
 use super::{WebGpuBackend, WebGpuBuffer};
 #[cfg(target_family = "wasm")]
-use tenferro_runtime::{assemble_preparation_only_engine_registration, ExecutionContextIdentity};
+use tenferro_runtime::{
+    assemble_preparation_only_engine_registration, PreparationOnlyEngineRegistrationConfig,
+};
 
 const WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
 const WEBGPU_HARDWARE_CLASS_ID: &str = "tenferro-webgpu.device.v1";
@@ -106,6 +109,12 @@ pub fn webgpu_runtime_engine_registration(
 ///
 /// The provider/device identity remains tied to the selected WebGPU device;
 /// only the runtime placement identity is supplied by the caller.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the caller-selected engine identifier,
+/// the selected backend's provider/device identity, or the assembled hardware
+/// and storage metadata fails validation.
 pub fn webgpu_runtime_engine_registration_with_id(
     backend: &WebGpuBackend,
     engine_id: EngineId,
@@ -157,30 +166,36 @@ pub fn webgpu_runtime_engine_registration_with_id(
     let capabilities = capabilities.build();
     #[cfg(not(target_family = "wasm"))]
     {
-        assemble_executable_engine_registration(
+        let metadata = EngineRegistrationMetadata::new(
             engine_id,
+            provider_device_identity,
             webgpu_runtime_hardware_class()?,
             Arc::from(vec![storage]),
             default_storage,
-            provider_device_identity,
             capabilities,
+        );
+        assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+            metadata,
             execution_backend,
             Arc::new(WebGpuEventDomainDriver::new(backend.runtime().clone())),
             ingress,
             None,
-        )
+        ))
     }
     #[cfg(target_family = "wasm")]
     {
-        assemble_preparation_only_engine_registration(
+        let metadata = EngineRegistrationMetadata::new(
             engine_id,
             provider_device_identity,
-            ExecutionContextIdentity::of::<WebGpuBackend>(),
             webgpu_runtime_hardware_class()?,
             Arc::from(vec![storage]),
             default_storage,
             capabilities,
-        )
+        );
+        assemble_preparation_only_engine_registration(PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<WebGpuBackend>(),
+        ))
     }
 }
 
