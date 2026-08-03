@@ -35,9 +35,10 @@ fn item_body<'a>(source: &'a str, signature: &str) -> &'a str {
 
 #[test]
 fn non_cpu_runtime_rejects_placement_binding_as_typed_unsupported() {
-    let runtime = Arc::new(EagerRuntime::from_backend(EagerBackend::recording_cpu(
-        Arc::new(AtomicUsize::new(0)),
-    )));
+    let runtime = Arc::new(
+        EagerRuntime::from_backend(EagerBackend::recording_cpu(Arc::new(AtomicUsize::new(0))))
+            .unwrap(),
+    );
 
     let error = runtime.on_cpu(CpuPlacement::Auto).unwrap_err();
 
@@ -47,7 +48,7 @@ fn non_cpu_runtime_rejects_placement_binding_as_typed_unsupported() {
 
 #[test]
 fn placement_binding_reports_poisoned_runtime_backend_lock() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = runtime.backend.lock().unwrap();
         panic!("poison placement-bound eager backend lock");

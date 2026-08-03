@@ -62,25 +62,29 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
     let mut backend = CpuBackend::new();
 
-    let svd_outputs = backend
-        .svd_with_options(
-            &a,
-            SvdOptions::default()
-                .gauge(SvdGauge::CanonicalPivot)
-                .derivative_eps(1.0e-10),
-        )
-        .unwrap();
-    let eigh_outputs = backend
-        .eigh_with_options(
-            &a,
-            EighOptions::default()
-                .gauge(EighGauge::CanonicalPivot)
-                .derivative_eps(1.0e-10),
-        )
-        .unwrap();
-    let qr_outputs = backend
-        .qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
-        .unwrap();
+    let (svd_outputs, eigh_outputs, qr_outputs) =
+        support::with_cpu_linalg(&mut backend, |backend| {
+            let svd_outputs = backend
+                .svd_with_options(
+                    &a,
+                    SvdOptions::default()
+                        .gauge(SvdGauge::CanonicalPivot)
+                        .derivative_eps(1.0e-10),
+                )
+                .unwrap();
+            let eigh_outputs = backend
+                .eigh_with_options(
+                    &a,
+                    EighOptions::default()
+                        .gauge(EighGauge::CanonicalPivot)
+                        .derivative_eps(1.0e-10),
+                )
+                .unwrap();
+            let qr_outputs = backend
+                .qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+                .unwrap();
+            (svd_outputs, eigh_outputs, qr_outputs)
+        });
 
     assert_eq!(svd_outputs[0].shape(), &[2, 2]);
     assert_eq!(svd_outputs[1].shape(), &[2]);

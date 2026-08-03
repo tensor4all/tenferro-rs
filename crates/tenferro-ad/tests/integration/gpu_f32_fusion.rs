@@ -3,9 +3,8 @@
 // Run with: cargo test --features cuda -- --ignored
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_runtime::{Tensor, TypedTensor};
-use tenferro_tensor::TensorDeviceTransfer;
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -22,11 +21,11 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let c_device = upload_tensor(upload_backend.runtime(), &c_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let a = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
@@ -34,7 +33,7 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let result = sum.mul(&c).unwrap().materialized().unwrap();
 
     let result = ctx
-        .with_backend_mut(|backend| backend.download_to_host(result.as_ref()))
+        .with_execution_session(|session| session.download_to_host(result.as_ref()))
         .unwrap()
         .unwrap();
     let values = result

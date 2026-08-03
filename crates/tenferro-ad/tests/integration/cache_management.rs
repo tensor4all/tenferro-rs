@@ -82,7 +82,7 @@ fn ad_context_transform_cache_limits_stats_and_clear_are_public() {
 #[test]
 fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
     let ad = AdContext::builder().build().unwrap();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         ctx.clone(),
@@ -108,7 +108,7 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
     let ad = AdContext::builder().build().unwrap();
     ad.set_ad_transform_cache_limits(AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap()))
         .unwrap();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
 
     let x0 = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
@@ -185,7 +185,7 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
         Fixture { x, loss }
     }
 
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let fixtures = [
         fixture(&ctx, vec![8, 4, 10], 0),
         fixture(&ctx, vec![10, 4, 12], 1),

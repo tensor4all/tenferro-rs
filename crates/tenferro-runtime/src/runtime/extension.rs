@@ -102,14 +102,20 @@ impl CandidateModuleRecord {
 
 pub(super) struct CandidateExtensionEngine {
     pub(super) engine: Arc<dyn ExtensionEngine>,
-    pub(super) identity: Option<RegistrationIdentity>,
+    pub(super) identity: CandidateRegistrationIdentity,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CandidateRegistrationIdentity {
+    New,
+    Preserved(RegistrationIdentity),
 }
 
 impl Clone for CandidateExtensionEngine {
     fn clone(&self) -> Self {
         Self {
             engine: Arc::clone(&self.engine),
-            identity: self.identity,
+            identity: self.identity.clone(),
         }
     }
 }
@@ -124,6 +130,18 @@ impl fmt::Debug for CandidateExtensionEngine {
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
+}
+
+pub(super) struct BoundCandidateExtensionEngine {
+    pub(super) engine: Arc<dyn ExtensionEngine>,
+    pub(super) identity: RegistrationIdentity,
+}
+
+pub(super) struct BoundCandidateModuleRecord {
+    pub(super) module: Arc<dyn ExtensionModule>,
+    pub(super) engines: BTreeMap<(ExtensionFamilyId, EngineId), BoundCandidateExtensionEngine>,
+    pub(super) configs: BTreeMap<EngineId, Arc<dyn ExtensionPlanningConfig>>,
+    pub(super) owners: BTreeMap<CacheOwnerId, Arc<dyn RuntimeCacheOwner>>,
 }
 
 #[derive(Clone)]
@@ -237,7 +255,9 @@ impl FrozenExtensionSlots {
                     (slot.family_id, slot.engine_id.clone()),
                     CandidateExtensionEngine {
                         engine: Arc::clone(&slot.engine),
-                        identity: Some(slot.registration_identity),
+                        identity: CandidateRegistrationIdentity::Preserved(
+                            slot.registration_identity,
+                        ),
                     },
                 );
                 record
@@ -347,7 +367,7 @@ impl fmt::Debug for FrozenExtensionSlots {
 }
 
 pub(super) fn freeze_extension_slots(
-    modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
+    modules: BTreeMap<ExtensionModuleId, BoundCandidateModuleRecord>,
 ) -> Result<FrozenExtensionSlots, RuntimeConfigError> {
     let mut frozen_modules = BTreeMap::new();
     let mut engines = Vec::new();
@@ -379,15 +399,12 @@ pub(super) fn freeze_extension_slots(
                     },
                 }
             })?;
-            let identity = record
-                .identity
-                .ok_or(RuntimeConfigError::IdentityExhausted)?;
             engines.push(FrozenExtensionEngineSlot {
                 module_id: module_id.clone(),
                 family_id,
                 engine_id: engine_id.clone(),
                 context_identity: record.engine.context_identity(),
-                registration_identity: identity,
+                registration_identity: record.identity,
                 engine: record.engine,
                 config,
             });
@@ -432,7 +449,7 @@ impl ExtensionRegistrationTransaction {
                     key,
                     CandidateExtensionEngine {
                         engine,
-                        identity: None,
+                        identity: CandidateRegistrationIdentity::New,
                     },
                 )
             })
@@ -475,6 +492,35 @@ impl ExtensionRegistrationTransaction {
         }
         Ok(())
     }
+}
+
+pub(super) fn bind_candidate_module(
+    module: CandidateModuleRecord,
+    allocate_identity: &mut impl FnMut() -> Result<RegistrationIdentity, RuntimeConfigError>,
+) -> Result<BoundCandidateModuleRecord, RuntimeConfigError> {
+    let engines = module
+        .engines
+        .into_iter()
+        .map(|(key, record)| {
+            let identity = match record.identity {
+                CandidateRegistrationIdentity::New => allocate_identity()?,
+                CandidateRegistrationIdentity::Preserved(identity) => identity,
+            };
+            Ok((
+                key,
+                BoundCandidateExtensionEngine {
+                    engine: record.engine,
+                    identity,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, RuntimeConfigError>>()?;
+    Ok(BoundCandidateModuleRecord {
+        module: module.module,
+        engines,
+        configs: module.configs,
+        owners: module.owners,
+    })
 }
 
 /// Borrowed registrar for one extension module transaction.

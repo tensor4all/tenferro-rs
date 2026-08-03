@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager_with_extension_context;
+use tenferro_ad::extension::apply_eager_with_extension_session;
 use tenferro_ad::EagerTensor;
 use tenferro_runtime::{ErrorPhase, ExtensionModule};
 
@@ -317,7 +317,7 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
     let op = Arc::new(LinalgExtensionOp::new(op));
     let execute_op = Arc::clone(&op);
     let module = eager_cpu_extension_module()?;
-    apply_eager_with_extension_context(op, inputs, module, move |_op, input_reads, ctx| {
+    apply_eager_with_extension_session(op, inputs, module, move |_op, input_reads, ctx| {
         execute_linalg_extension_reads(&execute_op, input_reads, ctx)
     })
 }
@@ -351,7 +351,7 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
 ///     ctx,
@@ -382,7 +382,7 @@ pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::{EagerTensorLinalgExt, SvdGauge, SvdOptions};
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
 ///     ctx,
@@ -439,7 +439,7 @@ pub fn svd_with_options(
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
 ///     ctx,
@@ -484,7 +484,7 @@ pub fn svd_full(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTenso
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
@@ -514,7 +514,7 @@ pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::{EagerTensorLinalgExt, QrGauge, QrOptions};
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
@@ -550,7 +550,7 @@ pub fn qr_with_options(a: &EagerTensor, options: QrOptions) -> Result<(EagerTens
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]).unwrap(),
 ///     ctx,
@@ -596,7 +596,7 @@ pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, Eag
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
 ///     ctx,
@@ -647,7 +647,7 @@ pub fn full_piv_lu(
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
 ///     ctx.clone(),
@@ -681,7 +681,7 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
 ///     ctx.clone(),
@@ -735,7 +735,7 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
 ///     ctx,
@@ -762,7 +762,7 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
@@ -793,7 +793,7 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::{EagerTensorLinalgExt, EighGauge, EighOptions};
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
@@ -839,7 +839,7 @@ pub fn eigh_with_options(
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
 ///     ctx,
@@ -875,7 +875,7 @@ pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_linalg::EagerTensorLinalgExt;
 ///
-/// let ctx = EagerRuntime::new();
+/// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap(),
 ///     ctx.clone(),

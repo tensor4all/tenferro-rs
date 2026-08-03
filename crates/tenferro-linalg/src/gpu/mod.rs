@@ -2,12 +2,12 @@ mod ffi;
 mod kernels;
 mod linalg;
 
-use tenferro_gpu::CudaBackend;
-use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorViewCanonicalization};
+use tenferro_gpu::CudaExecSession;
+use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
 
-impl LinalgBackend for CudaBackend {
+impl LinalgBackend for CudaExecSession<'_> {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::cholesky(self, input)
     }

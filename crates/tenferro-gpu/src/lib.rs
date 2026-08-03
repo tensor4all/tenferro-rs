@@ -3,25 +3,22 @@
 //! # Examples
 //!
 //! ```rust
-//! # fn main() -> tenferro_tensor::Result<()> {
 //! #[cfg(feature = "cuda")]
-//! {
-//!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-//!     use tenferro_tensor::{Tensor, TensorElementwise};
+//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
 //!
-//!     if gpu_available() {
-//!         let mut backend = CudaBackend::new(0).unwrap();
-//!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-//!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
-//!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
-//!         let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-//!         let gpu_sum = backend.add(&gpu_a, &gpu_b).unwrap();
-//!         let sum = download_tensor(backend.runtime(), &gpu_sum).unwrap();
-//!         assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-//!     }
+//! #[cfg(feature = "cuda")]
+//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//!     let devices = cuda_devices()?;
+//!     let Some(device) = devices.first() else {
+//!         return Ok(None);
+//!     };
+//!     Ok(Some(CudaBackend::new(device.id())?))
 //! }
-//! # Ok(())
-//! # }
+//!
+//! // This ordinary doctest checks the discovery-based selection API without
+//! // requiring CUDA hardware at test time.
+//! #[cfg(feature = "cuda")]
+//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
 
 #[cfg(feature = "cuda")]
@@ -29,6 +26,10 @@ use std::any::Any;
 
 #[cfg(feature = "cuda")]
 mod cubecl;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod event_domain_admission;
+#[cfg(any(feature = "cuda", feature = "webgpu"))]
+mod event_retirement;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
@@ -38,9 +39,10 @@ mod webgpu;
 
 #[cfg(feature = "cuda")]
 pub use cubecl::{
-    cuda_capabilities, cuda_runtime_engine_id, cuda_runtime_engine_registration,
-    cuda_runtime_hardware_class, device_ptr, download_tensor, gpu_available, upload_tensor,
-    CudaBackend, CudaRuntime,
+    cuda_capabilities, cuda_devices, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
+    device_ptr, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
+    CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaExecSession, CudaRuntime,
+    CudaRuntimeIdentity,
 };
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
@@ -48,8 +50,9 @@ pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 #[cfg(feature = "webgpu")]
 pub use webgpu::{
     download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
-    webgpu_runtime_engine_registration, webgpu_runtime_hardware_class, AppleContext,
-    AppleTransferStats, WebGpuBackend, WebGpuRuntime,
+    webgpu_runtime_engine_registration, webgpu_runtime_engine_registration_with_id,
+    webgpu_runtime_hardware_class, with_webgpu_exec_session, AppleContext, AppleTransferStats,
+    WebGpuBackend, WebGpuExecSession, WebGpuRuntime, WebGpuRuntimeIdentity,
 };
 
 /// Narrow owner-scoped WebGPU handle interop for extension crates.

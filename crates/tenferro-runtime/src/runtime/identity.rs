@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 use super::{IdentityError, IdentityKind};
 
-/// Opaque runtime identity, created only inside the runtime in A0.
+/// Opaque identity allocated for one [`Runtime`](super::Runtime) instance.
 ///
-/// B0 supplies the public creation path.
+/// The runtime uses this value to namespace snapshots, event domains, and
+/// prepared execution. Construction and numeric access remain crate-private so
+/// callers can compare identities without manufacturing one.
 ///
 /// # Examples
 ///
@@ -22,22 +24,25 @@ use super::{IdentityError, IdentityKind};
 pub struct RuntimeId(NonZeroU64);
 
 impl RuntimeId {
-    // INVARIANT: A0 exposes crate-private construction for runtime-owned callers; B0 is its first production owner.
+    // INVARIANT: Runtime construction is the sole production allocator; the
+    // crate-private constructor keeps the numeric representation opaque.
     #[allow(dead_code)]
     pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
         Self(value)
     }
 
-    // INVARIANT: A0 module-local tests are the only current consumer; B0 runtime ownership will read this opaque value.
+    // INVARIANT: Runtime internals read the value only to namespace runtime
+    // snapshots, event domains, and prepared-work validation.
     #[allow(dead_code)]
     pub(crate) const fn get(self) -> NonZeroU64 {
         self.0
     }
 }
 
-/// Opaque runtime epoch, created only inside the runtime in A0.
+/// Opaque monotonically increasing configuration epoch for one runtime.
 ///
-/// B0 supplies the public creation path.
+/// A new epoch is published when a runtime reconfiguration changes its
+/// execution snapshot; prepared work from an older epoch is rejected.
 ///
 /// # Examples
 ///
@@ -52,25 +57,29 @@ impl RuntimeId {
 pub struct RuntimeEpoch(NonZeroU64);
 
 impl RuntimeEpoch {
-    // INVARIANT: A0 defines epoch-one construction for the later B0 runtime owner without a public constructor.
+    // INVARIANT: A newly built runtime starts at epoch one; publication is the
+    // only production path that advances it.
     #[allow(dead_code)]
     pub(crate) const fn one() -> Self {
         Self(NonZeroU64::MIN)
     }
 
-    // INVARIANT: A0 module-local tests cover crate-private epoch construction until B0 creates epochs in production.
+    // INVARIANT: Snapshot construction supplies validated nonzero epochs while
+    // keeping the representation private to the runtime crate.
     #[allow(dead_code)]
     pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
         Self(value)
     }
 
-    // INVARIANT: A0 module-local tests cover opaque access until B0 owns epoch state transitions.
+    // INVARIANT: Runtime snapshot and prepared-work validation are the only
+    // production consumers of the numeric epoch.
     #[allow(dead_code)]
     pub(crate) const fn get(self) -> NonZeroU64 {
         self.0
     }
 
-    // INVARIANT: A0 module-local tests cover overflow termination until B0 maps it to a runtime reconfiguration error.
+    // INVARIANT: Reconfiguration uses `None` to report epoch exhaustion before
+    // publishing a wrapped value.
     #[allow(dead_code)]
     pub(crate) fn checked_next(self) -> Option<Self> {
         self.0
@@ -132,6 +141,157 @@ impl EngineId {
     }
 }
 
+/// Validated namespaced identity of a runtime provider.
+///
+/// A provider ID identifies the implementation namespace in the runtime
+/// control plane. It is deliberately distinct from tensor placement metadata.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::ProviderId;
+///
+/// assert_eq!(ProviderId::new("tenferro.cpu")?.as_str(), "tenferro.cpu");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProviderId(Arc<str>);
+
+impl ProviderId {
+    /// Validate a lowercase ASCII namespaced provider identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentityError`] with [`IdentityKind::Provider`] when `value`
+    /// does not match the lowercase ASCII namespaced identifier grammar.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::ProviderId;
+    ///
+    /// assert!(ProviderId::new("tenferro.cuda").is_ok());
+    /// ```
+    pub fn new(value: impl Into<Arc<str>>) -> Result<Self, IdentityError> {
+        validate_identifier(value.into(), IdentityKind::Provider).map(Self)
+    }
+
+    /// Borrow the validated provider identifier text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::ProviderId;
+    ///
+    /// assert_eq!(ProviderId::new("tenferro.cuda")?.as_str(), "tenferro.cuda");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Immutable runtime-control-plane binding of a provider to one physical target.
+///
+/// The target identity is opaque to the runtime and is canonicalized by the
+/// provider. It is not [`tenferro_tensor::DeviceId`] or tensor placement data.
+/// This immutable provider/target pair is the durable identity carried by
+/// runtime snapshots, execution locations, and transfer requests.
+/// Because this value appears in structured diagnostics and debug output, it
+/// accepts nonempty ASCII graphic text (no controls, whitespace, or Unicode
+/// confusables). Providers that need byte-level or Unicode identities must
+/// first canonicalize them into an escaped diagnostic-safe ASCII form.
+/// Equality, ordering, and hashing include both the provider and target.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+///
+/// let identity = ProviderDeviceIdentity::new(ProviderId::new("tenferro.cuda")?, "device-0")?;
+/// assert_eq!(identity.provider_id().as_str(), "tenferro.cuda");
+/// assert_eq!(identity.target_identity(), "device-0");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProviderDeviceIdentity {
+    provider_id: ProviderId,
+    target_identity: Arc<str>,
+}
+
+impl ProviderDeviceIdentity {
+    /// Construct a provider binding from a validated provider and opaque target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentityError`] with [`IdentityKind::ProviderTarget`] when the
+    /// provider-canonical target identity is empty or is not ASCII graphic
+    /// text. Target text is deliberately diagnostic-safe; opaque
+    /// provider-specific byte or Unicode identities must be encoded by the
+    /// provider before construction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let identity = ProviderDeviceIdentity::new(
+    ///     ProviderId::new("tenferro.cpu")?,
+    ///     "host-0",
+    /// )?;
+    /// assert_eq!(identity.target_identity(), "host-0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(
+        provider_id: ProviderId,
+        target_identity: impl Into<Arc<str>>,
+    ) -> Result<Self, IdentityError> {
+        let target_identity = target_identity.into();
+        if target_identity.is_empty()
+            || !target_identity
+                .chars()
+                .all(|character| character.is_ascii_graphic())
+        {
+            return Err(IdentityError::malformed(IdentityKind::ProviderTarget));
+        }
+        Ok(Self {
+            provider_id,
+            target_identity,
+        })
+    }
+
+    /// Return the validated provider namespace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let provider = ProviderId::new("tenferro.cpu")?;
+    /// let identity = ProviderDeviceIdentity::new(provider.clone(), "host-0")?;
+    /// assert_eq!(identity.provider_id(), &provider);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn provider_id(&self) -> &ProviderId {
+        &self.provider_id
+    }
+
+    /// Return the provider-canonical opaque target identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ProviderDeviceIdentity, ProviderId};
+    ///
+    /// let identity = ProviderDeviceIdentity::new(ProviderId::new("tenferro.cpu")?, "host-0")?;
+    /// assert_eq!(identity.target_identity(), "host-0");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn target_identity(&self) -> &str {
+        &self.target_identity
+    }
+}
+
 /// Validated namespaced identity of a hardware class.
 ///
 /// # Examples
@@ -183,10 +343,13 @@ impl HardwareClassId {
     }
 }
 
-/// Opaque runtime-local registration identity, created only inside the runtime in A0.
+/// Opaque runtime-local identity assigned to one frozen engine registration.
 ///
-/// B0 supplies the public creation path. Its debug output exposes the useful
-/// ordinal but never the private issuer.
+/// The identity is part of the durable registration contract: it is preserved
+/// when the same registration is carried into a later snapshot, changes when
+/// that registration is replaced, and participates in event-domain identity.
+/// Its equality, ordering, and hashing include the private issuer and ordinal;
+/// debug output exposes only the useful ordinal.
 ///
 /// # Examples
 ///
@@ -204,7 +367,8 @@ pub struct RegistrationIdentity {
 }
 
 impl RegistrationIdentity {
-    // INVARIANT: A0 module-local tests require crate-private construction; B0 owns all production registration issuance.
+    // INVARIANT: The runtime registration allocator is the sole production
+    // issuer; callers receive and compare the opaque identity only.
     #[allow(dead_code)]
     pub(crate) const fn new(issuer: NonZeroU64, ordinal: NonZeroU64) -> Self {
         Self { issuer, ordinal }

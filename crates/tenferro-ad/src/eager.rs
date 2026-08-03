@@ -41,8 +41,7 @@ use tenferro_tensor::{
 };
 
 use crate::eager_backend::{
-    cpu_runtime_engine_id, cpu_runtime_engine_registration, cpu_runtime_hardware_class,
-    eager_runtime_for_backend, EagerBackend,
+    cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_runtime_for_backend, EagerBackend,
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
@@ -125,7 +124,7 @@ fn eager_semantic_vjp_enabled() -> bool {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 /// use tenferro_cpu::CpuBackend;
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::requires_grad_in(
 ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
 ///     ctx.clone(),
@@ -251,18 +250,6 @@ pub(crate) fn print_and_reset_eager_op_profile() {
 
 fn eager_op_profile_per_call_us(entry: &EagerOpProfileEntry) -> Option<f64> {
     (entry.calls != 0).then(|| entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64)
-}
-
-fn build_eager_runtime_for_backend(backend: &EagerBackend) -> Runtime {
-    match eager_runtime_for_backend(backend) {
-        Ok(runtime) => runtime,
-        Err(source) => {
-            // INVARIANT: eager runtime construction uses fixed, private CPU
-            // identifiers and one storage class; failing here means the
-            // hard-coded registration contract has been broken.
-            panic!("fixed eager runtime configuration failed: {source}");
-        }
-    }
 }
 
 fn runtime_config_error(op: &'static str, source: RuntimeConfigError) -> Error {
@@ -395,7 +382,7 @@ pub(crate) struct EagerGraphExecution {
 /// use tenferro_ad::EagerRuntime;
 /// use tenferro_cpu::CpuPlacement;
 ///
-/// let runtime = EagerRuntime::new();
+/// let runtime = EagerRuntime::new()?;
 /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
 /// assert_eq!(cpu.runtime_id(), runtime.id());
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -451,7 +438,7 @@ impl CpuPlacementBoundEager {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuPlacement;
     ///
-    /// let runtime = EagerRuntime::new();
+    /// let runtime = EagerRuntime::new()?;
     /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
     /// assert_eq!(cpu.runtime_id(), runtime.id());
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -468,7 +455,7 @@ impl CpuPlacementBoundEager {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuPlacement;
     ///
-    /// let runtime = EagerRuntime::new();
+    /// let runtime = EagerRuntime::new()?;
     /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
     /// assert_eq!(cpu.placement(), CpuPlacement::Auto);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -495,7 +482,7 @@ impl CpuPlacementBoundEager {
     /// use tenferro_cpu::CpuPlacement;
     /// use tenferro_tensor::{Tensor, TensorElementwise};
     ///
-    /// let runtime = EagerRuntime::new();
+    /// let runtime = EagerRuntime::new()?;
     /// let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
     /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
@@ -537,17 +524,21 @@ impl CpuPlacementBoundEager {
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
 /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
 /// let z = x.add(&y).unwrap();
 ///
 /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub struct EagerRuntime {
     id: ContextId,
     runtime: Runtime,
-    pub(crate) backend: Mutex<EagerBackend>,
+    // The backend and its exact runtime engine registration are selected
+    // together during construction and remain paired for this runtime's
+    // lifetime. The mutex only serializes mutable backend operations.
+    backend: Mutex<EagerBackend>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -640,7 +631,7 @@ impl fmt::Debug for EagerRuntime {
 }
 
 impl EagerRuntime {
-    fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
+    pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
         self.backend.lock().map_err(|_| {
             Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
         })
@@ -712,49 +703,7 @@ impl EagerRuntime {
         })
     }
 
-    fn synchronize_runtime_registration_for_backend(&self, backend: &EagerBackend) -> Result<()> {
-        let engine_id = cpu_runtime_engine_id().map_err(|source| {
-            runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source)
-        })?;
-        let snapshot = self
-            .runtime
-            .snapshot()
-            .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
-        let has_cpu_engine = snapshot.engine(&engine_id).is_some();
-        match backend.cpu_snapshot() {
-            Some(backend) => {
-                let registration = cpu_runtime_engine_registration(&backend).map_err(|source| {
-                    runtime_config_error("EagerRuntime::cpu_runtime_engine_registration", source)
-                })?;
-                self.runtime
-                    .reconfigure(|edit| {
-                        if has_cpu_engine {
-                            edit.replace_engine(registration)?;
-                        } else {
-                            edit.register_engine(registration)?;
-                        }
-                        Ok(())
-                    })
-                    .map(|_| ())
-                    .map_err(|source| {
-                        runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
-                    })
-            }
-            None if has_cpu_engine => self
-                .runtime
-                .reconfigure(|edit| {
-                    edit.remove_engine(&engine_id)?;
-                    Ok(())
-                })
-                .map(|_| ())
-                .map_err(|source| {
-                    runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
-                }),
-            None => Ok(()),
-        }
-    }
-
-    fn from_backend(backend: EagerBackend) -> Self {
+    fn from_backend(backend: EagerBackend) -> Result<Self> {
         Self::from_backend_with_rules_and_cache(
             backend,
             SemanticExtensionRuleSet::default(),
@@ -766,9 +715,10 @@ impl EagerRuntime {
         backend: EagerBackend,
         semantic_extension_rules: SemanticExtensionRuleSet,
         ad_transform_cache: Arc<AdTransformCache>,
-    ) -> Self {
-        let runtime = build_eager_runtime_for_backend(&backend);
-        Self {
+    ) -> Result<Self> {
+        let runtime = eager_runtime_for_backend(&backend)
+            .map_err(|source| runtime_config_error("EagerRuntime::from_backend", source))?;
+        Ok(Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
@@ -780,7 +730,7 @@ impl EagerRuntime {
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
             prepared_derivative_cache: Mutex::new(PreparedDerivativeCache::default()),
-        }
+        })
     }
 
     /// Create a shared CPU eager execution context.
@@ -790,10 +740,17 @@ impl EagerRuntime {
     /// ```
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let ctx = EagerRuntime::new();
+    /// let ctx = EagerRuntime::new()?;
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn new() -> Arc<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn new() -> Result<Arc<Self>> {
         Self::with_cpu_backend(CpuBackend::new())
     }
 
@@ -805,11 +762,18 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn with_cpu_backend(backend: CpuBackend) -> Arc<Self> {
-        Arc::new(Self::from_backend(EagerBackend::cpu(backend)))
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_cpu_backend(backend: CpuBackend) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend(EagerBackend::cpu(backend))?))
     }
 
     /// Snapshot a placement-selected CPU handle from this eager runtime.
@@ -825,7 +789,7 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuPlacement;
     ///
-    /// let runtime = EagerRuntime::new();
+    /// let runtime = EagerRuntime::new()?;
     /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
     /// assert_eq!(cpu.runtime_id(), runtime.id());
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -877,15 +841,25 @@ impl EagerRuntime {
     /// use tenferro_ad::{AdContext, EagerRuntime};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    /// let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad)?;
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn with_cpu_backend_and_ad_context(backend: CpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_rules_and_cache(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_cpu_backend_and_ad_context(
+        backend: CpuBackend,
+        ad: &AdContext,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::cpu(backend),
             ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
-        ))
+        )?))
     }
 
     /// Create a shared eager execution context from a configured CUDA backend.
@@ -896,12 +870,18 @@ impl EagerRuntime {
     /// use tenferro_gpu::CudaBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_cuda_backend;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend(backend: CudaBackend) -> Arc<Self> {
-        Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_cuda_backend(backend: CudaBackend) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend(EagerBackend::cuda(backend))?))
     }
 
     /// Create a shared CUDA eager context with explicit AD extension rules.
@@ -912,16 +892,25 @@ impl EagerRuntime {
     /// use tenferro_ad::{AdContext, EagerRuntime};
     /// use tenferro_gpu::CudaBackend;
     ///
-    /// let _ctor: fn(CudaBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CudaBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
     /// ```
     #[cfg(feature = "cuda")]
-    pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_rules_and_cache(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_cuda_backend_and_ad_context(
+        backend: CudaBackend,
+        ad: &AdContext,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::cuda(backend),
             ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
-        ))
+        )?))
     }
 
     /// Create a shared eager execution context from a configured WebGPU backend.
@@ -932,12 +921,18 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_gpu::WebGpuBackend;
     ///
-    /// let _ctor: fn(WebGpuBackend) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(WebGpuBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend;
     /// ```
     #[cfg(feature = "webgpu")]
-    pub fn with_webgpu_backend(backend: WebGpuBackend) -> Arc<Self> {
-        Arc::new(Self::from_backend(EagerBackend::webgpu(backend)))
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_webgpu_backend(backend: WebGpuBackend) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend(EagerBackend::webgpu(backend))?))
     }
 
     /// Create a shared WebGPU eager context with explicit AD extension rules.
@@ -948,16 +943,25 @@ impl EagerRuntime {
     /// use tenferro_ad::{AdContext, EagerRuntime};
     /// use tenferro_gpu::WebGpuBackend;
     ///
-    /// let _ctor: fn(WebGpuBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(WebGpuBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend_and_ad_context;
     /// ```
     #[cfg(feature = "webgpu")]
-    pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_rules_and_cache(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when provider runtime
+    /// registration cannot be configured, preserving the underlying
+    /// [`RuntimeConfigError`] as the typed error source.
+    pub fn with_webgpu_backend_and_ad_context(
+        backend: WebGpuBackend,
+        ad: &AdContext,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::webgpu(backend),
             ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
-        ))
+        )?))
     }
 
     /// Return an opaque identifier for this context.
@@ -968,8 +972,9 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// assert_ne!(ctx.id(), EagerRuntime::with_cpu_backend(CpuBackend::new()).id());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// assert_ne!(ctx.id(), EagerRuntime::with_cpu_backend(CpuBackend::new())?.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn id(&self) -> ContextId {
         self.id
@@ -986,7 +991,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -1038,7 +1043,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// ctx.clear_extension_caches()?;
     /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1061,7 +1066,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// ctx.clear_caches()?;
     /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
@@ -1088,7 +1093,7 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// ctx.clear_prepared_derivative_cache()?;
     /// assert_eq!(ctx.cache_stats()?.prepared_derivatives.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1111,7 +1116,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let stats = ctx.cache_stats()?;
     /// assert_eq!(stats.extensions.entries, 0);
     /// assert_eq!(stats.ad_transforms.entries, 0);
@@ -1141,7 +1146,7 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// assert!(ctx.ad_transform_cache_limits()?.max_entries().get() > 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -1163,7 +1168,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{AdTransformCacheLimits, EagerRuntime};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let limits = AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap());
     /// ctx.set_ad_transform_cache_limits(limits)?;
     /// assert_eq!(ctx.ad_transform_cache_limits()?, limits);
@@ -1186,7 +1191,7 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// ctx.clear_ad_transform_caches()?;
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1208,7 +1213,7 @@ impl EagerRuntime {
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// assert!(ctx.prepared_derivative_cache_limits()?.max_entries().get() > 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -1230,7 +1235,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{AdTransformCacheLimits, EagerRuntime};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let limits = AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap());
     /// ctx.set_prepared_derivative_cache_limits(limits)?;
     /// assert_eq!(ctx.prepared_derivative_cache_limits()?, limits);
@@ -1270,80 +1275,93 @@ impl EagerRuntime {
         Ok(())
     }
 
-    /// Mutably borrow generic extension runtime cache storage.
+    /// Enter one backend execution session and run provider-neutral operations.
     ///
-    /// This hook is for standard extension crates that need cache entries
-    /// owned by an eager runtime while preserving eager value semantics outside
-    /// a registered extension execution boundary.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::EagerRuntime;
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::ExtensionCacheKey;
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let key = ExtensionCacheKey::new("example.cache.v1", "plans", 1);
-    ///
-    /// ctx.with_extension_caches_mut(|caches| {
-    ///     caches.put(key, 7_usize, std::mem::size_of::<usize>());
-    /// });
-    ///
-    /// assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
-    /// cache lock is poisoned before the closure can run.
-    pub fn with_extension_caches_mut<R>(
-        &self,
-        f: impl FnOnce(&mut ExtensionCacheStore) -> R,
-    ) -> Result<R> {
-        let mut caches = self.lock_extension_caches()?;
-        Ok(f(&mut caches))
-    }
-
-    /// Mutably borrow this runtime's backend.
-    ///
-    /// This hook lets standard extension crates run a whole contraction program
-    /// in a single backend session (instead of one eager op per step) while
-    /// preserving eager value semantics for untracked tensors.
+    /// The callback receives only a lifetime-bound, non-owning backend session.
+    /// The backend and its engine registration are fixed when the eager runtime
+    /// is constructed. Extension modules are installed separately and remain
+    /// available to later extension operations.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_ad::EagerRuntime;
     /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// // The closure receives `&mut EagerBackend`; standard extension crates
-    /// // use it to open one backend session for a whole contraction program.
-    /// let answer = ctx.with_backend_mut(|_backend| 42).unwrap();
-    /// assert_eq!(answer, 42);
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let output = ctx.with_execution_session(|session| {
+    ///     TensorElementwise::add(session, &lhs, &rhs)
+    /// })??;
+    /// assert_eq!(output.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
-    /// lock is poisoned before the closure can run.
-    pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
-        let mut backend = self.lock_backend()?;
-        let result = f(&mut backend);
-        self.synchronize_runtime_registration_for_backend(&backend)?;
-        Ok(result)
-    }
-
-    pub(crate) fn with_backend_and_extension_caches_mut<R>(
+    /// lock is poisoned. Backend operations retain their typed tensor/backend
+    /// errors inside the callback result.
+    pub fn with_execution_session<R: Send>(
         &self,
-        f: impl FnOnce(&mut EagerBackend, &mut ExtensionCacheStore) -> tenferro_tensor::Result<R>,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> Result<R> {
         let mut backend = self.lock_backend()?;
-        let mut extension_caches = self.lock_extension_caches()?;
-        let result = f(&mut backend, &mut extension_caches).map_err(Error::from)?;
-        self.synchronize_runtime_registration_for_backend(&backend)?;
-        Ok(result)
+        Ok(backend.with_backend_session(f))
+    }
+
+    // Lock ordering: the eager backend owner is locked first; the
+    // extension-cache lock is acquired only after it and remains held through
+    // the borrowed session callback.
+    /// Run an extension-owned eager operation with a borrowed backend session
+    /// and the eager runtime's extension cache store.
+    ///
+    /// The eager backend owner is locked before the extension-cache lock is
+    /// acquired. The callback receives an
+    /// [`tenferro_runtime::ExtensionExecutionContext`] so cache access and
+    /// backend execution share one lifetime-bound context without exposing the
+    /// owning eager backend. The backend and its engine registration remain
+    /// fixed for the eager runtime's lifetime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let output = ctx.with_extension_execution_context(|extension_ctx| {
+    ///     TensorElementwise::add(extension_ctx.backend_mut(), &lhs, &rhs)
+    /// })??;
+    /// assert_eq!(output.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
+    /// or extension-cache lock is poisoned. Errors returned by the callback
+    /// remain in its result value.
+    pub fn with_extension_execution_context<R: Send>(
+        &self,
+        f: impl FnOnce(
+                &mut tenferro_runtime::ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+            ) -> R
+            + Send,
+    ) -> Result<R> {
+        let mut backend = self.lock_backend()?;
+        let mut extension_cache_guard = self.lock_extension_caches()?;
+        let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+        Ok(backend.with_backend_session(move |session| {
+            let mut extension_ctx =
+                tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
+            f(&mut extension_ctx)
+        }))
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
@@ -1368,8 +1386,9 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// ctx.synchronize().unwrap();
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
@@ -1556,7 +1575,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx.clone()).unwrap();
     /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
@@ -1620,7 +1639,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let c = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx)?;
     /// let z = x.add(&c).unwrap();
@@ -1648,7 +1667,7 @@ impl EagerRuntime {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let p = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
     /// let loss = p.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _ = loss.backward().unwrap();
@@ -1678,7 +1697,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -1708,7 +1727,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -1762,7 +1781,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ///     ctx.clone(),
@@ -1801,7 +1820,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -1850,7 +1869,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -1889,7 +1908,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
     ///     ctx.clone(),
@@ -2478,7 +2497,7 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx)?;
 /// let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
 /// let _cotangents = loss.backward().unwrap();
@@ -2551,7 +2570,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
     /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
@@ -2594,7 +2613,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
     /// assert!(x.grad().unwrap().is_none());
@@ -2833,7 +2852,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     /// let y = x.detach();
     ///
@@ -2861,8 +2880,8 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx_a)?;
     /// let d = x.detach_into(&ctx_b)?;
     ///
@@ -2887,7 +2906,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(), ctx)?;
     /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2976,7 +2995,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx).unwrap();
     /// let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _cotangents = loss.backward().unwrap();
@@ -3015,7 +3034,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx).unwrap();
     /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
@@ -3053,7 +3072,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let plain = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
     /// let tracked = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let detached = tracked.detach();
@@ -3061,6 +3080,7 @@ impl EagerTensor {
     /// assert!(!plain.tracks_grad());
     /// assert!(tracked.tracks_grad());
     /// assert!(!detached.tracks_grad());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn tracks_grad(&self) -> bool {
         self.requires_grad
@@ -3079,10 +3099,11 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
     ///
     /// assert_eq!(x.ctx_id(), ctx.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn ctx_id(&self) -> ContextId {
         self.ctx.id()
@@ -3101,11 +3122,12 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
     ///
     /// assert!(x.same_context(&y));
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn same_context(&self, other: &Self) -> bool {
         self.ctx_id() == other.ctx_id()
@@ -3223,7 +3245,7 @@ impl EagerTensor {
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx).unwrap();
     /// let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _cotangents = loss.backward().unwrap();
@@ -3231,6 +3253,7 @@ impl EagerTensor {
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
@@ -3266,7 +3289,7 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(
     ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ///     ctx.clone(),

@@ -12,7 +12,7 @@ use tenferro_linalg::{
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
-    CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()))
+    CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap())
         .clone()
 }
 
@@ -22,7 +22,7 @@ fn ad_test_ctx() -> Arc<EagerRuntime> {
         .unwrap()
         .build()
         .unwrap();
-    EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad)
+    EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap()
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -424,16 +424,16 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]).unwrap();
     let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]).unwrap();
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_gpu, ctx).unwrap();
 
     let x = a.solve(&b).unwrap();
 
-    let download_backend = CudaBackend::new(0).unwrap();
+    let download_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
     let x_host = download_tensor(
         download_backend.runtime(),
         x.materialized().unwrap().as_ref(),

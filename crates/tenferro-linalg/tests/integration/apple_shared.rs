@@ -172,7 +172,7 @@ fn public_concrete_eager_and_traced_cholesky_preserve_apple_domain_without_trans
 
     let input = managed_spd(&context);
     let before = context.transfer_stats();
-    let runtime = EagerRuntime::with_cpu_backend(context.cpu_backend().clone());
+    let runtime = EagerRuntime::with_cpu_backend(context.cpu_backend().clone()).unwrap();
     let eager_input = EagerTensor::from_tensor_in(input.clone(), runtime).unwrap();
     let eager = eager_input.cholesky().unwrap().materialized().unwrap();
     assert_cholesky_result(&input, eager.as_ref(), &context, before);

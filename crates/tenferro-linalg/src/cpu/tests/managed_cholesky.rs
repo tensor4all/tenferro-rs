@@ -12,6 +12,7 @@ use tenferro_tensor::{
     TypedTensor,
 };
 
+use super::with_cpu_linalg;
 use crate::LinalgBackend;
 
 thread_local! {
@@ -233,13 +234,17 @@ fn assert_real_factor(values: &[f64]) {
 fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
     let domain = FakeDomain::new();
     let host = Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
-    let expected = CpuBackend::new().cholesky(&host).unwrap();
+    let mut expected_backend = CpuBackend::new();
+    let expected =
+        with_cpu_linalg(&mut expected_backend, |backend| backend.cholesky(&host)).unwrap();
     let mut backend = backend(&domain);
 
-    let direct = backend.cholesky(&host).unwrap();
-    let read = backend
-        .cholesky_read(TensorRead::from_tensor(&host))
-        .unwrap();
+    let (direct, read) = with_cpu_linalg(&mut backend, |backend| {
+        let direct = backend.cholesky(&host)?;
+        let read = backend.cholesky_read(TensorRead::from_tensor(&host))?;
+        Ok::<_, tenferro_tensor::Error>((direct, read))
+    })
+    .unwrap();
 
     assert_eq!(
         direct.as_slice::<f64>().unwrap(),
@@ -259,71 +264,73 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     let mut backend = backend(&domain);
     let selected = backend.execution_info().domain_id();
 
-    macro_rules! check_real {
-        ($scalar:ty, $variant:ident) => {{
-            let input = domain.tensor(
-                &[2, 2],
-                vec![
-                    4.0 as $scalar,
-                    2.0 as $scalar,
-                    2.0 as $scalar,
-                    3.0 as $scalar,
-                ],
-            );
-            let input_id = input.allocation_id();
-            let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
-            let Tensor::$variant(output) = output else {
-                unreachable!()
-            };
-            assert_eq!(output.allocation_domain(), Some(domain.id));
-            assert_ne!(output.allocation_id(), input_id);
-            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
-            assert_eq!(output.placement().device, None);
-            assert_eq!(output.placement().cpu_affinity, Some(selected));
-            let Buffer::Backend(buffer) = output.buffer() else {
-                panic!("expected backend output")
-            };
-            let mapped = buffer.map_read().unwrap();
-            assert_real_factor(&mapped.iter().map(|&value| value as f64).collect::<Vec<_>>());
-        }};
-    }
+    with_cpu_linalg(&mut backend, |backend| {
+        macro_rules! check_real {
+            ($scalar:ty, $variant:ident) => {{
+                let input = domain.tensor(
+                    &[2, 2],
+                    vec![
+                        4.0 as $scalar,
+                        2.0 as $scalar,
+                        2.0 as $scalar,
+                        3.0 as $scalar,
+                    ],
+                );
+                let input_id = input.allocation_id();
+                let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
+                let Tensor::$variant(output) = output else {
+                    unreachable!()
+                };
+                assert_eq!(output.allocation_domain(), Some(domain.id));
+                assert_ne!(output.allocation_id(), input_id);
+                assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+                assert_eq!(output.placement().device, None);
+                assert_eq!(output.placement().cpu_affinity, Some(selected));
+                let Buffer::Backend(buffer) = output.buffer() else {
+                    panic!("expected backend output")
+                };
+                let mapped = buffer.map_read().unwrap();
+                assert_real_factor(&mapped.iter().map(|&value| value as f64).collect::<Vec<_>>());
+            }};
+        }
 
-    macro_rules! check_complex {
-        ($scalar:ty, $variant:ident, $real:ty) => {{
-            let value = |real| <$scalar>::new(real as $real, 0.0);
-            let input = domain.tensor(
-                &[2, 2],
-                vec![value(4.0), value(2.0), value(2.0), value(3.0)],
-            );
-            let input_id = input.allocation_id();
-            let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
-            let Tensor::$variant(output) = output else {
-                unreachable!()
-            };
-            assert_eq!(output.allocation_domain(), Some(domain.id));
-            assert_ne!(output.allocation_id(), input_id);
-            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
-            assert_eq!(output.placement().device, None);
-            assert_eq!(output.placement().cpu_affinity, Some(selected));
-            let Buffer::Backend(buffer) = output.buffer() else {
-                panic!("expected backend output")
-            };
-            let mapped = buffer.map_read().unwrap();
-            assert!(mapped.iter().all(|value| value.im.abs() <= 1.0e-5));
-            assert_real_factor(
-                &mapped
-                    .iter()
-                    .map(|value| value.re as f64)
-                    .collect::<Vec<_>>(),
-            );
-        }};
-    }
+        macro_rules! check_complex {
+            ($scalar:ty, $variant:ident, $real:ty) => {{
+                let value = |real| <$scalar>::new(real as $real, 0.0);
+                let input = domain.tensor(
+                    &[2, 2],
+                    vec![value(4.0), value(2.0), value(2.0), value(3.0)],
+                );
+                let input_id = input.allocation_id();
+                let output = backend.cholesky(&Tensor::$variant(input)).unwrap();
+                let Tensor::$variant(output) = output else {
+                    unreachable!()
+                };
+                assert_eq!(output.allocation_domain(), Some(domain.id));
+                assert_ne!(output.allocation_id(), input_id);
+                assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+                assert_eq!(output.placement().device, None);
+                assert_eq!(output.placement().cpu_affinity, Some(selected));
+                let Buffer::Backend(buffer) = output.buffer() else {
+                    panic!("expected backend output")
+                };
+                let mapped = buffer.map_read().unwrap();
+                assert!(mapped.iter().all(|value| value.im.abs() <= 1.0e-5));
+                assert_real_factor(
+                    &mapped
+                        .iter()
+                        .map(|value| value.re as f64)
+                        .collect::<Vec<_>>(),
+                );
+            }};
+        }
 
-    check_real!(f32, F32);
-    check_real!(f64, F64);
-    check_complex!(Complex32, C32, f32);
-    check_complex!(Complex64, C64, f64);
-    assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 4);
+        check_real!(f32, F32);
+        check_real!(f64, F64);
+        check_complex!(Complex32, C32, f32);
+        check_complex!(Complex64, C64, f64);
+        assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 4);
+    });
 }
 
 #[test]
@@ -333,36 +340,38 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
     let mut backend = backend(&domain);
     let values = vec![4.0_f32, 2.0, 2.0, 3.0];
 
-    let foreign_tensor = foreign.tensor(&[2, 2], values.clone());
-    let error = backend.cholesky(&Tensor::F32(foreign_tensor)).unwrap_err();
-    assert!(matches!(
-        error,
-        tenferro_tensor::Error::HostAccess {
-            source: HostAccessError::ForeignDomain { .. },
-            ..
-        }
-    ));
+    with_cpu_linalg(&mut backend, |backend| {
+        let foreign_tensor = foreign.tensor(&[2, 2], values.clone());
+        let error = backend.cholesky(&Tensor::F32(foreign_tensor)).unwrap_err();
+        assert!(matches!(
+            error,
+            tenferro_tensor::Error::HostAccess {
+                source: HostAccessError::ForeignDomain { .. },
+                ..
+            }
+        ));
 
-    let device_local =
-        domain.tensor_with_domain(&[2, 2], values.clone(), None, false, MemoryKind::Device);
-    let error = backend.cholesky(&Tensor::F32(device_local)).unwrap_err();
-    assert!(matches!(
-        error,
-        tenferro_tensor::Error::HostAccess {
-            source: HostAccessError::Unsupported { .. },
-            ..
-        }
-    ));
+        let device_local =
+            domain.tensor_with_domain(&[2, 2], values.clone(), None, false, MemoryKind::Device);
+        let error = backend.cholesky(&Tensor::F32(device_local)).unwrap_err();
+        assert!(matches!(
+            error,
+            tenferro_tensor::Error::HostAccess {
+                source: HostAccessError::Unsupported { .. },
+                ..
+            }
+        ));
 
-    let busy =
-        domain.tensor_with_domain(&[2, 2], values, Some(domain.id), true, MemoryKind::Managed);
-    let error = backend.cholesky(&Tensor::F32(busy)).unwrap_err();
-    assert!(matches!(
-        error,
-        tenferro_tensor::Error::HostAccess {
-            source: HostAccessError::GpuAccessInProgress,
-            ..
-        }
-    ));
-    assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 0);
+        let busy =
+            domain.tensor_with_domain(&[2, 2], values, Some(domain.id), true, MemoryKind::Managed);
+        let error = backend.cholesky(&Tensor::F32(busy)).unwrap_err();
+        assert!(matches!(
+            error,
+            tenferro_tensor::Error::HostAccess {
+                source: HostAccessError::GpuAccessInProgress,
+                ..
+            }
+        ));
+        assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 0);
+    });
 }

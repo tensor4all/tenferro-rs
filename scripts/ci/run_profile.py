@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TextIO
 
 # Hosted CI uses Cargo `[profile.ci]`: opt-level=0, debug=0, incremental=false,
@@ -22,6 +23,7 @@ _CLIPPY_FLAGS = (
 _STORAGE_OWNERSHIP_CHECKER = (
     "python3 scripts/check-storage-ownership-contracts.py"
 )
+_TRYBUILD_CARGO_WRAPPER = str(Path(__file__).with_name("trybuild-cargo.py").resolve())
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "fmt": (
@@ -44,7 +46,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
     ),
     "workspace-blas": (
-        f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
+        # Direct invocation preserves our CARGO wrapper in nextest test processes.
+        f"cargo-nextest nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
         "--features cpu-blas --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
         "--features cpu-blas",
@@ -149,7 +152,10 @@ def run_profiles(
                 continue
             environment = os.environ.copy()
             if profile == "workspace-blas":
-                environment["RUSTFLAGS"] = "-l dylib=openblas -l dylib=lapack"
+                rustflags = "-l dylib=openblas -l dylib=lapack"
+                environment["RUSTFLAGS"] = rustflags
+                environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = rustflags
+                environment["CARGO"] = _TRYBUILD_CARGO_WRAPPER
             try:
                 # Commands are repository constants, not caller-provided shell text.
                 subprocess.run(

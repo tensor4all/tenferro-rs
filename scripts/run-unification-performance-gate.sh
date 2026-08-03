@@ -218,16 +218,7 @@ for entry in "${BENCHMARKS[@]}"; do
   run_cmd=("${run_prefix[@]}" cargo bench -p "$package")
 
   if [[ "$package" == "tenferro-runtime" && "$bench" == "elementwise_fusion" ]]; then
-    runtime_api="graph-executor"
-    if grep -R -q "pub struct Runtime" "$ROOT_DIR/crates/tenferro-runtime/src" \
-      && grep -R -q "run_compiled" "$ROOT_DIR/crates/tenferro-runtime/src"; then
-      runtime_api="run-compiled"
-      if [[ -n "$bench_features" ]]; then
-        bench_features+=",__bench_unification_run_compiled_api"
-      else
-        bench_features="__bench_unification_run_compiled_api"
-      fi
-    fi
+    runtime_api="run-compiled"
     printf 'runtime api: %s\n' "$runtime_api"
     printf 'elementwise_fusion_runtime_api=%s\n' "$runtime_api" >>"$manifest"
   fi

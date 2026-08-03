@@ -22,7 +22,7 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::new())
+    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
 }
 
 fn finite_diff_unary(f: impl Fn(&[f64]) -> f64, base: &[f64]) -> Vec<f64> {

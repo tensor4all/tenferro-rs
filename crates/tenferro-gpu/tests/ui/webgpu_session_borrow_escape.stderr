@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/ui/webgpu_session_borrow_escape.rs:4:5
+  |
+3 | fn escape<'a>(session: WebGpuExecSession<'a>) -> WebGpuExecSession<'static> {
+  |           -- lifetime `'a` defined here
+4 |     session
+  |     ^^^^^^^ returning this value requires that `'a` must outlive `'static`

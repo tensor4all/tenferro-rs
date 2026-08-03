@@ -1330,10 +1330,12 @@ lookup, and miss planning precede Phase 5 resource admission. It creates no
 transfer, collective, schedule, liveness/buffer plan, resource, event,
 execution, or extension lowering.
 
-Until Phase 5, production execution continues through the existing
-`GraphExecutor<B>` and private `ExecProgram` path. The new preparation
-aggregate is exercised by focused runtime tests and cache integration, not by
-a second public execution pipeline.
+During the Phase 4-only interval, production execution continued through the
+then-existing private staging path. That historical interval is superseded by
+the Phase 5 runtime-owned `Runtime::run_compiled` and
+`Runtime::run_compiled_values` execution boundary documented in the current
+execution-engine design. The Phase 4 preparation aggregate is therefore not a
+second public execution pipeline.
 
 ## Prepared-plan cache
 

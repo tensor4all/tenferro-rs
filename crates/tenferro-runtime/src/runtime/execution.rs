@@ -3,7 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -21,12 +21,13 @@ use crate::exec::{
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
-    EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledTransfer,
+    EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledNodeKind,
+    ScheduledTransfer, UnsupportedScheduledNodeError,
 };
 use crate::runtime::{
-    CacheOwnerError, CacheStats, EventDomainRun, EventToken, InputSignature, PrepareError,
-    PrepareOptions, PreparedOperationPlan, Runtime, RuntimeCacheOwner, StorageClass,
-    SubmissionError, TransferError, TransferProvider, TransferProviderContractError,
+    CacheOwnerError, CacheStats, EventDomainError, EventDomainOperation, EventDomainRun,
+    EventToken, InputSignature, PrepareError, PrepareOptions, PreparedOperationPlan, Runtime,
+    RuntimeCacheOwner, SubmissionError, TransferError, TransferProviderContractError,
     TransferRequest,
 };
 use crate::{Error, Result};
@@ -44,16 +45,15 @@ pub(super) enum RuntimeOutputMode {
 
 /// Runtime-prepared compiled graph execution handle.
 ///
-/// This handle keeps the prepared execution staging and selected engine bridge
-/// outside steady-state execution. It is tied to the runtime epoch that created
-/// it and becomes stale after runtime reconfiguration.
+/// This handle keeps the prepared execution staging and its direct provider
+/// witnesses inside the immutable schedule. It is tied to the runtime epoch
+/// that created it and becomes stale after runtime reconfiguration.
 #[derive(Clone)]
 pub struct PreparedCompiledGraph {
     runtime_id: super::RuntimeId,
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
     prepared: Arc<super::preparation::PreparedProgram>,
-    execution: Arc<PreparedExecutionEngines>,
 }
 
 /// Asynchronous runtime execution handle returned by [`Runtime::submit`].
@@ -700,22 +700,6 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
     }
 }
 
-#[derive(Debug)]
-struct PreparedExecutionEngines {
-    snapshot: Arc<super::RuntimeConfigSnapshot>,
-    root: Arc<dyn ErasedTensorBackendExecutor>,
-    root_location: ExecutionLocation,
-    input_locations: Box<[ExecutionLocation]>,
-    operations: Box<[PreparedOperationExecution]>,
-    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
-}
-
-#[derive(Debug)]
-struct PreparedOperationExecution {
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
-    location: ExecutionLocation,
-}
-
 pub(super) fn run_compiled(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -724,9 +708,8 @@ pub(super) fn run_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = execution_engines(runtime, &prepared)?;
+    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
     execute_scheduled_tensor_refs(
-        &execution,
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -742,13 +725,16 @@ pub(super) fn prepare_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = Arc::new(execution_engines(runtime, &prepared)?);
+    validate_prepared_epoch(
+        runtime,
+        prepared.root().epoch(),
+        "Runtime::prepare_compiled",
+    )?;
     Ok(PreparedCompiledGraph {
         runtime_id: runtime.id(),
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
-        execution,
     })
 }
 
@@ -784,7 +770,6 @@ pub(super) fn run_prepared(
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
-        &prepared.execution,
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -795,7 +780,6 @@ pub(super) fn run_prepared(
 fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
     execute_scheduled_tensor_refs(
-        &prepared.execution,
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -811,9 +795,12 @@ pub(super) fn run_compiled_values(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let execution = execution_engines(runtime, &prepared)?;
+    validate_prepared_epoch(
+        runtime,
+        prepared.root().epoch(),
+        "Runtime::run_compiled_values",
+    )?;
     execute_scheduled_value_refs(
-        &execution,
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -859,140 +846,28 @@ fn prepare(
         .map_err(prepare_error)
 }
 
-fn execution_engines(
+fn validate_prepared_epoch(
     runtime: &Runtime,
-    prepared: &Arc<super::preparation::PreparedProgram>,
-) -> Result<PreparedExecutionEngines> {
-    let snapshot = runtime.snapshot().map_err(|source| {
-        Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
-    })?;
-    let root = prepared.root();
-    if snapshot.epoch() != root.epoch() {
+    prepared_epoch: super::RuntimeEpoch,
+    caller: &'static str,
+) -> Result<()> {
+    let epoch = runtime
+        .epoch()
+        .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
+    if epoch != prepared_epoch {
         return Err(Error::runtime_state(
-            "Runtime::run_compiled",
+            caller,
             ErrorPhase::Execution,
             format!(
                 "prepared epoch {:?} does not match current epoch {:?}",
-                root.epoch(),
-                snapshot.epoch()
+                prepared_epoch, epoch
             ),
         ));
     }
-    let storage_class = root.resolved_placement().storage_class();
-    let root_engine = snapshot.engine(root.engine_id()).ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!(
-                "prepared root engine {:?} is no longer registered",
-                root.engine_id()
-            ),
-        )
-    })?;
-    let root_location = ExecutionLocation::new(
-        root.engine_id().clone(),
-        root_engine.event_domain_id(),
-        storage_class.clone(),
-    );
-    let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
-    let input_locations = root.input_locations();
-    for location in input_locations {
-        let engine = snapshot.engine(location.engine_id()).ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared input ingress engine {:?} is no longer registered",
-                    location.engine_id()
-                ),
-            )
-        })?;
-        if !engine.storage_classes().contains(location.storage_class()) {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared input ingress engine {:?} does not support storage {:?}",
-                    location.engine_id(),
-                    location.storage_class()
-                ),
-            ));
-        }
-    }
-    let operation_placements = root.operation_placements();
-    if operation_placements.len() != prepared.operations().len() {
-        return Err(Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!(
-                "prepared root has {} operation placements for {} operations",
-                operation_placements.len(),
-                prepared.operations().len()
-            ),
-        ));
-    }
-    let mut operation_executors = Vec::with_capacity(prepared.operations().len());
-    for (operation, placement) in prepared.operations().iter().zip(operation_placements) {
-        let engine_id = operation.binding().engine_id();
-        let engine = snapshot.engine(engine_id).ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!("prepared operation engine {engine_id:?} is no longer registered"),
-            )
-        })?;
-        if !engine.storage_classes().contains(placement.storage_class()) {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared operation engine {engine_id:?} does not support selected storage {:?}",
-                    placement.storage_class().as_str()
-                ),
-            ));
-        }
-        operation_executors.push(PreparedOperationExecution {
-            executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
-            location: ExecutionLocation::new(
-                engine_id.clone(),
-                engine.event_domain_id(),
-                placement.storage_class().clone(),
-            ),
-        });
-    }
-    let transfers = snapshot.transfers_for_execution();
-    Ok(PreparedExecutionEngines {
-        snapshot,
-        root: root_executor,
-        root_location,
-        input_locations: input_locations.to_vec().into_boxed_slice(),
-        operations: operation_executors.into_boxed_slice(),
-        transfers,
-    })
-}
-
-fn execution_engine_from_snapshot(
-    snapshot: &super::RuntimeConfigSnapshot,
-    engine_id: &super::EngineId,
-) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
-    let engine = snapshot.engine(engine_id).ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!("prepared engine {engine_id:?} is no longer registered"),
-        )
-    })?;
-    engine.execution_engine().cloned().ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!("engine {engine_id:?} has no runtime execution bridge"),
-        )
-    })
+    Ok(())
 }
 
 fn execute_scheduled_tensor_refs(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1000,13 +875,11 @@ fn execute_scheduled_tensor_refs(
 ) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
-    schedule.validate_for_runtime()?;
     let inputs = inputs
         .iter()
         .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
         .collect();
     execute_scheduled_slots(
-        execution,
         program,
         schedule,
         operations,
@@ -1015,14 +888,12 @@ fn execute_scheduled_tensor_refs(
     )
     .and_then(|mut slots| {
         collect_tensor_outputs_with(program, &mut slots, |location, slot| {
-            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
-                .materialize_slot(slot)
+            location.witness().executor().materialize_slot(slot)
         })
     })
 }
 
 fn execute_scheduled_value_refs(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1030,13 +901,11 @@ fn execute_scheduled_value_refs(
 ) -> Result<Vec<TensorValue>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    schedule.validate_for_runtime()?;
     let inputs = inputs
         .iter()
         .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
         .collect();
     execute_scheduled_slots(
-        execution,
         program,
         schedule,
         operations,
@@ -1045,14 +914,12 @@ fn execute_scheduled_value_refs(
     )
     .and_then(|mut slots| {
         collect_value_outputs_with(program, &mut slots, |location, slot| {
-            execution_engine_from_snapshot(&execution.snapshot, location.engine_id())?
-                .materialize_slot_value(slot)
+            location.witness().executor().materialize_slot_value(slot)
         })
     })
 }
 
 fn execute_scheduled_slots<'input>(
-    execution: &PreparedExecutionEngines,
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
@@ -1068,39 +935,36 @@ fn execute_scheduled_slots<'input>(
     let mut located = (0..program.n_slots)
         .map(|_| Vec::new())
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
-    // INVARIANT: runs are declared after the value stores so unwinding drops
+    // INVARIANT: the immutable schedule was validated during preparation;
+    // runs are declared after the value stores so unwinding drops
     // and drains native domain work before any tensor storage is released.
     // Driver preflight completes before input ingress or any operation launch.
-    let mut event_domains = ScheduledEventDomains::new(&execution.snapshot, schedule)?;
+    let mut event_domains = ScheduledEventDomains::new(schedule)?;
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
-        if execution.input_locations.len() != program.input_slots.len() {
+        if schedule.input_locations().len() != program.input_slots.len() {
             return Err(Error::runtime_state(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 format!(
-                    "prepared execution has {} input locations for {} inputs",
-                    execution.input_locations.len(),
+                    "prepared schedule has {} input locations for {} inputs",
+                    schedule.input_locations().len(),
                     program.input_slots.len()
                 ),
             ));
         }
-        for (&slot, location) in program
-            .input_slots
-            .iter()
-            .zip(execution.input_locations.iter())
-        {
+        for (&slot, location) in program.input_slots.iter().zip(schedule.input_locations()) {
             let value = staged
                 .get_mut(slot)
                 .and_then(Option::take)
                 .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            validate_runtime_input_ingress(execution, location, &value.as_read(), slot)?;
+            validate_runtime_input_ingress(location, &value.as_read(), slot)?;
             located[slot].push(LocatedExecSlot {
                 location: location.clone(),
                 value,
             });
         }
-        for node in schedule.nodes() {
+        for (node_index, node) in schedule.nodes().iter().enumerate() {
             match node {
                 ScheduledNode::Operation(operation_node) => {
                     let mut launch = || {
@@ -1118,7 +982,7 @@ fn execute_scheduled_slots<'input>(
                                     ),
                                 )
                             })?;
-                        let operation = instruction_execution(execution, instruction)?;
+                        let operation = instruction_execution(schedule, instruction)?;
                         if operation.location() != operation_node.location() {
                             return Err(Error::runtime_state(
                                 "Runtime::run_compiled",
@@ -1144,7 +1008,6 @@ fn execute_scheduled_slots<'input>(
                             &terminal_slots,
                         )?;
                         validate_instruction_outputs(
-                            execution,
                             instruction_index,
                             instruction,
                             operation.location(),
@@ -1157,23 +1020,25 @@ fn execute_scheduled_slots<'input>(
                             &mut staged,
                         )
                     };
-                    event_domains.enqueue(node, &mut launch)?;
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Transfer(transfer) => {
-                    let mut launch =
-                        || execute_scheduled_transfer(execution, transfer, &mut located);
-                    event_domains.enqueue(node, &mut launch)?;
+                    let mut launch = || execute_scheduled_transfer(transfer, &mut located);
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
                 ScheduledNode::Collective(_) => {
-                    return Err(Error::runtime_state(
+                    return Err(Error::runtime_state_source(
                         "Runtime::run_compiled",
                         ErrorPhase::Execution,
-                        "collective node execution is not implemented",
+                        UnsupportedScheduledNodeError {
+                            node_index,
+                            node_kind: ScheduledNodeKind::Collective,
+                        },
                     ));
                 }
                 ScheduledNode::Barrier(_) => {
                     let mut launch = || Ok(());
-                    event_domains.enqueue(node, &mut launch)?;
+                    event_domains.enqueue(node_index, node, &mut launch)?;
                 }
             }
         }
@@ -1190,38 +1055,62 @@ fn execute_scheduled_slots<'input>(
         (Err(primary), Err(cleanup)) => {
             staged.clear();
             located.clear();
-            Err(Error::runtime_state_source(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                ScheduledExecutionCleanupError { primary, cleanup },
-            ))
+            Err(scheduled_execution_cleanup_error(primary, cleanup))
         }
     }
 }
 
-struct ScheduledEventDomains {
-    runs: Vec<(super::EventDomainId, Box<dyn EventDomainRun>)>,
+#[derive(Debug)]
+pub(crate) struct ScheduledEventDomains {
+    runs: Vec<RuntimeOwnedEventDomainRun>,
     completions: HashMap<EventDependency, Arc<dyn EventToken>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "scheduled node {node_index} depends on completion {dependency:?}, but no completion token was recorded"
+)]
+pub(crate) struct MissingScheduledDependencyCompletionError {
+    pub(crate) dependency: EventDependency,
+    pub(crate) node_index: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("scheduled transfer destination {destination:?} already contains value slot {value_slot}")]
+pub(crate) struct DuplicateTransferDestinationError {
+    pub(crate) value_slot: usize,
+    pub(crate) destination: ExecutionLocation,
+}
+
 impl ScheduledEventDomains {
-    fn new(snapshot: &super::RuntimeConfigSnapshot, schedule: &ScheduledGraph) -> Result<Self> {
+    pub(crate) fn new(schedule: &ScheduledGraph) -> Result<Self> {
+        schedule.preflight().map_err(|source| {
+            Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
+        })?;
         let mut drivers = Vec::new();
+        let mut seen_domains = HashSet::new();
         for node in schedule.nodes() {
             let domain = node.completion().domain();
-            if drivers.iter().any(|(candidate, _)| *candidate == domain) {
+            if !seen_domains.insert(domain) {
                 continue;
             }
-            let driver = snapshot
-                .engine_views_for_preparation()
-                .find(|engine| engine.event_domain_id() == domain)
-                .and_then(|engine| engine.event_domain_driver().cloned())
-                .ok_or_else(|| missing_event_domain_driver(domain))?;
-            drivers.push((domain, driver));
+            let witness = node.event_domain_witness();
+            debug_assert_eq!(witness.event_domain_id(), domain);
+            drivers.push((domain, witness.event_domain_driver().clone()));
         }
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, driver) in drivers {
-            runs.push((domain, driver.begin_run()?));
+            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+            let actual = run.domain(EventDomainOperation::BeginRun)?;
+            if actual != domain {
+                return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                    operation: EventDomainOperation::BeginRun,
+                    node_index: None,
+                    expected: domain,
+                    actual,
+                }));
+            }
+            runs.push(run);
         }
         Ok(Self {
             runs,
@@ -1229,27 +1118,70 @@ impl ScheduledEventDomains {
         })
     }
 
-    fn enqueue(
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        drivers: Vec<(super::EventDomainId, Arc<dyn super::EventDomainDriver>)>,
+    ) -> Result<Self> {
+        let mut runs = Vec::with_capacity(drivers.len());
+        for (domain, driver) in drivers {
+            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+            let actual = run.domain(EventDomainOperation::BeginRun)?;
+            if actual != domain {
+                return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                    operation: EventDomainOperation::BeginRun,
+                    node_index: None,
+                    expected: domain,
+                    actual,
+                }));
+            }
+            runs.push(run);
+        }
+        Ok(Self {
+            runs,
+            completions: HashMap::new(),
+        })
+    }
+
+    pub(crate) fn enqueue(
         &mut self,
+        node_index: usize,
         node: &ScheduledNode,
         launch: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
-        let dependencies = node
-            .dependencies()
-            .iter()
-            .map(|dependency| {
-                self.completions.get(dependency).cloned().ok_or_else(|| {
-                    Error::runtime_state(
-                        "Runtime::run_compiled",
-                        ErrorPhase::Execution,
-                        format!("scheduled dependency {dependency:?} has no completion token"),
-                    )
-                })
-            })
-            .collect::<Result<SmallVec<[Arc<dyn EventToken>; 4]>>>()?;
         let completion = node.completion();
+        let destination = completion.domain();
         let run_index = self.run_index(completion.domain())?;
-        let completion_event = self.runs[run_index].1.enqueue(&dependencies, launch)?;
+        let actual_preflight_domain = self.runs[run_index].domain(EventDomainOperation::Enqueue)?;
+        if actual_preflight_domain != destination {
+            return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                operation: EventDomainOperation::Enqueue,
+                node_index: Some(node_index),
+                expected: destination,
+                actual: actual_preflight_domain,
+            }));
+        }
+        let dependencies = self.classify_dependencies(node_index, node, destination)?;
+        let actual_run_domain = self.runs[run_index].domain(EventDomainOperation::Enqueue)?;
+        if actual_run_domain != destination {
+            return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                operation: EventDomainOperation::Enqueue,
+                node_index: Some(node_index),
+                expected: destination,
+                actual: actual_run_domain,
+            }));
+        }
+        let completion_event = self.runs[run_index].enqueue(&dependencies, launch)?;
+        let actual = completion_event.origin();
+        if actual != completion.domain() {
+            return Err(event_domain_error(
+                EventDomainError::CompletionTokenDomainMismatch {
+                    operation: EventDomainOperation::ValidateCompletion,
+                    node_index: Some(node_index),
+                    expected: completion.domain(),
+                    actual,
+                },
+            ));
+        }
         self.completions.insert(
             EventDependency::from_completion(completion),
             completion_event,
@@ -1257,92 +1189,343 @@ impl ScheduledEventDomains {
         Ok(())
     }
 
-    fn run_index(&mut self, domain: super::EventDomainId) -> Result<usize> {
+    fn classify_dependencies(
+        &self,
+        node_index: usize,
+        node: &ScheduledNode,
+        destination: super::EventDomainId,
+    ) -> Result<SmallVec<[Arc<dyn EventToken>; 4]>> {
+        let mut admitted = SmallVec::with_capacity(node.dependencies().len());
+        for dependency in node.dependencies() {
+            let dependency_completion =
+                self.completions.get(dependency).cloned().ok_or_else(|| {
+                    Error::runtime_state_source(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        MissingScheduledDependencyCompletionError {
+                            dependency: *dependency,
+                            node_index,
+                        },
+                    )
+                })?;
+            let actual = dependency_completion.origin();
+            if actual != dependency.domain() {
+                return Err(event_domain_error(
+                    EventDomainError::DependencyDomainMismatch {
+                        operation: match node {
+                            ScheduledNode::Transfer(_) => EventDomainOperation::TransferBridge,
+                            ScheduledNode::Operation(_)
+                            | ScheduledNode::Collective(_)
+                            | ScheduledNode::Barrier(_) => EventDomainOperation::Enqueue,
+                        },
+                        node_index: Some(node_index),
+                        expected: dependency.domain(),
+                        actual,
+                    },
+                ));
+            }
+            match node {
+                ScheduledNode::Transfer(transfer) => {
+                    let source = transfer.source_event_domain();
+                    if actual == destination {
+                        admitted.push(dependency_completion);
+                    } else if actual == source {
+                        dependency_completion.wait().map_err(|source_error| {
+                            event_domain_error(EventDomainError::DependencyWaitFailed {
+                                operation: EventDomainOperation::TransferBridge,
+                                node_index: Some(node_index),
+                                expected: destination,
+                                actual,
+                                source: Box::new(source_error),
+                            })
+                        })?;
+                    } else {
+                        return Err(event_domain_error(
+                            EventDomainError::DependencyDomainMismatch {
+                                operation: EventDomainOperation::TransferBridge,
+                                node_index: Some(node_index),
+                                expected: source,
+                                actual,
+                            },
+                        ));
+                    }
+                }
+                ScheduledNode::Operation(_)
+                | ScheduledNode::Collective(_)
+                | ScheduledNode::Barrier(_) => {
+                    if actual != destination {
+                        return Err(event_domain_error(
+                            EventDomainError::DependencyDomainMismatch {
+                                operation: EventDomainOperation::Enqueue,
+                                node_index: Some(node_index),
+                                expected: destination,
+                                actual,
+                            },
+                        ));
+                    }
+                    admitted.push(dependency_completion);
+                }
+            }
+        }
+        Ok(admitted)
+    }
+
+    fn run_index(&self, domain: super::EventDomainId) -> Result<usize> {
         if let Some(index) = self
             .runs
             .iter()
-            .position(|(candidate, _)| *candidate == domain)
+            .position(|run| run.requested_domain() == domain)
         {
             return Ok(index);
         }
         Err(missing_event_domain_driver(domain))
     }
 
-    fn drain(&mut self) -> Result<()> {
-        let mut first_error = None;
-        for (_, run) in &mut self.runs {
+    pub(crate) fn drain(&mut self) -> Result<()> {
+        let mut failures = Vec::new();
+        for run in &mut self.runs {
             if let Err(error) = run.drain() {
-                first_error.get_or_insert(error);
+                failures.push(error);
             }
         }
-        first_error.map_or(Ok(()), Err)
+        let mut failures = failures.into_iter();
+        let Some(mut error) = failures.next() else {
+            return Ok(());
+        };
+        for failure in failures {
+            error = Error::with_suppressed(error, failure);
+        }
+        Err(error)
+    }
+}
+
+#[derive(Debug)]
+enum RuntimeOwnedEventDomainRunState {
+    Pending(Box<dyn EventDomainRun>),
+    Retired,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EventDomainRunTerminalState {
+    Retired,
+    Failed,
+}
+
+impl fmt::Display for EventDomainRunTerminalState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Retired => formatter.write_str("retired"),
+            Self::Failed => formatter.write_str("failed"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeOwnedEventDomainRun {
+    requested_domain: super::EventDomainId,
+    state: RuntimeOwnedEventDomainRunState,
+}
+
+impl RuntimeOwnedEventDomainRun {
+    fn new(requested_domain: super::EventDomainId, inner: Box<dyn EventDomainRun>) -> Self {
+        Self {
+            requested_domain,
+            state: RuntimeOwnedEventDomainRunState::Pending(inner),
+        }
+    }
+
+    fn requested_domain(&self) -> super::EventDomainId {
+        self.requested_domain
+    }
+
+    fn domain(&self, operation: EventDomainOperation) -> Result<super::EventDomainId> {
+        match &self.state {
+            RuntimeOwnedEventDomainRunState::Pending(run) => Ok(run.domain()),
+            RuntimeOwnedEventDomainRunState::Retired => Err(event_domain_run_state_error(
+                operation,
+                self.requested_domain,
+                EventDomainRunTerminalState::Retired,
+            )),
+            RuntimeOwnedEventDomainRunState::Failed => Err(event_domain_run_state_error(
+                operation,
+                self.requested_domain,
+                EventDomainRunTerminalState::Failed,
+            )),
+        }
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Arc<dyn EventToken>> {
+        match &mut self.state {
+            RuntimeOwnedEventDomainRunState::Pending(run) => run.enqueue(dependencies, launch),
+            RuntimeOwnedEventDomainRunState::Retired => Err(event_domain_run_state_error(
+                EventDomainOperation::Enqueue,
+                self.requested_domain,
+                EventDomainRunTerminalState::Retired,
+            )),
+            RuntimeOwnedEventDomainRunState::Failed => Err(event_domain_run_state_error(
+                EventDomainOperation::Enqueue,
+                self.requested_domain,
+                EventDomainRunTerminalState::Failed,
+            )),
+        }
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        let run = match std::mem::replace(&mut self.state, RuntimeOwnedEventDomainRunState::Failed)
+        {
+            RuntimeOwnedEventDomainRunState::Pending(run) => run,
+            RuntimeOwnedEventDomainRunState::Retired => {
+                self.state = RuntimeOwnedEventDomainRunState::Retired;
+                return Err(event_domain_run_state_error(
+                    EventDomainOperation::Drain,
+                    self.requested_domain,
+                    EventDomainRunTerminalState::Retired,
+                ));
+            }
+            RuntimeOwnedEventDomainRunState::Failed => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                return Err(event_domain_run_state_error(
+                    EventDomainOperation::Drain,
+                    self.requested_domain,
+                    EventDomainRunTerminalState::Failed,
+                ));
+            }
+        };
+        let domain = self.requested_domain;
+        let mut run = run;
+        let drain_result = catch_unwind(AssertUnwindSafe(|| run.drain()));
+        drop_event_domain_run(run);
+        match drain_result {
+            Ok(Ok(())) => {
+                self.state = RuntimeOwnedEventDomainRunState::Retired;
+                Ok(())
+            }
+            Ok(Err(error)) => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                Err(error)
+            }
+            Err(payload) => {
+                self.state = RuntimeOwnedEventDomainRunState::Failed;
+                Err(event_domain_error(EventDomainError::DrainPanicked {
+                    operation: EventDomainOperation::Drain,
+                    domain,
+                    message: safe_event_domain_panic_message(payload),
+                }))
+            }
+        }
+    }
+}
+
+/// Internal error returned when a runtime-owned event run is used after
+/// explicit retirement or failure.
+#[derive(Debug, thiserror::Error)]
+#[error("{operation} used event-domain run {domain:?} after it reached terminal state {state}")]
+pub(crate) struct EventDomainRunLifecycleError {
+    operation: EventDomainOperation,
+    domain: super::EventDomainId,
+    state: EventDomainRunTerminalState,
+}
+
+fn event_domain_run_state_error(
+    operation: EventDomainOperation,
+    domain: super::EventDomainId,
+    state: EventDomainRunTerminalState,
+) -> Error {
+    Error::runtime_state_source(
+        "Runtime::run_compiled",
+        ErrorPhase::Execution,
+        EventDomainRunLifecycleError {
+            operation,
+            domain,
+            state,
+        },
+    )
+}
+
+fn drop_event_domain_run(run: Box<dyn EventDomainRun>) {
+    if catch_unwind(AssertUnwindSafe(|| drop(run))).is_err() {
+        // The provider run has been consumed; its cleanup panic is contained.
+    }
+}
+
+impl Drop for RuntimeOwnedEventDomainRun {
+    fn drop(&mut self) {
+        let state = std::mem::replace(&mut self.state, RuntimeOwnedEventDomainRunState::Failed);
+        if let RuntimeOwnedEventDomainRunState::Pending(run) = state {
+            drop_event_domain_run(run);
+        }
     }
 }
 
 fn missing_event_domain_driver(domain: super::EventDomainId) -> Error {
-    Error::runtime_state(
-        "Runtime::run_compiled",
-        ErrorPhase::Execution,
-        format!("event domain {domain:?} has no registered driver"),
-    )
+    Error::from(EventDomainError::MissingDriver { domain })
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("scheduled execution failed ({primary}); event-domain cleanup also failed ({cleanup})")]
-struct ScheduledExecutionCleanupError {
-    #[source]
-    primary: Error,
-    cleanup: Error,
+fn event_domain_error(source: EventDomainError) -> Error {
+    Error::from(source)
+}
+
+fn safe_event_domain_panic_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    match payload.downcast::<&'static str>() {
+        Ok(message) => (*message).to_owned(),
+        Err(payload) => match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(_) => "non-string panic payload".to_owned(),
+        },
+    }
+}
+
+fn scheduled_execution_cleanup_error(primary: Error, cleanup: Error) -> Error {
+    Error::with_suppressed(primary, cleanup)
 }
 
 fn instruction_execution<'a>(
-    execution: &'a PreparedExecutionEngines,
+    schedule: &'a ScheduledGraph,
     instruction: &ExecInstruction,
 ) -> Result<InstructionExecution<'a>> {
     let Some(operation_index) = instruction.semantic_operation_index else {
+        let location = schedule.root_location();
         return Ok(InstructionExecution {
-            executor: &execution.root,
-            location: &execution.root_location,
+            witness: location.witness(),
+            location,
         });
     };
-    let operation = execution.operations.get(operation_index).ok_or_else(|| {
+    let location = schedule
+        .operation_locations()
+        .get(operation_index)
+        .ok_or_else(|| {
             Error::runtime_state(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 format!(
-                    "instruction references semantic operation {operation_index}, but prepared program has {} operations",
-                    execution.operations.len()
+                    "instruction references semantic operation {operation_index}, but prepared schedule has {} operations",
+                    schedule.operation_locations().len()
                 ),
             )
         })?;
     Ok(InstructionExecution {
-        executor: operation.executor(),
-        location: operation.location(),
+        witness: location.witness(),
+        location,
     })
 }
 
 struct InstructionExecution<'a> {
-    executor: &'a Arc<dyn ErasedTensorBackendExecutor>,
+    witness: &'a super::snapshot::ExecutableEngineSnapshot,
     location: &'a ExecutionLocation,
 }
 
 impl InstructionExecution<'_> {
     fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
-        self.executor
+        self.witness.executor()
     }
 
     fn location(&self) -> &ExecutionLocation {
         self.location
-    }
-}
-
-impl PreparedOperationExecution {
-    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
-        &self.executor
-    }
-
-    fn location(&self) -> &ExecutionLocation {
-        &self.location
     }
 }
 
@@ -1378,32 +1561,21 @@ fn stage_instruction_inputs<'input>(
 }
 
 fn validate_instruction_outputs(
-    execution: &PreparedExecutionEngines,
     instruction_index: usize,
     instruction: &ExecInstruction,
     location: &ExecutionLocation,
     staged: &[Option<ExecSlot<'_>>],
 ) -> Result<()> {
-    let engine = execution
-        .snapshot
-        .engine(location.engine_id())
-        .ok_or_else(|| {
-            Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "scheduled output engine {:?} is no longer registered",
-                    location.engine_id()
-                ),
-            )
-        })?;
     for &output_slot in &instruction.output_slots {
         let output = staged
             .get(output_slot)
             .and_then(Option::as_ref)
             .ok_or(tenferro_tensor::Error::MissingValue { slot: output_slot })?;
         let output = output.as_read();
-        if !engine.owns_resident_tensor(&output, location.storage_class()) {
+        if !location
+            .witness()
+            .owns_resident_tensor(&output, location.storage_class())
+        {
             return Err(Error::runtime_state_source(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
@@ -1469,15 +1641,13 @@ pub(crate) fn retain_instruction_results<'input>(
 }
 
 fn validate_runtime_input_ingress(
-    execution: &PreparedExecutionEngines,
     location: &ExecutionLocation,
     input: &TensorRead<'_>,
     slot: usize,
 ) -> Result<()> {
-    let accepted = execution
-        .snapshot
-        .engine(location.engine_id())
-        .is_some_and(|engine| engine.accepts_runtime_input(input, location.storage_class()));
+    let accepted = location
+        .witness()
+        .accepts_runtime_input(input, location.storage_class());
     if accepted {
         return Ok(());
     }
@@ -1496,32 +1666,12 @@ fn validate_runtime_input_ingress(
 }
 
 fn execute_scheduled_transfer<'input>(
-    execution: &PreparedExecutionEngines,
     transfer: &ScheduledTransfer,
     located: &mut [Vec<LocatedExecSlot<'input>>],
 ) -> Result<()> {
     let source = transfer.source_location();
     let destination = transfer.destination_location();
-    let provider = execution
-        .transfers
-        .get(&(
-            source.storage_class().clone(),
-            destination.storage_class().clone(),
-        ))
-        .ok_or_else(|| {
-            Error::runtime_state_source(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                TransferError::MissingProvider {
-                    source_engine_id: source.engine_id().clone(),
-                    source_event_domain_id: source.event_domain_id(),
-                    source_storage_class: source.storage_class().clone(),
-                    destination_engine_id: destination.engine_id().clone(),
-                    destination_event_domain_id: destination.event_domain_id(),
-                    destination_storage_class: destination.storage_class().clone(),
-                },
-            )
-        })?;
+    let provider = transfer.provider();
     let values =
         located
             .get_mut(transfer.value_slot())
@@ -1529,13 +1679,13 @@ fn execute_scheduled_transfer<'input>(
                 slot: transfer.value_slot(),
             })?;
     if values.iter().any(|value| &value.location == destination) {
-        return Err(Error::runtime_state(
+        return Err(Error::runtime_state_source(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
-            format!(
-                "scheduled transfer destination already contains value slot {}",
-                transfer.value_slot()
-            ),
+            DuplicateTransferDestinationError {
+                value_slot: transfer.value_slot(),
+                destination: destination.clone(),
+            },
         ));
     }
     let transferred = {
@@ -1550,13 +1700,7 @@ fn execute_scheduled_transfer<'input>(
         let expected_shape = source_read.shape().to_vec();
         let transferred =
             provider.transfer_blocking(TransferRequest::new(source, destination, source_read))?;
-        validate_transfer_output(
-            execution,
-            destination,
-            expected_dtype,
-            &expected_shape,
-            &transferred,
-        )?;
+        validate_transfer_output(destination, expected_dtype, &expected_shape, &transferred)?;
         transferred
     };
     values.push(LocatedExecSlot {
@@ -1567,7 +1711,6 @@ fn execute_scheduled_transfer<'input>(
 }
 
 fn validate_transfer_output(
-    execution: &PreparedExecutionEngines,
     destination: &ExecutionLocation,
     expected_dtype: tenferro_tensor::DType,
     expected_shape: &[usize],
@@ -1595,12 +1738,9 @@ fn validate_transfer_output(
             expected: expected_elements,
             actual: tensor_buffer_len(output),
         })
-    } else if !execution
-        .snapshot
-        .engine(destination.engine_id())
-        .is_some_and(|engine| {
-            engine.accepts_input_placement(output.placement(), destination.storage_class())
-        })
+    } else if !destination
+        .witness()
+        .accepts_input_placement(output.placement(), destination.storage_class())
     {
         Some(
             TransferProviderContractError::DestinationPlacementMismatch {
@@ -1609,16 +1749,10 @@ fn validate_transfer_output(
                 actual: output.placement().clone(),
             },
         )
-    } else if !execution
-        .snapshot
-        .engine(destination.engine_id())
-        .is_some_and(|engine| {
-            engine.owns_resident_tensor(
-                &TensorRead::from_tensor(output),
-                destination.storage_class(),
-            )
-        })
-    {
+    } else if !destination.witness().owns_resident_tensor(
+        &TensorRead::from_tensor(output),
+        destination.storage_class(),
+    ) {
         Some(
             TransferProviderContractError::DestinationResidencyMismatch {
                 destination_engine_id: destination.engine_id().clone(),
@@ -1890,6 +2024,7 @@ impl StdError for SharedPrepareError {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::error::Error as StdError;
     use std::hash::Hasher;
     use std::num::NonZeroU64;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1903,16 +2038,24 @@ mod tests {
         BackendSession, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
     };
 
-    use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+    use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
     use crate::runtime::{
-        EngineId, ErasedExecutionContext, ExecutionContextIdentity, HardwareClassId,
+        CoreCapabilityBundle, EngineId, ErasedExecutionContext, EventDomainDriver, EventDomainId,
+        ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId, InputIngressContract,
         InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
-        PreparedOperationPlan, RegistrationIdentity, RuntimeEpoch, RuntimeId,
-        SpecializationProjection, SpecializationRequirements,
+        PreparedOperationPlan, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
+        RuntimeCacheOwner, RuntimeEpoch, RuntimeId, SpecializationProjection,
+        SpecializationRequirements, StorageClass,
     };
     use crate::{Error, ErrorPhase, ExtensionCacheStore, Result};
 
-    use super::{ErasedTensorBackendExecutor, TensorBackendExecutor};
+    use super::{
+        DuplicateTransferDestinationError, ErasedTensorBackendExecutor, LocatedExecSlot,
+        TensorBackendExecutor,
+    };
+    use crate::runtime::schedule::{
+        EventCompletion, EventSlotId, ExecutionLocation, ScheduledTransfer,
+    };
 
     const LOCK_PROBE_FAMILY: &str = "runtime.lock-probe.v1";
     const REENTRANT_PROBE_FAMILY: &str = "runtime.reentrant-probe.v1";
@@ -2300,6 +2443,92 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_execution_cleanup_error_preserves_primary_error() {
+        let primary = Error::runtime_state(
+            "primary-execution",
+            ErrorPhase::Execution,
+            "primary execution failure",
+        );
+        let cleanup = Error::runtime_state(
+            "event-domain-cleanup",
+            ErrorPhase::Execution,
+            "cleanup failure",
+        );
+        let primary_display = primary.to_string();
+
+        let combined = super::scheduled_execution_cleanup_error(primary, cleanup);
+        let primary_error = combined.primary().expect("primary execution error");
+        let cleanup_error = combined.suppressed().expect("cleanup error");
+        assert_eq!(primary_error.to_string(), primary_display);
+        assert_eq!(
+            cleanup_error.to_string(),
+            "event-domain-cleanup (Execution): runtime state failure: cleanup failure"
+        );
+        assert_eq!(
+            StdError::source(&combined)
+                .expect("primary error in the standard source chain")
+                .to_string(),
+            primary_display
+        );
+    }
+
+    #[test]
+    fn duplicate_scheduled_transfer_destination_reports_typed_fields() {
+        let domain = EventDomainId::runtime_created_for_test(
+            RuntimeId::from_nonzero(nz(1)),
+            RuntimeEpoch::from_nonzero(nz(1)),
+            RegistrationIdentity::new(nz(1), nz(1)),
+        );
+        let source = ExecutionLocation::new(
+            EngineId::new("tenferro-test.transfer-source").expect("source engine"),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro-test.transfer").expect("provider id"),
+                "source",
+            )
+            .expect("source provider target"),
+            domain,
+            StorageClass::new("tenferro-test.transfer-source").expect("source storage"),
+        );
+        let destination = ExecutionLocation::new(
+            EngineId::new("tenferro-test.transfer-destination").expect("destination engine"),
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro-test.transfer").expect("provider id"),
+                "destination",
+            )
+            .expect("destination provider target"),
+            domain,
+            StorageClass::new("tenferro-test.transfer-destination").expect("destination storage"),
+        );
+        let transfer = ScheduledTransfer::new(
+            3,
+            source,
+            destination.clone(),
+            [],
+            EventCompletion::new(domain, EventSlotId::new(0), 0),
+        );
+        let mut located = vec![
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![LocatedExecSlot {
+                location: destination.clone(),
+                value: ExecSlot::Owned(f64_zeros(vec![1])),
+            }],
+        ];
+
+        let error = super::execute_scheduled_transfer(&transfer, &mut located)
+            .expect_err("duplicate transfer destination");
+        let Error::RuntimeStateSource { source, .. } = error else {
+            panic!("duplicate transfer destination must retain a typed source");
+        };
+        let duplicate = source
+            .downcast_ref::<DuplicateTransferDestinationError>()
+            .expect("typed duplicate transfer destination source");
+        assert_eq!(duplicate.value_slot, 3);
+        assert_eq!(duplicate.destination, destination);
+    }
+
+    #[test]
     fn tensor_backend_executor_reentrant_call_returns_error_instead_of_deadlocking() {
         let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
         let observed_reentrant_error = Arc::new(AtomicBool::new(false));
@@ -2400,6 +2629,15 @@ mod tests {
 
     #[test]
     fn tensor_backend_executor_bridge_does_not_require_clone_source_contract() {
+        type ContractConstructor<B> = fn(
+            ProviderDeviceIdentity,
+            CoreCapabilityBundle,
+            B,
+            Arc<dyn EventDomainDriver>,
+            InputIngressContract,
+            Option<Arc<dyn RuntimeCacheOwner>>,
+        ) -> ExecutableEngineContract;
+
         fn factory_accepts_backend_without_clone_bound<B>()
         where
             B: TensorBackend + Send + Sync + 'static,
@@ -2408,18 +2646,14 @@ mod tests {
                 super::erased_tensor_backend_executor::<B>;
         }
 
-        fn registration_accepts_backend_without_clone_bound<B>()
+        fn contract_accepts_backend_without_clone_bound<B>()
         where
             B: TensorBackend + Send + Sync + 'static,
         {
-            let _method: fn(
-                crate::runtime::EngineRegistration,
-                B,
-            ) -> crate::runtime::EngineRegistration =
-                crate::runtime::EngineRegistration::with_tensor_backend_executor::<B>;
+            let _constructor: ContractConstructor<B> = ExecutableEngineContract::new::<B>;
         }
 
         factory_accepts_backend_without_clone_bound::<CpuBackend>();
-        registration_accepts_backend_without_clone_bound::<CpuBackend>();
+        contract_accepts_backend_without_clone_bound::<CpuBackend>();
     }
 }

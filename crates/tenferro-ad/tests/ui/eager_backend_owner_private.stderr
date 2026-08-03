@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `tenferro_ad::EagerBackend`
+ --> tests/ui/eager_backend_owner_private.rs:1:5
+  |
+1 | use tenferro_ad::EagerBackend;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `EagerBackend` in the root
+  |
+help: a similar name exists in the module
+  |
+1 - use tenferro_ad::EagerBackend;
+1 + use tenferro_ad::eager_backend;
+  |

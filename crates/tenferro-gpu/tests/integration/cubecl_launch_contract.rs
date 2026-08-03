@@ -1396,24 +1396,24 @@ fn cubecl_runtime_initializes_context_before_client_and_syncs_on_drop() {
     let runtime_source = cubecl_source("runtime.rs");
     let new_source = source_section(
         &runtime_source,
-        "    pub fn new(device_ordinal: usize) -> crate::Result<Self> {",
+        "    pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {",
         "    pub(crate) fn client(&self)",
     );
     assert_ordered_needles(
         "CudaRuntime::new",
         new_source,
         &[
-            "cudarc::runtime::result::device::set",
             "cudarc::driver::result::init()",
-            "let primary_context = CudaPrimaryContext::retain(cuda_device)?;",
+            "let cuda_device = match cudarc::driver::result::device::get(cuda_ordinal)",
+            "let primary_context = CudaPrimaryContext::retain(cuda_device).map_err",
             "cudarc::driver::result::ctx::set_current",
+            "cudarc::runtime::result::device::set(cuda_ordinal)",
             "let device = CudaDevice::new(device_ordinal);",
-            "let client =",
-            "::client(&device);",
+            "let client = CubeclCudaRuntime::client(&device);",
         ],
     );
 
-    let drop_source = source_section(&runtime_source, "impl Drop for CudaRuntime", "}");
+    let drop_source = source_section(&runtime_source, "impl Drop for CudaRuntimeState", "}");
     assert_ordered_needles(
         "CudaRuntime::drop",
         drop_source,

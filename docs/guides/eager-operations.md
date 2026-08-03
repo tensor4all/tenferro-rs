@@ -283,7 +283,8 @@ explicitly when you want a fresh pass.
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
@@ -305,6 +306,8 @@ assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 ctx.clear_grads().unwrap();
 assert!(x.grad().unwrap().is_none());
 assert!(y.grad().unwrap().is_none());
+Ok(())
+}
 ```
 
 Use `backward_with` when the output is not scalar or when reverse mode should
@@ -314,7 +317,8 @@ start from an explicit cotangent seed:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
@@ -327,6 +331,8 @@ let seed = EagerTensor::from_tensor_in(
 let y = x.mul(&x).unwrap();
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
+Ok(())
+}
 ```
 
 Functional eager transforms return tensors instead of updating gradient slots:
@@ -335,7 +341,8 @@ Functional eager transforms return tensors instead of updating gradient slots:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
@@ -355,6 +362,8 @@ let jvp = ctx.jvp(&y, &x, &tangent).unwrap();
 assert_eq!(vjp.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 assert_eq!(jvp.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 assert!(x.grad().unwrap().is_none());
+Ok(())
+}
 ```
 
 Because functional derivatives are eager tensors, Hessian-vector products can
@@ -364,7 +373,8 @@ be written as `jvp(grad(f))`:
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ctx.clone(),
@@ -380,6 +390,8 @@ let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
 assert_eq!(grad.materialized().unwrap().as_slice::<f64>().unwrap(), &[27.0]);
 assert_eq!(hvp.materialized().unwrap().as_slice::<f64>().unwrap(), &[18.0]);
+Ok(())
+}
 ```
 
 Wrap updates, metric computations, and other non-differentiated eager work in
@@ -389,7 +401,8 @@ Wrap updates, metric computations, and other non-differentiated eager work in
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ctx.clone(),
@@ -399,6 +412,8 @@ let y = {
     x.mul(&x).unwrap()
 };
 assert!(!y.tracks_grad());
+Ok(())
+}
 ```
 
 `matmul` participates in the same eager reverse-mode workflow:
@@ -407,7 +422,8 @@ assert!(!y.tracks_grad());
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let a = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ctx.clone(),
@@ -425,6 +441,8 @@ assert_eq!(loss.materialized().unwrap().as_slice::<f64>().unwrap(), &[1685.0]);
 
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
+Ok(())
+}
 ```
 
 ## When To Use Each Immediate Layer

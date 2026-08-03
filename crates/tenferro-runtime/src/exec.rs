@@ -60,6 +60,15 @@ pub(crate) struct ExtensionExecutionDispatch<'a> {
     pub(crate) caches: &'a mut ExtensionCacheStore,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "prepared extension operation for family_id {family_id:?} at semantic operation {operation_index} has no executor bridge"
+)]
+pub(crate) struct MissingPreparedOperationExecutorError {
+    pub(crate) family_id: &'static str,
+    pub(crate) operation_index: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DispatchMode {
     Unsegmented,
@@ -945,13 +954,13 @@ fn execute_prepared_extension_instruction_in_session<'input>(
         )
     })?;
     let executor = operation.executor().ok_or_else(|| {
-        Error::runtime_state(
+        Error::runtime_state_source(
             "extension",
             ErrorPhase::Execution,
-            format!(
-                "prepared extension operation for family_id {:?} has no executor bridge",
-                ext.family_id()
-            ),
+            MissingPreparedOperationExecutorError {
+                family_id: ext.family_id(),
+                operation_index,
+            },
         )
     })?;
     if !executor.supports_session() {
@@ -1065,13 +1074,13 @@ fn execute_prepared_extension_instruction<'input, B: TensorBackend + 'static>(
         ));
     }
     let executor = operation.executor().ok_or_else(|| {
-        Error::runtime_state(
+        Error::runtime_state_source(
             "extension",
             ErrorPhase::Execution,
-            format!(
-                "prepared extension operation for family_id {:?} has no executor bridge",
-                ext.family_id()
-            ),
+            MissingPreparedOperationExecutorError {
+                family_id: ext.family_id(),
+                operation_index,
+            },
         )
     })?;
     let inputs = collect_tensor_reads(slots, &inst.input_slots)?;

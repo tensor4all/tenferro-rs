@@ -10,7 +10,7 @@ fn add_values(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad:
 
 #[test]
 fn runtime_snapshot_bridge_preserves_public_identity_placement_and_results() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
 
     assert_eq!(cpu.runtime_id(), runtime.id());

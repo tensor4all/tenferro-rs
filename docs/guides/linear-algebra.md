@@ -413,9 +413,9 @@ and `F64` for `F64`/`C64` inputs. The tensor extension
 exposes an explicit transpose flag.
 
 ```rust
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_linalg::LinalgBackend;
+use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -438,12 +438,32 @@ let a = Tensor::from_vec_col_major(
 );
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0]);
 
-let (p, l, u, q, parity) = a.full_piv_lu(&mut backend).unwrap();
+let outputs = backend
+    .with_backend_session(|session| {
+        with_cpu_exec_session(session, |exec_session| {
+            LinalgBackend::full_piv_lu(exec_session, &a)
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+    })
+    .unwrap();
+assert_eq!(outputs.len(), 5);
+let p = &outputs[0];
+let l = &outputs[1];
+let u = &outputs[2];
+let q = &outputs[3];
+let parity = &outputs[4];
 let pt = p.transpose(&[1, 0], &mut backend).unwrap();
 let pt_l = pt.matmul(&l, &mut backend).unwrap();
 let pt_lu = pt_l.matmul(&u, &mut backend).unwrap();
 let reconstructed = pt_lu.matmul(&q, &mut backend).unwrap();
-let x = a.full_piv_lu_solve(&b, &mut backend).unwrap();
+let x = backend
+    .with_backend_session(|session| {
+        with_cpu_exec_session(session, |exec_session| {
+            LinalgBackend::full_piv_lu_solve(exec_session, &a, &b, false)
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+    })
+    .unwrap();
 
 assert_eq!(p.shape(), &[4, 4]);
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);

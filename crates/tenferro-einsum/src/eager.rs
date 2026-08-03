@@ -773,11 +773,11 @@ fn eager_einsum_exec_values<'a>(
 /// executed whole-program without re-planning.
 #[cfg(all(feature = "autodiff", test))]
 pub(crate) fn eager_einsum_with_tree(
-    ctx: &mut impl TensorBackend,
+    exec: &mut dyn BackendSession,
     inputs: &[&Tensor],
     tree: &ContractionTree,
 ) -> Result<Tensor> {
-    ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, tree))
+    eager_einsum_exec(exec, inputs, tree)
 }
 
 pub(crate) fn eager_einsum_exec(
@@ -1023,6 +1023,17 @@ pub(crate) fn eager_einsum_subscripts(
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
     ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+}
+
+#[cfg(feature = "autodiff")]
+pub(crate) fn eager_einsum_subscripts_with_session(
+    exec: &mut dyn BackendSession,
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+) -> Result<Tensor> {
+    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
+    let tree = plan_subscripts(subscripts, &shapes)?;
+    eager_einsum_exec(exec, inputs, &tree)
 }
 
 /// Eager N-ary einsum on read-only tensor inputs.

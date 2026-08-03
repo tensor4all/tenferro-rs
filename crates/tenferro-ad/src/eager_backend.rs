@@ -19,7 +19,7 @@ use tenferro_tensor::{
     TensorReduction, TensorStructural, TensorValue, TensorWrite,
 };
 
-pub enum EagerBackend {
+pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
     #[cfg(test)]
     Recording(RecordingBackend),
@@ -27,6 +27,15 @@ pub enum EagerBackend {
     Cuda(CudaBackend),
     #[cfg(feature = "webgpu")]
     WebGpu(WebGpuBackend),
+}
+
+/// The fallible provider-specific registration produced from the exact eager
+/// backend. `NoEngine` is used by the test-only recording backend, whose
+/// tensor operations are intentionally not installed as a runtime engine.
+enum EagerBackendRegistration {
+    #[cfg(test)]
+    NoEngine,
+    Install(Box<EngineRegistration>),
 }
 
 impl std::fmt::Debug for EagerBackend {
@@ -95,18 +104,37 @@ pub(crate) fn eager_runtime_for_backend(
     backend: &EagerBackend,
 ) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
-    if let Some(backend) = backend.cpu_snapshot() {
-        builder.register_engine(cpu_runtime_engine_registration(&backend)?)?;
-    }
-    #[cfg(feature = "cuda")]
-    if let EagerBackend::Cuda(backend) = backend {
-        builder.register_engine(tenferro_gpu::cuda_runtime_engine_registration(backend)?)?;
-    }
-    #[cfg(feature = "webgpu")]
-    if let EagerBackend::WebGpu(backend) = backend {
-        builder.register_engine(tenferro_gpu::webgpu_runtime_engine_registration(backend)?)?;
+    match eager_engine_registration_for_backend(backend)? {
+        #[cfg(test)]
+        EagerBackendRegistration::NoEngine => {}
+        EagerBackendRegistration::Install(registration) => {
+            builder.register_engine(*registration)?;
+        }
     }
     builder.build()
+}
+
+fn eager_engine_registration_for_backend(
+    backend: &EagerBackend,
+) -> Result<EagerBackendRegistration, RuntimeConfigError> {
+    match backend {
+        EagerBackend::Cpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
+            cpu_runtime_engine_registration(backend)?,
+        ))),
+        #[cfg(test)]
+        EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
+        #[cfg(feature = "cuda")]
+        EagerBackend::Cuda(backend) => {
+            let engine_id = EngineId::new("tenferro-ad.cuda.default.v1")?;
+            Ok(EagerBackendRegistration::Install(Box::new(
+                tenferro_gpu::cuda_runtime_engine_registration(backend, engine_id)?,
+            )))
+        }
+        #[cfg(feature = "webgpu")]
+        EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
+            tenferro_gpu::webgpu_runtime_engine_registration(backend)?,
+        ))),
+    }
 }
 
 pub(crate) fn cpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {

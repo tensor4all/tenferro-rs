@@ -7,7 +7,7 @@ use crate::{ContractionTree, Subscripts};
 
 #[test]
 fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
@@ -31,7 +31,7 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
 
 #[test]
 fn whole_program_untracked_matches_per_op_nary_result() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a_data: Vec<f64> = (0..6).map(|i| i as f64 + 1.0).collect();
     let b_data: Vec<f64> = (0..12).map(|i| i as f64 * 0.5 - 2.0).collect();
     let c_data: Vec<f64> = (0..20).map(|i| (i as f64).sin()).collect();
@@ -72,11 +72,25 @@ fn whole_program_untracked_matches_per_op_nary_result() {
             "whole-program result {g} != per-op {w}"
         );
     }
+    let first = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
+    let first_stats = ctx.cache_stats().unwrap();
+    let second = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
+    let second_stats = ctx.cache_stats().unwrap();
+    assert_eq!(first.shape(), second.shape());
+    assert!(first_stats.extensions.entries > 0);
+    assert_eq!(
+        first_stats.extensions.entries,
+        second_stats.extensions.entries
+    );
+    assert_eq!(
+        second_stats.extensions.hits,
+        first_stats.extensions.hits + 1
+    );
 }
 
 #[test]
 fn whole_program_untracked_rejects_tracked_inputs() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
         ctx.clone(),
@@ -95,7 +109,7 @@ fn whole_program_untracked_rejects_tracked_inputs() {
 
 #[test]
 fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
@@ -124,7 +138,7 @@ fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
 
 #[test]
 fn nary_eager_einsum_expanded_standard_ops_reuse_runtime_cache() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
@@ -161,7 +175,7 @@ fn nary_eager_einsum_expanded_standard_ops_reuse_runtime_cache() {
 
 #[test]
 fn expanded_eager_einsum_cache_hit_preserves_lazy_view_output() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let k = 2;
     let j = 3;
     let o = 4;
@@ -203,7 +217,7 @@ fn expanded_eager_einsum_cache_hit_preserves_lazy_view_output() {
 
 #[test]
 fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
@@ -234,7 +248,7 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
 
 #[test]
 fn tracked_nary_einsum_gradients_match_expected_values() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
         ctx.clone(),
@@ -273,7 +287,7 @@ fn tracked_nary_einsum_gradients_match_expected_values() {
 
 #[test]
 fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let lhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         ctx.clone(),
@@ -299,7 +313,7 @@ fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
 
 #[test]
 fn eager_outer_product_can_return_lazy_noncompact_output() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let k = 2;
     let j = 3;
     let o = 4;

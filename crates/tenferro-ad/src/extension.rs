@@ -6,10 +6,9 @@ use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{Error, ErrorPhase, ExtensionModule, Result};
-use tenferro_tensor::{Tensor, TensorRead, TensorValue};
+use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
-use crate::eager_backend::EagerBackend;
 
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
@@ -19,7 +18,7 @@ pub use tenferro_runtime::extension::{
 /// Adopt an untracked eager tensor value produced by this runtime's backend.
 ///
 /// This is a low-level extension contract for eager composite operations that
-/// execute through [`EagerRuntime::with_backend_mut`] and receive a lazy
+/// execute through a lifetime-bound backend session and receive a lazy
 /// [`TensorValue`] from the backend. The value must have been produced for the
 /// same eager runtime; this helper intentionally does not register gradient
 /// metadata and must not be used for tracked outputs.
@@ -32,13 +31,14 @@ pub use tenferro_runtime::extension::{
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::{Tensor, TensorValue};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let value = TensorValue::from_tensor(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 /// );
 /// let eager = adopt_untracked_eager_value(ctx, value);
 /// assert_eq!(eager.shape(), &[1]);
 /// assert!(!eager.tracks_grad());
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 #[must_use]
 pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -> EagerTensor {
@@ -55,13 +55,14 @@ pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::Tensor;
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 ///     ctx,
 /// ).unwrap();
 /// let _ = &x;
 /// let _apply = apply_eager;
+/// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 /// # Errors
 ///
@@ -77,7 +78,8 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     finish_eager_extension_outputs(ctx, std_op, inputs, outputs)
 }
 
-/// Apply an extension op to eager tensors through a direct prepared-operation callback.
+/// Apply an extension op to eager tensors through a direct prepared-operation
+/// callback receiving a non-owning backend session.
 ///
 /// This keeps eager extension execution on the extension crate's semantic
 /// implementation without using the retired legacy extension executor.
@@ -88,23 +90,23 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// or its length differs from the extension's declared input count. Returns
 /// `Error::ContextMismatch` when tensors belong to different eager runtimes;
 /// backend, extension, and runtime-state failures retain their typed sources.
-pub fn apply_eager_with_extension_context(
+pub fn apply_eager_with_extension_session(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&EagerTensor],
     module: Arc<dyn ExtensionModule>,
     execute: impl FnOnce(
-        &dyn ExtensionOp,
-        &[TensorRead<'_>],
-        &mut ExtensionExecutionContext<'_, EagerBackend>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>>,
+            &dyn ExtensionOp,
+            &[TensorRead<'_>],
+            &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+        ) -> tenferro_tensor::Result<Vec<Tensor>>
+        + Send,
 ) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     ctx.install_extension_module(module)?;
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
-    let outputs = ctx.with_backend_and_extension_caches_mut(|backend, extension_caches| {
-        let mut extension_ctx = ExtensionExecutionContext::new(backend, extension_caches);
-        execute(op.as_ref(), &input_reads, &mut extension_ctx)
-    })?;
+    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
+        execute(op.as_ref(), &input_reads, extension_ctx)
+    })??;
     finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
 }
 

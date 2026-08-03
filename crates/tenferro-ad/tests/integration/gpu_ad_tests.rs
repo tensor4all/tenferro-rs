@@ -3,9 +3,9 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::{Buffer, TensorDeviceTransfer};
+use tenferro_tensor::Buffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -72,7 +72,7 @@ fn test_gpu_eager_backward_smoke() {
         return;
     }
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let x_gpu = upload_tensor(
         upload_backend.runtime(),
         &f64_tensor(vec![2], vec![2.0_f64, 3.0]),
@@ -83,7 +83,7 @@ fn test_gpu_eager_backward_smoke() {
         &f64_tensor(vec![2], vec![1.0_f64, 1.0]),
     )
     .unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let y = x.mul(&x).unwrap();
@@ -91,7 +91,7 @@ fn test_gpu_eager_backward_smoke() {
     y.backward_with(&seed).unwrap();
     let grad = x.grad().unwrap().unwrap();
     let grad_host = ctx
-        .with_backend_mut(|backend| backend.download_to_host(grad.as_ref()))
+        .with_execution_session(|session| session.download_to_host(grad.as_ref()))
         .unwrap()
         .unwrap();
 
@@ -149,11 +149,11 @@ fn test_gpu_matmul_vjp() {
     let cpu_grad_a = eval_cpu_tensor(&cpu_engine, &grad_a_cpu);
     let cpu_grad_b = eval_cpu_tensor(&cpu_engine, &grad_b_cpu);
 
-    let upload_backend = CudaBackend::new(0).unwrap();
+    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let cotangent_device = upload_tensor(upload_backend.runtime(), &cotangent_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let a_gpu = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();
@@ -181,11 +181,11 @@ fn test_gpu_matmul_vjp() {
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
     let gpu_grad_a = ctx
-        .with_backend_mut(|backend| backend.download_to_host(&gpu_grad_a))
+        .with_execution_session(|session| session.download_to_host(&gpu_grad_a))
         .unwrap()
         .unwrap();
     let gpu_grad_b = ctx
-        .with_backend_mut(|backend| backend.download_to_host(&gpu_grad_b))
+        .with_execution_session(|session| session.download_to_host(&gpu_grad_b))
         .unwrap()
         .unwrap();
 

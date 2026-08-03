@@ -30,7 +30,15 @@ pub use capability::{
     PreparedOperationHandle, PreparedOperationPlan, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
-pub use engine_registration::EngineRegistration;
+#[cfg(test)]
+pub(crate) use engine_registration::ExecutableEngineContract;
+pub use engine_registration::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
+    EngineRegistration, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
+    InputIngressContract, InputPlacementContract, InputSignatureContract,
+    PreparationOnlyEngineRegistrationConfig, ResidentOutputContract, RuntimeInputContract,
+};
+pub(crate) use engine_registration::{ProviderExecutableBinding, ProviderPreparationBinding};
 pub use error::{
     EngineExecutionContractError, ExecutionContextMismatch, ExecutionPolicyError,
     ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,
@@ -38,18 +46,21 @@ pub use error::{
     PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
     RuntimeReconfigureError, SpecializationError, SubmissionError,
 };
-pub use event_domain::{EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver};
+pub use event_domain::{
+    EventDomainDriver, EventDomainError, EventDomainOperation, EventDomainRun, EventToken,
+    ImmediateEventDomainDriver,
+};
 pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{
-    EngineId, ExecutionContextIdentity, HardwareClassId, RegistrationIdentity, RuntimeEpoch,
-    RuntimeId,
+    EngineId, ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId,
+    RegistrationIdentity, RuntimeEpoch, RuntimeId,
 };
 pub use policy::{
     CacheInFlightBehavior, Determinism, ExecutionPolicy, LayoutClass, PrepareOptions,
     PrepareOptionsKey, ProgramPlacementConstraint, ResolvedPlanningConfig, ResolvedPlanningKey,
-    ResolvedProgramPlacement, StorageClass,
+    ResolvedProgramPlacement, StorageClass, TransferEndpoint,
 };
 pub use schedule::EventDomainId;
 pub use signature::{InputSignature, InputSignatureEntry};
@@ -62,6 +73,9 @@ pub use specialization::{
     InputSpecializationRequirementsBuilder, LayoutProjection, LayoutSpecialization,
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
+};
+pub(crate) use transfer::{
+    FrozenTransferRegistry, ResolvedTransferEndpoint, ResolvedTransferRoute, TransferRoute,
 };
 pub use transfer::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,

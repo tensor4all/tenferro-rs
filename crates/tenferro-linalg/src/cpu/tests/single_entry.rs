@@ -21,6 +21,7 @@ use tenferro_tensor::{
 };
 
 use super::managed_cholesky::{enter_observed_operation_scope, FakeDomain};
+use super::with_cpu_linalg;
 use crate::LinalgBackend;
 
 #[derive(Debug)]
@@ -271,8 +272,8 @@ fn triangular_solve_read_two_noncompact_views_enters_once() {
     let a = a_base.as_view().transpose_view([1, 0]).unwrap();
     let b = b_base.as_view().transpose_view([1, 0]).unwrap();
 
-    let output = backend
-        .triangular_solve_read(
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.triangular_solve_read(
             TensorRead::from_view(TensorView::F64(a)),
             TensorRead::from_view(TensorView::F64(b)),
             true,
@@ -280,7 +281,8 @@ fn triangular_solve_read_two_noncompact_views_enters_once() {
             false,
             false,
         )
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
@@ -295,12 +297,13 @@ fn solve_read_two_noncompact_views_enters_once() {
     let a = a_base.as_view().transpose_view([1, 0]).unwrap();
     let b = b_base.as_view().transpose_view([1, 0]).unwrap();
 
-    let output = backend
-        .solve_read(
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.solve_read(
             TensorRead::from_view(TensorView::F64(a)),
             TensorRead::from_view(TensorView::F64(b)),
         )
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
@@ -318,12 +321,13 @@ fn solve_read_vector_rhs_reshape_stays_inside_one_entry() {
         .try_slice(&[StridedSliceSpec::reverse()])
         .unwrap();
 
-    let output = backend
-        .solve_read(
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.solve_read(
             TensorRead::from_view(TensorView::F64(a)),
             TensorRead::from_view(TensorView::F64(b)),
         )
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(output.shape(), &[2]);
     assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
@@ -339,8 +343,8 @@ fn managed_backend_handles_noncompact_two_input_reads() {
 
     let a = a_base.as_view().transpose_view([1, 0]).unwrap();
     let b = b_base.as_view().transpose_view([1, 0]).unwrap();
-    let triangular = backend
-        .triangular_solve_read(
+    let triangular = with_cpu_linalg(&mut backend, |backend| {
+        backend.triangular_solve_read(
             TensorRead::from_view(TensorView::F64(a)),
             TensorRead::from_view(TensorView::F64(b)),
             true,
@@ -348,17 +352,19 @@ fn managed_backend_handles_noncompact_two_input_reads() {
             false,
             false,
         )
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(triangular.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
     let a = a_base.as_view().transpose_view([1, 0]).unwrap();
     let b = b_base.as_view().transpose_view([1, 0]).unwrap();
-    let solved = backend
-        .solve_read(
+    let solved = with_cpu_linalg(&mut backend, |backend| {
+        backend.solve_read(
             TensorRead::from_view(TensorView::F64(a)),
             TensorRead::from_view(TensorView::F64(b)),
         )
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(solved.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 }
 
@@ -368,9 +374,10 @@ fn eig_read_one_input_fallback_enters_once() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
     let input = input.as_view().transpose_view([1, 0]).unwrap();
 
-    let outputs = backend
-        .eig_read(TensorRead::from_view(TensorView::F64(input)))
-        .unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        backend.eig_read(TensorRead::from_view(TensorView::F64(input)))
+    })
+    .unwrap();
 
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].shape(), &[2]);
@@ -386,9 +393,10 @@ fn faer_strided_read_fast_path_enters_once() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 5.0]).unwrap();
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
 
-    let outputs = backend
-        .svd_read(TensorRead::from_view(TensorView::F64(transposed)))
-        .unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        backend.svd_read(TensorRead::from_view(TensorView::F64(transposed)))
+    })
+    .unwrap();
 
     assert_eq!(outputs.len(), 3);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
@@ -402,7 +410,7 @@ fn faer_full_svd_enters_once() {
     let input =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).unwrap());
 
-    let outputs = backend.svd_full(&input).unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| backend.svd_full(&input)).unwrap();
 
     assert_eq!(outputs.len(), 3);
     assert_eq!(outputs[0].shape(), &[2, 2]);
@@ -433,37 +441,51 @@ fn every_one_input_read_fallback_enters_once() {
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.qr_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.qr_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.eigh_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.eigh_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.lu_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.lu_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 
     let view = input.as_view().try_slice(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
-        backend.eig_read(TensorRead::from_view(TensorView::F64(view)))
+        with_cpu_linalg(&mut backend, |backend| {
+            backend.eig_read(TensorRead::from_view(TensorView::F64(view)))
+        })
     });
 }
 
@@ -473,9 +495,10 @@ fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
     let (mut backend, installs, submits) = external_no_inner_managed_backend(&domain);
     let input = Tensor::F64(domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]));
 
-    let output = backend
-        .cholesky_read(TensorRead::from_tensor(&input))
-        .unwrap();
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_tensor(&input))
+    })
+    .unwrap();
 
     assert_eq!(installs.load(Ordering::Relaxed), 1);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -497,14 +520,11 @@ fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
     drop(values);
 
     let next = Tensor::from_vec_col_major([1, 1], vec![9.0_f64]).unwrap();
-    assert_eq!(
-        backend
-            .cholesky_read(TensorRead::from_tensor(&next))
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
-        &[3.0]
-    );
+    let next_output = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_tensor(&next))
+    })
+    .unwrap();
+    assert_eq!(next_output.as_slice::<f64>().unwrap(), &[3.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
@@ -515,9 +535,10 @@ fn managed_cholesky_read_keeps_zero_size_output_work_inside_one_entry() {
     let (mut backend, installs, submits) = external_no_inner_managed_backend(&domain);
     let input = Tensor::F64(domain.tensor(&[0, 0], Vec::<f64>::new()));
 
-    let output = backend
-        .cholesky_read(TensorRead::from_tensor(&input))
-        .unwrap();
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_tensor(&input))
+    })
+    .unwrap();
 
     assert_eq!(installs.load(Ordering::Relaxed), 1);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -528,14 +549,11 @@ fn managed_cholesky_read_keeps_zero_size_output_work_inside_one_entry() {
     assert_eq!(output.shape(), &[0, 0]);
 
     let next = Tensor::from_vec_col_major([1, 1], vec![4.0_f64]).unwrap();
-    assert_eq!(
-        backend
-            .cholesky_read(TensorRead::from_tensor(&next))
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
-        &[2.0]
-    );
+    let next_output = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_tensor(&next))
+    })
+    .unwrap();
+    assert_eq!(next_output.as_slice::<f64>().unwrap(), &[2.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
@@ -598,9 +616,10 @@ fn executor_rejection_preserves_input_and_pool_then_recovers() {
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
     let view = input.as_view().try_slice(&reversed).unwrap();
 
-    let error = backend
-        .svd_read(TensorRead::from_view(TensorView::F64(view)))
-        .unwrap_err();
+    let error = with_cpu_linalg(&mut backend, |backend| {
+        backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
+    })
+    .unwrap_err();
 
     assert!(matches!(
         error.source().and_then(|source| source.downcast_ref()),
@@ -614,9 +633,10 @@ fn executor_rejection_preserves_input_and_pool_then_recovers() {
     assert_eq!(backend.buffer_pool_stats().unwrap(), pool_before);
 
     let view = input.as_view().try_slice(&reversed).unwrap();
-    let outputs = backend
-        .svd_read(TensorRead::from_view(TensorView::F64(view)))
-        .unwrap();
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
+    })
+    .unwrap();
     assert_eq!(outputs.len(), 3);
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -631,9 +651,10 @@ fn provider_independent_cholesky_failure_uses_one_entry_and_recovers() {
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
     let view = invalid.as_view().try_slice(&reversed).unwrap();
 
-    let error = backend
-        .cholesky_read(TensorRead::from_view(TensorView::F64(view)))
-        .unwrap_err();
+    let error = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
+    })
+    .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::NumericalFailure);
     assert!(matches!(
         error
@@ -646,9 +667,10 @@ fn provider_independent_cholesky_failure_uses_one_entry_and_recovers() {
 
     let valid = TypedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
     let view = valid.as_view().try_slice(&reversed).unwrap();
-    let output = backend
-        .cholesky_read(TensorRead::from_view(TensorView::F64(view)))
-        .unwrap();
+    let output = with_cpu_linalg(&mut backend, |backend| {
+        backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
+    })
+    .unwrap();
     assert_eq!(output.shape(), &[2, 2]);
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -659,7 +681,9 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
     let (mut backend, installs, submits) = external_no_inner_backend();
 
     let panic = catch_unwind(AssertUnwindSafe(|| {
-        let _ = backend.with_linalg_pool::<()>(|_, _| panic!("single-entry provider panic"));
+        let _ = with_cpu_linalg(&mut backend, |backend| {
+            backend.with_linalg_pool::<()>(|_, _| panic!("single-entry provider panic"))
+        });
     }));
     assert!(panic.is_err());
     assert_eq!(installs.load(Ordering::Relaxed), 1);
@@ -670,13 +694,11 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
     let view = valid.as_view().try_slice(&reversed).unwrap();
     // This assertion covers operation and pool recovery. The separate public
     // stats API intentionally preserves its documented poisoned-lock error.
-    assert_eq!(
-        backend
-            .svd_read(TensorRead::from_view(TensorView::F64(view)))
-            .unwrap()
-            .len(),
-        3
-    );
+    let outputs = with_cpu_linalg(&mut backend, |backend| {
+        backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
+    })
+    .unwrap();
+    assert_eq!(outputs.len(), 3);
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }

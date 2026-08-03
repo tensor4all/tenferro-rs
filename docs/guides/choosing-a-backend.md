@@ -23,6 +23,20 @@ lowering instead of changing execution backends behind the caller's back. See
 [Devices and GPU](devices-and-gpu.md) and [XLA and PJRT](xla.md) for setup and
 operation coverage.
 
+The hardware-gated two-CUDA-device identity and execution evidence can be run
+with:
+
+```text
+cargo test -p tenferro-gpu --features cuda --lib \
+  cuda_registration_preserves_two_caller_selected_engine_ids_and_devices -- \
+  --ignored --nocapture
+```
+
+The test uses discovered device IDs, registers both caller-selected engines in
+one runtime, and reports an explicit `SKIP` with the detected count only when
+successful discovery finds fewer than two visible devices. A discovery error
+fails the test with the original typed error.
+
 ## CPU Provider Choice
 
 `CpuBackend::new()` uses the default provider compiled into the application.

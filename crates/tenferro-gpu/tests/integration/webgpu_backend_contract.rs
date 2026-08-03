@@ -1,15 +1,29 @@
 #![cfg(feature = "webgpu")]
 
 use tenferro_gpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_interop, WebGpuBackend, WebGpuRuntime,
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_interop, with_webgpu_exec_session,
+    WebGpuBackend, WebGpuExecSession, WebGpuRuntime,
 };
 use tenferro_tensor::{
-    DotGeneralConfig, DynRank, Error, Result, Tensor, TensorBackend, TensorDeviceTransfer,
-    TensorDot, TensorViewCanonicalization,
+    BackendSessionHost, DotGeneralConfig, DynRank, Error, Result, Tensor, TensorBackend,
+    TensorDeviceTransfer, TensorDot, TensorViewCanonicalization,
 };
 
 fn assert_tensor_backend<B: TensorBackend>() {}
 fn assert_f32_view_canonicalization<B: TensorViewCanonicalization<f32, DynRank>>() {}
+
+fn with_webgpu_session<R>(
+    backend: &mut WebGpuBackend,
+    f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_webgpu_exec_session(session, f)
+            .expect("WebGpuBackend must expose a WebGPU execution session")
+    })
+}
 
 #[test]
 fn webgpu_backend_implements_tensor_backend_contract() {
@@ -70,15 +84,17 @@ fn webgpu_output_completion_rejects_undersized_f32_and_c32_ranges() {
     let Ok(runtime) = WebGpuRuntime::new_default() else {
         return;
     };
-    let backend = WebGpuBackend::from_runtime(runtime);
-    let f32_handle = webgpu_interop::allocate_raw(&backend, 4);
-    let error =
-        webgpu_interop::finish_f32(&backend, vec![2], f32_handle, "test_finish_f32").unwrap_err();
+    let mut backend = WebGpuBackend::from_runtime(runtime);
+    let error = with_webgpu_session(&mut backend, |session| {
+        let f32_handle = webgpu_interop::allocate_raw(session, 4);
+        webgpu_interop::finish_f32(session, vec![2], f32_handle, "test_finish_f32").unwrap_err()
+    });
     assert!(matches!(error, Error::RuntimeState { .. }));
 
-    let c32_handle = webgpu_interop::allocate_raw(&backend, 4);
-    let error =
-        webgpu_interop::finish_c32(&backend, vec![1], c32_handle, "test_finish_c32").unwrap_err();
+    let error = with_webgpu_session(&mut backend, |session| {
+        let c32_handle = webgpu_interop::allocate_raw(session, 4);
+        webgpu_interop::finish_c32(session, vec![1], c32_handle, "test_finish_c32").unwrap_err()
+    });
     assert!(matches!(error, Error::RuntimeState { .. }));
 }
 
@@ -87,11 +103,14 @@ fn webgpu_output_completion_rejects_surviving_raw_alias() {
     let Ok(runtime) = WebGpuRuntime::new_default() else {
         return;
     };
-    let backend = WebGpuBackend::from_runtime(runtime);
-    let handle = webgpu_interop::allocate_raw(&backend, 8);
-    let alias = handle.clone();
-    let error =
-        webgpu_interop::finish_f32(&backend, vec![2], handle, "test_finish_alias").unwrap_err();
+    let mut backend = WebGpuBackend::from_runtime(runtime);
+    let (error, alias) = with_webgpu_session(&mut backend, |session| {
+        let handle = webgpu_interop::allocate_raw(session, 8);
+        let alias = handle.clone();
+        let error =
+            webgpu_interop::finish_f32(session, vec![2], handle, "test_finish_alias").unwrap_err();
+        (error, alias)
+    });
     assert!(matches!(error, Error::RuntimeState { .. }));
     drop(alias);
 }

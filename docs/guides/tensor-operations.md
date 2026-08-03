@@ -228,12 +228,15 @@ gradients or when a derivative transform should return another eager tensor.
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let y = (&x * &x).reduce_sum(Some(&[0])).unwrap();
 
 y.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+Ok(())
+}
 ```
 
 ## Traced Tensor Example
@@ -296,7 +299,8 @@ sequences and code that needs deferred graph errors to remain visible.
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
 let y = x.exp().unwrap();
 
@@ -305,6 +309,8 @@ let data = y.materialized().unwrap().as_slice::<f64>().unwrap();
 assert!((data[0] - 1.0).abs() < 1e-12);
 assert!((data[1] - std::f64::consts::E).abs() < 1e-12);
 assert!((data[2] - 7.38905609893065).abs() < 1e-12);
+Ok(())
+}
 ```
 
 ## Reshape And Transpose
@@ -332,12 +338,15 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
-let ctx = EagerRuntime::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::new()?;
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
 let repeated = v.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 
 assert_eq!(repeated.shape(), &[3, 2]);
 assert_eq!(repeated.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+Ok(())
+}
 ```
 
 ## Reduce Over Axes

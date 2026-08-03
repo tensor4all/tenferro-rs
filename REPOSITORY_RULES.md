@@ -1022,6 +1022,12 @@ diff-scoped review bot.
 - Every example must compile AND run as a doctest.
 - Use `compile_fail` only for examples that intentionally demonstrate compile errors.
 - If an example cannot run as a doctest, refactor it until it can.
+- When a canonical public API changes from infallible or panicking to
+  `Result`-returning, update its user-facing examples, tutorials, and guides to
+  propagate recoverable errors with `?` or handle the documented error
+  explicitly. Do not preserve the old call shape by appending `unwrap()` or
+  `expect()`. Tests may still use an intentional assertion boundary, and an
+  example may unwrap only a locally proven invariant whose proof is explicit.
 - Examples that call CPU or GPU backend operations should bind the backend to a
   local variable and reuse it for related operations instead of chaining
   `Backend::new().op(...)` beyond a single trivial construction example.

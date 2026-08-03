@@ -56,9 +56,10 @@
 //! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
 //! # {
 //! use num_complex::Complex32;
+//! use tenferro_cpu::with_cpu_exec_session;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_gpu::AppleContext;
-//! use tenferro_tensor::Tensor;
+//! use tenferro_gpu::{with_webgpu_exec_session, AppleContext};
+//! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! if let Ok(context) = AppleContext::new() {
 //!     let host = Tensor::from_vec_col_major(
@@ -68,15 +69,31 @@
 //!     let input = context.upload_tensor(&host).unwrap();
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
-//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
+//!     let cpu_output = cpu
+//!         .with_backend_session(|session| {
+//!             with_cpu_exec_session(session, |exec_session| {
+//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
+//!             })
+//!             .expect("CpuBackend must expose a CPU execution session")
+//!         })
+//!         .unwrap();
 //!     let mut metal = context.metal_backend().clone();
-//!     let output = input.fft(
-//!         None,
-//!         0,
-//!         FftNorm::Backward,
-//!         &mut metal,
-//!     ).unwrap();
-//!     metal.synchronize().unwrap();
+//!     let output = metal
+//!         .with_backend_session(|session| {
+//!             with_webgpu_exec_session(session, |exec_session| {
+//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
+//!             })
+//!             .expect("WebGpuBackend must expose a WebGPU execution session")
+//!         })
+//!         .unwrap();
+//!     metal
+//!         .with_backend_session(|session| {
+//!             with_webgpu_exec_session(session, |exec_session| {
+//!                 exec_session.runtime().synchronize()
+//!             })
+//!             .expect("WebGpuBackend must expose a WebGPU execution session")
+//!         })
+//!         .unwrap();
 //!     assert_eq!(output.shape(), &[4]);
 //!     assert_eq!(cpu_output.shape(), output.shape());
 //!     assert_eq!(context.transfer_stats(), after_creation);
@@ -86,13 +103,20 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_tensor::Tensor;
+//! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let mut backend = CpuBackend::new();
-//! let out = x.fft(None, -1, FftNorm::Backward, &mut backend).unwrap();
+//! let out = backend
+//!     .with_backend_session(|session| {
+//!         with_cpu_exec_session(session, |exec_session| {
+//!             x.fft(None, -1, FftNorm::Backward, exec_session)
+//!         })
+//!         .expect("CpuBackend must expose a CPU execution session")
+//!     })
+//!     .unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -109,13 +133,21 @@ use tenferro_ad::semantic_extension::{
     SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
     SemanticPrimalVjpRule,
 };
+use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp};
+use tenferro_runtime::extension::{
+    apply, ExtensionCacheStore, ExtensionExecutionContext, ExtensionOp,
+};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
-use tenferro_tensor::{CacheStats, DType, ErrorKind, Tensor, TensorRead, ValidationError};
+use tenferro_tensor::{
+    BackendSession, CacheStats, DType, ErrorKind, Tensor, TensorBackend, TensorRead,
+    ValidationError,
+};
 
 mod backend;
 mod cache;
@@ -412,14 +444,19 @@ impl TracedTensorFftExt for TracedTensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_fft::{FftNorm, TensorFftExt};
-/// use tenferro_tensor::Tensor;
+/// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = input.fft(None, -1, FftNorm::Backward, &mut backend)?;
+/// let spectrum = backend.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |exec_session| {
+///         input.fft(None, -1, FftNorm::Backward, exec_session)
+///     })
+///     .expect("CpuBackend must expose a CPU execution session")
+/// })?;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -578,16 +615,21 @@ impl TensorFftExt for Tensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_fft::{FftNorm, TensorReadFftExt};
-/// use tenferro_tensor::{TensorRead, TensorView};
+/// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 ///
 /// let shape = [4usize];
 /// let data = [1.0_f64, 2.0, 3.0, 4.0];
 /// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = input.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
+/// let spectrum = backend.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |exec_session| {
+///         input.fft_read(None, -1, FftNorm::Backward, exec_session)
+///     })
+///     .expect("CpuBackend must expose a CPU execution session")
+/// })?;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -935,8 +977,7 @@ fn execute_concrete_fft_read_op<B: FftBackend>(
         axis,
         norm,
     )?;
-    let materialized =
-        backend.with_backend_session(|exec| exec.to_contiguous_read(input.clone()))?;
+    let materialized = backend.to_contiguous_read(input.clone())?;
     let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
     backend.execute_fft(
         &materialized,
@@ -1337,10 +1378,32 @@ pub fn semantic_ad_rules(
         .with_primal_vjp(Arc::new(FftAdRule))
 }
 
-fn execute_fft_extension<B: FftBackend + 'static>(
+pub(crate) fn execute_fft_extension_reads_owner<B: TensorBackend + 'static>(
+    op: &FftOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let (backend, caches) = ctx.parts_mut();
+    backend.with_backend_session(|session| {
+        execute_fft_extension_reads_on_session(op, inputs, session, caches)
+    })
+}
+
+#[cfg(feature = "autodiff")]
+pub(crate) fn execute_fft_extension_reads_session(
+    op: &FftOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let (session, caches) = ctx.parts_mut();
+    execute_fft_extension_reads_on_session(op, inputs, session, caches)
+}
+
+fn execute_fft_extension_for_capability<B: FftBackend + ?Sized>(
     op: &FftOp,
     inputs: &[&Tensor],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
+    session: &mut B,
+    caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.len() != 1 {
         return Err(tenferro_tensor::Error::invalid_argument(
@@ -1359,43 +1422,59 @@ fn execute_fft_extension<B: FftBackend + 'static>(
         op.axis,
         op.norm,
     )?;
-    let (backend, caches) = ctx.parts_mut();
-    let output = backend.execute_fft(input, &spec, FftExecutionCache::runtime_owned(caches))?;
+    let output = session.execute_fft(input, &spec, FftExecutionCache::runtime_owned(caches))?;
     Ok(vec![output])
 }
 
-pub(crate) fn execute_fft_extension_reads<B: FftBackend + 'static>(
+fn execute_fft_extension_reads_on_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
+    session: &mut dyn BackendSession,
+    caches: &mut ExtensionCacheStore,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if let Some(result) = with_cpu_exec_session(session, |session| {
+        execute_fft_extension_reads_for_capability(op, inputs, session, caches)
+    }) {
+        return result;
+    }
+    #[cfg(feature = "webgpu")]
+    if let Some(result) = with_webgpu_exec_session(session, |session| {
+        execute_fft_extension_reads_for_capability(op, inputs, session, caches)
+    }) {
+        return result;
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        fft_op_name(op.operation),
+        "selected backend session does not expose an FFT execution capability",
+    ))
+}
+
+fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
+    op: &FftOp,
+    inputs: &[TensorRead<'_>],
+    session: &mut B,
+    caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let op_name = fft_op_name(op.operation);
-    {
-        let backend = ctx.backend_mut();
-        for input in inputs {
-            backend.validate_fft_read_input(op_name, input)?;
-        }
+    for input in inputs {
+        session.validate_fft_read_input(op_name, input)?;
     }
-    // FFT capabilities consume compact tensors on their existing placement;
-    // materialization uses the explicitly selected backend session.
-    let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
-        inputs
-            .iter()
-            .cloned()
-            .map(|input| exec.to_contiguous_read(input))
-            .collect::<tenferro_tensor::Result<Vec<_>>>()
-    })?;
+    let materialized_inputs = inputs
+        .iter()
+        .cloned()
+        .map(|input| session.to_contiguous_read(input))
+        .collect::<tenferro_tensor::Result<Vec<_>>>()?;
     let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    execute_fft_extension(op, &input_refs, ctx)
+    execute_fft_extension_for_capability(op, &input_refs, session, caches)
 }
 
 define_extension_runtime! {
     runtime = FftRuntime,
     family_id = FFT_EXTENSION_FAMILY_ID,
     op_type = FftOp,
-    execute = execute_fft_extension,
-    execute_reads = execute_fft_extension_reads,
-    backend_bound = FftBackend,
+    execute = execute_fft_extension_reads_owner,
+    execute_reads = execute_fft_extension_reads_owner,
+    backend_bound = TensorBackend,
 }
 
 /// Build a one-dimensional FFT along `axis`.

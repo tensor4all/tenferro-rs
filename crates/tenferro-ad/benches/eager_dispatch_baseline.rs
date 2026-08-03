@@ -13,6 +13,7 @@ fn runtime() -> Arc<EagerRuntime> {
     EagerRuntime::with_cpu_backend(
         CpuBackend::with_threads(1).expect("one-thread faer backend should construct"),
     )
+    .unwrap()
 }
 
 fn eager(runtime: &Arc<EagerRuntime>, shape: Vec<usize>) -> EagerTensor {

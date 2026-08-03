@@ -7,7 +7,7 @@ use tenferro_runtime::Tensor;
 const TOL: f64 = 1.0e-10;
 
 fn test_ctx() -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::new())
+    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {

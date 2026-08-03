@@ -133,9 +133,11 @@ tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", featur
 
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{TensorRead, TensorView, TypedTensor, TypedTensorOpsExt};
+use tenferro_runtime::{
+    BackendSessionHost, TensorRead, TensorView, TypedTensor, TypedTensorOpsExt,
+};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -158,7 +160,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    let svd = backend.svd_read(TensorRead::from_view(TensorView::F64(product.as_view())))?;
+    let svd = backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, |exec_session| {
+            exec_session.svd_read(TensorRead::from_view(TensorView::F64(product.as_view())))
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+    })?;
     assert_eq!(svd.len(), 3);
     assert_eq!(svd[0].shape(), &[2, 2]);
     assert_eq!(svd[1].shape(), &[2]);

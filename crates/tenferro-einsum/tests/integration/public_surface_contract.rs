@@ -101,21 +101,3 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
         );
     }
 }
-
-#[test]
-fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
-    let source = std::fs::read_to_string(root).expect("read eager tensor source");
-    let section = source
-        .split_once("pub fn einsum_subscripts")
-        .and_then(|(_, rest)| {
-            rest.split_once("fn try_direct_binary_dot_general")
-                .map(|(body, _)| body)
-        })
-        .expect("eager einsum execution source section");
-
-    assert!(section.contains("apply_eager_with_extension_context("));
-    assert!(section.contains("execute_einsum_extension_reads("));
-    assert!(!section.contains(".register_extension("));
-    assert!(!section.contains("to_string()"));
-}

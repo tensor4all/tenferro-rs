@@ -22,21 +22,19 @@ use super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedValue, RuntimeCacheSet, SharedRetention,
 };
 use super::extension::ExtensionFamilyId;
-use super::schedule::{
-    ExecutionLocation, ScheduleBuildError, ScheduledGraph, TransferReachability,
-};
+use super::schedule::{ExecutionLocation, ScheduleBuildError, ScheduledGraph};
 use super::{
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, ExecutionContextIdentity,
     ExtensionEngine, ExtensionModuleId, ExtensionPlanningConfig, ExtensionPrepareRequest,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputSignature,
-    InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
-    PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
+    FrozenTransferRegistry, HardwareClassId, IndexingPrepareRequest, IndexingRuntime,
+    InputSignature, InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection,
+    LayoutRuntime, PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
     PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
-    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
-    RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
-    UnsupportedReason,
+    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement,
+    ResolvedTransferEndpoint, ResolvedTransferRoute, Runtime, RuntimeStateError,
+    SpecializationProjection, SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
@@ -77,7 +75,7 @@ struct PreparedRootIdentity {
     prepare_options: PrepareOptionsKey,
     operation_bindings: Box<[PreparedOperationBinding]>,
     operation_placements: Box<[ResolvedProgramPlacement]>,
-    input_locations: Box<[ExecutionLocation]>,
+    input_endpoints: Box<[ResolvedTransferEndpoint]>,
     extension_planning: Box<[ExtensionPlanningIdentity]>,
 }
 
@@ -98,7 +96,7 @@ impl fmt::Debug for PreparedRootIdentity {
             .field("prepare_options", &self.prepare_options)
             .field("operation_bindings", &self.operation_bindings.len())
             .field("operation_placements", &self.operation_placements.len())
-            .field("input_locations", &self.input_locations.len())
+            .field("input_endpoints", &self.input_endpoints.len())
             .field("extension_planning", &self.extension_planning.len())
             .finish()
     }
@@ -204,16 +202,17 @@ impl PreparedProgramRoot {
         staging: Arc<ExecProgram>,
         extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
         root_location: ExecutionLocation,
+        input_locations: &[ExecutionLocation],
         operation_locations: &[ExecutionLocation],
-        transfer_reachability: &TransferReachability,
+        transfer_registry: &FrozenTransferRegistry,
     ) -> Result<Self, ScheduleBuildError> {
         let semantic = Arc::clone(&identity.semantic);
         let schedule = Arc::new(ScheduledGraph::from_exec_program(
             &staging,
-            root_location,
-            &identity.input_locations,
+            root_location.clone(),
+            input_locations,
             operation_locations,
-            transfer_reachability,
+            transfer_registry,
         )?);
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
@@ -245,22 +244,6 @@ impl PreparedProgramRoot {
 
     pub(crate) fn schedule(&self) -> &ScheduledGraph {
         &self.schedule
-    }
-
-    pub(crate) fn engine_id(&self) -> &EngineId {
-        &self.identity.engine_id
-    }
-
-    pub(crate) fn resolved_placement(&self) -> &ResolvedProgramPlacement {
-        &self.identity.resolved_placement
-    }
-
-    pub(crate) fn operation_placements(&self) -> &[ResolvedProgramPlacement] {
-        &self.identity.operation_placements
-    }
-
-    pub(crate) fn input_locations(&self) -> &[ExecutionLocation] {
-        &self.identity.input_locations
     }
 
     pub(crate) fn epoch(&self) -> super::RuntimeEpoch {
@@ -385,8 +368,9 @@ struct PreparationContext {
     operation_dispatch: Arc<[OperationDispatch]>,
     staging: Arc<ExecProgram>,
     root_location: ExecutionLocation,
+    input_locations: Arc<[ExecutionLocation]>,
     operation_locations: Arc<[ExecutionLocation]>,
-    transfer_reachability: Arc<TransferReachability>,
+    transfer_registry: FrozenTransferRegistry,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
 }
 
@@ -564,6 +548,19 @@ fn resolve_preparation_context(
     } else {
         candidates.extend(explicit.iter().filter_map(|engine| snapshot.engine(engine)));
     }
+    let all_candidates = candidates;
+    let executable_candidates: Vec<_> = all_candidates
+        .iter()
+        .copied()
+        .filter(|engine| engine.executable_witness().is_some())
+        .collect();
+    if executable_candidates.is_empty() {
+        if let Some(engine_id) = preparation_only_capability_engine(&all_candidates, frozen) {
+            return Err(Arc::new(PrepareError::NoExecutableEngine { engine_id }));
+        }
+        return Err(Arc::new(PrepareError::NoEligibleEngine { constraint }));
+    }
+    let candidates = executable_candidates;
     let staging = Arc::new(
         stage_semantic_program(&frozen.program, compiler_options).map_err(|source| {
             Arc::new(PrepareError::Engine {
@@ -635,7 +632,7 @@ fn resolve_input_locations(
     program: &ExecProgram,
     root_location: &ExecutionLocation,
     operation_locations: &[ExecutionLocation],
-    transfer_reachability: &TransferReachability,
+    transfer_registry: &FrozenTransferRegistry,
 ) -> PreparedProgramResult<Arc<[ExecutionLocation]>> {
     let consumers = physical_input_consumers(program, root_location, operation_locations).map_err(
         |source| {
@@ -656,20 +653,22 @@ fn resolve_input_locations(
             .iter()
             .flat_map(|engine| {
                 engine
-                    .storage_classes()
-                    .iter()
-                    .filter(move |storage| engine.accepts_input_signature(entry, storage))
-                    .map(move |storage| {
-                        ExecutionLocation::new(
-                            engine.engine_id().clone(),
-                            engine.event_domain_id(),
-                            storage.clone(),
-                        )
+                    .executable_witness()
+                    .into_iter()
+                    .flat_map(move |witness| {
+                        engine
+                            .storage_classes()
+                            .iter()
+                            .filter(move |storage| engine.accepts_input_signature(entry, storage))
+                            .map(move |storage| {
+                                ExecutionLocation::from_witness(
+                                    Arc::clone(witness),
+                                    storage.clone(),
+                                )
+                            })
                     })
             })
-            .find(|source| {
-                source_reaches_all_consumers(source, input_consumers, transfer_reachability)
-            })
+            .find(|source| source_reaches_all_consumers(source, input_consumers, transfer_registry))
             .ok_or_else(|| {
                 Arc::new(PrepareError::NoInputIngress {
                     input_index,
@@ -727,7 +726,7 @@ fn physical_input_consumers(
 fn source_reaches_all_consumers(
     source: &ExecutionLocation,
     consumers: &[ExecutionLocation],
-    transfer_reachability: &TransferReachability,
+    transfer_registry: &FrozenTransferRegistry,
 ) -> bool {
     let mut available = Vec::with_capacity(consumers.len().saturating_add(1));
     available.push(source.clone());
@@ -736,9 +735,9 @@ fn source_reaches_all_consumers(
             continue;
         }
         if !available.iter().any(|location| {
-            transfer_reachability.contains(&(
-                location.storage_class().clone(),
-                destination.storage_class().clone(),
+            transfer_registry.contains(&ResolvedTransferRoute::new(
+                location.resolved_endpoint().clone(),
+                destination.resolved_endpoint().clone(),
             ))
         }) {
             return false;
@@ -783,18 +782,56 @@ fn candidate_storage_classes(
     }
 }
 
+fn preparation_only_capability_engine(
+    candidates: &[super::EngineSnapshotView<'_>],
+    frozen: &FrozenProgram,
+) -> Option<EngineId> {
+    candidates
+        .iter()
+        .find(|engine| {
+            engine.executable_witness().is_none()
+                && frozen.program.operations().any(|operation| {
+                    let SemanticOpRef::Core(operation) = operation.op() else {
+                        return false;
+                    };
+                    let capability = required_core_capability(operation);
+                    match capability {
+                        CoreCapabilityKind::Elementwise => {
+                            engine.capabilities().elementwise().is_some()
+                        }
+                        CoreCapabilityKind::Reduction => {
+                            engine.capabilities().reduction().is_some()
+                        }
+                        CoreCapabilityKind::Indexing => engine.capabilities().indexing().is_some(),
+                        CoreCapabilityKind::DotGeneral => {
+                            engine.capabilities().dot_general().is_some()
+                        }
+                        CoreCapabilityKind::Layout => engine.capabilities().layout().is_some(),
+                    }
+                })
+        })
+        .map(|engine| engine.engine_id().clone())
+}
+
 pub(crate) fn execution_location(
-    snapshot: &super::RuntimeConfigSnapshot,
+    candidates: &[super::EngineSnapshotView<'_>],
     placement: &ResolvedProgramPlacement,
 ) -> PreparedProgramResult<ExecutionLocation> {
-    let engine = snapshot.engine(placement.engine_id()).ok_or_else(|| {
-        Arc::new(PrepareError::ResolvedEngineUnavailable {
+    let engine = candidates
+        .iter()
+        .find(|engine| engine.engine_id() == placement.engine_id())
+        .ok_or_else(|| {
+            Arc::new(PrepareError::ResolvedEngineUnavailable {
+                engine_id: placement.engine_id().clone(),
+            })
+        })?;
+    let witness = engine.executable_witness().cloned().ok_or_else(|| {
+        Arc::new(PrepareError::NoExecutableEngine {
             engine_id: placement.engine_id().clone(),
         })
     })?;
-    Ok(ExecutionLocation::new(
-        placement.engine_id().clone(),
-        engine.event_domain_id(),
+    Ok(ExecutionLocation::from_witness(
+        witness,
         placement.storage_class().clone(),
     ))
 }
@@ -947,27 +984,27 @@ fn build_preparation_context(
                 prepare_options_key,
             )
         };
-    let root_location = execution_location(snapshot, &primary_resolved_placement)?;
+    let root_location = execution_location(candidates, &primary_resolved_placement)?;
     let operation_locations: Arc<[_]> = placements
         .iter()
-        .map(|placement| execution_location(snapshot, placement))
+        .map(|placement| execution_location(candidates, placement))
         .collect::<PreparedProgramResult<Vec<_>>>()?
         .into();
-    let transfer_reachability = snapshot.transfer_reachability_for_preparation();
+    let transfer_registry = snapshot.transfer_registry_for_preparation();
     let input_locations = resolve_input_locations(
         candidates,
         signature,
         staging,
         &root_location,
         &operation_locations,
-        &transfer_reachability,
+        &transfer_registry,
     )?;
     ScheduledGraph::from_exec_program(
         staging,
         root_location.clone(),
         &input_locations,
         &operation_locations,
-        &transfer_reachability,
+        &transfer_registry,
     )
     .map_err(schedule_prepare_error)?;
     let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
@@ -986,7 +1023,10 @@ fn build_preparation_context(
         prepare_options: primary_options_key,
         operation_bindings: bindings.into_boxed_slice(),
         operation_placements: placements.into_boxed_slice(),
-        input_locations: input_locations.to_vec().into_boxed_slice(),
+        input_endpoints: input_locations
+            .iter()
+            .map(|location| location.resolved_endpoint().clone())
+            .collect(),
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
@@ -995,8 +1035,9 @@ fn build_preparation_context(
         operation_dispatch: dispatch.into(),
         staging: Arc::clone(staging),
         root_location,
+        input_locations,
         operation_locations,
-        transfer_reachability: Arc::new(transfer_reachability),
+        transfer_registry,
         extension_planning: extension_planning.into(),
     })
 }
@@ -1013,13 +1054,13 @@ fn schedule_prepare_error(source: ScheduleBuildError) -> Arc<PrepareError> {
         ScheduleBuildError::MissingTransferProvider {
             instruction_index,
             slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         } => Arc::new(PrepareError::MissingTransferProvider {
             instruction_index,
             value_slot: slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         }),
         source => Arc::new(PrepareError::Engine {
             source: Arc::new(source),
@@ -1537,21 +1578,22 @@ fn root_for_key(
         Arc::clone(&context.staging),
         Arc::clone(&context.extension_planning),
         context.root_location.clone(),
+        &context.input_locations,
         &context.operation_locations,
-        &context.transfer_reachability,
+        &context.transfer_registry,
     )
     .map(Arc::new)
     .map_err(|source| match source {
         ScheduleBuildError::MissingTransferProvider {
             instruction_index,
             slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         } => Arc::new(PrepareError::MissingTransferProvider {
             instruction_index,
             value_slot: slot,
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint,
+            available_source_endpoints,
         }),
         source => Arc::new(PrepareError::Engine {
             source: Arc::new(source),
@@ -1827,7 +1869,7 @@ fn hash_root_identity_for_digest(identity: &PreparedRootIdentity, state: &mut im
     identity.prepare_options.hash(state);
     identity.operation_bindings.hash(state);
     identity.operation_placements.hash(state);
-    identity.input_locations.hash(state);
+    identity.input_endpoints.hash(state);
     for extension in &identity.extension_planning {
         extension.module_id.hash(state);
         extension.family_id.hash(state);
@@ -1850,7 +1892,7 @@ fn root_identity_exact_eq(left: &PreparedRootIdentity, right: &PreparedRootIdent
         && left.prepare_options == right.prepare_options
         && left.operation_bindings == right.operation_bindings
         && left.operation_placements == right.operation_placements
-        && left.input_locations == right.input_locations
+        && left.input_endpoints == right.input_endpoints
         && left.semantic.semantic_eq(&right.semantic)
         && extension_planning_exact_eq(&left.extension_planning, &right.extension_planning)
 }
@@ -1907,9 +1949,9 @@ fn prepared_root_identity_key_retained_bytes(identity: &PreparedRootIdentity) ->
             .len()
             .checked_mul(size_of::<ResolvedProgramPlacement>())?,
         identity
-            .input_locations
+            .input_endpoints
             .len()
-            .checked_mul(size_of::<ExecutionLocation>())?,
+            .checked_mul(size_of::<ResolvedTransferEndpoint>())?,
         identity
             .extension_planning
             .len()

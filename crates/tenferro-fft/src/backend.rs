@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{BackendSession, Tensor, TensorRead};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -84,13 +84,17 @@ impl<'a> FftExecutionCache<'a> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 /// use tenferro_fft::FftBackend;
+/// use tenferro_tensor::BackendSessionHost;
 ///
 /// fn accepts_fft_backend<B: FftBackend>(_backend: &mut B) {}
 ///
 /// let mut backend = CpuBackend::new();
-/// accepts_fft_backend(&mut backend);
+/// backend.with_backend_session(|session| {
+///     with_cpu_exec_session(session, |exec_session| accepts_fft_backend(exec_session))
+///         .expect("CpuBackend must expose a CPU execution session");
+/// });
 /// ```
 ///
 /// A generic tensor backend without this explicit capability cannot build
@@ -106,7 +110,7 @@ impl<'a> FftExecutionCache<'a> {
 ///     let _ = input.fft(None, -1, FftNorm::Backward, backend);
 /// }
 /// ```
-pub trait FftBackend: TensorBackend {
+pub trait FftBackend: BackendSession {
     /// Validate a borrowed runtime input before the extension read path
     /// materializes it into a compact tensor.
     ///

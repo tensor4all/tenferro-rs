@@ -70,31 +70,36 @@ pub use extension_cache::{
 pub use extension_execution_context::ExtensionExecutionContext;
 pub use graph::{CompiledGraph, GraphCompiler};
 pub use runtime::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CacheInFlightBehavior, CacheOwnerError, CacheOwnerFailure, CacheOwnerId, CoreCapabilityBundle,
     CoreCapabilityBundleBuilder, CoreCapabilityKind, CorePrepareContext, Determinism,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineExecutionContractError, EngineId, EngineRegistration, EngineSnapshotView,
-    ErasedExecutionContext, EventDomainId, ExecutionContextIdentity, ExecutionContextMismatch,
-    ExecutionHandle, ExecutionPolicy, ExecutionPolicyError, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, HardwareClassId, IdentityError, IdentityKind, IndexingPrepareRequest,
-    IndexingRuntime, InputIngressContractError, InputSignature, InputSignatureEntry,
+    EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    EngineSnapshotView, ErasedExecutionContext, EventDomainDriver, EventDomainError, EventDomainId,
+    EventDomainOperation, EventDomainRun, EventToken, ExecutableEngineRegistrationConfig,
+    ExecutionContextIdentity, ExecutionContextMismatch, ExecutionHandle, ExecutionPolicy,
+    ExecutionPolicyError, ExtensionEngine, ExtensionModule, ExtensionModuleError,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    HardwareClassId, IdentityError, IdentityKind, ImmediateEventDomainDriver,
+    IndexingPrepareRequest, IndexingRuntime, InputIngressContract, InputIngressContractError,
+    InputPlacementContract, InputSignature, InputSignatureContract, InputSignatureEntry,
     InputSignatureError, InputSpecializationProjection, InputSpecializationRequirements,
     InputSpecializationRequirementsBuilder, InputSpecializationRequirementsError, LayoutClass,
     LayoutPrepareRequest, LayoutProjection, LayoutRuntime, LayoutSpecialization,
     PlacementConstraintError, PlacementProjection, PlacementSpecialization, PreparationKeySummary,
-    PrepareCapability, PrepareError, PrepareOptions, PrepareOptionsKey, PreparedCompiledGraph,
-    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
-    PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan,
-    PreparedPlanCacheLimits, PreparedPlanCacheStats, ProgramPlacementConstraint,
-    ProviderContractError, RankRequirement, ReductionPrepareRequest, ReductionRuntime,
-    RegistrationIdentity, RegistrationKey, ResolvedPlanningConfig, ResolvedPlanningKey,
+    PreparationOnlyEngineRegistrationConfig, PrepareCapability, PrepareError, PrepareOptions,
+    PrepareOptionsKey, PreparedCompiledGraph, PreparedOperation, PreparedOperationBinding,
+    PreparedOperationExecutor, PreparedOperationExecutorHandle, PreparedOperationHandle,
+    PreparedOperationPlan, PreparedPlanCacheLimits, PreparedPlanCacheStats,
+    ProgramPlacementConstraint, ProviderContractError, ProviderDeviceIdentity, ProviderId,
+    RankRequirement, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
+    RegistrationKey, ResidentOutputContract, ResolvedPlanningConfig, ResolvedPlanningKey,
     ResolvedProgramPlacement, Runtime, RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats,
     RuntimeConfigBuilder, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId,
-    RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, SubmissionError,
-    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
-    UnsupportedReason,
+    RuntimeInputContract, RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError,
+    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    SubmissionError, TransferEndpoint, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
@@ -102,9 +107,9 @@ pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
-    CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue,
-    TensorView, TypedTensor, TypedTensorView,
+    BackendSessionHost, CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar,
+    TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
 

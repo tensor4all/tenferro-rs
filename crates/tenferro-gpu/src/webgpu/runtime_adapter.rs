@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::{
-    CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation,
-    DotGeneralPrepareRequest, EngineId, EngineRegistration, ExecutionContextIdentity,
-    HardwareClassId, InputSignature, InputSpecializationProjection,
+    assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
+    CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, EngineId,
+    EngineRegistration, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
+    ExecutionContextIdentity, HardwareClassId, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutProjection, LayoutSpecialization, PrepareCapability,
     PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
-    ProviderContractError, RuntimeConfigError, SpecializationError, SpecializationProjection,
+    ProviderContractError, ProviderDeviceIdentity, ProviderId, ResidentOutputContract,
+    RuntimeConfigError, RuntimeInputContract, SpecializationError, SpecializationProjection,
     SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 use tenferro_tensor::{
@@ -18,6 +21,10 @@ use tenferro_tensor::{
 #[cfg(not(target_family = "wasm"))]
 use super::event_domain::WebGpuEventDomainDriver;
 use super::{WebGpuBackend, WebGpuBuffer};
+#[cfg(target_family = "wasm")]
+use tenferro_runtime::{
+    assemble_preparation_only_engine_registration, PreparationOnlyEngineRegistrationConfig,
+};
 
 const WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
 const WEBGPU_HARDWARE_CLASS_ID: &str = "tenferro-webgpu.device.v1";
@@ -95,6 +102,23 @@ pub fn webgpu_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigE
 pub fn webgpu_runtime_engine_registration(
     backend: &WebGpuBackend,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
+    webgpu_runtime_engine_registration_with_id(backend, webgpu_runtime_engine_id()?)
+}
+
+/// Build a WebGPU runtime engine registration with a caller-selected engine ID.
+///
+/// The provider/device identity remains tied to the selected WebGPU device;
+/// only the runtime placement identity is supplied by the caller.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the caller-selected engine identifier,
+/// the selected backend's provider/device identity, or the assembled hardware
+/// and storage metadata fails validation.
+pub fn webgpu_runtime_engine_registration_with_id(
+    backend: &WebGpuBackend,
+    engine_id: EngineId,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
     let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
     let execution_backend = backend.as_ref().clone();
@@ -103,6 +127,7 @@ pub fn webgpu_runtime_engine_registration(
     capabilities.dot_general(dot_general);
 
     let storage = webgpu_runtime_storage_class()?;
+    let default_storage = storage.clone();
     let placement_storage = storage.clone();
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
@@ -110,47 +135,68 @@ pub fn webgpu_runtime_engine_registration(
     let runtime = backend.runtime();
     let device_ordinal = runtime.device_ordinal();
     let allocation_domain = runtime.allocation_domain().map(|domain| domain.id);
-    EngineRegistration::new(
-        webgpu_runtime_engine_id()?,
-        ExecutionContextIdentity::of::<WebGpuBackend>(),
-        webgpu_runtime_hardware_class()?,
-        Arc::from(vec![storage.clone()]),
-        storage,
-        capabilities.build(),
-    )
-    .map(|registration| {
-        let registration = registration
-            .with_tensor_backend_executor(execution_backend)
-            .with_input_signature_validator(move |placement, family, domain, candidate| {
-                candidate == &signature_storage
-                    && webgpu_input_signature(
-                        placement,
-                        family,
-                        domain,
-                        device_ordinal,
-                        allocation_domain,
-                    )
-            })
-            .with_input_ingress_validator(
-                move |placement, candidate| {
-                    candidate == &placement_storage
-                        && webgpu_input_placement(placement, device_ordinal, allocation_domain)
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &runtime_storage
-                        && webgpu_input_tensor(input, device_ordinal, allocation_domain)
-                },
-                move |input: &TensorRead<'_>, candidate| {
-                    candidate == &resident_storage
-                        && webgpu_input_tensor(input, device_ordinal, allocation_domain)
-                },
-            );
-        #[cfg(not(target_family = "wasm"))]
-        let registration = registration.with_event_domain_driver(Arc::new(
-            WebGpuEventDomainDriver::new(backend.runtime().clone()),
-        ));
-        registration
-    })
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.webgpu")?,
+        format!("device:{device_ordinal}"),
+    )?;
+    let ingress = InputIngressContract::new(
+        InputPlacementContract::new(move |placement, candidate| {
+            candidate == &placement_storage
+                && webgpu_input_placement(placement, device_ordinal, allocation_domain)
+        }),
+        InputSignatureContract::new(move |placement, family, domain, candidate| {
+            candidate == &signature_storage
+                && webgpu_input_signature(
+                    placement,
+                    family,
+                    domain,
+                    device_ordinal,
+                    allocation_domain,
+                )
+        }),
+        RuntimeInputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &runtime_storage
+                && webgpu_input_tensor(input, device_ordinal, allocation_domain)
+        }),
+        ResidentOutputContract::new(move |input: &TensorRead<'_>, candidate| {
+            candidate == &resident_storage
+                && webgpu_input_tensor(input, device_ordinal, allocation_domain)
+        }),
+    );
+    let capabilities = capabilities.build();
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let metadata = EngineRegistrationMetadata::new(
+            engine_id,
+            provider_device_identity,
+            webgpu_runtime_hardware_class()?,
+            Arc::from(vec![storage]),
+            default_storage,
+            capabilities,
+        );
+        assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+            metadata,
+            execution_backend,
+            Arc::new(WebGpuEventDomainDriver::new(backend.runtime().clone())),
+            ingress,
+            None,
+        ))
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let metadata = EngineRegistrationMetadata::new(
+            engine_id,
+            provider_device_identity,
+            webgpu_runtime_hardware_class()?,
+            Arc::from(vec![storage]),
+            default_storage,
+            capabilities,
+        );
+        assemble_preparation_only_engine_registration(PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<WebGpuBackend>(),
+        ))
+    }
 }
 
 fn webgpu_input_signature(
