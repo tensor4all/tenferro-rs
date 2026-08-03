@@ -1,5 +1,10 @@
 import io
+import json
+import os
 import shlex
+import subprocess
+import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -59,7 +64,8 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             commands_for("workspace-blas"),
             (
-                "cargo nextest run --workspace --cargo-profile ci --no-default-features "
+                "cargo-nextest nextest run --workspace --cargo-profile ci "
+                "--no-default-features "
                 "--features cpu-blas --no-fail-fast",
                 "cargo test --doc --workspace --profile ci --no-default-features "
                 "--features cpu-blas",
@@ -253,14 +259,103 @@ class RunProfileTests(unittest.TestCase):
                 dry_run=False,
                 output=io.StringIO(),
             )
-        self.assertNotIn("RUSTFLAGS", calls[0])
-        self.assertEqual(
-            calls[2]["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
+        for call in calls[:2]:
+            self.assertNotIn("RUSTFLAGS", call)
+            self.assertNotIn("TENFERRO_TRYBUILD_RUSTFLAGS", call)
+            self.assertNotIn("CARGO", call)
+        for call in calls[2:]:
+            self.assertEqual(
+                call["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
+            )
+            self.assertEqual(
+                call["TENFERRO_TRYBUILD_RUSTFLAGS"],
+                "-l dylib=openblas -l dylib=lapack",
+            )
+            self.assertEqual(
+                call["CARGO"],
+                str((ROOT / "scripts" / "ci" / "trybuild-cargo.py").resolve()),
+            )
+
+    def test_trybuild_cargo_preserves_and_augments_complete_rustflags(self) -> None:
+        build_flags = [
+            "--cfg",
+            "trybuild",
+            "--verbose",
+            "--diagnostic-width=140",
+            "-A",
+            "dead_code",
+            "-C",
+            "instrument-coverage",
+        ]
+        target_flags = [
+            "--cfg",
+            "target-specific",
+            "-C",
+            "target-cpu=native",
+        ]
+        blas_flags = ["-l", "dylib=openblas", "-l", "dylib=lapack"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            capture = temp / "capture.json"
+            fake_cargo = temp / "cargo"
+            fake_cargo.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+Path(os.environ["TRYBUILD_CARGO_CAPTURE"]).write_text(
+    json.dumps({"args": sys.argv[1:], "cargo": os.environ.get("CARGO")})
+)
+"""
+            )
+            fake_cargo.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
+            environment["CARGO"] = "must-not-recurse"
+            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = " ".join(blas_flags)
+            environment["TRYBUILD_CARGO_CAPTURE"] = str(capture)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
+                    "check",
+                    "--config=build.rustflags=" + json.dumps(build_flags),
+                    "--config=target.x86_64-unknown-linux-gnu.rustflags="
+                    + json.dumps(target_flags),
+                    "--offline",
+                ],
+                check=True,
+                env=environment,
+            )
+
+            result = json.loads(capture.read_text())
+
+        build_argument = next(
+            argument
+            for argument in result["args"]
+            if argument.startswith("--config=build.rustflags=")
+        )
+        target_argument = next(
+            argument
+            for argument in result["args"]
+            if argument.startswith(
+                "--config=target.x86_64-unknown-linux-gnu.rustflags="
+            )
         )
         self.assertEqual(
-            calls[2]["TENFERRO_TRYBUILD_RUSTFLAGS"],
-            "-l dylib=openblas -l dylib=lapack",
+            json.loads(build_argument.split("=", 2)[2]),
+            build_flags + blas_flags,
         )
+        self.assertEqual(
+            json.loads(target_argument.split("=", 2)[2]),
+            target_flags + blas_flags,
+        )
+        self.assertIn("--offline", result["args"])
+        self.assertIsNone(result["cargo"])
 
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add the CI link flags to trybuild's nested Cargo rustflags."""
+"""Append CI link flags to rustflags arrays supplied by nested trybuild Cargo."""
 
 from __future__ import annotations
 
@@ -8,6 +8,28 @@ import os
 import shlex
 import subprocess
 import sys
+import tomllib
+
+
+def augment_rustflags_config(argument: str, extra: list[str]) -> str:
+    """Append flags to one Cargo build/target rustflags array."""
+    if not argument.startswith("--config="):
+        return argument
+    assignment = argument[len("--config=") :]
+    key, separator, value = assignment.partition("=")
+    is_rustflags = key == "build.rustflags" or (
+        key.startswith("target.") and key.endswith(".rustflags")
+    )
+    if not separator or not is_rustflags:
+        return argument
+
+    rustflags = tomllib.loads(f"rustflags = {value}")["rustflags"]
+    if not isinstance(rustflags, list) or not all(
+        isinstance(flag, str) for flag in rustflags
+    ):
+        raise ValueError(f"{key} must be an array of strings")
+    encoded = json.dumps([*rustflags, *extra], separators=(",", ":"))
+    return f"--config={key}={encoded}"
 
 
 def main() -> int:
@@ -15,22 +37,7 @@ def main() -> int:
     if not extra:
         return subprocess.call(["cargo", *sys.argv[1:]])
 
-    rustflags = ["--cfg", "trybuild", "--verbose", "-A", "dead_code", *extra]
-    encoded = json.dumps(rustflags, separators=(",", ":"))
-    args: list[str] = []
-    replaced = False
-    for argument in sys.argv[1:]:
-        if argument.startswith("--config=build.rustflags="):
-            args.append(f"--config=build.rustflags={encoded}")
-            replaced = True
-        elif argument.startswith("--config=target.") and ".rustflags=" in argument:
-            key = argument[len("--config=") :].split("=", 1)[0]
-            args.append(f"--config={key}={encoded}")
-            replaced = True
-        else:
-            args.append(argument)
-    if not replaced:
-        args.append(f"--config=build.rustflags={encoded}")
+    args = [augment_rustflags_config(argument, extra) for argument in sys.argv[1:]]
 
     environment = os.environ.copy()
     environment.pop("CARGO", None)
