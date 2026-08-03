@@ -42,5 +42,6 @@ repeated provider validation was added.
 - `python3 scripts/check-storage-design-docs.py`
 - `python3 scripts/test-storage-ownership-contracts-v2.py`
 
-The P3/P9 cohort remains open: scoped borrowed submission and the final public
-storage-name inventory still require a separate, explicitly selected step.
+The P3/P9 candidate is complete at this commit. P6 and later phases, including
+the P13-B closure audit, remain deferred; Issue #1555 must not be closed from
+this cohort alone.
