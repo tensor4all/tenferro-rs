@@ -44,7 +44,3 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
-
-[[test]]
-name = "engine_registration_debug"
-path = "tests/engine_registration_debug.rs"

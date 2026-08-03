@@ -1,3 +1,5 @@
+//! Public `Debug` contract coverage for engine registration descriptors.
+
 use std::fmt::Debug;
 use std::sync::Arc;
 
