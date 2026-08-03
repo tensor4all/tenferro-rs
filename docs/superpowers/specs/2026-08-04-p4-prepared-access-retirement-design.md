@@ -71,8 +71,10 @@ The P2 `BackendAllocation` boundary gains private provider mapping hooks that
 return borrowed, type-erased byte mappings. The provider receives the already
 checked root-bound span and dtype once. A mapping guard owns any provider map
 state for its borrow and exposes bytes only to the private typed conversion
-helpers. The helpers check the retained byte length/alignment and create the
-typed guard once; the only unsafe conversion is adjacent to that invariant.
+helpers. Provider implementations must return initialized bytes with valid
+representations for the requested `TensorScalar` dtype; the helpers check the
+retained byte length/alignment and create the typed guard once; the only unsafe
+conversion is adjacent to that invariant.
 No provider `Arc` is cloned during preparation.
 
 The public existing `HostReadGuard`/`HostWriteGuard` APIs are not changed in

@@ -43,6 +43,11 @@ pub(crate) unsafe trait BackendAllocation:
     fn capabilities(&self) -> ProviderCapabilities;
     fn as_any(&self) -> &dyn Any;
 
+    /// Map the checked span to initialized bytes with valid `TensorScalar`
+    /// representations for the requested dtype. The mapping must keep the
+    /// exact span length stable and retain the provider allocation for the
+    /// returned borrow; typed preparation checks the returned pointer's
+    /// alignment before any typed access.
     fn map_read(
         &self,
         _span: RootBoundSpan,
@@ -53,6 +58,11 @@ pub(crate) unsafe trait BackendAllocation:
         })
     }
 
+    /// Map the checked span to writable bytes with valid `TensorScalar`
+    /// representations for the requested dtype. The mapping must keep the
+    /// exact span length stable and retain exclusive provider access for the
+    /// returned borrow; typed preparation checks the returned pointer's
+    /// alignment before any typed access.
     fn map_write(
         &self,
         _span: RootBoundSpan,
