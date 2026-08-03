@@ -536,15 +536,8 @@ struct CheckedInjectiveDescriptor<R: TensorRank> {
     injectivity: WriteInjectivityProof,
 }
 
-struct CheckedRead<'a, R: TensorRank> {
-    access: StorageRef<'a>,
-    descriptor: &'a CheckedDescriptor<R>,
-}
-
-struct CheckedWrite<'a, R: TensorRank> {
-    access: StorageMut<'a>,
-    descriptor: &'a CheckedInjectiveDescriptor<R>,
-}
+struct CheckedRead<'a, R: TensorRank>(private::CheckedReadBundle<'a, R>);
+struct CheckedWrite<'a, R: TensorRank>(private::CheckedWriteBundle<'a, R>);
 
 enum CheckedTraversal<R: TensorRank> {
     Contiguous { element_range: Range<usize> },
@@ -591,6 +584,16 @@ through the borrowed root; preparation performs no provider-context `Arc`
 clone. Preparation failure returns the unchanged checked pairing and a typed
 error. Any temporary host mapping is released before returning. No partially
 prepared state is published.
+
+`CheckedRead` and `CheckedWrite` are opaque module-private bundles, not structs
+with independently constructible public or crate-wide fields. There is no
+`new(access, descriptor)` function. A tensor/view method creates the bundle by
+moving or borrowing its co-located storage capability and checked descriptor;
+an `AllocationGroup` method creates it only after resolving the descriptor's
+local `AllocationSlot` to that same occupied owner entry. Those are the only
+safe constructors. Consequently a descriptor cannot be paired with another
+root without entering the audited unsafe storage module, and ordinary access
+does not need a root-identity comparison or repeated range validation.
 
 Mapping, binding, and enqueue consume the prepared object. They may perform the
 provider's actual timeline admission or synchronization, but do not accept a
@@ -950,8 +953,8 @@ flags remain. On rejection it returns the exact bundle and typed error.
 
 `CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
 returns an owner or other owning resource. The provider-private permanent
-record retains the consumed `Arc` roots for that outcome. No public result can
-recover those roots.
+record retains the consumed retirement bindings, event, `Arc` roots, and
+provider context for that outcome. No public result can recover them.
 
 ### Scoped read-only execution
 
@@ -1068,7 +1071,7 @@ safety does not depend on panic catching or `Drop`.
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
 | `Prepared` -> submit result | owning (consumes `ExecutionInputs`) | none | validation and planning only | `SubmitRejected` returns the exact unadmitted owners | no admitted work or provider retention | owners return to the caller under G1 |
-| `Admitted` -> `Running` | owning (worker) | none | prepared bindings cross the enqueue-capable boundary | post-admission preparation or enqueue failure enters `Draining` | handle drop detaches observation; reaper retains owners, events, roots, and contexts | only at a terminal outcome |
+| `Admitted` -> `Running` | owning (worker) | none | prepared bindings cross the enqueue-capable boundary and become provider retirement bindings | post-admission preparation or enqueue failure enters `Draining` | handle drop detaches observation; reaper retains owners, retirement bindings, events, roots, and contexts | only at a terminal outcome |
 | `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain | execution failure or worker/provider panic enters `Draining` | panic is typed at the existing worker/thread/FFI boundary; reaper retains ownership | not yet |
 | `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
 | `Draining` -> `Retired(Failed)` | owning (worker/reaper) | none | completion proven | returns exact input owners with the typed execution or panic cause | n/a | returned owners follow G1 |
