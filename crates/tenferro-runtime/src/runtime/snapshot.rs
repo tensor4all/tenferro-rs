@@ -34,6 +34,7 @@ use super::{
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_REGISTRATION_ISSUER: AtomicU64 = AtomicU64::new(1);
+const INITIAL_REGISTRATION_ORDINAL: NonZeroU64 = NonZeroU64::MIN;
 
 #[derive(Clone, Debug)]
 struct CandidateEngineRecord {
@@ -163,7 +164,7 @@ pub(super) struct ExecutableEngineSnapshot {
 
 #[derive(Clone)]
 enum FrozenEngineSlot {
-    PreparationOnly(PreparationOnlyEngineSnapshot),
+    PreparationOnly(Arc<PreparationOnlyEngineSnapshot>),
     Executable(Arc<ExecutableEngineSnapshot>),
 }
 
@@ -1306,11 +1307,8 @@ impl RuntimeConfigBuilder {
     pub fn build(self) -> Result<Runtime, RuntimeConfigError> {
         let runtime_id = RuntimeId::from_nonzero(allocate_nonzero(&NEXT_RUNTIME_ID)?);
         let issuer = allocate_nonzero(&NEXT_REGISTRATION_ISSUER)?;
-        let (bound_candidate, post_ordinal) = validate_candidate(
-            self.candidate,
-            issuer,
-            NonZeroU64::new(1).expect("one is non-zero"),
-        )?;
+        let (bound_candidate, post_ordinal) =
+            validate_candidate(self.candidate, issuer, INITIAL_REGISTRATION_ORDINAL)?;
         let epoch = RuntimeEpoch::one();
         let snapshot = Arc::new(freeze_candidate(runtime_id, epoch, bound_candidate)?);
         let state = RuntimeState {
@@ -2043,10 +2041,10 @@ fn freeze_candidate(
         };
         let frozen = match state {
             EngineRegistrationState::PreparationOnly { binding } => {
-                FrozenEngineSlot::PreparationOnly(PreparationOnlyEngineSnapshot {
+                FrozenEngineSlot::PreparationOnly(Arc::new(PreparationOnlyEngineSnapshot {
                     metadata,
                     binding,
-                })
+                }))
             }
             EngineRegistrationState::Executable(binding) => {
                 if let Some(owner) = binding.contract().cache_owner().cloned() {
@@ -2275,5 +2273,16 @@ mod freeze_tests {
             bound,
         )
         .expect("a bound candidate must freeze without semantic route revalidation");
+    }
+
+    #[test]
+    fn frozen_engine_slots_are_arc_sized() {
+        let slot_size = std::mem::size_of::<FrozenEngineSlot>();
+        let arc_size = std::mem::size_of::<Arc<()>>();
+
+        assert!(
+            slot_size <= 2 * arc_size,
+            "frozen engine slots should keep immutable snapshot payloads behind Arc: slot_size={slot_size}, arc_size={arc_size}",
+        );
     }
 }
