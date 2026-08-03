@@ -25,7 +25,6 @@ DIAGNOSTICS_SCHEMA = "tenferro.storage-ownership-diagnostics.v1"
 
 ACTIVE_IDS = frozenset(
     {
-        "p0-control-plane",
         "p1-ledger",
         "p1-contract-document",
         "p1-api-parity",
@@ -33,6 +32,7 @@ ACTIVE_IDS = frozenset(
     }
 )
 DEFERRED_CORRECTIONS = {
+    "p0-control-plane": "P0",
     "p2-root-claims": "P2",
 }
 
@@ -469,7 +469,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         for row in deferred:
             self.assertFalse((ROOT / row["artifact"]["path"]).exists(), row["id"])
 
-        row = next(row for row in deferred if row["id"] == "p2-root-claims")
+        row = next(row for row in deferred if row["id"] == "p0-control-plane")
         files = _fixture_files()
         files[row["artifact"]["path"]] = "not a fabricated production artifact\n"
         result = _run_checker(
@@ -547,11 +547,11 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         _assert_error(self, result, "E_ARTIFACT_DUPLICATE_TARGET", {"artifact_id": "artifact-api-parity"})
 
     def test_promotion_changes_only_state_and_preserves_identity(self) -> None:
-        promoted = _manifest_text()
-        base_manifest = _replace_row_state(
-            promoted,
+        base_manifest = _manifest_text()
+        promoted = _replace_row_state(
+            base_manifest,
             "p0-control-plane",
-            '{ kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }',
+            '{ kind = "active" }',
         )
         files = _fixture_files(promoted)
         p0 = next(row for row in _manifest_rows(promoted) if row["id"] == "p0-control-plane")
@@ -582,8 +582,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
 
             changed = _replace_once(
                 promoted,
-                'path = "crates/tenferro-runtime/tests/execution_engine_identity.rs"',
-                'path = "crates/tenferro-runtime/tests/execution_engine_identity-renamed.rs"',
+                'path = "crates/tenferro-runtime/tests/integration/execution_engine_identity.rs"',
+                'path = "crates/tenferro-runtime/tests/integration/execution_engine_identity-renamed.rs"',
             )
             (root / "scripts/storage-ownership-contracts.toml").write_text(changed, encoding="utf-8")
             result = subprocess.run(
@@ -668,8 +668,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                     temporary.cleanup()
 
     def test_contract_revision_may_change_only_deferred_identity(self) -> None:
-        base_manifest = _manifest_text().replace("revision = 2", "revision = 1", 1)
-        revised = base_manifest.replace("revision = 1", "revision = 2", 1)
+        base_manifest = _manifest_text().replace("revision = 3", "revision = 2", 1)
+        revised = base_manifest.replace("revision = 2", "revision = 3", 1)
         revised = _replace_once(
             revised,
             'gates = ["G1", "G2", "G4"]\nartifact = { id = "artifact-reinterpret"',
@@ -736,11 +736,11 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             temporary.cleanup()
 
     def test_contract_revision_must_be_single_step_and_cannot_promote(self) -> None:
-        base_manifest = _manifest_text().replace("revision = 2", "revision = 1", 1)
-        for revision in (1, 3):
+        base_manifest = _manifest_text().replace("revision = 3", "revision = 2", 1)
+        for revision in (2, 4):
             with self.subTest(revision=revision):
                 candidate = base_manifest.replace(
-                    "revision = 1", f"revision = {revision}", 1
+                    "revision = 2", f"revision = {revision}", 1
                 )
                 candidate = _replace_once(
                     candidate,
@@ -775,17 +775,17 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                     _assert_error(
                         self,
                         result,
-                        "E_PROMOTION_REGISTRY" if revision == 3 else "E_PROMOTION_IDENTITY",
-                        {"component": "revision"} if revision == 3 else {"obligation_id": "p6-reinterpret"},
+                        "E_PROMOTION_REGISTRY" if revision == 4 else "E_PROMOTION_IDENTITY",
+                        {"component": "revision"} if revision == 4 else {"obligation_id": "p6-reinterpret"},
                     )
                 finally:
                     temporary.cleanup()
 
-        promoted = _manifest_text()
-        base_manifest = _replace_row_state(
-            promoted.replace("revision = 2", "revision = 1", 1),
+        base_manifest = _manifest_text()
+        promoted = _replace_row_state(
+            base_manifest.replace("revision = 3", "revision = 4", 1),
             "p0-control-plane",
-            '{ kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }',
+            '{ kind = "active" }',
         )
         files = _fixture_files(promoted)
         row = next(row for row in _manifest_rows(promoted) if row["id"] == "p0-control-plane")
@@ -890,7 +890,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 self,
                 result,
                 "E_COMMAND_FAILED",
-                {"command_id": "cmd-control-plane", "exit_code": 17},
+                {"command_id": "cmd-api-parity", "exit_code": 17},
             )
             self.assertFalse(receipt_path.exists())
         finally:

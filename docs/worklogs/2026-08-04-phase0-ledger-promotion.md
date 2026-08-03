@@ -21,7 +21,8 @@ protocol, repeated validation, or cryptographic evidence.
 - RED: after adding P0 to the expected active set, the 24-case ledger suite
   failed only because the production manifest still deferred it.
 - GREEN: `python3 scripts/test-storage-ownership-contracts-v2.py` passed 24/24.
-- GREEN: `cargo test -p tenferro-runtime --test execution_engine_identity`
+- The first PR normalizes the deferred artifact identity and intentionally leaves
+  the artifact absent; the following state-only promotion PR owns the integration test.
   passed 3/3.
 - MUTATION: temporarily replacing the transfer key with a source-only key made
   the endpoint-pair test fail at the second shared-source route; restoring the

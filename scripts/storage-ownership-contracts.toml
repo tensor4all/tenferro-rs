@@ -1,7 +1,7 @@
 schema = "tenferro.storage-ownership-contracts.v2"
 
 [registry]
-revision = 2
+revision = 3
 
 [[registry.gates]]
 id = "G1"
@@ -198,9 +198,9 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p0-control-plane"
 unit = "P0"
 gates = ["G3"]
-artifact = { id = "artifact-control-plane", kind = "rust-test", path = "crates/tenferro-runtime/tests/execution_engine_identity.rs" }
-command = { id = "cmd-control-plane", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-runtime", "--test", "execution_engine_identity"], cwd = ".", path_args = [], artifact_id = "artifact-control-plane" }
-state = { kind = "active" }
+artifact = { id = "artifact-control-plane", kind = "rust-test", path = "crates/tenferro-runtime/tests/integration/execution_engine_identity.rs" }
+command = { id = "cmd-control-plane", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-runtime", "--test", "integration"], cwd = ".", path_args = [], artifact_id = "artifact-control-plane" }
+state = { kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

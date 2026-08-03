@@ -11,7 +11,8 @@ the executable contract ledger.
 
 ## Decision
 
-Add the already-declared `execution_engine_identity` integration-test target
+Reserve `integration/execution_engine_identity.rs` in the existing consolidated
+integration-test target, then add that module only in the state-only promotion PR.
 and promote only `p0-control-plane` to `active`. The test uses public runtime
 APIs. It verifies caller-selected engine IDs, distinct provider and event-domain
 identities, typed duplicate registration failure, endpoint-pair routing, and
@@ -26,6 +27,8 @@ merged in #1596.
 
 - The ledger test suite must fail when its expected active set includes P0 but
   the manifest still defers it.
-- `cargo test -p tenferro-runtime --test execution_engine_identity` must pass.
+- The identity-normalization PR must leave the deferred artifact absent.
+- The following promotion PR must add the module and make
+  `cargo test -p tenferro-runtime --test integration` pass.
 - The storage ledger checker, design checker, all active obligations, and fast
   repository checks must pass from the committed candidate.
