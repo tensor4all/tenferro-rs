@@ -462,7 +462,7 @@ they validate bounds, layout, dtype, exact root-bound span (`RootBoundSpan`),
 alignment, storage, provider, and, for writes, write injectivity exactly once,
 then return prepared access carrying `CheckedLayout`. The hot loop consumes
 that checked metadata through `iter_contiguous`; it does not revalidate, decode
-perform registry lookups per element.
+coordinates, or perform registry lookups per element.
 
 Providers retain the completion event, together with the `Arc<RootResource>`
 that it protects, until the event proves completion. If completion is
