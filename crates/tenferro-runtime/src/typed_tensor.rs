@@ -558,6 +558,8 @@ fn broadcast_in_dim<T: TensorScalar>(
     into_typed_result("broadcast_in_dim", out)
 }
 
+// INVARIANT: this private adapter keeps borrowed reads borrowed and owns only
+// the explicit fallback tensor; it is never exposed or cloned.
 #[allow(clippy::large_enum_variant)]
 enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
