@@ -11,8 +11,12 @@ accepted Task 2 correction candidate is the base:
 The implementation commit is
 `199e0b94657d9408103c7b92531d41eab7cb5df8`; the P2 ledger/design activation
 commit is `f26820c57c6e836ea5f10ed7ad5c9e026b672b6`; the ledger artifact
-binding fix is `8c556863c60f76f3b4028ad5a53cbd939a3e8285`. The evidence commit
-containing this updated worklog follows those source commits.
+binding fix is `8c556863c60f76f3b4028ad5a53cbd939a3e8285`. The follow-up
+reconciliation commits are `6ac63ad3e801158b38b06cddad93586d05494db9`,
+`da0f58387433bc43b42c5d587d3f997d36419962`, and
+`6968d0181ea1594112cef4a4377e24c8f2b3e3f0`; they only reconcile the normative
+G1 sketch, active-state wording, and checker-facing documentation. The
+evidence commit containing this updated worklog follows those source commits.
 
 The selected `p2-root-claims` row is promoted on top of the already active P0
 and P1 rows. P3/P4/P5 and all later rows remain deferred. The implementation
@@ -50,8 +54,9 @@ owner rather than an `Arc` projection.
 
 ## Candidate-scoped verification
 
-All commands below were run from the candidate branch at or after
-`8c556863c60f76f3b4028ad5a53cbd939a3e8285`:
+All commands below were run from the candidate branch at or after the final
+source candidate and its documentation reconciliations (through
+`6968d0181ea1594112cef4a4377e24c8f2b3e3f0`):
 
 - `cargo fmt --all --check` and `git diff --check` — passed;
 - `cargo test -p tenferro-tensor --lib` — 228 passed;
@@ -67,10 +72,11 @@ All commands below were run from the candidate branch at or after
 - `python3 scripts/check-storage-ownership-contracts.py` — ledger OK;
 - `python3 scripts/check-storage-design-docs.py` — passed;
 - `python3 scripts/repository-rules-review.py --base origin/main --head
-  8c556863c60f76f3b4028ad5a53cbd939a3e8285 --output-json
-  /tmp/p2-task3-rules-review.json` — pass, zero findings.
+  "$(git rev-parse HEAD)" --output-json /tmp/p2-task3-rules-review.json` —
+  pass, zero findings; the review target is the exact final HEAD rather than a
+  stale source-candidate alias.
 
 Fresh independent specification and quality reviews are required against the
-final exact evidence commit (the docs-only commit immediately following the
-source candidate above) before the next phase starts. The final review command
-binds to `git rev-parse HEAD`; no source changes occur in the evidence commit.
+final exact evidence commit before the next phase starts. The final review
+commands bind to `git rev-parse HEAD`; no source changes occur after that
+evidence commit.
