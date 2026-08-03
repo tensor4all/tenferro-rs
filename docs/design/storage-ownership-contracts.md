@@ -78,11 +78,13 @@ Terminology:
 - **Prepared access**: the result of `prepare_read` or `prepare_write` after
   the one access-boundary validation. It carries the validated `CheckedLayout`
   and the Rust borrow required by the access; the hot loop consumes it through
-  `iter_contiguous`.
+  the `iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor
+  path.
 - **Completion-unproven retention**: the typed-error path used when a
-  provider cannot prove completion. The provider event and its
-  `Arc<RootResource>` are intentionally retained or leaked until safe
-  retirement is established; this is not a quarantine state.
+  provider cannot prove completion. A provider-private `UnprovenRetirement`
+  owns the event, `Arc<RootResource>`, and provider context until completion is
+  proven or those resources are intentionally made a permanent leak; this is
+  not a quarantine state.
 
 State-table columns. Every state-transition row in this document answers the
 six review-checklist questions from #1557, abbreviated as:
@@ -450,35 +452,47 @@ is allowed to manufacture ownership proof from an allocation ID or a lock.
 
 ### Controlling permanent model
 
-This subsection is the controlling G1 contract. The permanent lifetime root is
-`Arc<RootResource>`, which keeps the physical allocation and the provider
-resources it retains alive. `OwnedSpanClaim` is the unique authority for an
-owned span and is deliberately non-`Clone` (and non-`Copy`). Writes are
-authorized only by ordinary Rust exclusive borrows (`&mut`/`StorageMut`), never
-by a registry, lease, event, retry, or callback.
+This subsection is the controlling G1 contract and the contract-side
+proportional amendment to invariants I7 and I10 in
+[#1555](https://github.com/tensor4all/tenferro-rs/issues/1555). The permanent
+lifetime root is `Arc<RootResource>`, which keeps the physical allocation and
+the provider resources it retains alive. `OwnedSpanClaim` is the unique
+authority for an owned span and is deliberately non-`Clone` (and non-`Copy`).
+Writes are authorized only by ordinary Rust exclusive borrows
+(`&mut`/`StorageMut`), never by an access-authority, quarantine, or retirement
+registry, lease, event, retry, or callback.
 
 `prepare_read` and `prepare_write` are the access-preparation boundary. Together
 they validate bounds, layout, dtype, exact root-bound span (`RootBoundSpan`),
 alignment, storage, provider, and, for writes, write injectivity exactly once,
-then return prepared access carrying `CheckedLayout`. The hot loop consumes
-that checked metadata through `iter_contiguous`; it does not revalidate, decode
-coordinates, or perform registry lookups per element.
+then return prepared access carrying `CheckedLayout`. The hot loop uses the
+`iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor path.
+Neither path performs per-element coordinate decode or provider checks.
 
-Providers retain the completion event, together with the `Arc<RootResource>`
-that it protects, until the event proves completion. If completion is
-unproven, the operation returns the typed `CompletionUnproven` error and
-intentionally retains or leaks the allocation and event resources; speculative
-release is forbidden. This is completion-unproven retention.
+The concrete provider-private `UnprovenRetirement` owns the completion event,
+the `Arc<RootResource>` it protects, and the provider context whenever normal
+return cannot prove completion. Provider-private polling retains that owner;
+only a proven-completion branch may take and `Drop` its release-capable fields,
+exactly once. On a terminal poll result that cannot prove completion, or on
+device loss, it intentionally
+transitions to a permanent leak by suppressing `Drop` for every release-capable
+field (conceptually `mem::forget` or `ManuallyDrop`). The returned typed
+`CompletionUnproven` error carries diagnostics only and owns no resource whose
+`Drop` could release the allocation. Speculative release is forbidden.
 
-The permanent model explicitly removes quarantine / poison / `catch_unwind` /
-registry / retry / legacy bridge / repeated validation. **All later conflicting
-text anywhere in this document**, including G1, G3, G5, and the test index, is
-superseded by this subsection and pending physical deletion in this same PR.
-That supersession covers pseudocode, tables, transitions, obligations, and
-tests that describe quarantine, poison, unwind containment, registries,
-retries, legacy or provider bridges, repeated validation, or release without
-proven completion. This commit is internally authoritative but not final;
-until that text is deleted, this subsection controls.
+The permanent model explicitly removes quarantine, poison, `catch_unwind`,
+access-authority/quarantine/retirement registries, retry, legacy bridge, and
+repeated validation. This registry prohibition does not include the Phase 1
+contract ledger or a valid descriptor container; neither is access authority
+or a retention/reclamation mechanism. **All later conflicting text anywhere in
+this document**, including G1, G3, G5, and the test index, is superseded by this
+subsection and pending physical deletion in this same PR. That supersession
+covers pseudocode, tables, transitions, obligations, and tests that describe
+quarantine, poison, unwind containment, removed access-authority/quarantine/
+retirement registries, retries, legacy or provider bridges, repeated
+validation, or release without proven completion. This commit is internally
+authoritative but not final; until that text is deleted, this subsection
+controls.
 
 ### Types and acquisition surface
 
@@ -517,7 +531,7 @@ struct RootBoundSpan {
 
 pub(crate) struct RootResourcePin {
     root: RootResourceIdentity,
-    state: Arc<RootResourceState>, // lifetime/deallocator state only
+    state: Arc<RootResource>, // lifetime/deallocator state only
 }
 
 pub(crate) struct OwnedSpanClaim {
@@ -539,7 +553,7 @@ pub struct StorageMut<'a> {
     owner: &'a mut OwnedStorage,
 }
 
-pub(crate) struct RootResourceState {
+pub(crate) struct RootResource {
     root: RootResourceIdentity,
     // RootResourcePin's Arc pins this one provider allocation/access object.
     // There is no second Arc vtable and no per-access allocation.
@@ -600,7 +614,7 @@ pub unsafe trait BackendAllocationAccess: Send + Sync + 'static {
 }
 
 // The request is opaque to provider code and can only be constructed by the
-// private RootResourceState dispatchers below. It contains the exact pin/root
+// private RootResource dispatchers below. It contains the exact pin/root
 // witness, claim, and span selected by one ResolvedRead/ResolvedWrite.
 pub struct BackendReadRequest<'a> {
     _private: (
@@ -825,7 +839,7 @@ pub(crate) struct HostWriteGuard<'a> {
     mapping: BackendWriteMapping<'a>,
 }
 
-impl RootResourceState {
+impl RootResource {
     fn dispatch_host_read<'a>(
         &'a self,
         pin: &'a RootResourcePin,
@@ -1008,7 +1022,7 @@ pub struct ImportRejected {
 
 // This safe importer validates provider metadata before publishing a claim.
 // On rejection it returns the same one allocation box, so the provider drops
-// it exactly once; on success that box moves into RootResourceState and is
+// it exactly once; on success that box moves into RootResource and is
 // pinned by RootResourcePin. The unsafe provider implementation is the only
 // authority proof boundary; there is no second proof token or infallible
 // unsafe import function.
@@ -1156,7 +1170,7 @@ methods are allocation-free in the storage kernel. `ResolvedRead` and
 `ResolvedWrite` are fixed-layout values containing the capability, the exact
 `RootBoundSpan`, and the seal; they do not contain a provider enum, a
 per-access `Box`, or any other heap-backed erased operation. Provider
-dispatch uses the one vtable retained in `RootResourceState`. A provider may
+dispatch uses the one vtable retained in `RootResource`. A provider may
 allocate an event or queue object under its own documented backend contract,
 but resolution and the core binding path must not allocate.
 
