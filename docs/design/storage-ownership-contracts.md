@@ -1345,10 +1345,11 @@ values (#1555, "Disjoint views and allocation groups"; #1561).
 
 ```rust
 pub struct AllocationGroup {
-    allocations: Vec<OwnedStorage>, // private: one owner/claim per span
+    allocations: Vec<Option<OwnedStorage>>, // private, stable move-out slots
     descriptors: Vec<Option<DescriptorRecord>>, // private, group-local table
 }
 
+#[derive(Clone, Copy)]
 pub struct DescriptorSlot(u32); // opaque; meaningful only under its group borrow
 
 struct DescriptorRecord {
@@ -1361,20 +1362,25 @@ struct DescriptorRecord {
 
 Construction preconditions (safe constructors):
 
-- every `OwnedStorage` appears once; duplicate owner tokens are impossible by
-  move semantics, and overlapping owner spans for one key are rejected;
-- every descriptor is validated against its slot's span (G1 revalidation
-  rules) at construction;
+- every occupied allocation entry contains one `OwnedStorage`, and each owner
+  appears in exactly one entry. Duplicate owner tokens are impossible by move
+  semantics, and overlapping owner spans for one key are rejected;
+- allocation entries have stable indices. Moving an owner out leaves `None`
+  and never renumbers another `AllocationSlot`;
+- every descriptor references an occupied allocation entry and is validated
+  against that entry's span (G1 revalidation rules) at construction;
 - descriptors may alias freely, including exact duplicates;
 - an occupied slot is never silently rebound. Removing a descriptor leaves
   its table entry vacant; later insertion may append a new entry and is not
   required to fill vacant entries;
 - `DescriptorSlot` is only a local lookup key. It carries no allocation,
   root, provider, or write authority, and it is meaningful only when resolved
-  through a borrow of the group that owns the table;
-- physical lifetime comes from the `OwnedStorage` claims and their
-  `Arc<RootResource>` roots (G1). Mutation and extraction require the
-  exclusive group borrow or an explicitly transferred disjoint claim;
+  through a borrow of the group that owns the table. Copying a slot copies
+  only this metadata and grants no capability;
+- physical lifetime comes from each occupied entry's `OwnedStorage` claim and
+  its `Arc<RootResource>` root (G1). Mutation and extraction require the
+  exclusive group borrow; `split_mut` derives only temporary disjoint mutable
+  capabilities from that borrow;
 - descriptor records are ordinary group-owned metadata. No out-of-band
   descriptor liveness roots or cross-group identity participate in access or
   reclamation.
@@ -1408,10 +1414,11 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
 - `try_extract` resolves `slot` under `&mut AllocationGroup`. It succeeds
   only when the selected record is the sole descriptor in this group that
   refers to its `AllocationSlot`; the record is removed and its owned
-  allocation is moved out. If another local descriptor aliases that
-  allocation, the operation returns a typed reason and leaves the group
-  unchanged. A removed entry remains vacant, and no copy or materialization
-  fallback is permitted (I4).
+  allocation is moved out by replacing the occupied allocation entry with
+  `None`, without renumbering any other entry. If another local descriptor
+  aliases that allocation, the operation returns a typed reason and leaves
+  the group unchanged. A removed entry remains vacant, and no copy or
+  materialization fallback is permitted (I4).
 - `into_tensor` consumes the group, resolves one local slot, and explicitly
   discards all other descriptor records. It never duplicates ownership to
   preserve them. On failure it returns the unchanged group.
@@ -1428,7 +1435,8 @@ One audited module owns the proof. Normative validation order (#1561):
 4. partition requests by allocation key and root span;
 5. treat empty descriptors as non-overlapping;
 6. prove pairwise disjoint reachable byte envelopes;
-7. split the root exclusive capability into non-cloneable children.
+7. derive non-cloneable disjoint mutable child capabilities whose lifetimes
+   remain bounded by the exclusive group borrow.
 
 Conservative rejection is required rather than element enumeration:
 interleaved strided requests whose byte envelopes overlap return
@@ -1443,8 +1451,8 @@ unsupported provider span. Every error leaves the group unchanged.
 | construct group | owning (consumes owners) | none | none | owners returned to caller or dropped exactly once, per constructor contract | no partially observable group | owners' G1 rules |
 | `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
 | `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
-| `split_mut` | exclusive | requested slots are resolved under one group borrow; children receive disjoint claims | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
-| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | removed entry stays vacant; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
+| `split_mut` | exclusive | requested slots are resolved under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
+| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
 | `into_tensor` | owning | consuming group resolves one local slot and discards other records | none | group returned unchanged with reason | unselected records and claims follow G1 drop rules | selected owner follows G1 |
 
 ## G3. Submission
