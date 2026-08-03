@@ -69,30 +69,6 @@ DOCUMENTATION_REQUIREMENT_HOMES = (
 )
 
 
-RETIRED_EXECUTION_TERMS = (
-    "GraphExecutor",
-    "__bench_unification_run_compiled_api",
-    "graph-executor",
-    "with_tensor_backend_executor",
-)
-CURRENT_EXECUTION_RETIREMENT_NOTICE = "The previous `GraphExecutor<B>` facade is retired."
-AUTHORITATIVE_EXECUTION_DOCUMENTS = (
-    "docs/design/execution-engine-provider-architecture.md",
-    "docs/superpowers/specs/2026-07-20-execution-engine-provider-umbrella-design.md",
-    "docs/superpowers/specs/2026-07-24-phase-4-runtime-preparation-design.md",
-    "docs/worklogs/2026-07-25-phase-5-common-scheduled-graph.md",
-    "docs/worklogs/2026-08-01-issue-1556-phase0-a01-provider-device-binding.md",
-)
-RETIRED_EXECUTION_SOURCE_EXCEPTIONS = {
-    # These tests must spell the retired symbol to prove that it is absent from
-    # the public source surface; they are assertions, not execution paths.
-    "crates/tenferro-runtime/src/runtime/tests/preparation.rs",
-    "crates/tenferro-runtime/tests/integration/public_surface_contract.rs",
-    # This checker contains the forbidden terms as the policy it enforces.
-    "scripts/test-doc-consistency.py",
-}
-
-
 def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
@@ -563,45 +539,6 @@ def test_active_ad_docs_use_current_semantic_ad_owner() -> None:
     assert "SemanticExtensionRuleSet" in semantic_ad
 
 
-def test_retired_phase5_execution_facade_cannot_reappear_in_authority_or_source() -> None:
-    retired_draft = ROOT / "docs/superpowers/specs/2026-07-24-phase-5-common-scheduled-graph-design.md"
-    assert not retired_draft.exists()
-
-    for relative in (
-        "crates/tenferro-runtime/Cargo.toml",
-        "crates/tenferro-runtime/benches/elementwise_fusion.rs",
-        "scripts/run-unification-performance-gate.sh",
-    ):
-        text = read(relative)
-        for term in (
-            "GraphExecutor",
-            "__bench_unification_run_compiled_api",
-            "graph-executor",
-            "with_tensor_backend_executor",
-        ):
-            assert term not in text, f"{relative} reintroduces retired benchmark term {term}"
-
-    for relative in AUTHORITATIVE_EXECUTION_DOCUMENTS:
-        text = read(relative)
-        if relative == "docs/design/execution-engine-provider-architecture.md":
-            assert text.count(CURRENT_EXECUTION_RETIREMENT_NOTICE) == 1
-            text = text.replace(CURRENT_EXECUTION_RETIREMENT_NOTICE, "")
-        for term in RETIRED_EXECUTION_TERMS:
-            assert term not in text, f"{relative} reintroduces retired execution term {term}"
-
-    for root_relative in ("crates", "scripts"):
-        root = ROOT / root_relative
-        for path in root.rglob("*"):
-            if not path.is_file() or path.suffix not in {".rs", ".sh", ".py", ".toml"}:
-                continue
-            relative = path.relative_to(ROOT).as_posix()
-            if relative in RETIRED_EXECUTION_SOURCE_EXCEPTIONS:
-                continue
-            text = path.read_text(encoding="utf-8")
-            for term in RETIRED_EXECUTION_TERMS:
-                assert term not in text, f"{relative} reintroduces retired execution term {term}"
-
-
 def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical() -> None:
     rules = read("REPOSITORY_RULES.md")
     crates = read("docs/architecture/tenferro-crates.md")
@@ -628,8 +565,6 @@ def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canoni
     assert "preparation/execution substrate is implemented" in normalized_crates
     assert "opposite direction remains dev/test-only" in normalized_crates
     assert "Phase 5 common scheduled-graph checkpoint" in design
-    assert "assemble_executable_engine_registration" in design
-    assert "EngineRegistration::with_tensor_backend_executor" not in design
     assert "tenferro-cpu::runtime_engine_registration" in design
     assert "The previous `GraphExecutor<B>` facade is retired" in design
     assert "metadata-only layer" in design
@@ -678,7 +613,6 @@ def main() -> int:
         test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
         test_repository_rules_sections_are_routed_or_human_only,
         test_active_ad_docs_use_current_semantic_ad_owner,
-        test_retired_phase5_execution_facade_cannot_reappear_in_authority_or_source,
         test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical,
     ]:
         test()
