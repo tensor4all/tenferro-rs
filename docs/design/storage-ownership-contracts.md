@@ -1985,125 +1985,117 @@ The v2 ledger carries these executable obligations:
 
 ## G5. Raw handles and reclamation
 
-- Provider handles (CubeCL handles, wgpu resources, CUDA device pointers,
-  Metal resources) are lifetime or in-flight pins only. No handle can mint
-  ownership, recover uniqueness, or authorize a write (I3). `Handle`
-  cloneability inside a provider is acceptable exactly because handles carry
-  no authority.
-- Raw access is lease-bounded. The launch-session shape (#1563):
+- Raw provider handles and pointers are lifetime-only. They may keep a
+  provider resource usable for a binding or retirement record, but they carry
+  no owner claim, `StorageRef`, `StorageMut`, or write authority. Cloning a
+  provider handle or retaining an `Arc` does not change that contract.
 
-  ```rust
-  let read_binding = resolved_read.acquire_device_read(endpoint)?;
-  let write_binding = match unsafe { bind_raw_write(resolved_write, request) } {
-      Ok(binding) => binding,
-      Err((resolved, error)) => return Err((resolved, error)),
-  };
-  let completion = session.enqueue_borrowed(read_binding, write_binding)?;
-  ```
+### Prepared binding
 
-  ```rust
-  impl<'a> LaunchSession<'a> {
-      fn enqueue_borrowed(
-          self,
-          read: UseLease,
-          write: WriteBinding<'a>,
-      ) -> Result<RetiredBorrowed<'a>, (Self, EnqueueError)>;
-  }
-  ```
+`prepare_read` and `prepare_write` are the single access-boundary validation
+described by G1. They validate bounds, layout, dtype, the exact root span,
+alignment, storage, and provider compatibility, plus write injectivity for a
+write. The result is sealed provider-ready access carrying the checked layout
+and the Rust capability needed by the operation.
 
-  `RetiredBorrowed<'a>` is returned only after the device work and its lease
-  have retired. A pending completion cannot carry `'a` into a runtime
-  retirement record; detached submission uses the separate owning package.
+```rust
+fn prepare_read<'a>(
+    access: StorageRef<'a>,
+    request: ReadRequest,
+    provider: &Provider,
+) -> Result<PreparedRead<'a>, (StorageRef<'a>, AccessError)>;
 
-  `resolved_read` and `resolved_write` are sealed capability wrappers, not
-  public descriptor constructors. A read value is built only from `StorageRef`
-  plus a validated descriptor; a write value is built only from `StorageMut`
-  plus a validated, injective descriptor. Their fields and constructors remain
-  in the audited ownership module. `session` owns only endpoint/event
-  submission state: it cannot resolve a descriptor, select a provider, or
-  supply a second span or claim. Storage authority is carried by the resolved
-  value and then by the binding.
+fn prepare_write<'a>(
+    access: StorageMut<'a>,
+    request: WriteRequest,
+    provider: &Provider,
+) -> Result<PreparedWrite<'a>, (StorageMut<'a>, AccessError)>;
 
-  ```rust
-  struct TensorWrite<'a> {
-      resolved: ResolvedWrite<'a>,
-      _sealed: PrivateToken,
-  }
+fn bind_read<'a>(
+    prepared: PreparedRead<'a>,
+) -> Result<DeviceRead<'a>, (PreparedRead<'a>, BindError)>;
 
-  struct OwnedTensorWrite {
-      owner: OwnedStorage,
-      span: RootBoundSpan,
-      _sealed: PrivateToken,
-  }
+fn bind_write<'a>(
+    prepared: PreparedWrite<'a>,
+) -> Result<DeviceWrite<'a>, (PreparedWrite<'a>, BindError)>;
+```
 
-  // `WriteBinding<'a>` is the G1 type: it owns this resolved operation and
-  // its `UseLease` until enqueue admission and retirement finish.
-  ```
+Binding consumes provider-ready prepared access. Neither binding nor enqueue
+repeats these checks or compares a second request, key, or range; those values
+are carried by the prepared object, and the binding/enqueue signatures accept
+no replacement values. `PreparedRead`, `PreparedWrite`, `DeviceRead`, and
+`DeviceWrite` are distinct sealed states, not boolean state combinations.
 
-  The binding retains the exclusive borrow (or the consumed `OwnedTensorWrite`
-  package)
-  until enqueue admission has either returned the unchanged package or moved
-  it into the runtime retirement record. A static `UseLease` alone never
-  permits reacquiring mutable access while work is pending.
+There is no shared-to-exclusive conversion. A provider handle, `Arc`, lease,
+event, raw pointer, or refcount cannot become `StorageMut`, an owner claim, or
+a write binding. `prepare_write` starts with an exclusive owner borrow or a
+newly allocated output, and that Rust capability remains the source of write
+authority.
 
-  Bindings expose raw pointers only for the session lifetime; every binding
-  revalidates domain/endpoint, span, layout arithmetic, alignment, access
-  mode, and write injectivity (G1). A safe unleased
-  `device_ptr(&Tensor) -> u64` does not exist; any escaping raw-pointer API
-  is explicitly `unsafe` and documents its retirement obligations, and it
-  stays provider-specific (no false parity).
-- There is no shared-internal-to-exclusive transition. In particular, a
-  provider pin, `Arc`, raw handle, lease, reference count, or completion
-  token cannot be converted into `StorageMut`, an owner claim, or a write
-  binding. Raw write binding starts with an exclusive capability already
-  proven by Rust ownership. The sole audited unsafe boundary has this shape:
+Safe APIs never return an escaping raw pointer. Provider-specific unsafe
+interop may expose a pointer only with documentation that the caller keeps the
+binding alive for the required lifetime, obeys the provider's synchronization
+rules, and does not use the pointer after retirement. There is no safe generic
+`device_ptr` accessor.
 
-  ```rust
-  unsafe fn bind_raw_write<'a>(
-      capability: ResolvedWrite<'a>,
-      request: ValidatedWriteRequest,
-  ) -> Result<WriteBinding<'a>, (ResolvedWrite<'a>, AccessError)>;
-  ```
+### Detached and borrowed submission
 
-  `ResolvedWrite` carries the exclusively borrowed owner, its matching claim
-  and pin, the root-bound span, and the provider dispatch together, so the
-  binder cannot be given an unrelated pin or provider receiver. The binder
-  rechecks request key/range against that resolved capability before exposing
-  raw state. Its safety proof covers only conversion of an existing exclusive
-  capability into provider raw state; it does not establish uniqueness.
-  The call-site inventory is enforced by a source-contract test. Strong
-  counts may be diagnostics for leaked pins or retirement latency, never a
-  precondition or proof for access authority (I3).
-- Successful enqueue consumes the launch session. For detached execution,
-  the runtime task continues to own the containing `OwnedStorage` and makes
-  it unreachable to callers until event retirement; the encoding borrow may
-  end, but no safe reborrow is possible. The completion lease and root pin
-  move to the retirement record. Scoped submission in G3 is read-only. A
-  direct borrowed write retires synchronously; the only asynchronous write
-  package is the owning `OwnedTensorWrite` path. No other async write mode is
-  permitted.
-- Enqueue failure returns the unchanged session and all unadmitted
-  capabilities in `(Self, EnqueueError)`. No raw binding or lease remains
-  active, and the owning task/borrow can retry or recover without inference.
-- Stream-ordered reclamation (I6): a retirement record holds the root-resource
-  deallocator and all pins for a resource whose claim dropped with
-  outstanding work. It never owns a deallocator for an individual subspan.
-  Records are keyed by event domain. Completion tokens visible to users are
-  never the sole owner of a lease, because users may drop them. Runtime
-  drop drains only its own retirement queue before releasing its context.
-  A failed drain quarantines (retains and reports); it never frees early and
-  never releases a provider context that pending work may still use.
+Safe asynchronous device submission is detached and owning only. The task
+consumes the G3 `ExecutionInputs`, owns its `AllocationGroup` and the
+`Arc<RootResource>` roots held by that group, and derives the prepared read and
+write bindings inside the task before enqueue. A safe detached call does not
+accept a caller-borrowed prepared binding. A write binding is derived only from
+an exclusive owner/group borrow or a newly allocated output.
 
-### Raw-binding state table
+```rust
+fn submit_detached(
+    inputs: ExecutionInputs,
+) -> Result<ExecutionHandle, SubmitRejected>;
+
+fn submit_borrowed<'a>(
+    bindings: BorrowedBindings<'a>,
+) -> Result<RetiredBorrowed<'a>, (BorrowedBindings<'a>, SubmitError)>;
+```
+
+`SubmitRejected` returns the exact unchanged `ExecutionInputs`. Likewise,
+binding failure returns the exact unchanged `PreparedRead` or `PreparedWrite`,
+and a borrowed pre-admission failure returns the exact unchanged bindings. A
+borrowed operation is optional: if offered, it is synchronous through
+retirement and is supported only by a provider that guarantees no asynchronous
+work survives unwind. Other providers reject it as unsupported before
+admission.
+
+### Event retirement
+
+After detached admission, a provider-private retirement record owns the event,
+the `Arc<RootResource>` roots, and the provider context until completion is
+proven.
+
+```rust
+struct RetirementRecord {
+    event: ProviderEvent,
+    roots: Box<[Arc<RootResource>]>,
+    context: Arc<ProviderContext>,
+}
+```
+
+`CompletionUnproven` returns only its typed cause and diagnostics. Its
+provider-private record permanently retains the roots and context; it does not
+free speculatively and exposes no safe recovery path. There is no
+quarantine/poison state, access or retirement registry, or retry transition.
+Completion handles may be dropped without changing this retention. Once event
+retirement is proven, the record releases its retained resources exactly once.
+
+### Raw-handle state table
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| request write from shared pin/handle/lease | shared or none (insufficient) | none | none | structured capability error; no binding or state change | n/a | unchanged |
-| bind raw read | `StorageRef<'a>` | shared capability and resource for binding/session lifetime | dependencies from G1 | no binding; capability remains valid | session retains lease after admitted enqueue | after covering read retires |
-| bind raw write | sealed `TensorWrite<'a>` or `OwnedTensorWrite` from a matching exclusive capability | exclusive claim+pin capability for binding/session lifetime | RAW/WAR/WAW dependencies from G1 | no binding; exact borrowed/owning package remains valid | no shared state can recover the consumed exclusivity; admitted lease retires normally | after covering write retires |
-| enqueue validated bindings | consumes session; detached task retains owners | capabilities cannot be reused during admission or before retirement | provider enqueue/event registration | returns unchanged session and all capabilities in `(Self, EnqueueError)` | admitted leases and root pins move to runtime retirement even if completion handle is dropped | after event-domain retirement |
-| drop last claim with provider pins in flight | owning claim | none | none at drop | n/a | claim, root pin, and leases enter retirement record | root deallocator only after all sibling claims and pins retire |
-| retirement proof fails | provider-internal retirement record | none | attempted wait/poll | error reported | resource and context are quarantined | never speculatively |
+| owner/view -> `PreparedRead` or `PreparedWrite` | shared / exclusive | Rust capability carried by prepared access | one bounds/layout/dtype/root-span/alignment/storage/provider validation; write injectivity for writes | exact input capability, no prepared object | no provider state is published | owner follows G1 |
+| `Prepared*` -> device binding | prepared shared / exclusive | binding keeps its capability and provider lifetime | binding work only; no second check or request/key/range comparison | exact prepared object | unadmitted binding drops without changing ownership | no device resource is released before binding drop |
+| detached package -> pre-admission rejection | owning | no caller borrow | planning/admission only | exact unchanged `ExecutionInputs` | no event-retirement record exists | owners return under G1 |
+| detached package -> admitted event | owning task | task-local prepared bindings; no caller lifetime | enqueue and event registration | exact package/bindings are returned if admission fails | event record owns roots/context after admission | after proven event retirement |
+| borrowed binding -> retired result | shared / exclusive | binding borrow remains until return | provider work retires before return | exact unchanged bindings before admission; unsupported otherwise | provider contract leaves no async work across unwind | after synchronous retirement |
+| retirement -> `CompletionUnproven` | provider-private owning record | no public borrow | completion cannot be proven | diagnostics only; no owner is returned | record permanently retains roots/context | never released by this outcome |
 
 ## G6. Documentation ownership
 
@@ -2411,7 +2403,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
 | G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; borrowed output-view coverage; consuming `into_output`/`into_owned_output` cases prove repeated and duplicate-output aliases plus the remaining map disappear together, failures return the exact bundle, and scoped borrowed/metadata rejection never copies; source checks reject extracted-state flags; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
-| G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
+| G5 raw handles, reclamation | prepared-once resolution counts; compile-fail shared write; pre-admission exact return of unchanged owning package/bindings; event-retirement ownership; permanent retain on `CompletionUnproven`; raw binder source inventory | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
 | G7 AD retention | byte-preserving duplicate/transfer copy counters separated from allocation/kernel-write counters (zero retention events in both); ordered Arc-uniqueness-before-G2 tests with `IntoValueError<Self>` preservation; `take_grad` three-outcome extraction tests; acquired-record validity and local-key-miss tests; checkpoint retained-group exclusion/interior-release test; compile-fail mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
