@@ -137,6 +137,27 @@ the provider destructor exactly once. There is no second claim/hold accounting
 state machine, provider access, persistent split/group, recovery, quarantine,
 compatibility, or repeated validation in this phase.
 
+### P4 prepared access and retirement kernel
+
+P4 keeps the ownership boundary private and adds one checked transition from a
+borrowed `StorageRef`/`StorageMut` to enum-authoritative `PreparedRead` and
+`PreparedWrite` states. The constructor checks the exact root-bound span,
+dtype size/alignment, layout arithmetic, reachable offsets, and mutable
+injectivity once. Host preparation maps provider bytes once and retains a
+typed borrowed mapping; contiguous access uses a typed slice and strided access
+uses the stored shape/stride/carry plan. Device preparation retains only the
+checked capability and an opaque private token, with no host pointer or
+iterator. The mapping and prepared transition accept no replacement range,
+provider, or access-mode argument.
+
+Detached admission creates one retirement record owning the provider event,
+bindings, root pins, and provider context. A proven completion, including a
+typed provider failure after completion is proven, drops the record exactly
+once. If completion is unproven, the complete private record is intentionally
+retained and only a diagnostic outcome is returned; no owner, retry,
+quarantine, cancellation, or recovery protocol is introduced. A rejection
+known before admission returns the same prepared package unchanged.
+
 ## Phase 1 verification ledger
 
 The machine-readable production registry is
@@ -154,8 +175,10 @@ P1 obligation. The current production state activates the four P1 rows
 (`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
 `p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row; the
 already reconciled P0 `p0-control-plane` row is active as their prerequisite.
-All later rows remain deferred until their real artifacts and verifiers land.
-No missing deferred artifact is fabricated to make this phase terminal.
+The five P4 access-retirement rows are now active with their real private proof
+artifacts. P3/P5 and all later rows remain deferred until their own phase gates
+and verifiers land. No missing deferred artifact is fabricated to make a phase
+terminal.
 
 ### One canonical graph
 
