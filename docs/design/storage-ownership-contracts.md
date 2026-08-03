@@ -2282,21 +2282,27 @@ ownership shape, not final public names.
 |---|---|---|
 | `materialized(&self) -> Result<Arc<Tensor>>` | `value(&self) -> Result<ValueGuard<'_>>` | materializes if lazy, then exposes a borrowed `TensorView`; host bytes go through G1 guards |
 | owned copy of a value | `duplicate_value(&self) -> Result<Tensor>` | explicit copy, reason `ExplicitDuplicate` |
-| owned move of a value | `into_value(self) -> Result<Tensor, (Self, ValueStillReferenced)>` | consumes the handle and performs the G2 direct-ownership extraction; success requires unique descriptor/container ownership, and failure returns the handle |
-| backward result `Vec<Arc<Tensor>>`, `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>` | `Gradients` bundle (a G2 group specialization) with `grad(&self, key) -> Option<TensorView<'_>>` and `take_grad(&mut self, key) -> Option<Tensor>` | one owner per gradient allocation; extraction when unique |
+| owned move of a value | `into_value(self) -> Result<Tensor, IntoValueError<Self>>` | consumes the handle; `NotUnique(Self)` is returned before group extraction when direct Arc ownership is shared, while a local G2 failure returns `Extract { value: Self, error: ExtractError }` |
+| backward result `Vec<Arc<Tensor>>`, `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>` | `Gradients` bundle (a G2 group specialization) with `grad(&self, key) -> Option<TensorView<'_>>` and `take_grad(&mut self, key) -> Result<Option<Tensor>, ExtractError>` | one owner per gradient allocation; `Ok(None)` means no gradient, and extraction failure leaves the bundle unchanged |
 | traced attached-data maps `HashMap<ValueKey, Arc<Tensor>>` | `ExecutionInputs` bindings over directly retained group descriptors (G3) | no shared tensor owners or mutable authority in the runtime boundary |
+
+```rust
+pub enum IntoValueError<H> {
+    NotUnique(H),
+    Extract { value: H, error: ExtractError },
+}
+```
 
 `ValueGuard` borrows the record's prepared descriptor view and can request the
 G1 host-read guard. A guard does not retain a second owner or perform a new
 layout/provider validation. `duplicate_value` is the explicit destination
 allocation and data movement path. `into_value` is the consuming path; an
-`Arc::try_unwrap`-equivalent structural uniqueness test is the authority for
-extraction, not a counter or identifier lookup.
-
-`ValueStillReferenced` (or an implementation-equivalent `NotUnique`) is one
-undifferentiated structural-uniqueness error. It does not identify whether the
-remaining direct owner is a tape, checkpoint, execution record, or sibling
-handle. Those categories are useful test setups, not runtime error state.
+`Arc::try_unwrap`-equivalent structural uniqueness test runs before any G2
+group extraction. Failure returns `IntoValueError::NotUnique` with the
+original usable handle. Only after Arc uniqueness succeeds may G2 extraction
+run; its local error reconstructs and returns the same usable handle in
+`IntoValueError::Extract`. These are the only two error variants. Neither
+records nor reports the category of the remaining direct owner.
 
 ### Checkpoint semantics
 
@@ -2304,10 +2310,11 @@ handle. Those categories are useful test setups, not runtime error state.
   descriptor records whose direct container reference keeps the checkpoint
   group and required root resources alive.
 - Interior values are deliberately discarded at record time; checkpointing
-  must not accidentally retain every intermediate. A contract test asserts
-  that the checkpoint creates no descriptor record for an interior value. Its
-  allocation is released after the boundary is recorded when no tape,
-  execution, checkpoint, or external handle directly retains the container.
+  must not accidentally retain every intermediate. Their owners are never
+  inserted into the checkpoint retained group, and no checkpoint descriptor
+  record is created for them. After forward use, each interior owner therefore
+  drops normally unless a separate tape, execution record, or external handle
+  directly owns it.
 - Backward recomputation executes the stored subgraph and produces fresh
   owners; its allocations are classified `CheckpointRecomputeOutput`,
   distinct from retention (which allocates nothing) and from explicit
@@ -2324,11 +2331,11 @@ handle. Those categories are useful test setups, not runtime error state.
 - Mutable reinterpretation requires an exclusive or owning capability. A
   handle cannot supply it. If a tape, checkpoint, execution record, or sibling
   handle still retains the container, the unique owning path cannot be
-  obtained and `try_extract` returns the same undifferentiated
-  `ValueStillReferenced`/`NotUnique` error. This is a direct ownership/borrow
-  property, verified by structural-uniqueness tests and compile-fail tests for
-  mutable access through a shared handle. An explicit duplicate is the only
-  alternative; reinterpretation never duplicates implicitly.
+  obtained and the ownership acquisition returns undifferentiated
+  `NotUnique`. This is a direct ownership/borrow property, verified by
+  structural-uniqueness tests and compile-fail tests for mutable access
+  through a shared handle. An explicit duplicate is the only alternative;
+  reinterpretation never duplicates implicitly.
 
 ### Copy and allocation accounting
 
@@ -2357,14 +2364,18 @@ enum AllocationReason {
 - Retention has neither a copy nor an allocation reason because retaining a
   descriptor performs neither operation.
 - Every physical allocation emits exactly one allocation event. Every
-  physical data movement emits exactly one copy event, whether or not a new
-  destination was allocated. Descriptor aliasing, metadata-only outputs,
-  and public-handle cloning emit neither event.
+  byte-preserving explicit duplication or transfer emits exactly one copy
+  event, whether or not its destination allocation is new. Kernel writes,
+  initialization, reductions, and newly computed operation results are not
+  copy events; a fresh kernel result records only its allocation reason.
+  Descriptor aliasing, metadata-only outputs, and public-handle cloning emit
+  neither event.
 - Acceptance for an AD scenario (forward plus backward, with and without
-  checkpointing): every observed copy and every observed allocation carries
-  a reason from its own enum and each ledger matches the scenario's expected
-  multiset. Copies and allocations attributable to retention are therefore
-  both exactly zero.
+  checkpointing): every observed byte-preserving duplication/transfer and
+  every observed allocation carries a reason from its own enum, and each
+  ledger matches the scenario's expected multiset. Kernel writes and new
+  computed results must not increment the copy ledger. Copies and allocations
+  attributable to retention are therefore both exactly zero.
 - Aggregate pre-migration versus post-migration copy counts are not an
   acceptance criterion.
 
@@ -2375,25 +2386,33 @@ enum AllocationReason {
   record/container reference is dropped.
 - Structural-uniqueness tests cover a sibling handle, tape record,
   checkpoint record, and execution record. Each shared case rejects
-  `into_value` with the same undifferentiated error and without changing any
-  owner; the unique case unwraps the descriptor/container and moves one owner
-  through G2.
+  `into_value` with `IntoValueError::NotUnique`, preserves the same usable
+  handle, and proves that G2 extraction was not attempted. A uniquely owned
+  Arc proceeds to G2: local extraction failure returns
+  `IntoValueError::Extract` with the usable handle, while success moves one
+  owner through G2. All shared-owner setups assert the same `NotUnique`
+  result.
+- `take_grad` tests distinguish `Ok(None)`, `Ok(Some(owner))`, and
+  `Err(ExtractError)`; the error case leaves the `Gradients` bundle unchanged.
 - Compile-fail tests show that a shared handle has no mutable view or owner
   projection, and that mutable reinterpretation requires an exclusive owning
   borrow. An explicit duplicate test verifies that duplication is requested by
   the caller and that retention itself never copies.
-- A checkpoint test records boundary descriptors but no interior descriptor,
-  then checks direct container release and fresh recomputation ownership.
+- A checkpoint test inserts only boundary owners into its retained group,
+  asserts that no interior owner or descriptor was inserted, observes the
+  omitted interior allocation release after forward use, and checks fresh
+  recomputation ownership.
 - Forward/backward CPU and designated asynchronous-provider tests compare the
   reason-classified copy/allocation multisets and require zero events caused
-  by retention.
+  by retention. Kernel writes and fresh results contribute allocation events
+  where applicable but no copy events.
 
 ### Atomic cutover
 
 Public host ownership (#1559) and final detached/scoped runtime plus direct
 group-based AD retention (#1565) form one atomic promotion cohort. They land
 the final `AllocationGroup`, lease, retirement, and descriptor-ownership
-semantics together. There is no interim AD-retention adapter, compatibility
+semantics together. There is no interim AD-retention adapter or compatibility
 path. Each provider consumes the final prepared access and event-retirement
 contracts directly when its owning phase lands, with no additional ownership
 seam.
@@ -2422,10 +2441,10 @@ seam.
 | checkpoint retains/releases boundary record | owning checkpoint/container reference / none on release | none | none | local boundary-key lookup may fail before a record is acquired | ownership keeps an acquired record valid; interior values get no record | boundary allocation follows direct ownership |
 | `value()` guard | shared | record/container borrow for guard lifetime | G1 host-read rules if host bytes requested | error, record/container unchanged | guard drop ends the borrow | n/a |
 | backward execution | shared reads of retained descriptors; new owners for grads | tape/container shared during execution | G3 rules | typed failure, tape unchanged, grads dropped after retirement | per G3 panic row | grads owned by `Gradients` bundle |
-| `take_grad` | exclusive on `Gradients` | none after return | none | `None`/typed reason, bundle unchanged | n/a | extracted owner per G1 |
-| `into_value` while another direct owner exists | owning attempt (consumes one handle) | none | none | undifferentiated `ValueStillReferenced`/`NotUnique`; the original handle is returned | failed uniqueness leaves all direct owners unchanged | n/a |
-| `into_value` with unique direct ownership | owning (consumes the handle and uniquely unwraps its record/container) | none | none | G2 extraction error leaves the owner in the returned handle/container | owner moves exactly once; no identity transition is published | extracted owner per G1 |
-| checkpoint record | owning (boundary records retain their direct containers) | none | none | error: no partial checkpoint record is published | no interior record is created; independent handles remain valid | boundary containers after direct owners drop |
+| `take_grad` | exclusive on `Gradients` | exclusive bundle borrow until return | none | `Ok(None)` for no gradient; `Err(ExtractError)` leaves the bundle unchanged | owner is removed only after successful extraction | `Ok(Some(owner))` follows G1 |
+| `into_value` while another direct owner exists | owning attempt (consumes one handle) | none | none | `IntoValueError::NotUnique(Self)`; G2 extraction is not attempted | the original usable handle and all direct owners are preserved | n/a |
+| `into_value` after unique Arc ownership | owning (consumes and uniquely unwraps the record/container before G2) | none | none | local G2 failure returns `IntoValueError::Extract { value: Self, error: ExtractError }` | failure reconstructs the usable handle; success moves the owner exactly once | extracted owner per G1 |
+| checkpoint record | owning (only boundary owners/descriptors enter the checkpoint retained group) | none | none | error: no partial checkpoint record is published | interior owners are never inserted and drop after forward use absent another direct owner | boundary containers after direct owners drop |
 | checkpoint recompute (backward) | shared reads of boundary; fresh owners for recomputed values | checkpoint container shared | G3 rules | typed failure after retirement | per G3 | recomputed owners dropped after use |
 | tape drop | owning tape/container reference | none | retirement per G1 for in-flight work | n/a | direct records and event-retirement ownership follow G1; ordinary ownership only | after the last direct owner, exactly once |
 
@@ -2442,7 +2461,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
-| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); direct-Arc lifetime and category-independent structural-uniqueness rejection/preservation tests; acquired-record validity and local-key-miss tests; checkpoint interior-release test; compile-fail mutable-reinterpret exclusion; explicit-duplicate/implicit-copy test; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
+| G7 AD retention | byte-preserving duplicate/transfer copy counters separated from allocation/kernel-write counters (zero retention events in both); ordered Arc-uniqueness-before-G2 tests with `IntoValueError<Self>` preservation; `take_grad` three-outcome extraction tests; acquired-record validity and local-key-miss tests; checkpoint retained-group exclusion/interior-release test; compile-fail mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
 ## Relationship to phase issues
 
