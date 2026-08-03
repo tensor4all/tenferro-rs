@@ -765,6 +765,26 @@ def test_contains_sensitive_text_distinguishes_identifiers_from_quoted_credentia
     assert mod.contains_sensitive_text(f"+        api_token = {quoted_credential}")
 
 
+def test_sensitive_diff_finding_reports_added_match_location() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/crates/tenferro-runtime/src/runtime/engine_registration.rs "
+            "b/crates/tenferro-runtime/src/runtime/engine_registration.rs",
+            "--- a/crates/tenferro-runtime/src/runtime/engine_registration.rs",
+            "+++ b/crates/tenferro-runtime/src/runtime/engine_registration.rs",
+            "@@ -658,0 +659,1 @@",
+            '+        api_token = "live-token-value-1234567890"',
+        ]
+    )
+
+    finding = mod.sensitive_diff_finding(diff)
+
+    assert finding is not None
+    assert finding.file == "crates/tenferro-runtime/src/runtime/engine_registration.rs"
+    assert finding.line == 659
+
+
 def test_summarize_llm_review_computes_dropped_count() -> None:
     mod = load_module()
     summary = mod.summarize_llm_review(
@@ -840,6 +860,7 @@ def main() -> int:
         test_sensitive_diff_finding_checks_added_lines_only,
         test_contains_sensitive_text_ignores_env_lookup_code,
         test_contains_sensitive_text_distinguishes_identifiers_from_quoted_credentials,
+        test_sensitive_diff_finding_reports_added_match_location,
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,

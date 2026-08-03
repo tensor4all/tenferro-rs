@@ -555,15 +555,40 @@ def added_diff_text(diff_text: str) -> str:
     )
 
 
+def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
+    current_file: str | None = None
+    new_line: int | None = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            raw_path = line.removeprefix("+++ b/").removeprefix("+++ ")
+            current_file = None if raw_path == "/dev/null" else raw_path
+            continue
+        if line.startswith("@@"):
+            match = re.search(r"\+(\d+)(?:,\d+)?", line)
+            new_line = int(match.group(1)) if match else None
+            continue
+        if current_file is None or new_line is None:
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            if contains_sensitive_text(line[1:]):
+                return current_file, new_line
+            new_line += 1
+        elif line.startswith(" "):
+            new_line += 1
+    return None
+
+
 def sensitive_diff_finding(diff_text: str) -> Finding | None:
-    if not contains_sensitive_text(added_diff_text(diff_text)):
+    location = sensitive_diff_location(diff_text)
+    if location is None:
         return None
+    file, line = location
     return Finding(
         id="sensitive-diff",
         severity="block",
         rule_section="External LLM Review",
-        file="",
-        line=None,
+        file=file,
+        line=line,
         summary="Sensitive-looking diff content detected before LLM upload",
         detail=(
             "External LLM review was skipped because the diff contains token, "
