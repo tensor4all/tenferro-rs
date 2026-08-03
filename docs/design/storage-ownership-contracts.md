@@ -529,10 +529,15 @@ struct StorageMut<'a> {
 }
 
 struct RootBoundSpan {
+    root_identity: RootResourceIdentity,
     byte_range: Range<usize>,
-    dtype: DType,
+    guaranteed_alignment: NonZeroUsize,
 }
 ```
+
+The G1 sketch above is schematic; the executable P2 `RootBoundSpan` carries
+the exact `RootResourceIdentity` and checked alignment shown here. It is not
+constructible from a range alone.
 
 `OwnedStorage` and `OwnedSpanClaim` are non-`Clone`. `Arc<RootResource>` is
 cloneable only where direct physical lifetime must survive asynchronous work or

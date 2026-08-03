@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{AllocationDomainId, AllocationId};
 
-use super::{ByteRange, RootBoundSpan, RootResourceExtent, SpanValidationError};
+use super::span::{RootBoundSpan, RootResourceExtent, SpanValidationError};
 
 /// Domain-qualified diagnostic identity. It is not an ownership proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -92,19 +92,6 @@ impl RootResourceIdentity {
 
     pub(crate) const fn extent(self) -> RootResourceExtent {
         self.extent
-    }
-
-    pub(crate) fn bind_relative_range(
-        self,
-        relative: ByteRange,
-    ) -> Result<RootBoundSpan, SpanValidationError> {
-        let (byte_offset, byte_len, alignment) = self.extent.relative_parts(relative)?;
-        Ok(RootBoundSpan::from_parts(
-            self,
-            byte_offset,
-            byte_len,
-            alignment,
-        ))
     }
 
     pub(crate) fn validate_bound_span(

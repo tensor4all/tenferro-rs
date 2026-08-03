@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use super::{AllocationKey, RootResourceIdentity};
+use super::identity::{AllocationKey, RootResourceId, RootResourceIdentity};
 
 /// A half-open byte range with checked end arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,8 +70,8 @@ pub(crate) enum SpanValidationError {
     },
     #[error("root-resource identity does not match the bound span")]
     DifferentRoot {
-        expected: super::RootResourceId,
-        actual: super::RootResourceId,
+        expected: RootResourceId,
+        actual: RootResourceId,
     },
     #[error("requested span lies outside the root resource extent")]
     OutsideRootExtent {
@@ -241,7 +241,7 @@ impl RootBoundSpan {
         Ok(self.byte_offset <= other.byte_offset && other_end <= self_end)
     }
 
-    pub(crate) fn from_parts(
+    fn from_parts(
         root_identity: RootResourceIdentity,
         byte_offset: usize,
         byte_len: usize,
@@ -253,6 +253,21 @@ impl RootBoundSpan {
             byte_len,
             guaranteed_alignment,
         }
+    }
+}
+
+impl RootResourceIdentity {
+    pub(crate) fn bind_relative_range(
+        self,
+        relative: ByteRange,
+    ) -> Result<RootBoundSpan, SpanValidationError> {
+        let (byte_offset, byte_len, alignment) = self.extent().relative_parts(relative)?;
+        Ok(RootBoundSpan::from_parts(
+            self,
+            byte_offset,
+            byte_len,
+            alignment,
+        ))
     }
 }
 
@@ -269,7 +284,7 @@ fn checked_alignment(
             alignment: guaranteed_alignment,
         });
     }
-    if byte_offset % alignment.get() != 0 {
+    if !byte_offset.is_multiple_of(alignment.get()) {
         return Err(SpanValidationError::MisalignedOffset {
             byte_offset,
             alignment: guaranteed_alignment,

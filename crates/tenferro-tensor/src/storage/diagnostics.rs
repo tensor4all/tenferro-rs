@@ -1,6 +1,7 @@
 use std::fmt;
 
-use super::{AllocationKey, ByteRange, RootBoundSpan, RootResourceId};
+use super::identity::{AllocationKey, RootResourceId};
+use super::span::{ByteRange, RootBoundSpan};
 
 /// Explicit request identity used by operation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
