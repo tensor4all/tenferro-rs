@@ -31,6 +31,8 @@ impl ProviderCapabilities {
 /// Implementors must own exactly one provider allocation and its destructor,
 /// report stable truthful metadata, and uphold `Send`/`Sync` for the boxed
 /// value. The storage core does not recover from a violated provider contract.
+// INVARIANT: #1558 P2 names this private storage module as the sole provider
+// boundary; higher-layer tensor graph and AD paths remain unsafe-free.
 pub(crate) unsafe trait BackendAllocation:
     std::fmt::Debug + Send + Sync + 'static
 {
