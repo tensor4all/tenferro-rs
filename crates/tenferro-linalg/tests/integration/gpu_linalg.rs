@@ -570,11 +570,12 @@ fn test_cubecl_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
 
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
-    let outputs = gpu.svd(&gpu_input).unwrap();
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| session.svd(&gpu_input)).unwrap();
     let u = download(&gpu, &outputs[0]);
     let s = download(&gpu, &outputs[1]);
     let vt = download(&gpu, &outputs[2]);
-    let gpu_values = gpu.svd_values(&gpu_input).unwrap();
+    let gpu_values =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_values(&gpu_input)).unwrap();
     let values = download(&gpu, &gpu_values);
 
     assert_eq!(u.shape(), &[M, M]);
@@ -600,7 +601,8 @@ fn test_cubecl_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
     assert_identity_f64(&vvt, M, 1e-10);
 
     let mut cpu = cpu_backend();
-    let expected_values = cpu.svd_values(&input).unwrap();
+    let expected_values =
+        with_cpu_linalg_session(&mut cpu, |session| session.svd_values(&input)).unwrap();
     assert_tensor_close(&values, &expected_values, 1e-9);
 }
 
@@ -622,11 +624,12 @@ fn test_cubecl_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
 
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
-    let outputs = gpu.svd(&gpu_input).unwrap();
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| session.svd(&gpu_input)).unwrap();
     let u = download(&gpu, &outputs[0]);
     let s = download(&gpu, &outputs[1]);
     let vt = download(&gpu, &outputs[2]);
-    let gpu_values = gpu.svd_values(&gpu_input).unwrap();
+    let gpu_values =
+        with_cuda_linalg_session(&mut gpu, |session| session.svd_values(&gpu_input)).unwrap();
     let values = download(&gpu, &gpu_values);
 
     let u_data = u.as_slice::<Complex64>().unwrap();
@@ -653,7 +656,8 @@ fn test_cubecl_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
     assert_identity_c64(&vvh, M, 1e-10);
 
     let mut cpu = cpu_backend();
-    let expected_values = cpu.svd_values(&input).unwrap();
+    let expected_values =
+        with_cpu_linalg_session(&mut cpu, |session| session.svd_values(&input)).unwrap();
     assert_tensor_close(&values, &expected_values, 1e-9);
 }
 
@@ -674,7 +678,7 @@ fn test_cubecl_svd_gesvd_tall_f64_retains_direct_route() {
 
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
-    let outputs = gpu.svd(&gpu_input).unwrap();
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| session.svd(&gpu_input)).unwrap();
     let u = download(&gpu, &outputs[0]);
     let s = download(&gpu, &outputs[1]);
     let vt = download(&gpu, &outputs[2]);
@@ -693,7 +697,8 @@ fn test_cubecl_svd_gesvd_tall_f64_retains_direct_route() {
     assert_relative_error_f64(&reconstruction, input.as_slice::<f64>().unwrap(), 1e-10);
 
     let mut cpu = cpu_backend();
-    let expected_values = cpu.svd_values(&input).unwrap();
+    let expected_values =
+        with_cpu_linalg_session(&mut cpu, |session| session.svd_values(&input)).unwrap();
     assert_tensor_close(&s, &expected_values, 1e-9);
 }
 
