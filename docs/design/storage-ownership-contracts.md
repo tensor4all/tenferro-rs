@@ -175,10 +175,10 @@ P1 obligation. The current production state activates the four P1 rows
 (`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
 `p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row; the
 already reconciled P0 `p0-control-plane` row is active as their prerequisite.
-The five P4 access-retirement rows are now active with their real private proof
-artifacts. P3/P5 and all later rows remain deferred until their own phase gates
-and verifiers land. No missing deferred artifact is fabricated to make a phase
-terminal.
+The five P4 access-retirement rows and the selected P5 allocation-group row are
+now active with their real private proof artifacts. P3/P9 and all later rows
+remain deferred until their own phase gates and verifiers land. No missing
+deferred artifact is fabricated to make a phase terminal.
 
 ### One canonical graph
 
@@ -480,8 +480,9 @@ command, receipt, and exit-status mistakes, plus an integration case for the
 checked-in production manifest. Counts are derived from the parsed manifest;
 the suite does not preserve a migration-event registry or historical totals.
 It verifies the active P0 prerequisite, the four currently implementable P1 rows
-(including the measured element-access baseline), and the selected P2
-root-claims test command. The remaining future rows remain deferred and are not
+(including the measured element-access baseline), the selected P2 root-claims
+test command, the five P4 access-retirement commands, and the selected P5
+allocation-group command. The remaining future rows remain deferred and are not
 executed or materialized. Fake active artifacts are rejected because they would
 turn missing scientific evidence into a green lifecycle state rather than
 proving the underlying work.
@@ -492,10 +493,10 @@ comparison. The runner integration uses the real active Python verifiers and a
 temporary local cargo executable to prove that the canonical argv is executed;
 this fixture is not a production command mode or a lifecycle authority.
 
-P4 and P5 remain deferred;
-the CUTOVER candidate activates every required P4/P5 obligation and obtains
-successful runner evidence before atomically activating all P3/P9 obligations.
-In particular, the canonical obligation set includes:
+P4 and the selected P5 obligation are active; the CUTOVER candidate still
+requires successful runner evidence for the complete P4/P5 set before
+atomically activating all P3/P9 obligations. In particular, the canonical
+obligation set includes:
 
 - P4/G1+G4: a deferred production-code-bound compile/test artifact for the
   prepared read/write borrow shape and exact capability recovery before
@@ -803,6 +804,15 @@ G1 is accepted only with executable evidence for all of the following:
 
 The group is the only sound representation for one owner with many logical
 values (#1555, "Disjoint views and allocation groups"; #1561).
+
+The P5 candidate implements this kernel privately in
+`crates/tenferro-tensor/src/storage/group.rs`. It retains rank-erased checked
+layout metadata and root-bound spans in append-only local tables, resolves
+opaque descriptor slots only through a group borrow, and creates borrowed read
+or write children without copying storage. `split_mut` performs the single
+central injectivity/disjoint-envelope proof and `try_extract` performs the
+sole-local-descriptor ownership move. This is the P5 proof boundary; public
+API cutover and the atomic P3/P9 transition remain deferred.
 
 ### Types
 
