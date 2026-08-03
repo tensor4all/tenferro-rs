@@ -52,9 +52,11 @@ Long-term architecture quality gate:
 
 Terminology:
 
-- **Allocation**: one physical memory root and its claims. `AllocationSpan` is
-  metadata (a domain-qualified key plus byte range), never an access
-  capability or proof of ownership.
+- **Allocation**: one physical memory root and its claims. A requested byte
+  range is metadata (optionally carrying a domain-qualified key), never an
+  access capability or proof of ownership. A `RootBoundSpan` is the checked
+  range form and carries the exact `RootResourceIdentity` from which it was
+  derived.
 - **Owner**: the unique, non-cloneable ownership token for an allocation span
   (`OwnedStorage`, or a tensor/group wrapping it); this is the umbrella's
   one-owner rule.
@@ -101,6 +103,27 @@ six review-checklist questions from #1557, abbreviated as:
 
 Error conventions: all failures are structured errors carrying operation,
 requested range/ids, and resolved span identity, without raw addresses.
+
+### P2 identity and span correction boundary
+
+P2 constructs the private identity/span vocabulary used by later owners and
+prepared descriptors. `RootResourceExtent` checks every half-open range end
+with checked arithmetic before alignment or containment decisions.
+`RootResourceIdentity` pairs one private root provenance ID with that exact
+extent. `RootBoundSpan` can be created only from that identity and retains the
+identity in its value; equal extents from two roots therefore cannot be
+interchanged as resolved spans.
+
+Compound relative-range validation checks, in order, the root end, relative
+end, base-plus-relative offset, and child end. Only after those checks does it
+evaluate containment and alignment. This makes a relative-range overflow win
+over a simultaneous malformed-alignment condition without adding runtime
+recovery or repeated access validation.
+
+Operation request metadata uses the single sum type
+`RequestedIdentity::{Raw, Keyed, Rooted}`. It is untrusted and may differ from
+the resolved value; the resolved side retains a `RootBoundSpan`. No diagnostic
+identity contains a pointer, provider handle, or write authority.
 
 ## Phase 1 verification ledger
 
