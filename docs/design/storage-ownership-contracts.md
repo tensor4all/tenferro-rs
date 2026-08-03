@@ -1346,7 +1346,7 @@ values (#1555, "Disjoint views and allocation groups"; #1561).
 ```rust
 pub struct AllocationGroup {
     allocations: Vec<Option<OwnedStorage>>, // private, stable move-out slots
-    descriptors: Vec<Option<DescriptorRecord>>, // private, group-local table
+    descriptors: Vec<Option<DescriptorRecord>>, // private, append-only slots
 }
 
 #[derive(Clone, Copy)]
@@ -1367,12 +1367,14 @@ Construction preconditions (safe constructors):
   semantics, and overlapping owner spans for one key are rejected;
 - allocation entries have stable indices. Moving an owner out leaves `None`
   and never renumbers another `AllocationSlot`;
-- every descriptor references an occupied allocation entry and is validated
-  against that entry's span (G1 revalidation rules) at construction;
+- every descriptor references an occupied allocation entry. Before publishing
+  the record, safe construction validates its dtype, checked layout and byte
+  range, alignment, placement, storage, and provider compatibility against
+  that entry's exact root-bound span;
 - descriptors may alias freely, including exact duplicates;
-- an occupied slot is never silently rebound. Removing a descriptor leaves
-  its table entry vacant; later insertion may append a new entry and is not
-  required to fill vacant entries;
+- descriptor slots are append-only. Insertion always appends a new table
+  entry; removing a descriptor leaves its entry vacant for the rest of the
+  group's lifetime, and that slot is never rebound or reused;
 - `DescriptorSlot` is only a local lookup key. It carries no allocation,
   root, provider, or write authority, and it is meaningful only when resolved
   through a borrow of the group that owns the table. Copying a slot copies
@@ -1400,7 +1402,13 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
 - Every operation resolves its `DescriptorSlot` through the borrowed group:
   a shared receiver yields a borrowed descriptor record and read view, while
   an exclusive receiver yields the write or extraction path. A slot alone
-  cannot expose storage or a provider binding.
+  cannot expose storage or a provider binding. Slot resolution checks only
+  the local table position and occupancy; it does not repeat the descriptor's
+  construction-time invariant validation.
+- After any operation-specific checks such as write injectivity or pairwise
+  disjointness, the access path constructs the G1 prepared-access object once.
+  Provider map and enqueue consume that prepared object and do not repeat
+  bounds, layout, storage, or provider validation.
 - `view` borrows the group shared; any number of aliasing read views may
   coexist. The returned view is bounded by that borrow.
 - `view_mut` exclusively borrows the whole group; one mutable view exists at
@@ -1417,8 +1425,9 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
   allocation is moved out by replacing the occupied allocation entry with
   `None`, without renumbering any other entry. If another local descriptor
   aliases that allocation, the operation returns a typed reason and leaves
-  the group unchanged. A removed entry remains vacant, and no copy or
-  materialization fallback is permitted (I4).
+  the group unchanged. The removed descriptor entry remains vacant for the
+  rest of the group's lifetime, and no copy or materialization fallback is
+  permitted (I4).
 - `into_tensor` consumes the group, resolves one local slot, and explicitly
   discards all other descriptor records. It never duplicates ownership to
   preserve them. On failure it returns the unchanged group.
@@ -1452,7 +1461,7 @@ unsupported provider span. Every error leaves the group unchanged.
 | `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
 | `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
 | `split_mut` | exclusive | requested slots are resolved under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
-| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
+| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; the descriptor slot is never reused; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
 | `into_tensor` | owning | consuming group resolves one local slot and discards other records | none | group returned unchanged with reason | unselected records and claims follow G1 drop rules | selected owner follows G1 |
 
 ## G3. Submission
