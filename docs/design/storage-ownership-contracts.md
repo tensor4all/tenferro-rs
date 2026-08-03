@@ -1625,30 +1625,38 @@ a submission-layer panic catch.
 
 ### Lifecycle
 
-States: `Prepared` (validation/planning), `Admitted` (worker owns inputs),
-`Running`, `Draining` (event domains drain after completion, error, panic,
-or cancellation), then either `Retired(outcome)` or
-`Quarantined(quarantine_id)`.
+Detached execution follows `Prepared` -> `Admitted`/`Running` -> `Draining`
+-> `Retired(Completed | Failed | Cancelled)` or `CompletionUnproven`. The
+public terminal variants are `Completed`, `RetiredFailed`,
+`RetiredCancelled`, and `CompletionUnproven`.
+
+`Prepared` covers validation and planning. Rejection returns the exact
+unadmitted owners. Admission consumes `ExecutionInputs`; the worker or reaper
+owns its inputs and leases until a terminal outcome. Cancellation is
+cooperative and can take effect only before enqueue; enqueued work drains.
+
+`Retired(Failed | Cancelled)` returns the exact input owners only after
+completion is proven. `CompletionUnproven` returns no owner: a provider-private
+permanent record retains the `Arc` roots and exposes only its typed cause and
+diagnostics. There is no quarantine, poison, registry, retry, or recovery path.
+
+Dropping a detached handle detaches observation; the reaper owns resources
+until the terminal outcome.
+
+Scoped read-only execution is synchronous. Rejection returns the exact
+borrowed inputs. An admitted call joins and drains before return, so no work
+is outstanding at unwind; safety does not depend on `Drop` or `catch_unwind`.
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| `submit` validation/preparation/spawn | owning (consumes `ExecutionInputs`) | none | none | `SubmitRejected` returns the exact unaccepted package | no worker exists yet; nothing retained | inputs back with caller; G1 rules |
-| admitted, running | owning (worker) | none | leases per G1 acquired before each enqueue | execution error leads to Draining then `Failed` | worker panic leads to Draining/quarantine then `Failed` with a typed panic cause | only after retirement |
-| `ExecutionHandle::wait` | none | none | blocks until Retired or Quarantined | returns explicit terminal `ExecutionOutcome`; quarantined resources are not recovered | n/a | per retired outcome; quarantine registry otherwise |
-| handle drop before completion | none | none | none | n/a | detach: reaper retains owners and leases until retirement; completion is not cancelled | after retirement, by the reaper |
-| cancellation request | none | none | none | n/a | cooperative: honored at pre-enqueue boundaries only; already enqueued device work is never revoked | after retirement |
-| unobserved failure (detached, handle dropped) | none | none | none | reported through the documented runtime error sink/callback; never silent | n/a | after retirement |
-| scoped submit rejected | shared borrow packaged for `'env` | no runtime borrow admitted | none | exact `ScopedReadInputs<'env>` returned with cause | no worker or partial bundle exists | caller-owned inputs unaffected |
-| scoped admitted and `wait`ed | shared borrows of inputs for `'env` | input storage for `'env`; handle for `'s` only | leases per G1; `wait` observes post-retirement outcome | typed scoped outcome; borrowed descriptors retained, partial owned outputs private | panic enters draining/quarantine before outcome | fresh owners after retirement; borrowed slots never reclaimed by bundle |
-| scoped handle dropped | none beyond admitted shared input borrows | inputs remain borrowed for `'env`; handle observation ends | none at drop | n/a | scope registry retains task, owners, and leases | only after scope join/retirement |
-| scope exit with unobserved tasks | none | ends `'s`, not `'env` | joins and drains every admitted task | `ScopeExitError<R>` preserves closure result and aggregates failures/quarantine IDs | panic during closure still drains, reports secondary failures, and resumes original panic | after proven retirement; quarantine registry otherwise |
-
-Detached `Failed`/`Cancelled` outcomes return the exact owning input package
-only after all relevant event domains retire; normal shared, exclusive, and
-extraction APIs are then available again. A `Quarantined` outcome returns no
-owner: the runtime quarantine registry retains affected resources. Possibly
-partial or uninitialized outputs stay private and are dropped after
-retirement or retained by quarantine.
+| `Prepared` -> submit result | owning (consumes `ExecutionInputs`) | none | validation and planning only | `SubmitRejected` returns the exact unadmitted owners | no admitted work or provider retention | owners return to the caller under G1 |
+| `Admitted` -> `Running` | owning (worker) | none | leases acquired before enqueue | pre-enqueue cancellation or admission failure enters the terminal contract | handle drop detaches observation; reaper retains owners and leases | only at a terminal outcome |
+| `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain; cancellation never revokes enqueued work | execution failure or cancellation enters `Draining` | worker/reaper retains ownership | not yet |
+| `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
+| `Draining` -> `Retired(Failed | Cancelled)` | owning (worker/reaper) | none | completion proven | returns exact input owners only then | n/a | returned owners follow G1 |
+| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only `CompletionError` and diagnostics | permanent record retains the `Arc` roots | retained by that permanent record |
+| scoped submit rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns the exact borrowed inputs with the cause | no work is admitted | caller-owned borrows remain valid |
+| scoped admitted call | shared | input borrows remain for `'env` | joins and drains before return | returns only completed/failed/cancelled after retirement | no work is outstanding at unwind; no `Drop` or `catch_unwind` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
 
 ## G4. Method distribution
 
@@ -2364,7 +2372,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 |---|---|---|
 | G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
-| G3 submission terminal semantics | rejection carriers return identical allocation keys; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and quarantine outcomes; cancellation/panic/detach/unobserved-error suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
+| G3 submission terminal semantics | rejection carriers return exact owners/borrows; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and completion-unproven retention tests; cancellation/detach/terminal-outcome suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
