@@ -1485,9 +1485,9 @@ group unchanged.
 
 ## G3. Submission
 
-G3 has two submission surfaces: detached ownership and scoped borrowing.
-Detached inputs own their allocation group. Scoped inputs are borrowed,
-read-only views whose lifetime is tied to the scope.
+G3 has two submission surfaces. Detached owning execution remains
+asynchronous. Scoped read-only execution is synchronous to retirement and
+accepts only immutable tensor-view borrows.
 
 ### Detached submission
 
@@ -1555,25 +1555,22 @@ returns an owner or other owning resource. The provider-private permanent
 record retains the consumed `Arc` roots for that outcome. No public result can
 recover those roots.
 
-### Scoped submission
+### Scoped read-only execution
 
 ```rust
-pub fn scope<'env, R>(
+pub struct ScopedReadInputs<'env> {
+    bindings: Box<[ScopedReadBinding<'env>]>,
+}
+
+pub struct ScopedReadBinding<'env> {
+    tensor: TensorView<'env>,
+}
+
+pub fn execute_scoped_read_only<'env>(
     &self,
-    f: impl for<'s> FnOnce(&'s SubmitScope<'s, 'env>) -> R,
-) -> Result<R, ScopeExitError<R>>;
-
-impl<'s, 'env> SubmitScope<'s, 'env> {
-    pub fn submit_read_only(
-        &'s self,
-        program: &CompiledGraph,
-        inputs: ScopedReadInputs<'env>,
-    ) -> Result<ScopedHandle<'s, 'env>, ScopedSubmitRejected<'env>>;
-}
-
-impl<'s, 'env> ScopedHandle<'s, 'env> {
-    pub fn wait(self) -> ScopedExecutionOutcome<'env>;
-}
+    program: &CompiledGraph,
+    inputs: ScopedReadInputs<'env>,
+) -> Result<ScopedExecutionOutcome<'env>, ScopedSubmitRejected<'env>>;
 
 pub enum ScopedExecutionOutcome<'env> {
     Completed(ScopedExecutionBundle<'env>),
@@ -1605,22 +1602,13 @@ pub enum ScopedOutput<'env> {
     Owned(DescriptorSlot),
     Metadata(OutputMetadata),
 }
-
-pub struct ScopeExitError<R> {
-    value: R,
-    unobserved: Box<[ScopedTaskFailure]>,
-}
-
-impl<R> ScopeExitError<R> {
-    pub fn into_parts(self) -> (R, Box<[ScopedTaskFailure]>);
-}
 ```
 
-`ScopedReadInputs<'env>` contains borrowed read-only inputs. Rejection returns
-the exact borrows that were not admitted. An admitted scope always joins and
-drains every submission before any input borrow ends. `wait` and scope exit
-observe only post-retirement results; scoped submission has no
-`CompletionUnproven` outcome.
+`ScopedReadInputs<'env>` contains only immutable `TensorView<'env>` bindings;
+there is no writable binding shape. Rejection returns the exact borrowed
+package that was not admitted. Once admitted, `execute_scoped_read_only` is
+synchronous to retirement and returns only `Completed`, `RetiredFailed`, or
+`RetiredCancelled` after all provider work has retired.
 
 A completed scoped bundle distinguishes borrowed and owned tensor results.
 Identity and repeated outputs are `Borrowed` descriptor views bounded by
@@ -1629,13 +1617,11 @@ Identity and repeated outputs are `Borrowed` descriptor views bounded by
 materializes input storage, and fresh owned outputs become observable only
 after retirement.
 
-A provider that cannot guarantee join and drain before the scope borrow ends
-must reject before admission or not provide scoped submission. The `scope`
-wrapper is the minimal explicit unwind boundary: it catches an unwind from the
-closure, synchronously joins and drains all admitted scoped work, then resumes
-the original panic. On normal return it performs the same drain and reports
-unobserved task failures through `ScopeExitError<R>`. Dropping a handle or
-scope never establishes safety, completion, or retirement.
+A provider that cannot guarantee join and drain before an input borrow ends
+must reject before admission or not provide scoped read-only execution. The
+call has no return or unwind edge to the caller while borrowed device work is
+outstanding. Safety follows from synchronous retirement, never from `Drop` or
+a submission-layer panic catch.
 
 ### Lifecycle
 
