@@ -125,6 +125,18 @@ Operation request metadata uses the single sum type
 the resolved value; the resolved side retains a `RootBoundSpan`. No diagnostic
 identity contains a pointer, provider handle, or write authority.
 
+### P2 root claim kernel
+
+The selected P2 root-claims artifact adds one private `BackendAllocation` unsafe
+boundary and one `Arc<RootResource>` lifetime pin. `import_unique_root` validates
+the provider extent once, creates one `RootResource`, one non-`Clone`
+`RootResourcePin`, and one non-`Clone` `OwnedSpanClaim` carrying the full
+`RootBoundSpan`. `StorageRef<'a>` and `StorageMut<'a>` retain borrows of
+`OwnedStorage` and expose only identity/span metadata. The final `Arc` drop owns
+the provider destructor exactly once. There is no second claim/hold accounting
+state machine, provider access, persistent split/group, recovery, quarantine,
+compatibility, or repeated validation in this phase.
+
 ## Phase 1 verification ledger
 
 The machine-readable production registry is
@@ -138,11 +150,12 @@ contractual active/deferred IDs without becoming another production registry.
 The checker is v2-only, the old v1 test authority is deleted, and the retained
 v1 fixture contains only its schema marker so that an old manifest is rejected
 without a compatibility parser. The real design-document checker is an active
-P1 obligation. The current production state deliberately activates only these
-four P1 rows: `p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
-`p1-element-access-baseline`. P0 control-plane and P2 root claims remain
-deferred until their real artifacts and verifiers land. No missing deferred
-artifact is fabricated to make this phase terminal.
+P1 obligation. The current production state activates the four P1 rows
+(`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
+`p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row. P0
+control-plane and all later rows remain deferred until their real artifacts and
+verifiers land. No missing deferred artifact is fabricated to make this phase
+terminal.
 
 ### One canonical graph
 
@@ -444,10 +457,11 @@ command, receipt, and exit-status mistakes, plus an integration case for the
 checked-in production manifest. Counts are derived from the parsed manifest;
 the suite does not preserve a migration-event registry or historical totals.
 It verifies the four currently implementable P1 rows, including the measured
-element-access baseline. P0 control-plane and P2 root claims remain deferred,
-and the remaining future rows are not executed or materialized. Fake active
-artifacts are rejected because they would turn missing scientific evidence
-into a green lifecycle state rather than proving the underlying work.
+element-access baseline, and the selected P2 root-claims test command. P0
+control-plane and the remaining future rows remain deferred and are not
+executed or materialized. Fake active artifacts are rejected because they would
+turn missing scientific evidence into a green lifecycle state rather than
+proving the underlying work.
 
 Command tests cover exact typed argv and repository path confinement, including
 the ordering rule that a path escape is reported before a later command-identity

@@ -218,7 +218,7 @@ unit = "P2"
 gates = ["G1"]
 artifact = { id = "artifact-root-claims", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_root_claims.rs" }
 command = { id = "cmd-root-claims", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_root_claims"], cwd = ".", path_args = [], artifact_id = "artifact-root-claims" }
-state = { kind = "deferred", activation_unit = "P2", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
