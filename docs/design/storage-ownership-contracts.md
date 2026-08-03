@@ -1503,9 +1503,17 @@ pub fn submit(
     inputs: ExecutionInputs,
 ) -> Result<ExecutionHandle, SubmitRejected>;
 
+impl ExecutionHandle {
+    pub fn wait(self) -> ExecutionOutcome;
+}
+
 pub struct SubmitRejected {
     cause: SubmitError,
     inputs: ExecutionInputs,
+}
+
+impl SubmitRejected {
+    pub fn into_parts(self) -> (SubmitError, ExecutionInputs);
 }
 
 pub enum ExecutionOutcome {
@@ -1525,14 +1533,22 @@ pub enum ExecutionOutcome {
 
 pub struct ExecutionBundle {
     group: AllocationGroup,
-    outputs: Box<[FreshOutput]>,
+    outputs: Box<[ExecutionOutput]>,
+}
+
+pub enum ExecutionOutput {
+    Tensor(DescriptorSlot),
+    Metadata(OutputMetadata),
 }
 ```
 
 `SubmitRejected` returns the exact owning `ExecutionInputs` that were not
 admitted. After admission, `Completed`, `RetiredFailed`, and
 `RetiredCancelled` expose their resources only after provider retirement.
-`ExecutionBundle` exposes fresh outputs only after that retirement.
+`ExecutionBundle` exposes outputs only after that retirement. A tensor output
+slot is resolved in the returned group. It may be an existing identity or
+repeated slot, or a slot newly inserted for a fresh allocation; neither case
+copies storage. `Metadata` is genuinely storage-free.
 
 `CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
 returns an owner or other owning resource. The provider-private permanent
@@ -1574,6 +1590,30 @@ pub struct ScopedSubmitRejected<'env> {
     cause: SubmitError,
     inputs: ScopedReadInputs<'env>,
 }
+
+impl<'env> ScopedSubmitRejected<'env> {
+    pub fn into_parts(self) -> (SubmitError, ScopedReadInputs<'env>);
+}
+
+pub struct ScopedExecutionBundle<'env> {
+    owned: AllocationGroup,
+    outputs: Box<[ScopedOutput<'env>]>,
+}
+
+pub enum ScopedOutput<'env> {
+    Borrowed(TensorView<'env>),
+    Owned(DescriptorSlot),
+    Metadata(OutputMetadata),
+}
+
+pub struct ScopeExitError<R> {
+    value: R,
+    unobserved: Box<[ScopedTaskFailure]>,
+}
+
+impl<R> ScopeExitError<R> {
+    pub fn into_parts(self) -> (R, Box<[ScopedTaskFailure]>);
+}
 ```
 
 `ScopedReadInputs<'env>` contains borrowed read-only inputs. Rejection returns
@@ -1582,12 +1622,21 @@ drains every submission before any input borrow ends. `wait` and scope exit
 observe only post-retirement results; scoped submission has no
 `CompletionUnproven` outcome.
 
+A completed scoped bundle distinguishes borrowed and owned tensor results.
+Identity and repeated outputs are `Borrowed` descriptor views bounded by
+`'env`; fresh results are inserted into `owned` and named by group-local
+`Owned` slots. `Metadata` is storage-free. None of these paths copies or
+materializes input storage, and fresh owned outputs become observable only
+after retirement.
+
 A provider that cannot guarantee join and drain before the scope borrow ends
-must reject before admission or not provide scoped submission. Fresh scoped
-outputs are created and exposed only after retirement. Dropping a handle or
-scope never establishes safety, completion, or retirement. Panic capture is
-allowed only at the existing thread/FFI boundary; submission adds no panic
-catching of its own.
+must reject before admission or not provide scoped submission. The `scope`
+wrapper is the minimal explicit unwind boundary: it catches an unwind from the
+closure, synchronously joins and drains all admitted scoped work, then resumes
+the original panic. On normal return it performs the same drain and reports
+unobserved task failures through `ScopeExitError<R>`. Dropping a handle or
+scope never establishes safety, completion, or retirement.
+
 ### Lifecycle
 
 States: `Prepared` (validation/planning), `Admitted` (worker owns inputs),
