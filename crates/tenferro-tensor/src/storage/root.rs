@@ -2,11 +2,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::BackendId;
+use crate::DType;
 
 use super::diagnostics::{
     RequestedIdentity, StorageOperation, StorageOperationContext, StorageOperationError,
 };
 use super::identity::{RootResourceIdentity, RootResourceIdentityError};
+use super::prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
 use super::span::{ByteRange, RootBoundSpan, RootResourceExtent};
 
 /// Provider family metadata retained by the private allocation boundary.
@@ -40,6 +42,26 @@ pub(crate) unsafe trait BackendAllocation:
     fn provider_kind(&self) -> ProviderKind;
     fn capabilities(&self) -> ProviderCapabilities;
     fn as_any(&self) -> &dyn Any;
+
+    fn map_read(
+        &self,
+        _span: RootBoundSpan,
+        _dtype: DType,
+    ) -> Result<ProviderReadMapping<'_>, AccessError> {
+        Err(AccessError::Unsupported {
+            backend: "unimplemented",
+        })
+    }
+
+    fn map_write(
+        &self,
+        _span: RootBoundSpan,
+        _dtype: DType,
+    ) -> Result<ProviderWriteMapping<'_>, AccessError> {
+        Err(AccessError::Unsupported {
+            backend: "unimplemented",
+        })
+    }
 }
 
 /// The physical root and its provider allocation. It is held only by the
@@ -132,6 +154,10 @@ impl<'a> StorageRef<'a> {
     pub(crate) const fn span(&self) -> RootBoundSpan {
         self.owner.claim.span
     }
+
+    pub(super) fn allocation(&self) -> &dyn BackendAllocation {
+        &*self.owner.pin.0.allocation
+    }
 }
 
 impl<'a> StorageMut<'a> {
@@ -141,5 +167,9 @@ impl<'a> StorageMut<'a> {
 
     pub(crate) const fn span(&self) -> RootBoundSpan {
         self.owner.claim.span
+    }
+
+    pub(super) fn allocation(&self) -> &dyn BackendAllocation {
+        &*self.owner.pin.0.allocation
     }
 }
