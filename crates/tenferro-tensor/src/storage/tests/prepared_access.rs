@@ -543,7 +543,10 @@ fn prepared_strided_iterators_cover_reverse_and_empty_layouts() {
     .expect("empty checked read");
     let empty: PreparedRead<'_, bool, DynRank> =
         prepare_read(empty, AccessTarget::Host).expect("empty prepared read");
-    assert_eq!(empty.as_slice().expect("empty contiguous slice"), &[]);
+    assert_eq!(
+        empty.as_slice().expect("empty contiguous slice"),
+        &[] as &[bool]
+    );
 }
 
 #[test]
