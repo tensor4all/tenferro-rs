@@ -9,10 +9,9 @@ implementation PRs against.
 
 Authority and change control:
 
-- The #1555 issue body owns the architecture invariants (referenced below as
-  I1 through I10, numbered as in its "Required invariants" section). This
-  document owns the contracts. The phase issues (#1556 through #1569) own
-  work decomposition and verification inventories.
+- The #1555 issue body owns the named bullets in its "Fixed architecture"
+  section. This document owns the detailed contracts. The phase issues (#1556
+  through #1569) own work decomposition and verification inventories.
 - Any semantic change to a contract in this document must update this
   document and its tests in the same PR.
 - Signature sketches are normative in shape: which capability a call
@@ -30,21 +29,20 @@ Long-term architecture quality gate:
 - The redesign has one ownership kernel shared by CPU, CUDA, WebGPU, Apple/
   Metal, runtime submission, and AD. Providers may differ in synchronization,
   mapping, and endpoint capabilities, but not in the meaning of owner,
-  shared/exclusive capability, descriptor, claim, or lease.
-- Owner claims, Rust access capabilities, provider-resource pins, and
-  descriptor-liveness roots are four separate concepts. No implementation
-  may merge them for convenience or recover one from another through a
-  reference count, downcast, raw handle, or provider-specific shortcut.
+  shared/exclusive capability, descriptor, claim, prepared access, or
+  retirement.
+- Owner claims, Rust access capabilities, direct root lifetime, and
+  descriptors are separate concepts. No implementation may recover ownership
+  or write authority from a reference count, downcast, raw handle, allocation
+  ID, or provider-specific shortcut.
 - New APIs are derived from ownership and lifetime requirements in this
   document, not shaped around preserving legacy call sites. Backward
   compatibility is not a requirement for #1555.
-- One typed, crate-private provider bridge is permitted while an accelerator
-  provider is still being migrated. It must already use the final
-  claim/pin/access/lease/retirement contract, cannot mint ownership or writes,
-  and is removed by the CUDA and WebGPU/Metal migration phases. No AD,
-  submission, or conservative-synchronization adapter is permitted. The
-  completed redesign has no dual storage stack, permanent compatibility
-  adapter, or provider-specific authority escape hatch.
+- Old and new storage representations coexist without conversion only until
+  the atomic CUTOVER. No migration, legacy, provider, compatibility,
+  submission, or conservative-synchronization bridge ships; CUTOVER switches
+  every owner, access, retention, runtime, and AD user together and deletes the
+  old representation.
 - A phase is incomplete when it merely adds the new path: it must also delete
   the replaced path and update contract tests, documentation, and source
   inventories. Exceptions require a contract change reviewed before the
@@ -58,27 +56,36 @@ Terminology:
   metadata (a domain-qualified key plus byte range), never an access
   capability or proof of ownership.
 - **Owner**: the unique, non-cloneable ownership token for an allocation span
-  (`OwnedStorage`, or a tensor/group wrapping it). Invariant I1.
+  (`OwnedStorage`, or a tensor/group wrapping it); this is the umbrella's
+  one-owner rule.
 - **Capability**: the right to access storage, expressed as Rust
   ownership/borrows: shared (`StorageRef`, views), exclusive (`StorageMut`,
-  mutable views), or owning (consuming APIs). Invariant I2.
+  mutable views), or owning (consuming APIs); Rust borrowing is the write
+  authority.
 - **Descriptor**: a typed interpretation (dtype, layout, placement) referring
   to an allocation slot. Descriptors never own storage.
 - **Group**: one or more owners plus descriptors (`AllocationGroup`), the only
   representation for "one allocation, many logical values".
 - **Guard**: a borrow-carrying value granting host byte access to a validated
   span (`HostReadGuard`, `HostWriteGuard`).
-- **Lease** (`UseLease`): a provider-private retention and ordering record for
-  enqueued device access. A lease is not a capability: it never authorizes
-  safe access by itself and cannot mint ownership or write authority
-  (invariant I3). It pins provider resources until retirement.
 - **Endpoint**: an engine/device access point (`AccessEndpoint`). Distinct
   from `AllocationDomainId`, which is allocation identity (#1555, "Identity
   vs endpoints").
 - **Retirement**: the point when all provider events covering an access have
-  completed and retained resources may be released. Invariant I6.
-- **Quarantine**: the terminal state for resources whose retirement cannot be
-  proven; they are retained and reported, never freed speculatively.
+  completed and retained resources may be released.
+- **Prepared access**: the result of pairing a Rust capability with retained
+  construction-time descriptor proofs and completing access-time provider
+  mapping/synchronization. It carries the `CheckedLayout` and Rust borrow
+  required by the access. Its host variant exposes the hot loop through the
+  `iter_contiguous*` typed-slice path or the `iter_strided*` prepared-cursor
+  path; its device variant retains provider-ready binding state and exposes no
+  host pointer or iterator.
+- **Completion-unproven retention**: the typed-error path used when a
+  provider cannot prove completion. A provider-private `UnprovenRetirement`
+  owns provider retirement bindings, the event, `Arc<RootResource>`, and
+  provider context until completion is proven or those resources are
+  intentionally made a permanent leak; this is
+  not a quarantine state.
 
 State-table columns. Every state-transition row in this document answers the
 six review-checklist questions from #1557, abbreviated as:
@@ -87,7 +94,7 @@ six review-checklist questions from #1557, abbreviated as:
 |--------|---------|
 | cap | capability required (shared / exclusive / owning / none) |
 | borrow | what is borrowed and for how long |
-| sync | provider synchronization performed (waits are documented synchronization points, never copies; invariant I4) |
+| sync | provider synchronization performed (waits are documented synchronization points, never copies) |
 | fail | return on failure (ownership must be recovered or provably retained) |
 | panic/drop | state retained if the caller panics or drops mid-operation |
 | reclaim | when reclamation of the affected allocation becomes legal |
@@ -164,9 +171,10 @@ the only place where public host ownership, detached/scoped runtime ownership,
 and direct group-based AD retention are introduced. There is no Phase 3
 AD-retention adapter, Phase 4 AD bridge, minimal submit bridge, or
 conservative pre-retirement synchronization path to promote or delete.
-The sole provider bridge is a separate typed obligation under the root/provider
-phase; its implementation already obeys the final lease and retirement
-contract and its removal is part of the accelerator migration.
+Until atomic CUTOVER, the old and new representations coexist without
+conversion. No provider or legacy bridge is a production obligation or
+shippable artifact; CUTOVER activates the final representation and deletes the
+old one atomically.
 
 ### v2 manifest and promotion contract
 
@@ -196,6 +204,17 @@ unchanged between base and candidate; graph edits are not promotions.
 Every member obligation of an atomic cohort must make that transition in the
 same candidate; partial cohort activation is rejected. A changed artifact,
 command, ID, unit, or gate is a new obligation, not a promotion.
+
+Contract revision is distinct from promotion. `registry.revision` is a
+positive monotonic integer (the original field-less v2 registry is revision
+1). A candidate may advance it by exactly one while preserving the complete
+unit/gate/edge/cohort topology, obligation membership, and every tagged state.
+During that revision-only transition, active obligation identities remain
+immutable; only still-deferred rows may revise their gates, artifact, or
+command to reflect the reviewed implementation contract. Revision and
+promotion cannot occur in the same candidate. Once an obligation is active,
+later contract revisions cannot rewrite its evidence. This is the explicit
+design-amendment path; it is not an exception to promotion immutability.
 
 Every registered unit owns at least one required obligation. A unit is
 complete only when all of its required obligations are active and the
@@ -277,8 +296,8 @@ parallel active/deferred tables:
 id = "p4-access-retirement"
 unit = "P4"
 gates = ["G1"]
-artifact = { id = "artifact-corruption-map", kind = "corruption-test", path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs" }
-command = { id = "cmd-corruption-map", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"], cwd = ".", path_args = [], artifact_id = "artifact-corruption-map" }
+artifact = { id = "artifact-prepared-validation-boundary", kind = "validation-boundary-test", path = "crates/tenferro-tensor/tests/storage_prepared_validation.rs" }
+command = { id = "cmd-prepared-validation-boundary", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_validation"], cwd = ".", path_args = [], artifact_id = "artifact-prepared-validation-boundary" }
 state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
 ```
 
@@ -419,12 +438,14 @@ successful runner evidence before atomically activating all P3/P9 obligations.
 In particular, the canonical obligation set includes:
 
 - P4/G1+G4: a deferred production-code-bound compile/test artifact for the
-  private dispatch borrow shape and exact `ResolvedWrite` failure recovery;
-- P3/G1+G4: a compile contract using the repository compile-test harness or
-  static assertions for `UseLease`/`BackendRawLease: Send + !Sync` and
-  `BackendRawMapping`/host guards: `!Send + !Sync`;
-- P4/G1+G3: a provider runtime test for take-before-call, exactly-once release,
-  callback panic containment, and root quarantine after release panic.
+  prepared read/write borrow shape and exact capability recovery before
+  admission;
+- P3/G1+G4: a compile contract using the repository compile-test harness for
+  non-`Clone` owners, exclusive write preparation, allocation-free views, and
+  host guards that cannot escape their borrow;
+- P4/G1+G3: a provider event-retirement runtime test proving exactly-once
+  release after proven completion and intentional retain/leak plus a typed
+  `CompletionUnproven` error when completion is unproven.
 
 These are ordinary immutable artifact-command rows, so all-active terminal
 proof necessarily includes their successful runner results. A synthetic
@@ -435,854 +456,282 @@ prove the structural capability/borrow/recovery contract through the real
 crate harness.
 
 The proof layers remain distinct: Rust borrowing/private constructors prove
-write safety; trybuild, Miri, property, corruption, and provider tests exercise
-dynamic boundaries; source inventories record deletion drift; and the
-source-blind documentation audit checks stale public language. None of these
-is allowed to manufacture ownership proof from an allocation ID or a lock.
+write safety; trybuild, Miri, property, invalid-constructor/input-boundary, and
+provider tests exercise dynamic boundaries before checked descriptors or
+prepared access are published; source inventories record deletion drift; and
+the source-blind documentation audit checks stale public language. None of
+these is allowed to manufacture ownership proof from an allocation ID or a
+lock. These tests do not introduce a post-construction corruption hook or
+repeated map/enqueue validation protocol.
 
 ## G1. Span access and retirement
 
-### Types and acquisition surface
+G1 defines the permanent correctness boundary for storage access. Tenferro is
+scientific-computing software, not a security boundary. This gate protects Rust
+aliasing and memory safety, checked layout arithmetic, numerical interpretation,
+provider compatibility, and asynchronous device lifetime. It does not defend
+against a malicious maintainer, runner, provider implementation, or process
+that can already execute arbitrary code in the repository.
 
-The following Rust block fixes normative type, visibility, lifetime, field-
-split, and state-transition shape. It is intentionally architecture
-pseudocode: unrelated declarations, imports, and routine method bodies may be
-elided, and the block is not claimed as one standalone crate. Executability is
-proved separately by the canonical P4 production-bound compile/test artifact
-and the P3/P4 compile/runtime obligations above. Implementations may rename
-provisional private items, but may not replace the private dispatch shape with
-a request that escapes and permits a second owner/provider borrow.
+### Ownership and capability types
+
+The physical resource has one direct lifetime graph. There is no second
+authority, liveness table, or reconstructable identity protocol.
 
 ```rust
-use core::{cell::Cell, marker::PhantomData, ptr::NonNull};
-use std::{ffi::c_void, panic::{catch_unwind, AssertUnwindSafe}, rc::Rc};
-
-pub struct AllocationKey {
-    domain: AllocationDomainId,
-    local: AllocationId,
+struct RootResource {
+    provider: Arc<ProviderContext>,
+    allocation: ProviderAllocation,
+    capacity_bytes: usize,
+    diagnostics: AllocationDiagnostics,
 }
 
-pub struct AllocationSpan {
-    key: AllocationKey,
-    byte_offset: usize,
-    byte_len: usize,
-    guaranteed_alignment: usize, // power of two, describes the span start
+struct OwnedSpanClaim {
+    root: Arc<RootResource>,
+    byte_range: Range<usize>,
 }
 
-// Metadata only. This value is not accepted by an access or binding method.
-// The exact root binding is carried by the private RootBoundSpan type.
-struct RootBoundSpan {
-    root: RootResourceIdentity,
-    range: ByteRange,
-    _sealed: PrivateToken,
-}
-
-pub(crate) struct RootResourcePin {
-    root: RootResourceIdentity,
-    state: Arc<RootResourceState>, // lifetime/deallocator state only
-}
-
-pub(crate) struct OwnedSpanClaim {
-    root: RootResourceIdentity,
-    span: RootBoundSpan,
-    provenance: ClaimProvenance, // private, non-Clone and non-Copy
-}
-
-pub struct OwnedStorage {
-    pin: RootResourcePin,
+struct OwnedStorage {
     claim: OwnedSpanClaim,
 }
 
-pub struct StorageRef<'a> {
-    owner: &'a OwnedStorage,
+struct StorageRef<'a> {
+    root: &'a Arc<RootResource>,
+    byte_range: Range<usize>,
 }
 
-pub struct StorageMut<'a> {
-    owner: &'a mut OwnedStorage,
+struct StorageMut<'a> {
+    root: &'a mut Arc<RootResource>,
+    byte_range: Range<usize>,
 }
 
-pub(crate) struct RootResourceState {
-    root: RootResourceIdentity,
-    // RootResourcePin's Arc pins this one provider allocation/access object.
-    // There is no second Arc vtable and no per-access allocation.
-    allocation: Box<dyn BackendAllocationAccess>,
+struct RootBoundSpan {
+    byte_range: Range<usize>,
+    dtype: DType,
+}
+```
+
+`OwnedStorage` and `OwnedSpanClaim` are non-`Clone`. `Arc<RootResource>` is
+cloneable only where direct physical lifetime must survive asynchronous work or
+read-only retained records; cloning it grants neither an owner nor write
+authority. Allocation IDs and diagnostics identify observations only.
+
+`StorageRef` is created from a shared borrow of a matching claim. `StorageMut`
+is created only from an exclusive borrow of a matching claim or from a freshly
+allocated output that has not escaped. Neither can be constructed from an ID,
+raw handle, event, provider context, reference count, or read-only handle.
+Splitting an owned claim consumes it and creates checked disjoint child claims.
+Temporary mutable splitting distributes one existing exclusive borrow and does
+not change physical ownership.
+
+Provider import is the audited unsafe boundary that constructs the initial
+root and full-range claim. Its safety contract proves that the allocation is
+valid for its reported capacity, deallocation contract, alignment, provider,
+and device context. Safe code may narrow or split that claim but never widen it.
+
+### Validate once, then traverse
+
+Safe tensor/group construction validates the descriptor once and retains the
+result. Every host or device access then consumes a capability already paired
+with that checked descriptor into a prepared object:
+
+```rust
+enum CheckedLayout<R: TensorRank> {
+    Contiguous {
+        element_range: Range<usize>,
+    },
+    Strided(CheckedStrided<R>),
 }
 
-pub struct BackendAllocationMetadata {
-    // This is provider-reported validation metadata only. The kernel assigns
-    // RootResourceIdentity during import; a provider cannot construct that
-    // identity or any claim from this value.
-    byte_len: usize,
-    guaranteed_alignment: usize,
-}
-
-impl BackendAllocationMetadata {
-    pub fn new(byte_len: usize, guaranteed_alignment: usize)
-        -> Result<Self, MetadataError>;
-    pub fn byte_len(&self) -> usize;
-    pub fn guaranteed_alignment(&self) -> usize;
-}
-
-pub struct BackendAccessRange {
-    pub byte_offset: usize,
-    pub byte_len: usize,
-    pub guaranteed_alignment: usize,
-}
-
-// This is the sole cross-crate provider extension contract. Provider crates
-// implement this unsafe trait; the storage kernel alone constructs guards and
-// UseLease. The implementation must uphold root identity, checked
-// range/alignment, access ordering, lease retirement, and exactly-once
-// provider cleanup for the allocation represented by the request. Lease parts
-// and their release callback may be moved to an arbitrary retirement worker
-// and invoked there exactly once. Host mapping parts need not be transferable.
-// These thread-transfer clauses are part of this one unsafe implementation;
-// providers do not receive a second Send-proof API. Each successful method
-// returns exactly one carrier made from its request; no carrier escapes an Err.
-pub unsafe trait BackendAllocationAccess: Send + Sync + 'static {
-    fn metadata(&self) -> BackendAllocationMetadata;
-    fn map_host_read<'a>(
-        &self,
-        request: &BackendReadRequest<'a>,
-    ) -> Result<BackendRawMapping, AccessError>;
-    fn map_host_write<'a>(
-        &self,
-        request: &BackendWriteRequest<'a>,
-    ) -> Result<BackendRawMapping, AccessError>;
-    fn acquire_device_read(
-        &self,
-        request: &BackendReadRequest<'_>,
-        endpoint: AccessEndpoint,
-    ) -> Result<BackendRawLease, AccessError>;
-    fn acquire_device_write(
-        &self,
-        request: &BackendWriteRequest<'_>,
-        endpoint: AccessEndpoint,
-    ) -> Result<BackendRawLease, AccessError>;
-}
-
-// The request is opaque to provider code and can only be constructed by the
-// private RootResourceState dispatchers below. It contains the exact pin/root
-// witness, claim, and span selected by one ResolvedRead/ResolvedWrite.
-pub struct BackendReadRequest<'a> {
-    _private: (
-        &'a RootResourcePin,
-        &'a OwnedSpanClaim,
-        &'a RootBoundSpan,
-        PrivateToken,
-    ),
-}
-
-pub struct BackendWriteRequest<'a> {
-    _private: (
-        &'a RootResourcePin,
-        &'a mut OwnedSpanClaim,
-        &'a RootBoundSpan,
-        PrivateToken,
-    ),
-}
-
-// These are raw extension carriers rather than storage capabilities. A
-// provider constructs them from its mapping/order token through the narrow
-// request helpers; no carrier contains an owner, claim constructor, mutable
-// capability, or public guard/lease constructor.
-pub struct BackendRawMapping {
-    pin: RootResourcePin,
-    provider: Option<ProviderMappingParts>,
-    // Zero-sized: host pointers and guards never become Send or Sync merely
-    // because a particular pointer representation has permissive auto traits.
-    _thread_bound: PhantomData<Rc<()>>,
-}
-
-pub struct BackendRawLease {
-    pin: RootResourcePin,
-    provider: Option<ProviderLeaseParts>,
-    // Cell is Send but not Sync. A lease may move to one worker/reaper, but
-    // shared concurrent access is not part of the provider contract.
-    _not_sync: PhantomData<Cell<()>>,
-}
-
-// SAFETY: this is a kernel implementation of the thread-transfer clause on
-// the single unsafe BackendAllocationAccess contract, not a provider-facing
-// proof boundary. make_raw_lease installs the exact root pin and accepts parts
-// only while servicing that provider's opaque request. ProviderLeaseParts is
-// intentionally not Send on its own.
-unsafe impl Send for BackendRawLease {}
-
-pub struct ProviderMappingParts {
-    pointer: NonNull<u8>,
-    len: usize,
-    release: ProviderReleaseToken,
-}
-
-pub struct ProviderLeaseParts {
-    token: NonNull<c_void>,
-    release: ProviderReleaseToken,
-}
-
-pub struct ProviderReleaseToken {
-    pending: Option<ProviderReleaseParts>,
-}
-
-struct ProviderReleaseParts {
-    context: *mut c_void,
-    release: unsafe extern "C-unwind" fn(*mut c_void),
-}
-
-impl ProviderReleaseToken {
-    // This is a raw carrier constructor, not an ownership/uniqueness proof.
-    // Its safety obligation is part of the one BackendAllocationAccess
-    // provider-extension contract. These constructors create raw carriers
-    // only; they do not establish ownership, uniqueness, or a root claim.
-    pub unsafe fn from_raw_parts(
-        context: *mut c_void,
-        release: unsafe extern "C-unwind" fn(*mut c_void),
-    ) -> Self;
-
-    fn run_once(&mut self) -> Result<(), ProviderReleasePanic> {
-        // Take before calling. Success, panic, and outer unwinding therefore
-        // cannot invoke the provider callback a second time.
-        let Some(parts) = self.pending.take() else { return Ok(()) };
-        catch_unwind(AssertUnwindSafe(|| unsafe {
-            (parts.release)(parts.context)
-        }))
-        .map_err(|_| ProviderReleasePanic)
-    }
-}
-
-impl ProviderMappingParts {
-    pub unsafe fn from_raw_parts(
-        pointer: NonNull<u8>,
-        len: usize,
-        release: ProviderReleaseToken,
-    ) -> Self;
-}
-
-impl ProviderLeaseParts {
-    pub unsafe fn from_raw_parts(
-        token: NonNull<c_void>,
-        release: ProviderReleaseToken,
-    ) -> Self;
-}
-
-impl<'a> BackendReadRequest<'a> {
-    fn new_private(
-        pin: &'a RootResourcePin,
-        claim: &'a OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-    ) -> Self {
-        Self {
-            _private: (pin, claim, span, PrivateToken::new()),
-        }
-    }
-
-    pub fn range(&self) -> BackendAccessRange;
-    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping {
-        BackendRawMapping {
-            pin: self._private.0.clone(),
-            provider: Some(parts),
-            _thread_bound: PhantomData,
-        }
-    }
-    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease {
-        BackendRawLease {
-            pin: self._private.0.clone(),
-            provider: Some(parts),
-            _not_sync: PhantomData,
-        }
-    }
-}
-
-impl<'a> BackendWriteRequest<'a> {
-    fn new_private(
-        pin: &'a RootResourcePin,
-        claim: &'a mut OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-    ) -> Self {
-        Self {
-            _private: (pin, claim, span, PrivateToken::new()),
-        }
-    }
-
-    pub fn range(&self) -> BackendAccessRange;
-    pub fn make_raw_mapping(&self, parts: ProviderMappingParts) -> BackendRawMapping {
-        BackendRawMapping {
-            pin: self._private.0.clone(),
-            provider: Some(parts),
-            _thread_bound: PhantomData,
-        }
-    }
-    pub fn make_raw_lease(&self, parts: ProviderLeaseParts) -> BackendRawLease {
-        BackendRawLease {
-            pin: self._private.0.clone(),
-            provider: Some(parts),
-            _not_sync: PhantomData,
-        }
-    }
-}
-
-impl BackendRawMapping {
-    fn release_once(&mut self) -> ReleaseOutcome {
-        let Some(mut parts) = self.provider.take() else { return ReleaseOutcome::Retired };
-        match parts.release.run_once() {
-            Ok(()) => ReleaseOutcome::Retired,
-            Err(panic) => {
-                self.pin.quarantine(QuarantineReason::ProviderReleasePanic(panic));
-                ReleaseOutcome::Quarantined
-            }
-        }
-    }
-}
-
-impl Drop for BackendRawMapping {
-    fn drop(&mut self) {
-        // release_once contains provider panic. Dropping is a liveness fast
-        // path; forgetting the carrier retains its root pin and is still safe.
-        let _ = self.release_once();
-    }
-}
-
-impl BackendRawLease {
-    fn retire(mut self) -> ReleaseOutcome {
-        self.release_once()
-    }
-
-    fn release_once(&mut self) -> ReleaseOutcome {
-        let Some(mut parts) = self.provider.take() else { return ReleaseOutcome::Retired };
-        match parts.release.run_once() {
-            Ok(()) => ReleaseOutcome::Retired,
-            Err(panic) => {
-                self.pin.quarantine(QuarantineReason::ProviderReleasePanic(panic));
-                ReleaseOutcome::Quarantined
-            }
-        }
-    }
-}
-
-impl Drop for BackendRawLease {
-    fn drop(&mut self) {
-        // Retirement records normally call retire explicitly. This fallback is
-        // idempotent, panic-contained, and never retries an uncertain release.
-        let _ = self.release_once();
-    }
-}
-
-// Private kernel wrappers. Sibling provider crates cannot construct these
-// types, HostReadGuard, HostWriteGuard, or UseLease.
-struct BackendReadMapping<'a> {
-    raw: BackendRawMapping,
-    _borrow: PhantomData<&'a [u8]>,
-}
-
-struct BackendWriteMapping<'a> {
-    raw: BackendRawMapping,
-    _borrow: PhantomData<&'a mut [u8]>,
-}
-
-pub(crate) struct HostReadGuard<'a> {
-    mapping: BackendReadMapping<'a>,
-}
-
-pub(crate) struct HostWriteGuard<'a> {
-    mapping: BackendWriteMapping<'a>,
-}
-
-impl RootResourceState {
-    fn dispatch_host_read<'a>(
-        &'a self,
-        pin: &'a RootResourcePin,
-        claim: &'a OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-    ) -> Result<BackendRawMapping, AccessError> {
-        self.validate_read_binding(pin, claim, span)?;
-        let request = BackendReadRequest::new_private(pin, claim, span);
-        self.allocation.map_host_read(&request)
-    }
-
-    fn dispatch_device_read<'a>(
-        &'a self,
-        pin: &'a RootResourcePin,
-        claim: &'a OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-        endpoint: AccessEndpoint,
-    ) -> Result<BackendRawLease, AccessError> {
-        self.validate_read_binding(pin, claim, span)?;
-        let request = BackendReadRequest::new_private(pin, claim, span);
-        self.allocation.acquire_device_read(&request, endpoint)
-    }
-
-    fn dispatch_host_write<'a>(
-        &'a self,
-        pin: &'a RootResourcePin,
-        claim: &'a mut OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-    ) -> Result<BackendRawMapping, AccessError> {
-        self.validate_write_binding(pin, &*claim, span)?;
-        let request = BackendWriteRequest::new_private(pin, claim, span);
-        self.allocation.map_host_write(&request)
-    }
-
-    fn dispatch_device_write<'a>(
-        &'a self,
-        pin: &'a RootResourcePin,
-        claim: &'a mut OwnedSpanClaim,
-        span: &'a RootBoundSpan,
-        endpoint: AccessEndpoint,
-    ) -> Result<BackendRawLease, AccessError> {
-        self.validate_write_binding(pin, &*claim, span)?;
-        let request = BackendWriteRequest::new_private(pin, claim, span);
-        self.allocation.acquire_device_write(&request, endpoint)
-    }
-    // Each private dispatcher revalidates state.root == pin.root ==
-    // claim.root == span.root and checked containment, constructs the opaque
-    // request, and calls this state's provider before any borrow escapes.
-    // Provider code never receives a receiver selected independently from the
-    // request capability.
-}
-
-pub(crate) struct ResolvedRead<'a> {
-    capability: StorageRef<'a>, // exact owner/claim/pin selected by resolve
-    span: RootBoundSpan,         // exact span from that capability's claim
-    _sealed: PrivateToken,
-}
-
-pub(crate) struct ResolvedWrite<'a> {
-    capability: StorageMut<'a>, // exact exclusive owner/claim/pin
-    span: RootBoundSpan,         // exact span from that capability's claim
-    _sealed: PrivateToken,
-}
-
-pub(crate) struct UseLease {
+struct CheckedDescriptor<R: TensorRank> {
     span: RootBoundSpan,
-    mode: AccessMode,
-    provider: BackendRawLease,
-    // No StorageMut conversion, raw write authority, Clone, or public constructor.
+    layout: CheckedLayout<R>,
+    placement: Placement,
 }
 
-fn auto_trait_contract() {
-    fn assert_send<T: Send>() {}
-    assert_send::<BackendRawLease>();
-    assert_send::<UseLease>();
-    // Compile-fail/static assertions additionally require BackendRawLease and
-    // UseLease to be !Sync and BackendRawMapping/host guards to be !Send+!Sync.
+struct CheckedInjectiveDescriptor<R: TensorRank> {
+    descriptor: CheckedDescriptor<R>,
+    injectivity: WriteInjectivityProof,
 }
 
-impl OwnedStorage {
-    fn as_ref(&self) -> StorageRef<'_>;
-    fn as_mut(&mut self) -> StorageMut<'_>;
+struct CheckedRead<'a, R: TensorRank>(private::CheckedReadBundle<'a, R>);
+struct CheckedWrite<'a, R: TensorRank>(private::CheckedWriteBundle<'a, R>);
 
-    fn split_claim(
-        self,
-        children: &[ByteRange],
-    ) -> Result<Vec<Self>, (Self, ClaimSplitError)>;
+enum AccessTarget {
+    Host,
+    Device,
 }
 
-impl<'a> StorageRef<'a> {
-    fn resolve(
-        self,
-        descriptor: &ValidatedDescriptor,
-    ) -> Result<ResolvedRead<'a>, AccessError>;
+enum PreparedRead<'a, T, R: TensorRank> {
+    Host(PreparedHostRead<'a, T, R>),
+    Device(PreparedDeviceRead<'a, T, R>),
 }
 
-impl<'a> ResolvedRead<'a> {
-    fn acquire_host_read(&self) -> Result<HostReadGuard<'_>, AccessError> {
-        let owner = self.capability.owner;
-        let (pin, claim) = (&owner.pin, &owner.claim);
-        let state = &*pin.state;
-        let raw = state.dispatch_host_read(pin, claim, &self.span)?;
-        Ok(HostReadGuard {
-            mapping: BackendReadMapping {
-                raw,
-                _borrow: PhantomData,
-            },
-        })
-    }
-
-    fn acquire_device_read(&self, endpoint: AccessEndpoint)
-        -> Result<UseLease, AccessError> {
-        let owner = self.capability.owner;
-        let (pin, claim) = (&owner.pin, &owner.claim);
-        let state = &*pin.state;
-        let provider = state.dispatch_device_read(pin, claim, &self.span, endpoint)?;
-        Ok(UseLease {
-            span: self.span.clone(),
-            mode: AccessMode::Read,
-            provider,
-        })
-    }
+enum PreparedWrite<'a, T, R: TensorRank> {
+    Host(PreparedHostWrite<'a, T, R>),
+    Device(PreparedDeviceWrite<'a, T, R>),
 }
 
-impl<'a> StorageMut<'a> {
-    fn resolve_write(
-        self,
-        descriptor: &ValidatedWriteDescriptor,
-    ) -> Result<ResolvedWrite<'a>, (Self, AccessError)>;
-}
+fn prepare_read<'a, T, R: TensorRank>(
+    checked: CheckedRead<'a, R>,
+    target: AccessTarget,
+) -> Result<PreparedRead<'a, T, R>, (CheckedRead<'a, R>, AccessError)>;
 
-impl<'a> ResolvedWrite<'a> {
-    fn acquire_host_write(&mut self) -> Result<HostWriteGuard<'_>, AccessError> {
-        let owner = &mut *self.capability.owner;
-        let (pin, claim) = (&owner.pin, &mut owner.claim);
-        let state = &*pin.state;
-        let raw = state.dispatch_host_write(pin, claim, &self.span)?;
-        Ok(HostWriteGuard {
-            mapping: BackendWriteMapping {
-                raw,
-                _borrow: PhantomData,
-            },
-        })
-    }
-
-    fn acquire_device_write(self, endpoint: AccessEndpoint)
-        -> Result<WriteBinding<'a>, (Self, AccessError)> {
-        // A failed private dispatch or provider admission returns this exact
-        // ResolvedWrite, preserving the exclusive capability for recovery.
-        let this = self;
-        let admission = {
-            let owner = &mut *this.capability.owner;
-            let (pin, claim) = (&owner.pin, &mut owner.claim);
-            let state = &*pin.state;
-            state.dispatch_device_write(pin, claim, &this.span, endpoint)
-        };
-        // The inner borrow ended before this match. Validation or provider
-        // pre-admission failure therefore returns this exact ResolvedWrite.
-        match admission {
-            Ok(provider) => {
-                let lease = UseLease {
-                    span: this.span.clone(),
-                    mode: AccessMode::Write,
-                    provider,
-                };
-                Ok(WriteBinding {
-                    resolved: this,
-                    lease,
-                })
-            }
-            Err(error) => Err((this, error)),
-        }
-    }
-}
-
-pub struct ImportRejected {
-    allocation: Box<dyn BackendAllocationAccess>,
-    error: ImportError,
-}
-
-// This safe importer validates provider metadata before publishing a claim.
-// On rejection it returns the same one allocation box, so the provider drops
-// it exactly once; on success that box moves into RootResourceState and is
-// pinned by RootResourcePin. The unsafe provider implementation is the only
-// authority proof boundary; there is no second proof token or infallible
-// unsafe import function.
-fn import_owned_storage(
-    allocation: Box<dyn BackendAllocationAccess>,
-) -> Result<OwnedStorage, ImportRejected>;
-
-impl ImportRejected {
-    fn into_parts(self) -> (Box<dyn BackendAllocationAccess>, ImportError);
-}
-
-struct WriteBinding<'a> {
-    resolved: ResolvedWrite<'a>,
-    lease: UseLease,
-}
-
+fn prepare_write<'a, T, R: TensorRank>(
+    checked: CheckedWrite<'a, R>,
+    target: AccessTarget,
+) -> Result<PreparedWrite<'a, T, R>, (CheckedWrite<'a, R>, AccessError)>;
 ```
 
-Contract points:
+Before any `CheckedDescriptor` is published, its safe constructor validates:
 
-- There is no public `timeline()`, `TimelineState`, `map_read`, or
-  `map_write`. The provider-internal access state machine stays behind the
-  owner-scoped acquisition methods (#1555, "Host-visible memory and device
-  timelines").
-- `AllocationSpan` is metadata only. It may be copied for diagnostics or
-  validation, but it cannot be passed to a provider access method and cannot
-  authorize a read, write, map, enqueue, or lease.
-- Provider implementations receive only the validated `BackendAccessRange`
-  metadata accessor on an opaque request. The range is enough to calculate a
-  provider-local pointer or mapping length, but it carries no
-  `RootResourceIdentity`, claim provenance, or access authority and cannot be
-  constructed into a request by provider code. This keeps the public unsafe
-  extension implementable without exposing `RootBoundSpan`.
-- `RootBoundSpan` is private and carries the exact `RootResourceIdentity`.
-  `ResolvedRead` and `ResolvedWrite` are sealed values constructed only by
-  consuming the matching `StorageRef` or `StorageMut`. Each resolved value
-  directly owns that capability and its exact root-bound span; there is no
-  per-access operation allocation or provider-specific enum. Equal-looking
-  offsets from another root are not interchangeable.
-- Acquisition methods live only on `ResolvedRead`/`ResolvedWrite`; they do not
-  accept a separately supplied span, provider, dispatch object, or resolved
-  capability. The method reaches only the vtable stored in
-  `self.capability.owner.pin.state`, and that state constructs an opaque
-  request from this exact owner claim, pin, and span. The private dispatcher
-  rechecks dynamic root equality before dispatch. Thus no public or
-  crate-facing safe API has an independently sourced receiver-plus-resolved
-  pair to mismatch. Provider crates implement only the narrow unsafe
-  `BackendAllocationAccess` extension contract; the storage kernel does not
-  enumerate providers and does not ask sibling crates to implement private
-  per-access traits.
-- `HostReadGuard`/`HostWriteGuard` expose only the validated byte span as
-  immutable/mutable bytes and checked typed slices. Guards borrow the
-  allocation (`'a`), so the borrow checker excludes moves (consuming
-  submission) and exclusive operations while a guard is alive.
-- `UseLease` is `'static`, provider-private, span- and access-mode-scoped. It
-  holds a root pin inside its raw carrier, not a Rust borrow, so it can move
-  into runtime retirement records. `UseLease` and `BackendRawLease` are
-  `Send + !Sync`: one worker/reaper may own them, but concurrent shared use is
-  forbidden. This `Send` guarantee is implemented once by the kernel under the
-  thread-transfer clause of `BackendAllocationAccess`; it is not an authority
-  token or a second unsafe provider proof. `BackendRawMapping` and both host
-  guards are `!Send + !Sync` and remain borrow-bound even for a backend whose
-  current mapping happens to be transferable. All markers are zero-sized and
-  root-pin cloning is a refcount operation, so resolve/acquire performs no heap
-  allocation. A lease is non-cloneable and non-forgeable, has no conversion to
-  `StorageMut`, and cannot authorize a raw write by itself.
-- Provider release is exactly once on every explicit-retirement or ordinary
-  drop path: the kernel removes the callback/context from its private `Option`
-  before invocation. A provider panic is caught, never retried, and changes the
-  pinned root to `Quarantined`; it cannot unwind through a guard, runtime
-  worker, or destructor. `mem::forget` keeps the root pin forever and degrades
-  liveness only. Consequently safety and reclamation never rely on `Drop`
-  running to completion. The kernel quarantine/report transition itself is
-  infallible and non-panicking. Foreign exceptions must not cross the callback;
-  a Rust provider that may panic uses the declared `C-unwind` ABI and is
-  contained by the kernel.
-- Write resolution and acquisition require the exclusive capability (`&mut`);
-  read resolution requires shared. Device write acquisition consumes the
-  `ResolvedWrite` into a `WriteBinding`, retaining the exclusive borrow or the
-  consumed owner package through enqueue and retirement. Its failure type is
-  `(ResolvedWrite<'a>, AccessError)`, so pre-admission failure returns the
-  exact exclusive capability. If a direct API would return the owner and end
-  the `&mut` borrow earlier, it must synchronously retire the device work
-  before returning it.
-- Physical-resource lifetime and span authority are separate. An
-  `OwnedSpanClaim` is the unique, non-cloneable authority for its byte span.
-  A `RootResourcePin` may be shared internally to keep the provider root
-  resource and its deallocator alive, but it authorizes neither reads nor
-  writes and cannot create a claim. `OwnedStorage` combines exactly one
-  claim with such a pin; all safe access starts from that claim through the
-  borrow-taking methods above. Raw write bindings retain the originating
-  `StorageMut` borrow (or consume the owning package) through enqueue.
-- The claim and pin carry the same private, non-forgeable `RootResourceId`.
-  `OwnedStorage` construction checks that relation. `split_claim` consumes
-  the parent provenance token before creating children; failure returns the
-  unchanged parent. Provider import uses the safe, fallible
-  `import_owned_storage` path; it reads metadata from that same allocation,
-  and rejection returns the unconsumed provider allocation with a typed
-  `ImportError`. The unsafe `BackendAllocationAccess` implementation is the
-  sole authority proof boundary. Raw carrier constructors are subordinate
-  FFI plumbing inside that boundary and are not a second claim/import proof;
-  no redundant uniqueness proof token exists.
-- Allocation-resource pins do not float unaccounted: every live pin is held
-  by an owner claim, an acquired lease/binding, or a retirement/quarantine
-  record. Provider endpoint/context handles that are cached independently do
-  not own this allocation's deallocator. This makes "last claim and lease"
-  an auditable deallocation condition rather than an incidental strong-count
-  observation.
+1. checked shape, stride, offset, and byte-range arithmetic;
+2. logical bounds and the exact root-bound span;
+3. dtype size and interpretation;
+4. required alignment;
+5. storage and provider compatibility; and
+6. non-overlapping element addresses for a write layout.
 
-### Span rules
+Views and group records retain these proofs. Slicing or reinterpretation
+constructs a new checked descriptor and validates only the newly derived
+arithmetic and invariants. `prepare_read` and `prepare_write` do not recompute
+them: they consume the checked capability/descriptor pairing and perform only
+provider operations that cannot be established until access time, such as
+mapping, synchronization, and timeline admission. Provider lifetime is reached
+through the borrowed root; preparation performs no provider-context `Arc`
+clone. Preparation failure returns the unchanged checked pairing and a typed
+error. Any temporary host mapping is released before returning. No partially
+prepared state is published.
 
-- `byte_offset + byte_len` uses checked arithmetic and must fit the provider
-  allocation. `guaranteed_alignment` is a power of two describing the start
-  of this span, not merely the base allocation.
-- `AllocationKey` equality is domain-qualified (I3, #1558); provider kind or
-  device ordinal alone never identifies an allocation.
-- Suballocations of one provider resource share `key` and differ by byte
-  range. Conflict, hazard, and disjointness reasoning always operates on
-  `(key, byte range, access mode)` triples, never on object identity.
-- Two owners whose spans overlap for the same key must not exist. Group
-  construction and provider constructors reject overlapping owner claims.
-  Distinct non-overlapping suballocations sharing a key are valid.
-- A safe provider constructor creates a claim only for a freshly allocated
-  root resource. Further claims for that resource arise only by consuming a
-  parent claim and splitting it into proven-disjoint children. Provider
-  import or allocator code that cannot establish this provenance statically
-  is one audited `unsafe` boundary whose safety contract requires global
-  non-overlap for the imported `(key, byte range)`. Cloning a resource pin is
-  never a claim-creation mechanism.
-- The root provider resource is deallocated exactly once, after the last
-  span claim has been released and every lease covering that resource has
-  retired. Releasing one child claim never deallocates a root still covered
-  by sibling claims. The shared pin may hold the deallocator internally, but
-  its reference count is lifetime bookkeeping only, not evidence of access
-  uniqueness.
-- Zero-length spans: canonically valid when `byte_len == 0` and the offset
-  passes checked arithmetic. Guards over empty spans return empty slices.
-  Empty access acquires no provider resources and imposes no ordering. No
-  code path may dereference a pointer to justify an empty span.
+`CheckedRead` and `CheckedWrite` are opaque module-private bundles, not structs
+with independently constructible public or crate-wide fields. There is no
+`new(access, descriptor)` function. A tensor/view method creates the bundle by
+moving or borrowing its co-located storage capability and checked descriptor;
+an `AllocationGroup` method creates it only after resolving the descriptor's
+local `AllocationSlot` to that same occupied owner entry. Those are the only
+safe constructors. Consequently a descriptor cannot be paired with another
+root without entering the audited unsafe storage module, and ordinary access
+does not need a root-identity comparison or repeated range validation.
 
-### Hot-path allocation contract
+Host mapping or device preparation consumes the checked object and publishes
+the matching `Prepared*::Host` or `Prepared*::Device` variant. The device
+payload retains the checked capability/layout plus the provider's opaque
+prepared mapping or binding state; it does not contain or construct a host
+guard. Subsequent binding and enqueue consume that device payload. None of
+these operations accepts a replacement descriptor, range, key, provider, or
+access mode or repeats the static checks above. This is an API-shape
+requirement, not a convention.
 
-`StorageRef::resolve`, `StorageMut::resolve_write`, and all G1 acquisition
-methods are allocation-free in the storage kernel. `ResolvedRead` and
-`ResolvedWrite` are fixed-layout values containing the capability, the exact
-`RootBoundSpan`, and the seal; they do not contain a provider enum, a
-per-access `Box`, or any other heap-backed erased operation. Provider
-dispatch uses the one vtable retained in `RootResourceState`. A provider may
-allocate an event or queue object under its own documented backend contract,
-but resolution and the core binding path must not allocate.
+### Contiguous and strided hot paths
 
-The Phase 1 acceptance harness records allocator events around a warmed
-`resolve -> acquire_host_*` and `resolve -> acquire_device_*` loop. The core
-counter must remain zero for both read and write paths (with provider-owned
-event allocation measured separately and explicitly reported). A benchmark
-receipt records the loop count, allocator counter, resolved-value size, and
-backend; a regression that introduces a per-access allocation fails the G1
-performance gate.
+Host preparation selects the traversal representation once. A contiguous
+prepared access exposes the already checked typed range as a slice and an
+`iter_contiguous()`-equivalent slice iterator. A strided prepared access owns a
+precomputed incremental plan:
 
-Resolution is a traversal or launch boundary, never an element boundary.
-For one prepared host traversal or backend launch, allocation-key/span
-validation, provider dispatch/downcast, host mapping, guard acquisition, and
-`UseLease` acquisition each occur a constant number of times independent of
-the element count. The resulting loop or kernel receives a monomorphized typed
-slice/pointer plus a prevalidated iteration plan. No element iteration may
-perform virtual dispatch, `Any` downcast, heap allocation, reference-count
-operation, lock acquisition, synchronization, or descriptor-range
-revalidation. Contiguous host traversal has a slice-equivalent inner loop;
-strided traversal pays only its prepared stride arithmetic and ordinary loop
-control. No path in this contract transfers or materializes storage.
+The authoritative `PreparedRead`/`PreparedWrite` enums select exactly one host
+or device state. Within the host variant, `PreparedHostRead` and
+`PreparedHostWrite` select exactly one contiguous or strided traversal state.
+Their payloads and traversal methods are specified once in G4 below. Device
+payloads retain `CheckedLayout` for launch/binding but expose no host pointer,
+slice, or iterator. There is no optional second traversal surface.
 
-Phase 4 proves the constant-count boundary with an instrumented fake provider
-(`p4-traversal-resolution-counts`). Phase 10 adds a source-contract proof
-(`p10-element-hot-path-structure`) and verifies release traversal performance
-against both a direct-slice control and the immutable Phase 1 pre-redesign
-report (`p10-storage-traversal-performance`). Timing alone is not a sound CI
-proof; the deterministic counters and structural checks are mandatory even
-when a machine-dependent benchmark comparison is reported.
+The exact names may change in the owning phase, but equivalent code generation
+and verification properties are mandatory. Contiguous inner loops perform only
+ordinary typed slice access. Strided `next()` performs only loop termination,
+typed pointer access, and necessary precomputed stride/carry increments. It
+does not resolve storage, dispatch through a provider, check bounds, inspect
+dtype, map, synchronize, allocate, decode a flat index into coordinates, or
+repeat layout arithmetic. Fixed-rank plans remain monomorphized; dynamic-rank
+cursor state is allocated or initialized once outside the element loop.
 
-The P1 element-access baseline is active after one clean pre-redesign source
-measurement. The measured source commit is
-`da7b36e699f9f4731dec08de6a4e1ca93f20cd6f`; the benchmark source path is
-`crates/tenferro-tensor/benches/element_access.rs`; and the tracked report is
-`docs/testing/storage-element-access-baseline.json`. The capture utility was
-run with:
+`CheckedInjectiveDescriptor` retains descriptor-level write injectivity, and
+`CheckedInjectiveStrided` carries the corresponding traversal proof used by
+the private mutable strided iterator to yield each writable element at most
+once. The iterator owns the sole mutable borrow of its prepared guard.
+Independent booleans such as `is_checked`,
+`is_mapped`, `is_contiguous`, and `is_writable` do not encode lifecycle state;
+the prepared enum/newtype variants do.
 
-```text
-python3 scripts/capture-storage-element-access-baseline.py \
-  --root . --output docs/testing/storage-element-access-baseline.json
+Ordinary `as_view()` and `as_view_mut()` only reborrow owner storage and layout
+metadata. They are O(1), allocation-free, and perform no provider operation,
+reference-count increment, synchronization, transfer, or materialization.
+
+### Provider use and retirement
+
+Host/CPU borrowed access is synchronous when the provider guarantees that all
+work and temporary mapping retire before the call returns. An asynchronous
+CUDA, WebGPU, or Metal operation uses detached owning submission. It consumes
+prepared bindings into a task-owned retirement record:
+
+```rust
+struct RetirementRecord {
+    event: ProviderEvent,
+    bindings: Box<[ProviderRetirementBinding]>,
+    roots: Box<[Arc<RootResource>]>,
+    provider: Arc<ProviderContext>,
+}
 ```
 
-Its exact Criterion command was:
+Enqueue consumes each `DeviceRead`/`DeviceWrite` into a
+`ProviderRetirementBinding` that owns any mapping, reservation, or raw-binding
+lifetime the provider requires after enqueue. The record owns every binding,
+event, root, and provider context until completion is proven. Dropping a
+user-visible completion handle only detaches
+observation; the worker or provider reaper retains the record. After proven
+completion, the record releases bindings, event, and root/context references
+exactly once and publishes a completed or typed failed outcome.
 
-```text
-cargo bench --locked -p tenferro-tensor --bench element_access -- \
-  --warm-up-time 2 --measurement-time 5 --sample-size 100 --noplot
-```
+If completion cannot be proven, the public outcome contains diagnostics and no
+owner. A provider-private record permanently retains the bindings, event,
+roots, and provider context because neither binding/event destruction nor
+memory reuse is known to be safe. This is a terminal leak-for-soundness case,
+not a recoverable state.
+There is no retry API, global recovery table, or safe extraction path from it.
 
-The command uses Cargo's optimized `bench` profile, records WallTime values
-as nanoseconds, and sets `MKL_NUM_THREADS`, `OMP_NUM_THREADS`,
-`OPENBLAS_NUM_THREADS`, `RAYON_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS` to
-`1`. It records the actual Cargo/rustc/toolchain, CPU/OS/affinity, and actual
-`RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` values (both were empty here). The
-report retains explicit warm-up, measurement, sample, and unit fields without
-duplicating Criterion arguments, version, provider, or a derivable thread
-count. Mutable cases aggregate touched values, and the strided case is a full
-logical-order traversal of a rectangular transpose. The required cases include
-fixed-rank 3D access, dynamic immutable iteration, and dynamic mutable
-iteration. The active canonical command is deliberately a read-only verifier:
+Soundness does not depend on `Drop` or a callback running: `mem::forget` may
+reduce liveness, but cannot create writable aliases or early reclamation. Panic
+is handled at the existing thread/task/FFI boundary. After possible enqueue it
+drains to a proven retired failure or the same ownerless
+`CompletionUnproven` outcome; G1 introduces no panic-catching access protocol.
 
-```text
-python3 scripts/verify-storage-element-access-baseline.py \
-  --report docs/testing/storage-element-access-baseline.json
-```
+### Transition contract
 
-It never benchmarks or rewrites the report. On every later candidate it checks
-the tracked report at its exact repository-relative path and uses the recorded
-measurement commit and source paths as provenance. The exact Git commit plus
-path identifies tracked bytes; no content checksum or saved baseline receipt
-is required. P10 consumes the baseline report and its commit/path provenance
-directly. A benchmark added after the redesign or an unmeasured `--no-run`
-build cannot replace the measured artifact.
-
-P10 may compare a candidate traversal with this baseline only in a compatible
-environment: the relevant CPU architecture/model and affinity, OS/kernel
-class, rustc/Cargo/toolchain and compilation target, optimized profile, thread
-environment, and provider/placement configuration where applicable must match
-or be explicitly justified as equivalent. On an incompatible environment the
-report remains useful provenance but the comparison is inconclusive; no
-machine-independent threshold is inferred and no threshold is transferred
-between environments.
-
-### Ordering rules
-
-Conceptually each allocation tracks, per span, the last unretired device
-write and the set of outstanding uses. The normative ordering behavior:
-
-1. `acquire_host_read(s)` waits until all device writes overlapping `s`
-   retire. Providers whose mapping model forbids concurrent host and device
-   reads (current WebGPU/CubeCL) also wait for overlapping device reads;
-   this is a provider capability, not a contract change.
-2. `acquire_host_write(s)` waits until all outstanding device uses
-   overlapping `s` retire. New device use is excluded for the guard lifetime
-   by the exclusive borrow.
-3. `acquire_device_read(e, s)` validates that endpoint `e` may access the
-   allocation, then either waits for or records an event dependency on the
-   last overlapping write before first device read.
-4. `acquire_device_write(e, s)` orders against all outstanding overlapping
-   uses (read-after-write, write-after-read, write-after-write) through
-   event dependencies on the device timeline where possible, host waits
-   otherwise.
-5. Every wait above is a documented synchronization point. None of them may
-   copy, transfer, materialize, or fall back to another provider (I4).
-
-### Revalidation at map and enqueue boundaries
-
-At every guard acquisition (map) and every binding encode (enqueue), the
-implementation receives a `ResolvedRead` or `ResolvedWrite` and revalidates
-the descriptor against that value's own claim/pin as defense in depth (I7):
-
-1. use the already root-bound span carried by the resolved value;
-2. checked containment: descriptor byte range inside that exact span;
-3. alignment: descriptor start satisfies the dtype and provider requirement
-   given `guaranteed_alignment`;
-4. access mode: write requires the `ResolvedWrite` path;
-5. for writes, layout injectivity has been proven (G2).
-
-There is no second receiver or free span to compare. A test-only corruption
-hook may alter a private descriptor after resolution, but it cannot replace
-the resolved root, claim, pin, or the pin-state access vtable. Tests must assert
-that no safe signature contains an independently supplied provider/dispatch
-receiver together with a resolved capability or span.
-
-Failure is a structured error naming the operation, requested range, and
-resolved span key. Revalidation failure is always an error, never UB, even
-if an internal invariant was violated upstream.
-
-### State table
-
-| Transition | cap | borrow | sync | fail | panic/drop | reclaim |
+| Transition | capability | borrow | synchronization | failure | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| allocate fresh root and claim | provider allocator returns owning claim | none | provider allocation rules | no claim and provider cleans up unpublished resource | no partially published claim | root is live under its first claim |
-| reject overlapping/imported claim | none until audited construction succeeds | none | none | structured overlap/provenance error; existing claims unchanged | no claim published | unchanged |
-| `StorageRef::resolve` | shared | consumes the `StorageRef` wrapper; owner remains immutably borrowed for the resolved value | descriptor range/alignment validation only | unchanged `StorageRef` plus typed error | no resolved value is published | owner remains live |
-| `StorageMut::resolve_write` | exclusive | consumes the `StorageMut` wrapper and retains its `&mut OwnedStorage` in `ResolvedWrite` | checked range, alignment, and write-injectivity validation | `(StorageMut, AccessError)` with the exact capability returned | no partial resolved capability is published | owner remains live |
-| `acquire_host_read` | shared | allocation for guard lifetime | wait: overlapping device writes (plus reads where provider requires) | no guard, no state change | guard drop unregisters host use | not while guard alive |
-| `acquire_host_write` | exclusive | allocation, exclusively, for guard lifetime | wait: all overlapping device uses | no guard, no state change | drop unregisters; writes made so far are visible bytes, no rollback | not while guard alive |
-| `acquire_device_read` | shared | none beyond the call (lease is a `Send + !Sync` pin/carrier) | event dependency on last overlapping write | no lease, no state change | lease drop before submission invokes release once; callback panic is contained and quarantines root | not while lease outstanding |
-| `acquire_device_write` | exclusive | consumes `ResolvedWrite`; `WriteBinding` retains the owner/`&mut` through enqueue and retirement | event dependencies for RAW/WAR/WAW | unchanged binding capability plus typed error | admitted binding moves to retirement even if its handle is dropped | after covering events retire |
-| direct write API returning an owner | owning | no early end of exclusive access is allowed | synchronous retirement before returning the owner | owner returned only after retirement; otherwise typed error retains it | panic retains/quarantines until retirement | after synchronous retirement |
-| lease submitted with work | owning (runtime owns inputs) | none (pins) | none at submit; retirement via events | enqueue prep failure releases only unsubmitted leases | admitted leases survive handle drop and panic until retirement | after all covering events complete |
-| guard leaked (`mem::forget`) | n/a | borrow ends without `Drop` | none | n/a | provider host-use registration may persist until owner drop; soundness is preserved (access is gone), liveness may degrade; this is documented, not UB | owner drop path below |
-| split owner claim | owning (consumes parent claim) | none | none | original owner returned unchanged | no child is observable until all disjoint claims are built | parent is replaced by children; root resource remains pinned |
-| drop one of several sibling claims | owning | none | covering leases for that claim follow the next row | n/a | only that claim is released or retired | root remains live under sibling claims/pins |
-| owner drop, no outstanding use | owning | none | none | n/a | releases exactly that span claim | root deallocated exactly once only if this was the last claim and no lease remains |
-| owner drop, outstanding leases | owning | none | none | n/a | claim, deallocator pin, and leases move into a retirement record | claim releases after its events; root deallocates exactly once after the last claim and lease |
-| last root pin/claim release | owning/provider-internal | none | all covering events already retired | n/a | exactly-once deallocator runs or the resource remains quarantined | now, and only now |
-| retirement wait fails | n/a | none | attempted wait/poll | error reported on the runtime/provider error channel | resources quarantined: retained and reported | never speculatively; only if a later drain proves completion |
-| provider release callback panics | carrier has already consumed its one callback token | unchanged | no retry | structured provider-release failure | panic is caught; pinned root enters `Quarantined`; outer Drop/worker continues | never from the failed release proof |
+| owner -> shared view | shared | tied to owner borrow | none | infallible | borrow rules remain authoritative | owner/root lifetime |
+| owner -> mutable view | exclusive | tied to exclusive owner borrow | none | infallible | borrow rules remain authoritative | owner/root lifetime |
+| checked shared pairing -> prepared host/device read | shared | capability and checked descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
+| checked exclusive pairing -> prepared host/device write | exclusive | capability and checked injective descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
+| prepared host access -> synchronous return | shared/exclusive | guard lives through call | provider work retires before return | typed retired error | no work survives return/unwind | after guard and owner release |
+| prepared device access -> pre-admission rejection | owning | no caller borrow escapes | no enqueue occurred | exact unchanged package | no retirement record exists | caller retains owners |
+| possible enqueue -> draining | task-owned | no caller borrow | event domains drain | no immediate owner return | worker/reaper owns retirement bindings, event, roots, context | not yet |
+| draining -> retired completed/failed | task-owned | none | completion proven | typed result; owners only after retirement | record releases bindings/event/roots/context once | normal root lifetime |
+| draining -> completion unproven | provider-private | none | completion not proven | diagnostics only, no owner | permanently retains bindings, event, roots, context | never by this outcome |
 
-Persistent owner-claim splitting above is distinct from G2 `split_mut`.
-Claim splitting consumes one owner and changes the persistent ownership set;
-`split_mut` only derives temporary disjoint Rust borrows from an unchanged
-owner/group and cannot create a claim or affect root-resource lifetime.
+### Acceptance evidence
 
-Quarantine is root-resource state, not merely a runtime log entry. Marking a
-root quarantined is atomic and visible to every claim sharing its private
-`RootResourceId`. All safe acquisition and extraction paths revalidate this
-state and fail before exposing bytes or raw bindings. A quarantine record
-retains the root pin/deallocator and provider context even after every public
-claim is dropped; only a later provider-specific proof of retirement may
-release it.
+G1 is accepted only with executable evidence for all of the following:
+
+- compile-fail tests reject `Clone` for owners/claims, write preparation from a
+  shared borrow, overlapping mutable splits, and prepared guards escaping their
+  borrow;
+- property/Miri tests cover empty, singleton, reverse-stride, noncontiguous,
+  overflow, out-of-span, misaligned, wrong-dtype, and non-injective layouts;
+- fake-provider counters prove validation, provider resolution, mapping,
+  synchronization, and dispatch counts are independent of element count;
+- source/API contracts prove binding and enqueue accept only prepared access and
+  no replacement descriptor/range/provider/access mode;
+- contiguous release benchmarks/codegen show slice-equivalent loops, and
+  strided structure checks show only typed access plus stride/carry increments;
+- `as_view()` and `as_view_mut()` tests prove zero allocation, zero provider or
+  storage clone/refcount work, and no dynamic layout clone;
+- event tests cover immediate handle drop, successful completion, execution
+  failure, panic after possible enqueue, and completion-unproven retention of
+  provider retirement bindings, event, roots, and provider context;
+- CPU, CUDA, WebGPU, and Metal use the same capability and retirement contract,
+  with explicit unsupported errors where a provider cannot offer a mode.
+
 
 ## G2. AllocationGroup
 
@@ -1293,126 +742,156 @@ values (#1555, "Disjoint views and allocation groups"; #1561).
 
 ```rust
 pub struct AllocationGroup {
-    allocations: Vec<OwnedStorage>,   // private: each owned span exactly once
-    values: GenerationalDescriptors,  // private: interpretation + slot
+    allocations: Vec<Option<OwnedStorage>>, // private, stable move-out slots
+    descriptors: Vec<Option<DescriptorRecord>>, // private, append-only slots
 }
 
-pub struct TensorDescriptor {
-    slot: AllocationSlot,             // index into `allocations`
+#[derive(Clone, Copy)]
+pub struct DescriptorSlot(u32); // opaque; meaningful only under its group borrow
+
+struct DescriptorRecord {
+    allocation: AllocationSlot, // index into `allocations`
     dtype: DType,
-    layout: TensorLayout,
+    layout: ValidatedLayoutMetadata,
+    byte_range: ValidatedRootBoundRange,
     placement: Placement,
-}
-
-pub struct ValueId {
-    group: GroupId,
-    slot: u32,
-    generation: u32,
-}
-
-struct GenerationalDescriptors {
-    group: GroupId,
-    slots: SlotMap<DescriptorSlot>,
-}
-
-struct DescriptorSlot {
-    generation: u32,
-    descriptor: Option<TensorDescriptor>,
-    roots: DescriptorRoots, // handles, tape, checkpoint, execution
+    storage: ValidatedStorageMetadata,
+    provider: ValidatedProviderMetadata,
+    write_injectivity: Option<WriteInjectivityProof>,
 }
 ```
 
 Construction preconditions (safe constructors):
 
-- every `OwnedStorage` appears once; duplicate owner tokens are impossible by
-  move semantics, and overlapping owner spans for one key are rejected;
-- every descriptor is validated against its slot's span (G1 revalidation
-  rules) at construction;
-- descriptors may alias freely, including exact duplicates.
-- A `ValueId` is stable only while its descriptor slot and generation are
-  live. Removing a descriptor tombstones the slot; reuse increments the
-  generation. Stale IDs fail with a structured error and can never resolve
-  to a later value. The group component prevents an ID from resolving in a
-  different group even when slot and generation happen to match. Slot
-  indices, vector addresses, and provider handles are not public identity.
-- `GroupId` is opaque, non-forgeable outside the registry, and is never
-  reused while a stale `ValueId` could exist. Exhaustion is a structured
-  construction error, never wraparound. Group identity is descriptor-table
-  identity only and cannot authorize allocation access.
-- `GenerationalDescriptors` is the sole authoritative descriptor-liveness
-  registry. Root registration/release and descriptor lookup are atomic with
-  respect to slot tombstoning. G2 extraction and G7 handle operations consult
-  this registry; no side table or provider reference count may override it.
+- every occupied allocation entry contains one `OwnedStorage`, and each owner
+  appears in exactly one entry. Duplicate owner tokens are impossible by move
+  semantics, and overlapping owner spans for one key are rejected;
+- allocation entries have stable indices. Moving an owner out leaves `None`
+  and never renumbers another `AllocationSlot`;
+- every descriptor references an occupied allocation entry. Before publishing
+  the record, safe construction validates its dtype, checked layout and byte
+  range, alignment, placement, storage, and provider compatibility against
+  that entry's exact root-bound span, then retains the validated
+  layout/range/storage/provider metadata in `DescriptorRecord`. This metadata
+  is non-owning and non-authoritative;
+- descriptors may alias freely, including exact duplicates;
+- descriptor slots are append-only. Insertion always appends a new table
+  entry; removing a descriptor leaves its entry vacant for the rest of the
+  group's lifetime, and that slot is never rebound or reused;
+- `DescriptorSlot` is only a local lookup key. It carries no allocation,
+  root, provider, or write authority, and it is meaningful only when resolved
+  through a borrow of the group that owns the table. Copying a slot copies
+  only this metadata and grants no capability;
+- physical lifetime comes from each occupied entry's `OwnedStorage` claim and
+  its `Arc<RootResource>` root (G1). Mutation and extraction require the
+  exclusive group borrow; `split_mut` derives only temporary disjoint mutable
+  capabilities from that borrow;
+- descriptor records are ordinary group-owned metadata. No out-of-band
+  descriptor liveness roots or cross-group identity participate in access or
+  reclamation.
 
 ### Operation contracts
 
 ```rust
-fn view(&self, id: ValueId) -> Result<TensorView<'_>, GroupError>;
-fn view_mut(&mut self, id: ValueId) -> Result<TensorViewMut<'_>, GroupError>;
-fn split_mut(&mut self, ids: &[ValueId])
+fn view(&self, slot: DescriptorSlot) -> Result<TensorView<'_>, GroupError>;
+fn view_mut(&mut self, slot: DescriptorSlot)
+    -> Result<TensorViewMut<'_>, GroupError>;
+fn split_mut(&mut self, slots: &[DescriptorSlot])
     -> Result<Vec<TensorViewMut<'_>>, DisjointViewError>;
-fn try_extract(&mut self, id: ValueId) -> Result<Tensor, ExtractError>;
-fn into_tensor(self, id: ValueId) -> Result<Tensor, (Self, ExtractError)>;
+fn try_extract(&mut self, slot: DescriptorSlot) -> Result<Tensor, ExtractError>;
+fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError)>;
 ```
 
+- Every operation resolves its `DescriptorSlot` through the borrowed group:
+  a shared receiver yields a borrowed descriptor record and read view, while
+  an exclusive receiver yields the write or extraction path. A slot alone
+  cannot expose storage or a provider binding. Slot resolution checks only
+  the local table position and occupancy; it does not repeat the descriptor's
+  construction-time invariant validation.
+- An access path combines the retained metadata with its Rust borrow and any
+  operation-specific proof, then constructs the G1 prepared-access object
+  once. Provider map and enqueue consume that prepared object and do not
+  repeat bounds, layout, range, storage, or provider validation.
 - `view` borrows the group shared; any number of aliasing read views may
-  coexist.
-- `view_mut` exclusively borrows the whole group; one at a time.
-- `split_mut` returns N simultaneous mutable views only after the central
-  disjointness proof (below). Children are non-cloneable and hold the
-  exclusive borrow of the group; the root is inaccessible while any child
-  lives.
-- `try_extract` removes descriptor `id` and moves its allocation out as a
-  standalone owner only when no remaining descriptor or registered external
-  descriptor handle references the same allocation slot. On failure the
-  group is unchanged and the error carries a typed reason. Removing the
-  descriptor invalidates its generation. There is no copy or materialization
-  fallback (I4).
-- `into_tensor` consumes the group, selecting one descriptor and explicitly
-  discarding the rest; it never duplicates ownership to preserve them. On
-  failure it returns the unchanged group.
+  coexist. The returned view is bounded by that borrow.
+- `view_mut` exclusively borrows the whole group; one mutable view exists at
+  a time. The Rust borrow is the write authority; the slot is only the record
+  selected by that borrow.
+- `split_mut` resolves all requested slots under one exclusive group borrow,
+  reads their retained validated metadata, and returns N simultaneous mutable
+  views only after the central disjointness proof (below). It performs no
+  layout, range, storage, provider, map, or enqueue revalidation. Its only
+  additional proofs are write injectivity when a record does not already
+  retain that proof, and pairwise disjointness for the requested mutable
+  views. Children are non-cloneable and hold the exclusive borrow of the
+  group; the root is inaccessible while any child lives.
+- `try_extract` resolves `slot` under `&mut AllocationGroup`. It succeeds
+  only when the selected record is the sole descriptor in this group that
+  refers to its `AllocationSlot`; the record is removed and its owned
+  allocation is moved out by replacing the occupied allocation entry with
+  `None`, without renumbering any other entry. If another local descriptor
+  aliases that allocation, the operation returns a typed reason and leaves
+  the group unchanged. The removed descriptor entry remains vacant for the
+  rest of the group's lifetime, and no copy or materialization fallback is
+  permitted by the no-hidden-copy rule.
+- `into_tensor` consumes the group, resolves one local slot, and explicitly
+  discards all other descriptor records. It never duplicates ownership to
+  preserve them. On failure it returns the unchanged group.
+- Persistent AD handle behavior is outside G2 and is specified by G7; these
+  operations do not consult AD handle bookkeeping.
 
 ### Central disjointness proof
 
-One audited module owns the proof. Normative validation order (#1561):
+One audited module owns the proof. Normative order (#1561):
 
-1. validate each layout with checked shape/stride/offset arithmetic;
-2. resolve dtype-sized byte ranges against the exact root-bound claim span;
-3. prove each mutable layout internally injective;
-4. partition requests by allocation key and root span;
+1. resolve each requested occupied descriptor slot under the exclusive group
+   borrow;
+2. read its retained validated layout, root-bound byte range, storage, and
+   provider metadata without recomputing those facts;
+3. use the retained write-injectivity proof, or compute that proof once when
+   the record does not already contain it;
+4. partition requests by their retained allocation slot and root span;
 5. treat empty descriptors as non-overlapping;
-6. prove pairwise disjoint reachable byte envelopes;
-7. split the root exclusive capability into non-cloneable children.
+6. prove pairwise disjointness of the retained reachable byte envelopes;
+7. derive non-cloneable disjoint mutable child capabilities whose lifetimes
+   remain bounded by the exclusive group borrow.
+
+After slot resolution, `split_mut` performs only the write-injectivity proof
+for records that do not retain one and requested-view pairwise disjointness.
+It neither maps nor enqueues storage. A later map or enqueue consumes prepared
+access and does not repeat construction-time validation.
 
 Conservative rejection is required rather than element enumeration:
 interleaved strided requests whose byte envelopes overlap return
-`NotProvablyDisjoint`. Error variants: invalid layout, foreign allocation,
-internal overlap, pairwise overlap, not provably disjoint, overflow,
-unsupported provider span. Every error leaves the group unchanged.
+`NotProvablyDisjoint`. Error variants are invalid or empty descriptor slot,
+non-injective write layout when no retained proof exists, pairwise overlap,
+and not provably disjoint. Construction-time layout, range, storage, and
+provider errors cannot originate from `split_mut`. Every error leaves the
+group unchanged.
 
 ### State table
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| construct group | owning (consumes owners) | none | none | owners returned to caller or dropped exactly once, per constructor contract | no partially observable group | owners' G1 rules |
-| `view` | shared | group, guard-free descriptor view | none (host access goes through G1 guards) | error, group unchanged | view drop is borrow end | n/a |
-| `view_mut` | exclusive | whole group for view lifetime | none | error, group unchanged | borrow end; bytes written stay written | n/a |
-| `split_mut` | exclusive | whole group, transferred to children | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
-| `try_extract` | exclusive | none after return | none | typed reason, group unchanged | n/a | extracted owner follows G1 |
-| `into_tensor` | owning | none | none | group returned unchanged with reason | n/a | discarded owners follow G1 drop rules |
+| construct group | owning (consumes owners) | none | none | typed invariant-validation error returns owners or drops them exactly once, per constructor contract | no partially observable record; validated layout/range/storage/provider metadata is published only after all checks pass | owners' G1 rules |
+| `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
+| `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
+| `split_mut` | exclusive | requested slots consume retained metadata under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | no map/enqueue; no repeated validation | invalid/empty slot, non-injective write layout when its proof was absent, pairwise overlap, or not provably disjoint; group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
+| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; the descriptor slot is never reused; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
+| `into_tensor` | owning | consuming group resolves one local slot and discards other records | none | group returned unchanged with reason | unselected records and claims follow G1 drop rules | selected owner follows G1 |
 
 ## G3. Submission
 
-Two complementary APIs (#1555, "Runtime ownership and asynchronous
-execution"; #1565). Detached execution returns an owned group-based result;
-scoped execution returns the hybrid borrowed/owned result defined below.
+G3 has two submission surfaces. Detached owning execution remains
+asynchronous. Scoped read-only execution is synchronous to retirement and
+accepts only immutable tensor-view borrows.
 
-### Signatures
+### Detached submission
 
 ```rust
 pub struct ExecutionInputs {
     group: AllocationGroup,
-    bindings: Box<[ValueId]>, // graph input i reads descriptor bindings[i]
+    bindings: Box<[DescriptorSlot]>,
 }
 
 pub fn submit(
@@ -1421,245 +900,199 @@ pub fn submit(
     inputs: ExecutionInputs,
 ) -> Result<ExecutionHandle, SubmitRejected>;
 
+impl ExecutionHandle {
+    pub fn wait(self) -> ExecutionOutcome;
+}
+
 pub struct SubmitRejected {
-    error: Error,
-    inputs: ExecutionInputs, // the exact unaccepted package
-}
-
-pub struct ExecutionFailure {
-    cause: ExecutionError,
+    cause: SubmitError,
     inputs: ExecutionInputs,
 }
 
-pub struct CancelledExecution {
-    inputs: ExecutionInputs,
-}
-
-pub struct QuarantinedExecution {
-    cause: RetirementError,
-    quarantine: QuarantineId,
-    affected: Box<[AllocationKey]>, // diagnostic identity, never owners
+impl SubmitRejected {
+    pub fn into_parts(self) -> (SubmitError, ExecutionInputs);
 }
 
 pub enum ExecutionOutcome {
     Completed(ExecutionBundle),
-    Failed(ExecutionFailure),       // recovered inputs, typed cause
-    Cancelled(CancelledExecution),  // recovered inputs
-    Quarantined(QuarantinedExecution), // runtime registry retains resources
+    RetiredFailed {
+        cause: ExecutionError,
+        inputs: ExecutionInputs,
+    },
+    CompletionUnproven {
+        cause: CompletionError,
+        diagnostic_keys: Box<[DiagnosticKey]>,
+    },
 }
 
 pub struct ExecutionBundle {
     group: AllocationGroup,
     outputs: Box<[ExecutionOutput]>,
-    retained_inputs: Box<[Option<ValueId>]>,
 }
 
 pub enum ExecutionOutput {
-    Tensor(ValueId),
+    Tensor(DescriptorSlot),
     Metadata(OutputMetadata),
 }
 
-impl SubmitRejected {
-    pub fn into_parts(self) -> (Error, ExecutionInputs);
+pub enum OutputRef<'a> {
+    Tensor(TensorView<'a>),
+    Metadata(&'a OutputMetadata),
 }
 
-impl ExecutionFailure {
-    pub fn into_parts(self) -> (ExecutionError, ExecutionInputs);
+pub enum OutputExtractError {
+    InvalidOutput,
+    MetadataOutput,
+    Extract(ExtractError),
 }
 
-impl CancelledExecution {
-    pub fn into_inputs(self) -> ExecutionInputs;
-}
-
-impl QuarantinedExecution {
-    pub fn into_parts(self) -> (RetirementError, QuarantineId, Box<[AllocationKey]>);
-}
-
-pub fn scope<'env, R>(
-    &self,
-    f: impl for<'s> FnOnce(&'s SubmitScope<'s, 'env>) -> R,
-) -> Result<R, ScopeExitError<R>>;
-
-impl<'s, 'env> SubmitScope<'s, 'env> {
-    pub fn submit_read_only(
-        &'s self,
-        program: &CompiledGraph,
-        inputs: ScopedReadInputs<'env>,
-    ) -> Result<ScopedHandle<'s, 'env>, ScopedSubmitRejected<'env>>;
-}
-
-impl<'s, 'env> ScopedHandle<'s, 'env> {
-    pub fn wait(self) -> ScopedExecutionOutcome<'env>;
-}
-
-pub enum ScopedExecutionOutcome<'env> {
-    Completed(ScopedExecutionBundle<'env>),
-    Failed(ScopedExecutionFailure<'env>),
-    Cancelled(ScopedCancelledExecution<'env>),
-    Quarantined(ScopedQuarantinedExecution<'env>),
-}
-
-pub struct ScopedExecutionBundle<'env> {
-    allocations: Box<[ScopedAllocation<'env>]>,
-    values: GenerationalDescriptors,
-    outputs: Box<[ScopedOutput]>,
-}
-
-pub enum ScopedOutput {
-    Tensor(ValueId),
-    Metadata(OutputMetadata), // genuinely storage-free graph result
-}
-
-enum ScopedAllocation<'env> {
-    Borrowed(StorageRef<'env>),
-    Owned(OwnedStorage),
-}
-
-pub struct ScopedSubmitRejected<'env> {
-    error: Error,
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedExecutionFailure<'env> {
-    cause: ExecutionError,
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedCancelledExecution<'env> {
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopedQuarantinedExecution<'env> {
-    cause: RetirementError,
-    quarantine: QuarantineId,
-    inputs: ScopedReadInputs<'env>,
-}
-
-pub struct ScopeExitError<R> {
-    value: R,
-    unobserved: Box<[ScopedTaskFailure]>,
-}
-
-impl<'env> ScopedSubmitRejected<'env> {
-    pub fn into_parts(self) -> (Error, ScopedReadInputs<'env>);
-}
-
-impl<'env> ScopedExecutionFailure<'env> {
-    pub fn into_parts(self) -> (ExecutionError, ScopedReadInputs<'env>);
-}
-
-impl<'env> ScopedCancelledExecution<'env> {
-    pub fn into_inputs(self) -> ScopedReadInputs<'env>;
-}
-
-impl<'env> ScopedQuarantinedExecution<'env> {
-    pub fn into_parts(
-        self,
-    ) -> (RetirementError, QuarantineId, ScopedReadInputs<'env>);
-}
-
-impl<R> ScopeExitError<R> {
-    pub fn into_parts(self) -> (R, Box<[ScopedTaskFailure]>);
+impl ExecutionBundle {
+    pub fn output(&self, output: usize)
+        -> Result<OutputRef<'_>, OutputAccessError>;
+    pub fn into_output(self, output: usize)
+        -> Result<Tensor, (Self, OutputExtractError)>;
 }
 ```
 
-- Repeated or aliased bindings reference descriptors; they never duplicate
-  owners.
-- `ExecutionBundle` fields are private. Tensor `output()` returns a borrowed
-  view; `output_mut()` exclusively borrows the whole bundle; extraction
-  follows G2. Identity, metadata-only tensor transforms, repeated-input, and
-  duplicate-output graphs keep exactly one owner per physical allocation,
-  with no hidden copy. A genuinely storage-free output uses
-  `ExecutionOutput::Metadata`, parallel to scoped execution.
-- `ScopedReadInputs` borrows immutable tensor/group views for `'env` and
-  declares its access mode explicitly. Provider read leases are still
-  acquired (G1), because logically read-only host and device uses can
-  conflict on some providers. G3 contains no scoped writable-input contract;
-  scoped submission is read-only and no writable scoped row may be inferred
-  from this surface.
-- `ScopedHandle<'s, 'env>` cannot escape the scope (higher-ranked `'s`). Its
-  `wait` result contains no `'s` borrow and may leave the scope, but remains
-  bounded by the original input lifetime `'env`.
-- A completed scoped bundle is deliberately hybrid. Identity,
-  metadata-only, repeated-input, and duplicate-output results are
-  tensor descriptors whose slot is `ScopedAllocation::Borrowed`; newly
-  computed tensor results use `ScopedAllocation::Owned`. A genuinely
-  storage-free result is `ScopedOutput::Metadata` and never receives a fake
-  allocation slot. `output()` borrows the bundle and returns a view bounded
-  by both that borrow and `'env`. Extraction is available only for an
-  `Owned` slot satisfying G2; requesting extraction from a `Borrowed` slot
-  returns `BorrowedOutput` and never copies.
-- `ScopedSubmitRejected<'env>` returns the exact unadmitted
-  `ScopedReadInputs<'env>` with its typed cause. After
-  admission, `ScopedExecutionFailure<'env>` and
-  `ScopedCancelledExecution<'env>` retain the exact borrowed input
-  descriptors for diagnosis; caller ownership was never transferred. Partial
-  or uninitialized owned outputs remain private and are retired and dropped
-  or quarantined before either outcome becomes observable. Consuming
-  accessors return the error and exact input package; private fields are not
-  the recovery contract.
-- Scope exit joins and retires every admitted task whose handle was not
-  waited. Dropping a handle abandons observation, not execution. A waited
-  `ScopedExecutionBundle<'env>` may be returned from the closure because it
-  contains only `'env` borrows plus its own fresh owners, never a scope
-  borrow.
-- Scope exit is an explicit synchronous `join_and_retire_all` transition, not
-  a `Drop` side effect. The read-only scope-owned task registry still joins
-  every task and retires every lease before ending the `'env` borrow. If the
-  closure panics, the implementation catches the unwind long enough to
-  perform the same synchronous join/retirement, records secondary failures,
-  and then resumes the original panic. `Drop` is diagnostic cleanup only and
-  never establishes safety or retirement.
-- A normal scope exit reports every unobserved task failure through
-  `ScopeExitError<R>` while preserving the closure result. If the closure
-  panics, the scope guard still drains, records secondary failures in the
-  documented runtime error sink, and resumes the original panic; it never
-  replaces that panic with a second one.
-- If retirement cannot be proven, `Quarantined` is a distinct terminal
-  outcome, not `Retired`. Before a scoped borrow can end, provider state for
-  every affected root is atomically marked quarantined. All later safe map,
-  enqueue, extraction, and deallocation attempts return `Quarantined`; the
-  quarantine registry retains the root resource and context. Thus dropping
-  a scoped error cannot expose borrowed storage to work of unknown status.
-- The detached runtime is the only G3 asynchronous path that owns writable
-  inputs: `submit` consumes `ExecutionInputs`, whose `AllocationGroup` owns
-  its `OwnedStorage` values after admission. Those owners move into the
-  retirement record with the leases; no detached record stores a Rust borrow.
-  A static `UseLease` alone never makes an owner externally writable while
-  device work remains.
-- A direct borrowed device-write API is synchronous in its public lifetime
-  shape: it may use `WriteBinding<'a>` internally, but it must join and retire
-  all device work before returning and therefore cannot place `'a` in a
-  `'static` retirement record. It returns the exact borrowed input on
-  pre-admission failure. This is distinct from the read-only scoped API and
-  detached owning submission; there is no scoped write API in this contract.
+`SubmitRejected` returns the exact owning `ExecutionInputs` that were not
+admitted. After admission, `Completed` and `RetiredFailed` expose their
+resources only after provider retirement. `ExecutionBundle::output` returns a
+borrowed tensor view or metadata reference. A tensor output slot is resolved
+in the returned group and may be an existing identity or repeated slot, or a
+slot newly inserted for a fresh allocation; neither case copies storage.
+`into_output` consumes the entire bundle and delegates the selected tensor slot
+to G2 `into_tensor`. On success, repeated or duplicate output aliases, the
+remaining group, and the output map disappear together; no extracted-state
+flags remain. On rejection it returns the exact bundle and typed error.
+`Metadata` is genuinely storage-free.
+
+`CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
+returns an owner or other owning resource. The provider-private permanent
+record retains the consumed retirement bindings, event, `Arc` roots, and
+provider context for that outcome. No public result can recover them.
+
+### Scoped read-only execution
+
+```rust
+pub struct ScopedReadInputs<'env> {
+    bindings: Box<[ScopedReadBinding<'env>]>,
+}
+
+pub struct ScopedReadBinding<'env> {
+    tensor: TensorView<'env>,
+}
+
+pub fn execute_scoped_read_only<'env>(
+    &self,
+    program: &CompiledGraph,
+    inputs: ScopedReadInputs<'env>,
+) -> Result<ScopedExecutionOutcome<'env>, ScopedSubmitRejected<'env>>;
+
+pub enum ScopedExecutionOutcome<'env> {
+    Completed(ScopedExecutionBundle<'env>),
+    RetiredFailed {
+        cause: ExecutionError,
+        inputs: ScopedReadInputs<'env>,
+    },
+}
+
+pub struct ScopedSubmitRejected<'env> {
+    cause: SubmitError,
+    inputs: ScopedReadInputs<'env>,
+}
+
+impl<'env> ScopedSubmitRejected<'env> {
+    pub fn into_parts(self) -> (SubmitError, ScopedReadInputs<'env>);
+}
+
+pub struct ScopedExecutionBundle<'env> {
+    owned: AllocationGroup,
+    outputs: Box<[ScopedOutput<'env>]>,
+}
+
+pub enum ScopedOutput<'env> {
+    Borrowed(TensorView<'env>),
+    Owned(DescriptorSlot),
+    Metadata(OutputMetadata),
+}
+
+pub enum ScopedOutputExtractError {
+    BorrowedOutput,
+    Output(OutputExtractError),
+}
+
+impl<'env> ScopedExecutionBundle<'env> {
+    pub fn output(&self, output: usize)
+        -> Result<OutputRef<'_>, OutputAccessError>;
+    pub fn into_owned_output(self, output: usize)
+        -> Result<Tensor, (Self, ScopedOutputExtractError)>;
+}
+```
+
+`ScopedReadInputs<'env>` contains only immutable `TensorView<'env>` bindings;
+there is no writable binding shape. Rejection returns the exact borrowed
+package that was not admitted. Once admitted, `execute_scoped_read_only` is
+synchronous to retirement and returns only `Completed` or `RetiredFailed`
+after all provider work has retired.
+
+A completed scoped bundle distinguishes borrowed and owned tensor results.
+Identity and repeated outputs are `Borrowed` descriptor views bounded by
+`'env`; fresh results are inserted into `owned` and named by group-local
+`Owned` slots. `Metadata` is storage-free. None of these paths copies or
+materializes input storage, and fresh owned outputs become observable only
+after retirement. `output` reborrows either tensor form as an immutable view.
+`into_owned_output` consumes the whole bundle and succeeds only for an `Owned`
+slot by delegating to G2 `into_tensor`. Success discards repeated or duplicate
+owned aliases and the remaining output map together. A `Borrowed` output
+returns the exact bundle with `ScopedOutputExtractError::BorrowedOutput`; a
+metadata output returns the exact bundle with the typed metadata rejection.
+Neither rejection copies, and no extracted-state flags exist.
+
+Scoped read-only execution supports only host/CPU providers whose operation is
+synchronous through retirement. CUDA, WebGPU, Metal, and any provider that can
+leave asynchronous work live across unwind are rejected before admission or
+report the operation unsupported. No borrowed device work is outstanding at
+any unwind point. Safety follows from the synchronous-provider contract,
+never from panic catching or `Drop`.
 
 ### Lifecycle
 
-States: `Prepared` (validation/planning), `Admitted` (worker owns inputs),
-`Running`, `Draining` (event domains drain after completion, error, panic,
-or cancellation), then either `Retired(outcome)` or
-`Quarantined(quarantine_id)`.
+Detached execution follows `Prepared` -> `Admitted`/`Running` -> `Draining`
+-> `Retired(Completed | Failed)` or `CompletionUnproven`. The public terminal
+variants are `Completed`, `RetiredFailed`, and `CompletionUnproven`.
+
+`Prepared` covers validation and planning. Rejection returns the exact
+unadmitted owners. Admission consumes `ExecutionInputs`; the worker or reaper
+owns its inputs, provider retirement bindings, events, roots, and provider contexts until
+a terminal outcome.
+
+A detached worker or provider panic is contained at the existing worker,
+thread, or FFI boundary and enters `Draining`. If completion is proven,
+`RetiredFailed` returns the exact input owners with a typed panic cause. If
+completion cannot be proven, `CompletionUnproven` returns only its typed cause
+and diagnostics while a provider-private permanent record retains the
+retirement bindings, event, `Arc` roots, and provider context. No public
+recovery path returns those owners.
+
+Dropping a detached handle detaches observation; the reaper owns resources
+until the terminal outcome.
+
+Scoped read-only execution is limited to synchronous host/CPU providers.
+Rejection returns the exact borrowed inputs; accelerator and asynchronous
+providers reject before admission or do not support this call. An admitted
+call retires before return, so no borrowed work is outstanding at unwind and
+safety does not depend on panic catching or `Drop`.
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| `submit` validation/preparation/spawn | owning (consumes `ExecutionInputs`) | none | none | `SubmitRejected` returns the exact unaccepted package | no worker exists yet; nothing retained | inputs back with caller; G1 rules |
-| admitted, running | owning (worker) | none | leases per G1 acquired before each enqueue | execution error leads to Draining then `Failed` | worker panic leads to Draining/quarantine then `Failed` with a typed panic cause | only after retirement |
-| `ExecutionHandle::wait` | none | none | blocks until Retired or Quarantined | returns explicit terminal `ExecutionOutcome`; quarantined resources are not recovered | n/a | per retired outcome; quarantine registry otherwise |
-| handle drop before completion | none | none | none | n/a | detach: reaper retains owners and leases until retirement; completion is not cancelled | after retirement, by the reaper |
-| cancellation request | none | none | none | n/a | cooperative: honored at pre-enqueue boundaries only; already enqueued device work is never revoked | after retirement |
-| unobserved failure (detached, handle dropped) | none | none | none | reported through the documented runtime error sink/callback; never silent | n/a | after retirement |
-| scoped submit rejected | shared borrow packaged for `'env` | no runtime borrow admitted | none | exact `ScopedReadInputs<'env>` returned with cause | no worker or partial bundle exists | caller-owned inputs unaffected |
-| scoped admitted and `wait`ed | shared borrows of inputs for `'env` | input storage for `'env`; handle for `'s` only | leases per G1; `wait` observes post-retirement outcome | typed scoped outcome; borrowed descriptors retained, partial owned outputs private | panic enters draining/quarantine before outcome | fresh owners after retirement; borrowed slots never reclaimed by bundle |
-| scoped handle dropped | none beyond admitted shared input borrows | inputs remain borrowed for `'env`; handle observation ends | none at drop | n/a | scope registry retains task, owners, and leases | only after scope join/retirement |
-| scope exit with unobserved tasks | none | ends `'s`, not `'env` | joins and drains every admitted task | `ScopeExitError<R>` preserves closure result and aggregates failures/quarantine IDs | panic during closure still drains, reports secondary failures, and resumes original panic | after proven retirement; quarantine registry otherwise |
-
-Detached `Failed`/`Cancelled` outcomes return the exact owning input package
-only after all relevant event domains retire; normal shared, exclusive, and
-extraction APIs are then available again. A `Quarantined` outcome returns no
-owner: the runtime quarantine registry retains affected resources. Possibly
-partial or uninitialized outputs stay private and are dropped after
-retirement or retained by quarantine.
+| `Prepared` -> submit result | owning (consumes `ExecutionInputs`) | none | validation and planning only | `SubmitRejected` returns the exact unadmitted owners | no admitted work or provider retention | owners return to the caller under G1 |
+| `Admitted` -> `Running` | owning (worker) | none | prepared bindings cross the enqueue-capable boundary and become provider retirement bindings | post-admission preparation or enqueue failure enters `Draining` | handle drop detaches observation; reaper retains owners, retirement bindings, events, roots, and contexts | only at a terminal outcome |
+| `Running` -> `Draining` | owning (worker/reaper) | none | all enqueued work and event domains drain | execution failure or worker/provider panic enters `Draining` | panic is typed at the existing worker/thread/FFI boundary; reaper retains ownership | not yet |
+| `Draining` -> `Retired(Completed)` | owning (worker/reaper) | none | completion proven | returns `ExecutionBundle` | n/a | returned bundle follows G1 |
+| `Draining` -> `Retired(Failed)` | owning (worker/reaper) | none | completion proven | returns exact input owners with the typed execution or panic cause | n/a | returned owners follow G1 |
+| `Draining` -> `CompletionUnproven` | no public owner; provider-private retention | none | completion cannot be proven | returns no owner, only the typed completion or panic cause and diagnostics | permanent record retains retirement bindings, event, `Arc` roots, and provider context | retained permanently because completion and safe binding/event destruction are unproven |
+| scoped call rejected | shared | `ScopedReadInputs<'env>` borrows | none | returns exact borrowed inputs; non-host or asynchronous providers are unsupported | no work is admitted | caller-owned borrows remain valid |
+| scoped admitted call | shared | input borrows remain for `'env` | host/CPU work executes and retires synchronously before return | returns only completed or failed after retirement | no work survives to an unwind point; no panic-catch or `Drop` safety | owned outputs follow G1; borrowed outputs remain bounded by `'env` |
 
 ## G4. Method distribution
 
@@ -1695,7 +1128,7 @@ Rules (#1555, "Capability surface and method distribution"; #1559):
 6. Swap-safety: no public API returns `&mut OwnedStorage`,
    `&mut Box<dyn BackendAllocationAccess>`, or any mutable projection of an owner
    container; `StorageMut` is an opaque write capability. Layout mutation is
-   available only through operations that revalidate the resulting
+   available only through operations that validate the resulting
    descriptor against the span (G1), so layout and storage cannot be
    decoupled through safe code.
 7. Parity is enforced: the canonical read-only method list has one source of
@@ -1761,7 +1194,7 @@ Checked random `get(&[usize])` and `get_mut(&[usize])` may validate bounds and
 perform O(rank) offset arithmetic per call. They are not the canonical hot-loop
 interface. Contiguous bulk access resolves once and exposes a typed slice or
 guard. Strided iteration resolves once and carries a prevalidated incremental
-offset/stride plan. Backend execution resolves and leases once per launch.
+offset/stride plan. Backend execution prepares and binds once per launch.
 Static-rank traversal remains monomorphized and eligible for loop unrolling;
 dynamic-rank support must not route every typed element through opaque
 per-element dispatch. The release codegen artifact
@@ -1769,17 +1202,12 @@ per-element dispatch. The release codegen artifact
 must show a slice-equivalent inner loop without storage/provider abstraction
 work.
 
-Phase 4 must expose a concrete prepared-access boundary equivalent to this
-shape:
+Phase 4 implements the authoritative G1 `CheckedLayout`, `PreparedRead`, and
+`PreparedWrite` hierarchy. The host variants use these nested traversal
+variants and payloads; the device variants are shown afterward. This is one
+preparation hierarchy, not a second host-preparation surface:
 
 ```rust
-enum CheckedLayout<R: TensorRank> {
-    Contiguous {
-        element_range: core::ops::Range<usize>,
-    },
-    Strided(CheckedStrided<R>),
-}
-
 enum PreparedHostRead<'a, T, R: TensorRank> {
     Contiguous(PreparedContiguousRead<'a, T, R>),
     Strided(PreparedStridedRead<'a, T, R>),
@@ -1810,6 +1238,18 @@ struct PreparedStridedRead<'a, T, R: TensorRank> {
 struct PreparedStridedWrite<'a, T, R: TensorRank> {
     guard: HostWriteGuard<'a, T>,
     plan: CheckedInjectiveStrided<R>,
+}
+
+struct PreparedDeviceRead<'a, T, R: TensorRank> {
+    checked: CheckedRead<'a, R>,
+    provider_state: ProviderPreparedRead<'a>,
+    _scalar: PhantomData<T>,
+}
+
+struct PreparedDeviceWrite<'a, T, R: TensorRank> {
+    checked: CheckedWrite<'a, R>,
+    provider_state: ProviderPreparedWrite<'a>,
+    _scalar: PhantomData<T>,
 }
 
 struct StrideCursor<R: TensorRank> {
@@ -1873,31 +1313,48 @@ impl<'i, T, R: TensorRank> Iterator for PreparedStridedIterMut<'i, T, R> {
 }
 ```
 
+These view methods are public convenience wrappers around the private G1
+`prepare_read`/`prepare_write` transition, not another preparation layer. They
+create the opaque checked bundle from the view's co-located capability and
+descriptor, call that transition, and reconstruct the unchanged view when it
+returns the checked bundle with an error. Both paths publish the same
+`PreparedRead::Host`/`PreparedWrite::Host` payloads and return those payloads
+without introducing another lifecycle state.
+
+`PreparedDeviceRead` and `PreparedDeviceWrite` are the device payloads of the
+same G1 hierarchy. Their opaque `ProviderPrepared*` state represents only the
+provider mapping/binding work selected for the descriptor's placement. The
+embedded checked bundle retains the capability and `CheckedLayout`; these
+payloads neither map host memory nor contain a `HostReadGuard` or
+`HostWriteGuard`. CUDA, WebGPU, and Metal therefore prepare device bindings
+without manufacturing a host-visible access path.
+
 `RankIndex<R>` is the rank-preserving cursor representation: inline for fixed
 rank and initialized once outside iteration for dynamic rank.
 `CheckedStrided<R>` owns the checked start offset, extents, strides, element
 count, and incremental carry plan; it contains no provider or storage receiver.
 `CheckedInjectiveStrided<R>` is constructible only after the write-injectivity
-proof and otherwise has the same traversal data. The fallible `prepare_host*`
-constructor resolves the storage capability, validates checked
-shape/stride/offset arithmetic, bounds, span containment, alignment, layout
-injectivity for writes, provider compatibility, mapping, and synchronization
-before constructing or publishing `CheckedLayout`, `PreparedHostRead`, or
-`PreparedHostWrite`. Failure rolls back any partial mapping/registration and
-returns the unchanged input capability with a typed `AccessError`; no prepared
-object or iterator exists on failure. The constructor consumes the checked
-layout into exactly one `PreparedHost*` enum variant. Matching that variant is
-the only contiguous/strided state transition and performs no validation or
-provider work.
+proof and otherwise has the same traversal data. View/group construction has
+already retained the checked shape/stride/offset arithmetic, bounds, exact
+root-span containment, alignment, provider compatibility, and write
+injectivity required here. The fallible `prepare_host*` constructor consumes
+that checked capability/descriptor pairing without recomputing those proofs;
+it performs only access-time mapping and synchronization before publishing
+`PreparedHostRead` or `PreparedHostWrite`. Failure releases any temporary
+provider mapping and returns the unchanged view with a typed `AccessError`; no
+prepared object or iterator exists on failure. The constructor selects exactly
+one `PreparedHost*` enum variant from the retained `CheckedLayout`. Matching
+that variant performs no validation or provider work.
 
 `as_slice*` and `iter_contiguous*` perform only typed slice access after one
 range extraction outside the loop. `PreparedStridedIter*::next` performs only
 typed pointer/slice access, the necessary incremental stride/carry updates,
 and loop termination. It does not decode a flat index into coordinates or
 repeat bounds, layout, span, alignment, capability, provider, map, or
-synchronization checks. The `PreparedHost*` and `CheckedLayout` enums are the
-state authorities; independent booleans such as `is_checked`, `is_contiguous`,
-`is_mapped`, and `is_writable` must not encode these states.
+synchronization checks. The `PreparedRead`/`PreparedWrite`, `PreparedHost*`,
+and `CheckedLayout` enums are the state authorities; independent booleans such
+as `is_checked`, `is_contiguous`, `is_mapped`, and `is_writable` must not
+encode these states.
 
 `iter_strided*` borrows its prepared guard for `'i`, takes the already checked
 base pointer, and initializes `StrideCursor` once; it performs no validation,
@@ -1921,9 +1378,10 @@ its replacement. It must show, through `p4-prepared-access-api`,
 `p4-traversal-resolution-counts`, `p10-element-hot-path-structure`, and
 `p10-static-rank-codegen`, that its API has the same prevalidation, inner-loop,
 and code-generation properties. The P4 artifact combines compile/runtime API
-tests with a source-contract inventory proving all validation and provider
-work precede construction, iterator bodies contain only the permitted typed
-access and increments, and no boolean fields duplicate enum state. P10 repeats
+tests with a source-contract inventory proving static descriptor proofs are
+retained rather than recomputed, access-time provider work precedes prepared
+object construction, iterator bodies contain only the permitted typed access
+and increments, and no boolean fields duplicate enum state. P10 repeats
 the loop-boundary structural proof over the final normalized API.
 
 Rank-changing reinterpretation is separate from ordinary views. Phase 6 must
@@ -1933,6 +1391,20 @@ level result such as `N + 1` may require a dynamic result or an explicit
 caller-selected result rank for that operation only; it must never force
 rank-preserving view, slice, or traversal APIs to erase `R`.
 
+Every reinterpretation is a descriptor operation over the same physical root,
+not a copy or a new ownership path. Its sealed scalar-pair rule validates byte
+divisibility, alignment, shape/stride/offset arithmetic, and resulting exact
+root-bound span before publishing the new checked descriptor. A consuming
+owner operation preserves and returns the original owner on failure; a
+read-only view remains tied to its source borrow. The resulting descriptor
+retains the same root `Arc`, allocation diagnostics, provider placement, and
+device/managed-resource state. Mutable reinterpretation additionally requires
+an exclusive borrow and an injective resulting layout, and is unavailable
+while retained aliases prevent that exclusive path. `p6-reinterpret` proves
+same-root preservation, zero allocation/copy, numerical element mapping, and
+typed failure recovery; the rank-policy obligation is supplementary rather
+than the whole Phase 6 contract.
+
 The v2 ledger carries these executable obligations:
 
 | Obligation | Phase | Artifact and proof |
@@ -1940,8 +1412,9 @@ The v2 ledger carries these executable obligations:
 | `p1-element-access-baseline` | P1 | active measured direct-slice/contiguous/strided report and verifier; later candidates use its exact Git commit and repository-relative path, subject to P10 compatible-environment comparison |
 | `p3-static-rank-preservation` | P3 | compile/API contract for owner, immutable view, and mutable view preserving `R` |
 | `p3-as-view-zero-allocation` | P3 | warmed allocator/refcount/provider-clone/layout-clone counters plus borrow-only source contract for owner/view-mut reborrows, including dynamic rank |
-| `p4-traversal-resolution-counts` | P4 | fake provider counters proving resolve/map/lease/dispatch counts are independent of element count |
+| `p4-traversal-resolution-counts` | P4 | fake provider counters proving prepare/map/bind/dispatch counts are independent of element count |
 | `p4-prepared-access-api` | P4 | compile/runtime and source contract for typed failure, enum-authoritative preparation, contiguous slice/iterator access, and incremental strided iteration |
+| `p6-reinterpret` | P6 | same-root, zero-copy, numerical/layout, exclusivity, and typed failure-recovery contract for every sealed scalar pair |
 | `p6-reinterpret-rank-policy` | P6 | behavior and compile contract for every rank-changing reinterpretation |
 | `p10-element-hot-path-structure` | P10 | source-contract check that provider/capability resolution is outside element loops |
 | `p10-storage-traversal-performance` | P10 | release contiguous and representative strided report that explicitly verifies and consumes the P1 result JSON plus its measured commit/path provenance |
@@ -1951,125 +1424,151 @@ The v2 ledger carries these executable obligations:
 
 ## G5. Raw handles and reclamation
 
-- Provider handles (CubeCL handles, wgpu resources, CUDA device pointers,
-  Metal resources) are lifetime or in-flight pins only. No handle can mint
-  ownership, recover uniqueness, or authorize a write (I3). `Handle`
-  cloneability inside a provider is acceptable exactly because handles carry
-  no authority.
-- Raw access is lease-bounded. The launch-session shape (#1563):
+- Raw provider handles and pointers are lifetime-only. They may keep a
+  provider resource usable for a binding or retirement record, but they carry
+  no owner claim, `StorageRef`, `StorageMut`, or write authority. Cloning a
+  provider handle or retaining an `Arc` does not change that contract.
 
-  ```rust
-  let read_binding = resolved_read.acquire_device_read(endpoint)?;
-  let write_binding = match unsafe { bind_raw_write(resolved_write, request) } {
-      Ok(binding) => binding,
-      Err((resolved, error)) => return Err((resolved, error)),
-  };
-  let completion = session.enqueue_borrowed(read_binding, write_binding)?;
-  ```
+### Prepared binding
 
-  ```rust
-  impl<'a> LaunchSession<'a> {
-      fn enqueue_borrowed(
-          self,
-          read: UseLease,
-          write: WriteBinding<'a>,
-      ) -> Result<RetiredBorrowed<'a>, (Self, EnqueueError)>;
-  }
-  ```
+G5 consumes the exact `PreparedDeviceRead` and `PreparedDeviceWrite` variant
+payloads of the G1 `PreparedRead` and `PreparedWrite` hierarchy; it does not
+redefine a second preparation surface. Descriptor construction has already established the static
+bounds/layout/dtype/root-span/alignment/storage/provider proofs and write
+injectivity. Preparation consumes those retained proofs with the matching Rust
+capability and performs only access-time provider mapping, synchronization, or
+timeline admission. An immutable owner or view can yield
+`PreparedRead::Device`; only an owner or mutable view borrowed exclusively can
+yield `PreparedWrite::Device`.
 
-  `RetiredBorrowed<'a>` is returned only after the device work and its lease
-  have retired. A pending completion cannot carry `'a` into a runtime
-  retirement record; detached submission uses the separate owning package.
+```rust
+fn bind_read<'a, T, R: TensorRank>(
+    prepared: PreparedDeviceRead<'a, T, R>,
+) -> Result<DeviceRead<'a, T, R>, (PreparedDeviceRead<'a, T, R>, BindError)>;
 
-  `resolved_read` and `resolved_write` are sealed capability wrappers, not
-  public descriptor constructors. A read value is built only from `StorageRef`
-  plus a validated descriptor; a write value is built only from `StorageMut`
-  plus a validated, injective descriptor. Their fields and constructors remain
-  in the audited ownership module. `session` owns only endpoint/event
-  submission state: it cannot resolve a descriptor, select a provider, or
-  supply a second span or claim. Storage authority is carried by the resolved
-  value and then by the binding.
+fn bind_write<'a, T, R: TensorRank>(
+    prepared: PreparedDeviceWrite<'a, T, R>,
+) -> Result<DeviceWrite<'a, T, R>, (PreparedDeviceWrite<'a, T, R>, BindError)>;
+```
 
-  ```rust
-  struct TensorWrite<'a> {
-      resolved: ResolvedWrite<'a>,
-      _sealed: PrivateToken,
-  }
+The checked access already borrows the root that owns its provider context.
+Consequently binding needs no provider argument, additional provider lifetime,
+or provider-context `Arc` clone. Detached execution owns the roots in its task
+package, so the same relationship remains valid through event retirement.
 
-  struct OwnedTensorWrite {
-      owner: OwnedStorage,
-      span: RootBoundSpan,
-      _sealed: PrivateToken,
-  }
+Binding consumes provider-ready prepared access. Neither binding nor enqueue
+repeats these checks or compares a second request, key, or range; those values
+are carried by the prepared object, and the binding/enqueue signatures accept
+no replacement values. The host/device and host traversal variants plus
+`DeviceRead` and `DeviceWrite` are distinct sealed states, not boolean state
+combinations.
 
-  // `WriteBinding<'a>` is the G1 type: it owns this resolved operation and
-  // its `UseLease` until enqueue admission and retirement finish.
-  ```
+There is no shared-to-exclusive conversion. A provider handle, `Arc`,
+event, raw pointer, or refcount cannot become `StorageMut`, an owner claim, or
+a write binding. `prepare_write` starts with an exclusive owner borrow or a
+newly allocated output, and that Rust capability remains the source of write
+authority.
 
-  The binding retains the exclusive borrow (or the consumed `OwnedTensorWrite`
-  package)
-  until enqueue admission has either returned the unchanged package or moved
-  it into the runtime retirement record. A static `UseLease` alone never
-  permits reacquiring mutable access while work is pending.
+Safe APIs never return an escaping raw pointer. Provider-specific unsafe
+interop may expose a pointer only with documentation that the caller keeps the
+binding alive for the required lifetime, obeys the provider's synchronization
+rules, and does not use the pointer after retirement. There is no safe generic
+`device_ptr` accessor.
 
-  Bindings expose raw pointers only for the session lifetime; every binding
-  revalidates domain/endpoint, span, layout arithmetic, alignment, access
-  mode, and write injectivity (G1). A safe unleased
-  `device_ptr(&Tensor) -> u64` does not exist; any escaping raw-pointer API
-  is explicitly `unsafe` and documents its retirement obligations, and it
-  stays provider-specific (no false parity).
-- There is no shared-internal-to-exclusive transition. In particular, a
-  provider pin, `Arc`, raw handle, lease, reference count, or completion
-  token cannot be converted into `StorageMut`, an owner claim, or a write
-  binding. Raw write binding starts with an exclusive capability already
-  proven by Rust ownership. The sole audited unsafe boundary has this shape:
+### Detached and borrowed submission
 
-  ```rust
-  unsafe fn bind_raw_write<'a>(
-      capability: ResolvedWrite<'a>,
-      request: ValidatedWriteRequest,
-  ) -> Result<WriteBinding<'a>, (ResolvedWrite<'a>, AccessError)>;
-  ```
+Safe asynchronous device submission is detached and owning only. The task
+consumes the G3 `ExecutionInputs`, owns its `AllocationGroup` and the
+`Arc<RootResource>` roots held by that group, and derives the prepared read and
+write bindings inside the task before enqueue. A safe detached call does not
+accept a caller-borrowed prepared binding. A write binding is derived only from
+an exclusive owner/group borrow or a newly allocated output.
 
-  `ResolvedWrite` carries the exclusively borrowed owner, its matching claim
-  and pin, the root-bound span, and the provider dispatch together, so the
-  binder cannot be given an unrelated pin or provider receiver. The binder
-  rechecks request key/range against that resolved capability before exposing
-  raw state. Its safety proof covers only conversion of an existing exclusive
-  capability into provider raw state; it does not establish uniqueness.
-  The call-site inventory is enforced by a source-contract test. Strong
-  counts may be diagnostics for leaked pins or retirement latency, never a
-  precondition or proof for access authority (I3).
-- Successful enqueue consumes the launch session. For detached execution,
-  the runtime task continues to own the containing `OwnedStorage` and makes
-  it unreachable to callers until event retirement; the encoding borrow may
-  end, but no safe reborrow is possible. The completion lease and root pin
-  move to the retirement record. Scoped submission in G3 is read-only. A
-  direct borrowed write retires synchronously; the only asynchronous write
-  package is the owning `OwnedTensorWrite` path. No other async write mode is
-  permitted.
-- Enqueue failure returns the unchanged session and all unadmitted
-  capabilities in `(Self, EnqueueError)`. No raw binding or lease remains
-  active, and the owning task/borrow can retry or recover without inference.
-- Stream-ordered reclamation (I6): a retirement record holds the root-resource
-  deallocator and all pins for a resource whose claim dropped with
-  outstanding work. It never owns a deallocator for an individual subspan.
-  Records are keyed by event domain. Completion tokens visible to users are
-  never the sole owner of a lease, because users may drop them. Runtime
-  drop drains only its own retirement queue before releasing its context.
-  A failed drain quarantines (retains and reports); it never frees early and
-  never releases a provider context that pending work may still use.
+```rust
+fn submit_detached(
+    inputs: ExecutionInputs,
+) -> Result<ExecutionHandle, SubmitRejected>;
 
-### Raw-binding state table
+fn submit_borrowed<'a>(
+    bindings: BorrowedBindings<'a>,
+) -> Result<RetiredBorrowed<'a>, BorrowedSubmitRejected<'a>>;
+
+struct BorrowedSubmitRejected<'a> {
+    cause: SubmitError,
+    bindings: BorrowedBindings<'a>,
+}
+
+enum RetiredBorrowed<'a> {
+    Completed(BorrowedBindings<'a>),
+    RetiredFailed {
+        cause: ExecutionError,
+        bindings: BorrowedBindings<'a>,
+    },
+}
+```
+
+The admission boundary is the first provider call that may enqueue device
+work. A failure is pre-admission only when it occurs before that call or the
+provider result proves that no work was enqueued. `SubmitRejected` and
+`BorrowedSubmitRejected` are reserved for that proven case and return the exact
+unchanged owning package or borrowed bindings. Binding failure likewise
+returns the exact unchanged `PreparedDeviceRead` or `PreparedDeviceWrite` because binding
+precedes the enqueue-capable call.
+
+Once enqueue may have happened, the task retains the package and bindings and
+enters G3 `Draining`; an immediate error never returns them. On a post-boundary
+failure, ownership returns only as G3 `RetiredFailed` after completion is
+proven. If completion cannot be proven, `CompletionUnproven` returns diagnostics
+without owners while the provider-private permanent record retains the
+retirement bindings, event, roots, and provider context.
+
+A borrowed operation is optional: if offered, it is synchronous through
+retirement and is supported only by a provider that guarantees no asynchronous
+work survives unwind. After its enqueue-capable call, it returns bindings only
+inside `RetiredBorrowed::Completed` or `RetiredBorrowed::RetiredFailed` after
+retirement. Asynchronous providers reject borrowed submission as unsupported
+before admission.
+
+### Event retirement
+
+After detached admission, a provider-private retirement record owns the
+provider retirement bindings, event, the `Arc<RootResource>` roots, and the
+provider context until completion is proven.
+
+```rust
+struct RetirementRecord {
+    event: ProviderEvent,
+    bindings: Box<[ProviderRetirementBinding]>,
+    roots: Box<[Arc<RootResource>]>,
+    context: Arc<ProviderContext>,
+}
+```
+
+`CompletionUnproven` returns only its typed cause and diagnostics. Its
+provider-private record permanently retains the bindings, event, root `Arc`s,
+and provider context because binding/event destruction while completion
+remains unproven is not known to be safe. It does not
+free speculatively and exposes no safe recovery path. There is no
+quarantine/poison state, access or retirement registry, or retry transition.
+Completion handles may be dropped without changing this retention. When event
+retirement is proven, the record releases its retained bindings, event, root
+`Arc`s, and context reference exactly once before publishing `Completed` or
+`RetiredFailed`.
+
+### Raw-handle state table
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| request write from shared pin/handle/lease | shared or none (insufficient) | none | none | structured capability error; no binding or state change | n/a | unchanged |
-| bind raw read | `StorageRef<'a>` | shared capability and resource for binding/session lifetime | dependencies from G1 | no binding; capability remains valid | session retains lease after admitted enqueue | after covering read retires |
-| bind raw write | sealed `TensorWrite<'a>` or `OwnedTensorWrite` from a matching exclusive capability | exclusive claim+pin capability for binding/session lifetime | RAW/WAR/WAW dependencies from G1 | no binding; exact borrowed/owning package remains valid | no shared state can recover the consumed exclusivity; admitted lease retires normally | after covering write retires |
-| enqueue validated bindings | consumes session; detached task retains owners | capabilities cannot be reused during admission or before retirement | provider enqueue/event registration | returns unchanged session and all capabilities in `(Self, EnqueueError)` | admitted leases and root pins move to runtime retirement even if completion handle is dropped | after event-domain retirement |
-| drop last claim with provider pins in flight | owning claim | none | none at drop | n/a | claim, root pin, and leases enter retirement record | root deallocator only after all sibling claims and pins retire |
-| retirement proof fails | provider-internal retirement record | none | attempted wait/poll | error reported | resource and context are quarantined | never speculatively |
+| checked shared pairing -> `PreparedRead::Device` | shared | `StorageRef` and checked descriptor borrow carried by device payload; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary provider state released | owner follows G1 |
+| checked exclusive pairing -> `PreparedWrite::Device` | exclusive | `StorageMut` and checked injective descriptor borrow carried by device payload; provider reached through root | retained static proofs; access-time provider work only | exact checked pairing, no prepared object | temporary provider state released | owner follows G1 |
+| `PreparedDevice*` -> device binding | prepared shared / exclusive | binding keeps its capability and provider lifetime | binding work only; no second check or request/key/range comparison | exact device payload | unadmitted binding drops without changing ownership | no device resource is released before binding drop |
+| prepared submission -> proven pre-admission rejection | owning / borrowed | package or bindings have not crossed the enqueue-capable call | no enqueue occurred | exact unchanged package/bindings | no event-retirement record exists | caller retains ownership |
+| enqueue may have happened -> G3 `Draining` | owning task | task-local prepared bindings; no caller lifetime | event domains drain | no immediate owner return | worker/reaper retains package, retirement bindings, event, roots, and context | only after proven event retirement |
+| G3 `Draining` -> `RetiredFailed` | owning worker/reaper | none | completion proven | returns owners with typed failure | retirement-held bindings/event/root/context references release exactly once | returned owners follow G1 |
+| G3 `Draining` -> `Completed` | owning worker/reaper | none | completion proven | returns completed bundle | retirement-held bindings/event/root/context references release exactly once | returned bundle follows G1 |
+| asynchronous provider rejects borrowed submission | borrowed | unchanged bindings | none; rejection precedes admission | unsupported with exact unchanged bindings | no work survives | caller retains bindings |
+| admitted synchronous borrowed operation -> retired result | shared / exclusive | binding borrow remains until return | provider work retires before return | returns bindings only in retired completed/failed outcome | provider contract leaves no async work across unwind | after synchronous retirement |
+| retirement -> `CompletionUnproven` | provider-private owning record | no public borrow | completion cannot be proven | diagnostics only; no owner is returned | record permanently retains bindings/event/root `Arc`s/provider context | bindings, event, roots, and context are never released by this outcome |
 
 ## G6. Documentation ownership
 
@@ -2091,17 +1590,18 @@ Common validation commands:
 |---|---|---|
 | 0 (#1556) | runtime/API docs for discovery, caller-selected engine IDs, endpoint routing; examples must not assume CUDA device 0 or a fixed engine ID | common commands |
 | 1 (#1557) | this document; the per-phase ownership table itself | common commands |
-| 2 (#1558) | internal architecture/safety rustdoc for the unsafe allocation boundary; the legacy-bridge inventory | common commands |
+| 2 (#1558) | internal architecture/safety rustdoc for the unsafe allocation boundary and direct root/span ownership model | common commands |
 | 3 (#1559) | `docs/spec/tensor-semantics.md` section III rewritten in the PR that removes public `Buffer<T>`; rustdoc/examples broken by clone/Buffer removal; final owner/view migration notes | common commands |
-| 4 (#1560) | G1 state tables kept current; API rustdoc for guards/leases; waits documented as synchronization points, explicitly not copies | common commands |
+| 4 (#1560) | G1 state tables kept current; API rustdoc for prepared host access and provider event retirement; waits documented as synchronization points, explicitly not copies | common commands |
 | 5 (#1561) | storage design updates for immutable aliasing, conservative disjointness, N-way borrow lifetimes, extraction | common commands |
 | 6 (#1562) | reinterpretation rustdoc; the reserved section of the views guide (representation view vs numeric cast, supported pairs) | common commands |
 | 7 (#1563) | CUDA design doc, device guide, unsafe interop rustdoc, synchronization/reclamation behavior, explicit duplication examples | common commands |
 | 8 (#1564) | GPU backend design, device guide, Apple tutorials; synchronization/map transitions vs transfers; one owner with multiple access endpoints | common commands |
-| 9 (#1565) | detached vs scoped ownership, outcome recovery, detach vs cancel, extraction; G3 state tables kept current | common commands |
+| 9 (#1565) | detached vs synchronous scoped ownership, outcome recovery, handle detachment, extraction; G3 state tables kept current | common commands |
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
+| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 The Phase 12 element-access section must distinguish O(rank) checked random
 access, contiguous typed-slice/guard traversal, prepared strided traversal,
@@ -2113,7 +1613,6 @@ states whether the operation allocates, dispatches through a provider,
 synchronizes, performs per-element bounds/stride work, preserves static rank,
 or can transfer/materialize. The source-blind reviewer must be able to select
 the zero-overhead path without reading implementation source.
-| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 ## G7. AD value retention
 
@@ -2126,83 +1625,134 @@ not an accepted migration.
 ### Ownership root
 
 - Each autodiff context (eager tape, traced execution, checkpoint store)
-  owns retained primal allocations through one retention group:
+  owns retained primal allocations through a directly owned group/container
+  record. The exact names remain implementation choices; the ownership shape
+  is normative:
 
   ```rust
   struct TapeRetention {
-      group: AllocationGroup,
-      index: HashMap<ValueKey, ValueId>,
+      tape: Arc<TapeRecord>,
+      retained: HashMap<ValueKey, Arc<AdValueRecord>>,
+  }
+
+  struct AdValueRecord {
+      descriptor: DescriptorRef,       // read-only group-local descriptor
+      container: Arc<RetentionContainer>,
+  }
+
+  struct RetentionContainer {
+      group: AllocationGroup,         // directly owns group/root resources
+  }
+
+  struct TapeRecord {
+      container: Arc<RetentionContainer>,
   }
   ```
 
-- An `EagerTensor` (and any traced value handle) is a node handle plus a
-  descriptor reference. Cloning a handle clones neither storage nor
-  ownership: handles are read-only descriptor handles and can never mint a
-  storage owner or a write capability. Handle types may remain `Clone`
-  because they are not owner-like; the non-`Clone` rule (I1) applies to
-  owners and capabilities.
-- Every descriptor reference is registered against a generational `ValueId`.
-  The liveness set includes the tape, checkpoint records, execution bundles,
-  and every public handle clone. This bookkeeping may use reference counts,
-  but those counts govern descriptor-slot liveness only; they never prove
-  storage uniqueness or authorize a write. A slot is reclaimed or reused
-  only after all liveness roots are gone, and reuse increments the generation
-  so stale handles fail rather than resolving to a new value.
-- Public handles pin the retention table and its group as liveness roots,
-  without gaining access authority. Dropping a tape/context releases only
-  its own root; owners needed by surviving public handles remain in the table
-  until those handles are dropped or one last handle successfully extracts
-  the value.
-- Retention policy: an operation output is retained iff a registered
+- An `EagerTensor` (and any traced value handle) contains an `Arc<AdValueRecord>`
+  plus non-owning node metadata. Cloning a handle clones only that `Arc`:
+  storage, the descriptor, and the write authority are not cloned. The
+  record directly retains the `Arc<RetentionContainer>` that owns the group
+  and its root resources. A tape or checkpoint retains the same kind of
+  record/container directly; no external table is needed to keep an
+  allocation alive.
+- Handle types may remain `Clone` because they are read-only descriptor
+  references, not owners or capabilities. A handle has no method that returns
+  an owner, creates a write capability, or produces a mutable view. The non-`Clone`
+  one-owner rule applies to owners and capabilities.
+- `ValueKey` is only a local associative key inside a tape/checkpoint
+  container. It is never used to reconstruct a descriptor, prove uniqueness,
+  or authorize access.
+- A descriptor record contains only read-only metadata and shared container
+  ownership. It does not allocate a per-element storage/provider object or
+  repeat layout/provider validation.
+- Handle drop is ordinary `Arc`/container lifetime. Dropping a tape/context
+  releases its owning reference; a surviving handle keeps its directly
+  retained descriptor record, container, group, and root resources alive.
+  When the last reference disappears, normal ownership/drop of the container
+  releases the allocation according to G1/G2. Lifetime is represented only by
+  these direct owners; no side table participates in release.
+- Mutable access is available only from an exclusive owning
+  `&mut RetentionContainer`/`&mut TapeRecord` path. The shared handle type
+  cannot be used to obtain that borrow. If an owning `Arc` cannot be made
+  unique because a handle, tape, checkpoint, or execution record still
+  retains it, the mutable operation is unavailable and returns a typed
+  uniqueness error; the caller may request an explicit duplicate instead.
+  No implicit duplication is provided.
+- Retention policy: an operation output is retained iff a declared
   VJP/JVP rule declares it needed for backward, or the user explicitly
   requests retention. Values nobody declares needed are not retained.
-- When the caller wants a standalone owner of a retained value, the paths
-  are exactly the G2 paths: `try_extract` after every other registered root
-  (tape, checkpoint, execution, and sibling public handles) is absent, or an
-  explicit duplicate (classified below). There is no hidden copy path.
+- When the caller wants a standalone owner of a retained value, the only
+  paths are the G2 paths: consume the handle and uniquely unwrap the direct
+  descriptor/container ownership, then move the selected owner out of the
+  group, or make an explicit duplicate (classified below). There is no hidden
+  copy path and no external identifier check.
 
 ### Public API replacement
 
 The `Arc<Tensor>`-returning surface is replaced. No retention adapter appears
 in any public or crate-private runtime boundary; the cutover lands directly on
-the group-qualified descriptor model.
+the group-qualified descriptor model. The sketch intentionally exposes the
+ownership shape, not final public names.
 
 | Current | Replacement sketch | Semantics |
 |---|---|---|
 | `materialized(&self) -> Result<Arc<Tensor>>` | `value(&self) -> Result<ValueGuard<'_>>` | materializes if lazy, then exposes a borrowed `TensorView`; host bytes go through G1 guards |
 | owned copy of a value | `duplicate_value(&self) -> Result<Tensor>` | explicit copy, reason `ExplicitDuplicate` |
-| owned move of a value | `into_value(self) -> Result<Tensor, (Self, ValueStillReferenced)>` | extraction via G2; succeeds only after consuming the last public handle and when tape, checkpoint, execution bundle, and sibling-handle liveness roots are absent; failure returns the handle |
-| backward result `Vec<Arc<Tensor>>`, `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>` | `Gradients` bundle (a G2 group specialization) with `grad(&self, key) -> Option<TensorView<'_>>` and `take_grad(&mut self, key) -> Option<Tensor>` | one owner per gradient allocation; extraction when unique |
-| traced attached-data maps `HashMap<ValueKey, Arc<Tensor>>` | `ExecutionInputs` bindings over group descriptors (G3) | no shared owners in the runtime boundary |
+| owned move of a value | `into_value(self) -> Result<Tensor, IntoValueError<Self>>` | consumes the handle; `NotUnique(Self)` is returned before group extraction when direct Arc ownership is shared, while a local G2 failure returns `Extract { value: Self, error: ExtractError }` |
+| backward result `Vec<Arc<Tensor>>`, `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>` | `Gradients` bundle (a G2 group specialization) with `grad(&self, key) -> Option<TensorView<'_>>` and `take_grad(&mut self, key) -> Result<Option<Tensor>, ExtractError>` | one owner per gradient allocation; `Ok(None)` means no gradient, and extraction failure leaves the bundle unchanged |
+| traced attached-data maps `HashMap<ValueKey, Arc<Tensor>>` | `ExecutionInputs` bindings over directly retained group descriptors (G3) | no shared tensor owners or mutable authority in the runtime boundary |
+
+```rust
+pub enum IntoValueError<H> {
+    NotUnique(H),
+    Extract { value: H, error: ExtractError },
+}
+```
+
+`ValueGuard` borrows the record's prepared descriptor view and can request the
+G1 host-read guard. A guard does not retain a second owner or perform a new
+layout/provider validation. `duplicate_value` is the explicit destination
+allocation and data movement path. `into_value` is the consuming path; an
+`Arc::try_unwrap`-equivalent structural uniqueness test runs before any G2
+group extraction. Failure returns `IntoValueError::NotUnique` with the
+original usable handle. Only after Arc uniqueness succeeds may G2 extraction
+run; its local error reconstructs and returns the same usable handle in
+`IntoValueError::Extract`. These are the only two error variants. Neither
+records nor reports the category of the remaining direct owner.
 
 ### Checkpoint semantics
 
 - Boundary values (checkpoint region inputs and outputs) are retained as
-  descriptors in the checkpoint group.
+  descriptor records whose direct container reference keeps the checkpoint
+  group and required root resources alive.
 - Interior values are deliberately discarded at record time; checkpointing
-  must not accidentally retain every intermediate. A contract test asserts
-  the checkpoint adds no liveness root for an interior value. Its allocation
-  is released after the boundary is recorded only when no tape, execution,
-  or external handle root independently keeps it live.
+  must not accidentally retain every intermediate. Their owners are never
+  inserted into the checkpoint retained group, and no checkpoint descriptor
+  record is created for them. After forward use, each interior owner therefore
+  drops normally unless a separate tape, execution record, or external handle
+  directly owns it.
 - Backward recomputation executes the stored subgraph and produces fresh
   owners; its allocations are classified `CheckpointRecomputeOutput`,
   distinct from retention (which allocates nothing) and from explicit
   duplicates.
+- A checkpoint record and a tape record retain their required containers
+  directly. Releasing one record is ordinary ownership drop and cannot
+  invalidate a descriptor record still held by a handle.
 
 ### Reinterpretation and aliases
 
 - A retained complex/real reinterpretation of a retained value is another
-  descriptor of the same slot in the same group (G2 duplicate-descriptor
-  semantics), never a second owner.
-- Mutable reinterpretation requires an exclusive or owning capability. While
-  any tape, checkpoint, execution bundle, or sibling handle descriptor
-  references a span, the owner lives in the retention group, so no caller can
-  hold the owner: consuming or mutable reinterpretation of that allocation
-  is unreachable, and `try_extract` fails with a typed
-  `ValueStillReferenced` reason (`Tape`, `Checkpoint`, `Execution`, or
-  `SiblingHandle`). This exclusion is structural (borrow/owner placement),
-  verified by compile-fail plus runtime extraction and stale-generation
-  tests.
+  read-only descriptor reference to the same group allocation, with the same
+  direct container record and no second owner.
+- Mutable reinterpretation requires an exclusive or owning capability. A
+  handle cannot supply it. If a tape, checkpoint, execution record, or sibling
+  handle still retains the container, the unique owning path cannot be
+  obtained and the ownership acquisition returns undifferentiated
+  `NotUnique`. This is a direct ownership/borrow property, verified by
+  structural-uniqueness tests and compile-fail tests for mutable access
+  through a shared handle. An explicit duplicate is the only alternative;
+  reinterpretation never duplicates implicitly.
 
 ### Copy and allocation accounting
 
@@ -2231,32 +1781,58 @@ enum AllocationReason {
 - Retention has neither a copy nor an allocation reason because retaining a
   descriptor performs neither operation.
 - Every physical allocation emits exactly one allocation event. Every
-  physical data movement emits exactly one copy event, whether or not a new
-  destination was allocated. Descriptor aliasing, metadata-only outputs,
-  and public-handle cloning emit neither event.
+  byte-preserving explicit duplication or transfer emits exactly one copy
+  event, whether or not its destination allocation is new. Kernel writes,
+  initialization, reductions, and newly computed operation results are not
+  copy events; a fresh kernel result records only its allocation reason.
+  Descriptor aliasing, metadata-only outputs, and public-handle cloning emit
+  neither event.
 - Acceptance for an AD scenario (forward plus backward, with and without
-  checkpointing): every observed copy and every observed allocation carries
-  a reason from its own enum and each ledger matches the scenario's expected
-  multiset. Copies and allocations attributable to retention are therefore
-  both exactly zero.
+  checkpointing): every observed byte-preserving duplication/transfer and
+  every observed allocation carries a reason from its own enum, and each
+  ledger matches the scenario's expected multiset. Kernel writes and new
+  computed results must not increment the copy ledger. Copies and allocations
+  attributable to retention are therefore both exactly zero.
 - Aggregate pre-migration versus post-migration copy counts are not an
   acceptance criterion.
 
-### Atomic cutover and provider bridge
+### Contract tests
+
+- A direct-lifetime test drops the tape/context while a cloned handle remains,
+  reads through that handle, then observes release only after the final direct
+  record/container reference is dropped.
+- Structural-uniqueness tests cover a sibling handle, tape record,
+  checkpoint record, and execution record. Each shared case rejects
+  `into_value` with `IntoValueError::NotUnique`, preserves the same usable
+  handle, and proves that G2 extraction was not attempted. A uniquely owned
+  Arc proceeds to G2: local extraction failure returns
+  `IntoValueError::Extract` with the usable handle, while success moves one
+  owner through G2. All shared-owner setups assert the same `NotUnique`
+  result.
+- `take_grad` tests distinguish `Ok(None)`, `Ok(Some(owner))`, and
+  `Err(ExtractError)`; the error case leaves the `Gradients` bundle unchanged.
+- Compile-fail tests show that a shared handle has no mutable view or owner
+  projection, and that mutable reinterpretation requires an exclusive owning
+  borrow. An explicit duplicate test verifies that duplication is requested by
+  the caller and that retention itself never copies.
+- A checkpoint test inserts only boundary owners into its retained group,
+  asserts that no interior owner or descriptor was inserted, observes the
+  omitted interior allocation release after forward use, and checks fresh
+  recomputation ownership.
+- Forward/backward CPU and designated asynchronous-provider tests compare the
+  reason-classified copy/allocation multisets and require zero events caused
+  by retention. Kernel writes and fresh results contribute allocation events
+  where applicable but no copy events.
+
+### Atomic cutover
 
 Public host ownership (#1559) and final detached/scoped runtime plus direct
 group-based AD retention (#1565) form one atomic promotion cohort. They land
-the final `AllocationGroup`, lease, retirement, and descriptor-liveness
-semantics together. There is no interim AD-retention adapter, minimal
-consuming-submit bridge, or pre-retirement synchronization adapter.
-
-Exactly one typed, inventoried crate-private provider bridge may keep an
-unmigrated accelerator provider buildable. The bridge is implemented against
-the final root-bound claim, access, authority-free lease, and retirement
-contracts; it cannot expose an owner-like shared handle, mint a claim, or
-authorize a write. #1563 and #1564 remove the bridge as their provider paths
-are migrated. If the bridge cannot satisfy the final contract, provider
-migration moves earlier instead of adding a second seam.
+the final `AllocationGroup`, prepared-access, retirement, and descriptor-ownership
+semantics together. There is no interim AD-retention adapter or compatibility
+path. Each provider consumes the final prepared access and event-retirement
+contracts directly when its owning phase lands, with no additional ownership
+seam.
 
 ### Validation lanes
 
@@ -2274,22 +1850,20 @@ migration moves earlier instead of adding a second seam.
 
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
-| record op output into tape | owning (retention table takes the output owner into its group) | none | none | op error: no retention entry | unwind releases the tape root but preserves independent roots | after the last liveness root, via G1/G2 |
-| clone `EagerTensor` handle | none (descriptor liveness only) | none | none | n/a; clone does not resolve storage | clone registers another liveness root; drop unregisters it | descriptor slot only after all roots disappear; never storage authority |
-| drop last descriptor handle while tape/checkpoint retains | none | none | none | n/a | public-handle root disappears; retention root remains | not until all remaining roots disappear |
-| tape/context drop while public handle remains | owning tape root only | none | outstanding work follows G1 | n/a | table/group pin transfers no authority; public-handle root remains | not until last independent root disappears |
-| tape retains/releases descriptor | owning tape bookkeeping / none on release | none | none | invalid or stale ID is typed error | update is atomic; release cannot invalidate sibling roots | only after all roots disappear |
-| checkpoint retains/releases boundary descriptor | owning checkpoint bookkeeping / none on release | none | none | invalid or stale ID is typed error | no interior root is added implicitly | only after all roots disappear |
-| `value()` guard | shared | tape group (shared) for guard lifetime | G1 host-read rules if host bytes requested | error, tape unchanged | guard drop ends borrow | n/a |
-| backward execution | shared reads of retained descriptors; new owners for grads | tape group shared during execution | G3 rules | typed failure, tape unchanged, grads dropped after retirement | per G3 panic row | grads owned by `Gradients` bundle |
-| `take_grad` | exclusive on `Gradients` | none after return | none | `None`/typed reason, bundle unchanged | n/a | extracted owner per G1 |
-| `into_value` while any other root remains | owning attempt (consumes one handle) | none | none | `ValueStillReferenced` identifies tape/checkpoint/execution/sibling handle; consumed handle is returned or remains usable | no liveness root is lost on failure | n/a |
-| `into_value` as last root | owning (consumes last handle and group slot) | none | none | stale/invalid descriptor leaves group unchanged | generation tombstoned; owner moves exactly once | extracted owner per G1 |
-| stale-handle access after tombstone/reuse | none | none | none | deterministic `StaleValueId`; no storage is touched | no state change | unchanged |
-| reuse descriptor slot | owning group bookkeeping | none | none | n/a | generation increments before publication | new slot follows its own roots; old IDs remain stale |
-| checkpoint record | owning (boundary owners/descriptors into checkpoint group) | none | none | error: no partial checkpoint | no checkpoint root is added for interiors; independent roots remain valid | boundary owners after last liveness root |
-| checkpoint recompute (backward) | shared reads of boundary; fresh owners for recomputed values | checkpoint group shared | G3 rules | typed failure after retirement | per G3 | recomputed owners dropped after use |
-| tape drop | owning tape root | none | retirement per G1 for owners with no other roots and in-flight work | n/a | quarantine path per G1; independent handle/checkpoint roots remain | after retirement and the last liveness root, exactly once |
+| record op output into tape | owning (tape/container takes the output owner into its group) | none | none | op error: no retained record | unwind drops the partially constructed direct owner exactly once | container/group ownership follows G1/G2 |
+| clone `EagerTensor` handle | none (read-only `Arc<AdValueRecord>` reference) | none | none | n/a; clone does not resolve or validate storage | ordinary `Arc` clone; no owner or write authority is created | record/container remains while any direct owner exists |
+| drop a handle while tape/checkpoint retains | none | none | none | n/a | ordinary `Arc` drop; tape/checkpoint record remains independent | allocation remains under direct container ownership |
+| tape/context drop while a handle remains | none | none | outstanding work follows G1 | n/a | tape's owning record drops; the handle's record retains the container/group/root | normal container drop after the last direct owner |
+| tape retains/releases descriptor record | owning tape/container reference / none on release | none | none | local `ValueKey` lookup may fail before a record is acquired; no storage is changed | an `Arc<AdValueRecord>` keeps the descriptor/container valid for its lifetime | group/container drops when no direct owner remains |
+| checkpoint retains/releases boundary record | owning checkpoint/container reference / none on release | none | none | local boundary-key lookup may fail before a record is acquired | ownership keeps an acquired record valid; interior values get no record | boundary allocation follows direct ownership |
+| `value()` guard | shared | record/container borrow for guard lifetime | G1 host-read rules if host bytes requested | error, record/container unchanged | guard drop ends the borrow | n/a |
+| backward execution | shared reads of retained descriptors; new owners for grads | tape/container shared during execution | G3 rules | typed failure, tape unchanged, grads dropped after retirement | per G3 panic row | grads owned by `Gradients` bundle |
+| `take_grad` | exclusive on `Gradients` | exclusive bundle borrow until return | none | `Ok(None)` for no gradient; `Err(ExtractError)` leaves the bundle unchanged | owner is removed only after successful extraction | `Ok(Some(owner))` follows G1 |
+| `into_value` while another direct owner exists | owning attempt (consumes one handle) | none | none | `IntoValueError::NotUnique(Self)`; G2 extraction is not attempted | the original usable handle and all direct owners are preserved | n/a |
+| `into_value` after unique Arc ownership | owning (consumes and uniquely unwraps the record/container before G2) | none | none | local G2 failure returns `IntoValueError::Extract { value: Self, error: ExtractError }` | failure reconstructs the usable handle; success moves the owner exactly once | extracted owner per G1 |
+| checkpoint record | owning (only boundary owners/descriptors enter the checkpoint retained group) | none | none | error: no partial checkpoint record is published | interior owners are never inserted and drop after forward use absent another direct owner | boundary containers after direct owners drop |
+| checkpoint recompute (backward) | shared reads of boundary; fresh owners for recomputed values | checkpoint container shared | G3 rules | typed failure after retirement | per G3 | recomputed owners dropped after use |
+| tape drop | owning tape/container reference | none | retirement per G1 for in-flight work | n/a | direct records and event-retirement ownership follow G1; ordinary ownership only | after the last direct owner, exactly once |
 
 ## Contract test index
 
@@ -2298,13 +1872,13 @@ phase issues carry the full inventories; this index is the cross-reference.
 
 | Gate | Enforcement | Owning phases |
 |---|---|---|
-| G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
-| G2 group, splitting, extraction | N-way split cases (N=0,1,>2, empty, reverse-stride, overflow); permutation-independence property tests; group-qualified stale-generation tests; compile-fail (root access while children live); extraction counters | #1561 |
-| G3 submission terminal semantics | rejection carriers return identical allocation keys; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and quarantine outcomes; cancellation/panic/detach/unobserved-error suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
+| G1 prepared access and retirement | deterministic transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write preparation from shared); invalid-descriptor rejection before prepared-object construction; immediate-drop-after-enqueue; Miri on host guard slices; permanent binding/event/root/context retention when completion is unproven; constant prepare/map/bind/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
+| G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
+| G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; borrowed output-view coverage; consuming `into_output`/`into_owned_output` cases prove repeated and duplicate-output aliases plus the remaining map disappear together, failures return the exact bundle, and scoped borrowed/metadata rejection never copies; source checks reject extracted-state flags; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
-| G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
+| G5 raw handles, reclamation | executable prepared-once resolution counts; API/source checks that device-prepared access reaches provider context through its borrowed root without an extra `Arc` clone, contains no host guard, and bind accepts only the G1 device variant payload without a provider argument or lifetime; source checks that bind/enqueue accept no replacement request/key/range and perform no repeated static validation; acquisition and compile-fail checks that shared owner/immutable view yields only read preparation, while only exclusive owner/mutable view yields write preparation; source inventory proving raw handles, `Arc`, and refcounts cannot mint write authority; provider-matrix checks that asynchronous providers accept detached owning submission only and reject borrowed submission before admission; exact-return tests limited to failures proving no enqueue occurred, with post-boundary failures routed through G3 terminal outcomes; proven-retirement tests releasing bindings/event/roots/context exactly once; `CompletionUnproven` tests returning no owners and permanently retaining bindings/event/roots/provider context; raw-binder source inventory and unsafe-interop rustdoc checks for binding lifetime, synchronization duties, and post-retirement invalidity | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
-| G7 AD retention | separate reason-classified copy/allocation counters (zero retention events in both); generational stale-handle and all-liveness-root extraction tests; checkpoint interior-release test; mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
+| G7 AD retention | byte-preserving duplicate/transfer copy counters separated from allocation/kernel-write counters (zero retention events in both); ordered Arc-uniqueness-before-G2 tests with `IntoValueError<Self>` preservation; `take_grad` three-outcome extraction tests; acquired-record validity and local-key-miss tests; checkpoint retained-group exclusion/interior-release test; compile-fail mutable-reinterpret exclusion; CPU plus designated async accelerator lanes | #1557 contract, atomic #1559/#1565 cutover, #1568 evidence |
 
 ## Relationship to phase issues
 
@@ -2315,9 +1889,10 @@ phase issues carry the full inventories; this index is the cross-reference.
   `da7b36e699f9f4731dec08de6a4e1ca93f20cd6f` and repository-relative path
   `docs/testing/storage-element-access-baseline.json`; P10 may compare it only
   under the compatible-environment rule above.
-- #1558 owns the root pin, non-`Clone` claim, and the single typed provider
-  bridge. #1560 owns access/retirement. #1561 owns groups and generational
-  descriptors. None waits for the public host cutover.
+- #1558 owns direct root lifetime and the non-`Clone` claim. #1560 owns
+  prepared access and retirement. #1561 owns groups and direct borrowed
+  descriptor slots. No phase introduces a provider bridge, and none waits for
+  the public host cutover.
 - #1559 and #1565 are one atomic promotion cohort. The cohort lands public
   host ownership, final detached/scoped runtime ownership, and direct AD group
   retention together.

@@ -241,3 +241,20 @@ The hosted checker requires a schema-v2 base for promotion comparisons. The
 merged-main base used for this promotion is
 `eab65236d6fff7ae28b5ec700b83a97b81a77740`; P0 and P2 remain deferred until
 their own artifacts are real.
+
+## Final provider-neutral prepared-access review
+
+The Sol-medium closure review of candidate `25cba3207650fc472c76bb4e69bbb6f9ba856e6e`
+found that the consolidated prepared-access sketch still placed host guards in
+payloads also consumed by CUDA/WebGPU/Metal binding. The contract now keeps one
+provider-neutral `PreparedRead`/`PreparedWrite` hierarchy with explicit
+`Host` and `Device` variants. Only nested host payloads contain host guards and
+expose contiguous slices or strided iterators. Device payloads retain the
+checked capability/layout and opaque provider-prepared state, and G5 consumes
+those exact payloads without constructing host-visible access.
+
+The same review found one stale `CheckedInjectiveLayout` name. The contract now
+names `CheckedInjectiveDescriptor` as the descriptor-level write proof and
+`CheckedInjectiveStrided` as the mutable iterator's traversal proof. No new
+runtime validation, identity protocol, registry, or compatibility mechanism
+was introduced by either correction.
