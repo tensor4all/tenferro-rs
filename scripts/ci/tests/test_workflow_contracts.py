@@ -374,6 +374,15 @@ class WorkflowContractTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(filter_expression, read(path))
 
+        for path in (
+            "crates/tenferro-ad/tests/integration/eager_backend_capability_contract.rs",
+            "crates/tenferro-gpu/tests/integration/session_contract.rs",
+        ):
+            source = read(path)
+            with self.subTest(offline_guard=path):
+                self.assertIn('var_os("NEXTEST")', source)
+                self.assertIn('var("CARGO_NET_OFFLINE")', source)
+
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (
             ".github/workflows/runpod-gpu-test.yml",
