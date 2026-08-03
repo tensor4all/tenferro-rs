@@ -13,8 +13,8 @@ use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, GraphCompiler, PrepareError, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
-    TypedTensor, ValidationError,
+    BackendStorageHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
+    StorageBuffer, TypedTensor, ValidationError,
 };
 
 fn run(output: &TracedTensor) -> Tensor {
@@ -135,7 +135,9 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<Complex64>::new_with_len(
+                7, len,
+            ))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

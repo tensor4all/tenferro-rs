@@ -15,6 +15,10 @@ existing candidate. It does not activate P6 or any later phase.
   of being copied implicitly.
 - The old public `TensorOwnedView` path and enum-pattern storage variants were
   removed. Runtime and CPU/eager paths use owner/value accessors instead.
+- The remaining legacy public storage identifiers were renamed in place to
+  `StorageBuffer`, `BackendStorage`, `BackendStorageHandle`,
+  `TensorStorageRef`, `TensorStorageRefMut`, and `TypedTensorViewMutSplit`;
+  no compatibility aliases retain the old spellings.
 - Detached `ExecutionInputs` now owns one `AllocationGroup` and an immutable
   descriptor binding array. Admission and worker execution borrow those
   bindings; ordinary pre-admission failures return the unchanged package, and

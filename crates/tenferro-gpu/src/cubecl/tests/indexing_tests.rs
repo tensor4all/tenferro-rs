@@ -2,8 +2,8 @@
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use num_complex::Complex64;
 use tenferro_tensor::{
-    Buffer, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, TensorIndexing,
-    TypedTensor,
+    DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    TensorIndexing, TypedTensor,
 };
 
 use super::{
@@ -484,7 +484,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let malformed_bool = crate::Tensor::Bool(
         TypedTensor::from_buffer_col_major(
             vec![0],
-            Buffer::Host(vec![]),
+            StorageBuffer::Host(vec![]),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {
@@ -559,7 +559,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let malformed_updates = crate::Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![0],
-            Buffer::Host(vec![]),
+            StorageBuffer::Host(vec![]),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

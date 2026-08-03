@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorStructural,
-    TypedTensor, ValidationError,
+    BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
+    TensorAnalytic, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing,
+    TensorStructural, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -33,7 +33,7 @@ fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::F64(
         TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(7, len))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

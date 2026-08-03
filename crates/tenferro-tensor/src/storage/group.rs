@@ -511,7 +511,7 @@ impl AllocationGroup {
     pub(crate) fn host_buffer<T: 'static>(
         &self,
         slot: DescriptorSlot,
-    ) -> Option<&crate::Buffer<T>> {
+    ) -> Option<&crate::StorageBuffer<T>> {
         let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
         self.allocations
             .get(descriptor.allocation.index())?

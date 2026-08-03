@@ -7,7 +7,7 @@ mod metal {
         upload_webgpu_tensor, webgpu_interop, with_webgpu_exec_session, AppleContext,
         WebGpuBackend, WebGpuExecSession, WebGpuRuntime,
     };
-    use tenferro_tensor::{BackendSessionHost, Buffer, Error, Tensor};
+    use tenferro_tensor::{BackendSessionHost, Error, StorageBuffer, Tensor};
 
     fn with_cpu_fft<R>(
         backend: &mut CpuBackend,
@@ -36,7 +36,7 @@ mod metal {
     }
 
     fn mapped<T: Copy + Send + Sync + 'static>(tensor: &tenferro_tensor::TypedTensor<T>) -> Vec<T> {
-        let Buffer::Backend(buffer) = tensor.buffer() else {
+        let StorageBuffer::Backend(buffer) = tensor.buffer() else {
             panic!("expected managed backend buffer")
         };
         buffer.map_read().unwrap().to_vec()

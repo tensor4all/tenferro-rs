@@ -48,7 +48,7 @@ fn typed_tensor_storage_fields_are_accessor_based() {
         .expect("tenferro-tensor types source must be readable");
 
     assert!(
-        !source.contains("pub buffer: Buffer<T>"),
+        !source.contains("pub buffer: StorageBuffer<T>"),
         "TypedTensor storage must not expose a public buffer field"
     );
     assert!(
@@ -57,7 +57,7 @@ fn typed_tensor_storage_fields_are_accessor_based() {
     );
     assert!(
         !source.contains("pub id: u64"),
-        "BufferHandle ids must remain opaque"
+        "BackendStorageHandle ids must remain opaque"
     );
     assert!(
         source.contains("pub fn buffer(&self)"),

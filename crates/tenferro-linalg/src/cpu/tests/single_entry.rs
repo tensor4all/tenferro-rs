@@ -16,8 +16,9 @@ use tenferro_cpu::{
     CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
-    Buffer, BufferHandle, CpuDomainId, ErrorKind, MemoryKind, Placement,
-    SharedTensorAllocationDomain, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
+    BackendStorageHandle, CpuDomainId, ErrorKind, MemoryKind, Placement,
+    SharedTensorAllocationDomain, StorageBuffer, StridedSliceSpec, Tensor, TensorRead, TensorView,
+    TypedTensor,
 };
 
 use super::managed_cholesky::{enter_observed_operation_scope, FakeDomain};
@@ -219,7 +220,7 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
     let source = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let opaque = TypedTensor::from_buffer_col_major(
         vec![2, 2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(17, 4))),
+        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(17, 4))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: None,
@@ -509,7 +510,7 @@ fn managed_cholesky_read_keeps_nonzero_storage_work_inside_one_entry() {
     let Tensor::F64(output) = output else {
         panic!("managed Cholesky should preserve f64 dtype")
     };
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let StorageBuffer::Backend(buffer) = output.buffer() else {
         panic!("managed Cholesky should preserve backend storage")
     };
     let values = buffer.map_read().unwrap();

@@ -13,11 +13,12 @@ use tenferro_fft::{
 };
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural, TypedTensor,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TypedTensor,
 };
 
 macro_rules! unreachable_backend_methods {
@@ -456,7 +457,9 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<Complex64>::new_with_len(
+                7, len,
+            ))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

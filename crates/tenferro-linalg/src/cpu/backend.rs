@@ -6,9 +6,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
-    validate::validate_nonsingular_u, AllocationDomainId, Buffer, DType, Error, HostAccessError,
-    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead, TensorScalar,
-    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
+    MemoryKind, SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorElementwise, TensorRead,
+    TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 trait FreshLinalgOutput {
@@ -777,13 +777,13 @@ fn solve_shape_direct_eligible(a_shape: &[usize], b_shape: &[usize]) -> bool {
 
 fn tensor_uses_backend_storage(input: &Tensor) -> bool {
     match input {
-        Tensor::F32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::F64(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::I32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::I64(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::Bool(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::C32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::C64(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::F32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::F64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::I32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::I64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::Bool(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::C32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::C64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
     }
 }
 
@@ -894,7 +894,7 @@ where
     T: ManagedCholeskyScalar,
 {
     let n = validate_managed_cholesky_input(input, domain.id())?;
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             "cholesky",
             HostAccessError::Unsupported { backend: "host" },
@@ -947,7 +947,7 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + TensorScalar + 'stati
             "matrix element count overflows usize",
         )
     })?;
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             "cholesky",
             HostAccessError::Unsupported { backend: "host" },
@@ -997,7 +997,7 @@ fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
             "shared allocation owner returned an output outside its managed domain",
         ));
     }
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let StorageBuffer::Backend(buffer) = output.buffer() else {
         return Err(tenferro_tensor::Error::runtime_state(
             "cholesky",
             "shared allocation owner returned a host output",

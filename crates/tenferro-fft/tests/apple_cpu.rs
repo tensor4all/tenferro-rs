@@ -3,7 +3,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
 use tenferro_gpu::{upload_webgpu_tensor, AppleContext, WebGpuRuntime};
-use tenferro_tensor::{Buffer, HostAccessError, Tensor};
+use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -18,7 +18,7 @@ fn apple_context() -> Option<AppleContext> {
 fn mapped_slice<T: Copy + Send + Sync + 'static>(
     tensor: &tenferro_tensor::TypedTensor<T>,
 ) -> Vec<T> {
-    let Buffer::Backend(buffer) = tensor.buffer() else {
+    let StorageBuffer::Backend(buffer) = tensor.buffer() else {
         panic!("expected managed backend output")
     };
     buffer.map_read().unwrap().to_vec()

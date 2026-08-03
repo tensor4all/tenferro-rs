@@ -9,8 +9,8 @@ use std::sync::Arc;
 use super::dispatch;
 use crate::cubecl::runtime::CudaRuntime;
 use crate::types::{
-    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
-    TypedTensor,
+    CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    Tensor, TypedTensor,
 };
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
@@ -106,8 +106,8 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
+        StorageBuffer::Host(data) => data,
+        StorageBuffer::Backend(buffer) => {
             return Err(crate::Error::runtime_state(
                 "upload",
                 format!(
@@ -121,7 +121,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = client.create_from_slice(T::as_bytes(host_data));
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(CubeclBuffer::new(
+        StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
             handle,
             host_data.len(),
             device_ordinal,
@@ -142,13 +142,13 @@ fn download_typed<T: CubeElement + Clone + 'static>(
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let handle = match typed.buffer() {
-        Buffer::Host(_) => {
+        StorageBuffer::Host(_) => {
             return Err(crate::Error::runtime_state(
                 "download",
                 "expected CubeCL buffer",
             ));
         }
-        Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
+        StorageBuffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
 
     if typed.n_elements() == 0 {
@@ -170,8 +170,8 @@ fn upload_bool(
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
+        StorageBuffer::Host(data) => data,
+        StorageBuffer::Backend(buffer) => {
             return Err(crate::Error::runtime_state(
                 "upload",
                 format!(
@@ -186,7 +186,7 @@ fn upload_bool(
     let handle = client.create_from_slice(&bytes);
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(CubeclBuffer::new(
+        StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
             handle,
             host_data.len(),
             device_ordinal,
@@ -204,13 +204,13 @@ fn upload_bool(
 
 fn download_bool(rt: &CudaRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
     let handle = match typed.buffer() {
-        Buffer::Host(_) => {
+        StorageBuffer::Host(_) => {
             return Err(crate::Error::runtime_state(
                 "download",
                 "expected CubeCL buffer",
             ));
         }
-        Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
+        StorageBuffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
 
     if typed.n_elements() == 0 {
@@ -255,19 +255,21 @@ fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl_runtime::server::Handl
 }
 
 fn cubecl_handle_from_buffer<T: 'static>(
-    buffer: &Buffer<T>,
+    buffer: &StorageBuffer<T>,
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     match buffer {
-        Buffer::Host(_) => Err(crate::Error::runtime_state(
+        StorageBuffer::Host(_) => Err(crate::Error::runtime_state(
             "cubecl_handle",
             "expected CubeCL buffer",
         )),
-        Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "cubecl_handle"),
+        StorageBuffer::Backend(buffer) => {
+            cubecl_handle_from_backend(buffer.as_ref(), "cubecl_handle")
+        }
     }
 }
 
 fn cubecl_handle_from_backend<T: 'static>(
-    buffer: &dyn crate::BackendBuffer<T>,
+    buffer: &dyn crate::BackendStorage<T>,
     op: &'static str,
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     buffer

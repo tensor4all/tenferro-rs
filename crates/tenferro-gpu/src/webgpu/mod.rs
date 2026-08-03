@@ -6,10 +6,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache, Buffer,
+    AllocationDomainId, AllocationId, BackendCachedDot, BackendRuntimeCache, BackendStorage,
     CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig, GpuBackendKind,
     HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, PadConfig, Placement,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
@@ -199,7 +199,7 @@ fn validate_typed_read_mapping<T: 'static>(
     Ok(())
 }
 
-impl<T: Send + Sync + 'static> BackendBuffer<T> for WebGpuBuffer<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "cubecl-webgpu"
     }
@@ -259,7 +259,7 @@ impl<T: Send + Sync + 'static> BackendBuffer<T> for WebGpuBuffer<T> {
 }
 
 fn webgpu_handle_from_backend<T: 'static>(
-    buffer: &dyn BackendBuffer<T>,
+    buffer: &dyn BackendStorage<T>,
     op: &'static str,
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     buffer
@@ -340,12 +340,12 @@ fn webgpu_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a WebGpuBuffer<T>> {
     match tensor.buffer() {
-        Buffer::Host(_) => Err(Error::runtime_state(
+        StorageBuffer::Host(_) => Err(Error::runtime_state(
             op,
             "expected WebGPU tensor, got host tensor. \
              Use upload_webgpu_tensor() to transfer to WebGPU before calling WebGPU ops.",
         )),
-        Buffer::Backend(buffer) => buffer
+        StorageBuffer::Backend(buffer) => buffer
             .as_any()
             .downcast_ref::<WebGpuBuffer<T>>()
             .ok_or_else(|| {
@@ -478,7 +478,7 @@ pub(super) fn typed_from_webgpu<T: Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Arc::new(buffer)),
         webgpu_placement(rt),
     )
 }
@@ -523,7 +523,7 @@ pub(super) fn alloc_tensor_in_runtime(
             let buffer = WebGpuBuffer::new_for_runtime(rt, handle, len, "apple_alloc")?;
             Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                Buffer::Backend(Arc::new(buffer)),
+                StorageBuffer::Backend(Arc::new(buffer)),
                 webgpu_placement(rt),
             )?))
         }

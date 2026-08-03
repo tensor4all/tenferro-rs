@@ -1596,8 +1596,8 @@ mod tests {
         SymDim,
     };
     use tenferro_tensor::{
-        Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
-        TypedTensor,
+        BackendStorageHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+        StorageBuffer, TypedTensor,
     };
 
     #[test]
@@ -1682,7 +1682,7 @@ mod tests {
         let lhs = Arc::new(Tensor::F64(
             TypedTensor::from_buffer_col_major(
                 vec![2],
-                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
+                StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(1, 2))),
                 placement.clone(),
             )
             .unwrap(),
@@ -1690,7 +1690,7 @@ mod tests {
         let rhs = Arc::new(Tensor::F64(
             TypedTensor::from_buffer_col_major(
                 vec![2],
-                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
+                StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(2, 2))),
                 placement,
             )
             .unwrap(),

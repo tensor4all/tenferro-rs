@@ -95,7 +95,7 @@ use crate::native_permutation::{
     NativePermutationKind, NativePermutationPlan, NativeTransposeTile,
 };
 use crate::{
-    Buffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRank,
+    DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
     TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
@@ -1116,7 +1116,7 @@ impl CudaBackend {
             .map_err(|err| crate::Error::validation(op, err))?;
         Ok(TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(crate::CubeclBuffer::new(
+            StorageBuffer::Backend(Arc::new(crate::CubeclBuffer::new(
                 handle,
                 len,
                 self.runtime().device_ordinal(),
@@ -1236,7 +1236,7 @@ impl CudaBackend {
             .map_err(|err| crate::Error::validation(op, err))?;
         let source_tensor: TypedTensor<T, R> = TypedTensor::from_buffer_col_major(
             source_shape,
-            Buffer::Backend(Arc::clone(source_buffer)),
+            StorageBuffer::Backend(Arc::clone(source_buffer)),
             src.placement().clone(),
         )?;
         let len = src.n_elements();
