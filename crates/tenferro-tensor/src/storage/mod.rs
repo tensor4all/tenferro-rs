@@ -6,6 +6,10 @@ mod diagnostics;
 #[allow(dead_code)]
 mod identity;
 #[allow(dead_code)]
+mod prepared;
+#[allow(dead_code)]
+mod retirement;
+#[allow(dead_code)]
 mod root;
 #[allow(dead_code)]
 mod span;
