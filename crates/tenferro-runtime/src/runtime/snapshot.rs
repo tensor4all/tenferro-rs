@@ -1166,8 +1166,9 @@ impl RuntimeConfigBuilder {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
     ///     assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
-    ///     Error, EngineRegistration, Runtime, StorageClass, TransferEndpoint, TransferProvider,
-    ///     TransferRequest,
+    ///     EngineRegistration, EngineRegistrationMetadata, Error, ExecutionContextIdentity,
+    ///     HardwareClassId, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity,
+    ///     ProviderId, Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -1182,32 +1183,39 @@ impl RuntimeConfigBuilder {
     ///     }
     /// }
     ///
+    /// fn registration(
+    ///     id: EngineId,
+    ///     target: &str,
+    ///     storage: &StorageClass,
+    /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
+    ///     let metadata = EngineRegistrationMetadata::new(
+    ///         id,
+    ///         ProviderDeviceIdentity::new(ProviderId::new("example.provider")?, target)?,
+    ///         HardwareClassId::new("example.hardware")?,
+    ///         Arc::from([storage.clone()]),
+    ///         storage.clone(),
+    ///         CoreCapabilityBundle::default(),
+    ///     );
+    ///     assemble_preparation_only_engine_registration(
+    ///         PreparationOnlyEngineRegistrationConfig::new(
+    ///             metadata,
+    ///             ExecutionContextIdentity::of::<()>(),
+    ///         ),
+    ///     )
+    /// }
+    ///
     /// let storage = StorageClass::new("example.storage.host")?;
     /// let source_id = EngineId::new("example.engine.source")?;
     /// let destination_id = EngineId::new("example.engine.destination")?;
-    /// let source = assemble_preparation_only_engine_registration(
+    /// let source = registration(
     ///     source_id.clone(),
-    ///     tenferro_runtime::ProviderDeviceIdentity::new(
-    ///         tenferro_runtime::ProviderId::new("example.provider")?,
-    ///         "source-0",
-    ///     )?,
-    ///     tenferro_runtime::ExecutionContextIdentity::of::<()>(),
-    ///     tenferro_runtime::HardwareClassId::new("example.hardware")?,
-    ///     Arc::from(vec![storage.clone()]),
-    ///     storage.clone(),
-    ///     CoreCapabilityBundle::default(),
+    ///     "source-0",
+    ///     &storage,
     /// )?;
-    /// let destination = assemble_preparation_only_engine_registration(
+    /// let destination = registration(
     ///     destination_id.clone(),
-    ///     tenferro_runtime::ProviderDeviceIdentity::new(
-    ///         tenferro_runtime::ProviderId::new("example.provider")?,
-    ///         "destination-0",
-    ///     )?,
-    ///     tenferro_runtime::ExecutionContextIdentity::of::<()>(),
-    ///     tenferro_runtime::HardwareClassId::new("example.hardware")?,
-    ///     Arc::from(vec![storage.clone()]),
-    ///     storage.clone(),
-    ///     CoreCapabilityBundle::default(),
+    ///     "destination-0",
+    ///     &storage,
     /// )?;
     /// let mut builder = Runtime::builder();
     /// builder.register_engine(source)?;
@@ -1417,8 +1425,9 @@ impl RuntimeReconfiguration<'_> {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{
     ///     assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
-    ///     EngineRegistration, Error, Runtime, StorageClass, TransferEndpoint, TransferProvider,
-    ///     TransferRequest,
+    ///     EngineRegistration, EngineRegistrationMetadata, Error, ExecutionContextIdentity,
+    ///     HardwareClassId, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity,
+    ///     ProviderId, Runtime, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
     /// };
     ///
     /// #[derive(Debug)]
@@ -1437,17 +1446,22 @@ impl RuntimeReconfiguration<'_> {
     ///     id: &str,
     ///     storage: &StorageClass,
     /// ) -> Result<EngineRegistration, tenferro_runtime::RuntimeConfigError> {
-    ///     Ok(assemble_preparation_only_engine_registration(
+    ///     let metadata = EngineRegistrationMetadata::new(
     ///         EngineId::new(id)?,
-    ///         tenferro_runtime::ProviderDeviceIdentity::new(
-    ///             tenferro_runtime::ProviderId::new("example.provider")?,
+    ///         ProviderDeviceIdentity::new(
+    ///             ProviderId::new("example.provider")?,
     ///             format!("engine:{id}"),
     ///         )?,
-    ///         tenferro_runtime::ExecutionContextIdentity::of::<()>(),
-    ///         tenferro_runtime::HardwareClassId::new("example.hardware")?,
-    ///         Arc::from(vec![storage.clone()]),
+    ///         HardwareClassId::new("example.hardware")?,
+    ///         Arc::from([storage.clone()]),
     ///         storage.clone(),
     ///         CoreCapabilityBundle::default(),
+    ///     );
+    ///     Ok(assemble_preparation_only_engine_registration(
+    ///         PreparationOnlyEngineRegistrationConfig::new(
+    ///             metadata,
+    ///             ExecutionContextIdentity::of::<()>(),
+    ///         ),
     ///     )?)
     /// }
     ///
