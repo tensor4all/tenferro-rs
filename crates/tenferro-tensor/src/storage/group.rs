@@ -30,11 +30,18 @@ impl AllocationSlot {
 
 /// A group-local descriptor lookup key. It carries no ownership authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DescriptorSlot(u32);
+pub struct DescriptorSlot(u32);
 
 impl DescriptorSlot {
-    pub(crate) const fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self.0 as usize
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        match u32::try_from(index) {
+            Ok(index) => Some(Self(index)),
+            Err(_) => None,
+        }
     }
 
     #[cfg(test)]
@@ -127,7 +134,7 @@ impl DescriptorRecord {
 
 /// Group construction and slot errors.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum GroupError {
+pub enum GroupError {
     #[error("group index overflows u32")]
     IndexOverflow,
     #[error("descriptor slot {slot} is outside the group")]
@@ -172,13 +179,14 @@ pub(crate) enum ExtractError {
 
 /// One group of move-only owners and append-only logical descriptors.
 #[derive(Default)]
-pub(crate) struct AllocationGroup {
+pub struct AllocationGroup {
     // Most public tensors contain one root and one descriptor. Keep that
     // common case inline so the ownership boundary does not add a per-result
     // metadata allocation to CPU hot paths; the vectors still grow for
     // explicit multi-descriptor groups.
     allocations: SmallVec<[Option<OwnedStorage>; 1]>,
     descriptors: SmallVec<[Option<DescriptorRecord>; 1]>,
+    tensor_owners: Vec<Option<crate::Tensor>>,
 }
 
 /// A shared descriptor child bounded by the group's shared borrow.
@@ -298,6 +306,37 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
 impl AllocationGroup {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Build one move-only group for detached runtime input ownership.
+    pub fn from_tensors(
+        tensors: Vec<crate::Tensor>,
+    ) -> Result<(Self, Box<[DescriptorSlot]>), GroupError> {
+        let mut group = Self::new();
+        let mut bindings = Vec::with_capacity(tensors.len());
+        for (index, tensor) in tensors.into_iter().enumerate() {
+            let slot = DescriptorSlot::from_index(index).ok_or(GroupError::IndexOverflow)?;
+            group.tensor_owners.push(Some(tensor));
+            bindings.push(slot);
+        }
+        Ok((group, bindings.into_boxed_slice()))
+    }
+
+    /// Borrow the tensors named by a detached input binding set.
+    pub fn tensor_refs<'a>(
+        &'a self,
+        bindings: &[DescriptorSlot],
+    ) -> Result<Vec<&'a crate::Tensor>, GroupError> {
+        bindings
+            .iter()
+            .map(|slot| {
+                self.tensor_owners
+                    .get(slot.index())
+                    .ok_or(GroupError::DescriptorSlotOutOfBounds { slot: slot.index() })?
+                    .as_ref()
+                    .ok_or(GroupError::DescriptorSlotVacant { slot: slot.index() })
+            })
+            .collect()
     }
 
     pub(crate) fn from_host_vec<T: TensorScalar, R: TensorRank>(

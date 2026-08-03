@@ -2,8 +2,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
     CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
-    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorValue,
-    TracedTensor,
+    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TracedTensor,
 };
 use tenferro_tensor::{Error as TensorError, ValidationError};
 
@@ -444,13 +443,8 @@ fn runtime_can_return_final_transpose_as_lazy_value() {
 
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].shape(), &[3, 2]);
-    match &values[0] {
-        TensorValue::View(view) => {
-            assert_eq!(view.shape(), &[3, 2]);
-            assert_eq!(view.strides(), &[2, 1]);
-        }
-        TensorValue::Tensor(_) => panic!("final transpose should stay as a lazy owned view"),
-    }
+    assert!(values[0].is_view());
+    assert_eq!(values[0].strides(), &[2, 1]);
 }
 
 #[test]

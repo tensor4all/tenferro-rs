@@ -6,7 +6,7 @@ use crate::optimize::EinsumPlanSpec;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::{ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext};
-use tenferro_tensor::{TensorOwnedView, TensorRead};
+use tenferro_tensor::TensorValue;
 
 #[cfg(feature = "autodiff")]
 #[test]
@@ -207,8 +207,9 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
     let base = Arc::new(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
-    let view = TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
-    let input = TensorRead::from_view(view.tensor_view());
+    let view =
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
+    let input = view.tensor_read();
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
     let mut backend = CpuBackend::new();
     let mut caches = ExtensionCacheStore::new();

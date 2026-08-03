@@ -12,7 +12,9 @@ use std::thread::{self, ThreadId};
 
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{
+    AllocationGroup, DescriptorSlot, Tensor, TensorBackend, TensorRead, TensorValue,
+};
 
 use crate::error::ErrorPhase;
 use crate::exec::{
@@ -63,21 +65,31 @@ pub struct ExecutionHandle {
 
 /// Move-only input package for detached runtime submission.
 pub struct ExecutionInputs {
-    tensors: Vec<Tensor>,
+    group: AllocationGroup,
+    bindings: Box<[DescriptorSlot]>,
 }
 
 impl ExecutionInputs {
     /// Construct a package from already-owned tensors.
-    pub fn new(tensors: Vec<Tensor>) -> Self {
-        Self { tensors }
+    pub fn new(tensors: Vec<Tensor>) -> Result<Self> {
+        let (group, bindings) = AllocationGroup::from_tensors(tensors).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionInputs::new",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+        Ok(Self { group, bindings })
     }
 
-    pub(crate) fn as_refs(&self) -> Vec<&Tensor> {
-        self.tensors.iter().collect()
-    }
-
-    pub(crate) fn into_tensors(self) -> Vec<Tensor> {
-        self.tensors
+    pub(crate) fn as_refs(&self) -> Result<Vec<&Tensor>> {
+        self.group.tensor_refs(&self.bindings).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionInputs::as_refs",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })
     }
 }
 
@@ -85,7 +97,7 @@ impl fmt::Debug for ExecutionInputs {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ExecutionInputs")
-            .field("len", &self.tensors.len())
+            .field("len", &self.bindings.len())
             .finish()
     }
 }
@@ -104,7 +116,7 @@ pub enum ExecutionOutcome {
     /// available again because retirement was observed.
     RetiredFailed {
         error: Error,
-        inputs: ExecutionInputs,
+        inputs: Box<ExecutionInputs>,
     },
 }
 
@@ -116,7 +128,7 @@ pub enum SubmitError {
     /// returned unchanged to the caller.
     PreAdmission {
         source: Box<Error>,
-        inputs: ExecutionInputs,
+        inputs: Box<ExecutionInputs>,
     },
     /// The worker could not be spawned after admission. The in-flight record
     /// retains the admitted owner; no recovery owner is manufactured here.
@@ -127,7 +139,7 @@ impl SubmitError {
     /// Recover the unchanged package from a pre-admission rejection.
     pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
         match self {
-            Self::PreAdmission { source, inputs } => Some((*source, inputs)),
+            Self::PreAdmission { source, inputs } => Some((*source, *inputs)),
             Self::WorkerSpawn { .. } => None,
         }
     }
@@ -200,11 +212,11 @@ pub(super) struct InFlightSubmission {
 
 struct AdmittedExecution {
     prepared: PreparedCompiledGraph,
-    inputs: Vec<Tensor>,
+    inputs: ExecutionInputs,
 }
 
 enum InFlightWork {
-    Admitted(AdmittedExecution),
+    Admitted(Box<AdmittedExecution>),
     #[cfg(test)]
     Test(Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>),
 }
@@ -212,10 +224,10 @@ enum InFlightWork {
 impl InFlightSubmission {
     fn new(prepared: PreparedCompiledGraph, inputs: ExecutionInputs) -> Self {
         Self {
-            work: Mutex::new(Some(InFlightWork::Admitted(AdmittedExecution {
+            work: Mutex::new(Some(InFlightWork::Admitted(Box::new(AdmittedExecution {
                 prepared,
-                inputs: inputs.into_tensors(),
-            }))),
+                inputs,
+            })))),
             completion: Mutex::new(None),
             completed: Condvar::new(),
         }
@@ -237,13 +249,21 @@ impl InFlightSubmission {
         };
         let result = catch_unwind(AssertUnwindSafe(|| match work {
             Some(InFlightWork::Admitted(admitted)) => {
-                let AdmittedExecution { prepared, inputs } = admitted;
-                let input_refs = inputs.iter().collect::<Vec<_>>();
+                let AdmittedExecution { prepared, inputs } = *admitted;
+                let input_refs = match inputs.as_refs() {
+                    Ok(input_refs) => input_refs,
+                    Err(error) => {
+                        return Ok(ExecutionOutcome::RetiredFailed {
+                            error,
+                            inputs: Box::new(inputs),
+                        });
+                    }
+                };
                 match execute_admitted(&prepared, &input_refs) {
                     Ok(outputs) => Ok(ExecutionOutcome::Completed(outputs)),
                     Err(error) => Ok(ExecutionOutcome::RetiredFailed {
                         error,
-                        inputs: ExecutionInputs::new(inputs),
+                        inputs: Box::new(inputs),
                     }),
                 }
             }
@@ -868,13 +888,21 @@ pub(super) fn submit_with_spawner(
     inputs: ExecutionInputs,
     spawner: &dyn SubmissionSpawner,
 ) -> std::result::Result<ExecutionHandle, SubmitError> {
-    let input_refs = inputs.as_refs();
+    let input_refs = match inputs.as_refs() {
+        Ok(input_refs) => input_refs,
+        Err(source) => {
+            return Err(SubmitError::PreAdmission {
+                source: Box::new(source),
+                inputs: Box::new(inputs),
+            })
+        }
+    };
     let prepared = match prepare_compiled(runtime, program, &input_refs) {
         Ok(prepared) => prepared,
         Err(source) => {
             return Err(SubmitError::PreAdmission {
                 source: Box::new(source),
-                inputs,
+                inputs: Box::new(inputs),
             })
         }
     };

@@ -158,12 +158,12 @@ fn lazy_view_input_conversion_shares_live_owned_tensor() {
         .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
         .unwrap();
 
-    let output = value.as_tensor_arc().unwrap();
+    let output = value.as_tensor().unwrap();
     let stored = match slots[0].as_ref().unwrap() {
-        ExecSlot::Value(value) => value.as_tensor_arc().unwrap(),
+        ExecSlot::Value(value) => value.as_tensor().unwrap(),
         _ => panic!("expected promoted tensor value"),
     };
-    assert!(Arc::ptr_eq(output, stored));
+    assert!(std::ptr::eq(output, stored));
 }
 
 #[test]

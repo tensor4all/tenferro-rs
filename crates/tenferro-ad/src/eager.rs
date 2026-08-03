@@ -1365,8 +1365,8 @@ impl EagerRuntime {
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
-        if let Some(tensor) = value.as_tensor_arc() {
-            return tensor.as_ref().duplicate().map_err(Error::from);
+        if let Some(tensor) = value.as_tensor() {
+            return tensor.duplicate().map_err(Error::from);
         }
 
         let mut backend = self.lock_backend()?;
@@ -1535,15 +1535,18 @@ impl EagerRuntime {
         &self,
         record: &Arc<EagerTensorRecord>,
     ) -> Result<()> {
-        let tensor = match record.value.as_tensor_arc() {
-            Some(tensor) => Some(Arc::clone(tensor)),
-            None => record.materialized_cache.get().cloned(),
+        let tensor_ptr = match record.value.as_tensor() {
+            Some(tensor) => Some(tensor_ptr_ref(tensor)),
+            None => record
+                .materialized_cache
+                .get()
+                .map(|tensor| tensor_ptr_ref(tensor)),
         };
-        let Some(tensor) = tensor else {
+        let Some(tensor_ptr) = tensor_ptr else {
             return Ok(());
         };
         self.lock_value_ptr_records()?
-            .insert(tensor_ptr(&tensor), Arc::downgrade(record));
+            .insert(tensor_ptr, Arc::downgrade(record));
         Ok(())
     }
 
@@ -2469,8 +2472,15 @@ fn validate_same_runtime(
     Ok(())
 }
 
-pub(crate) fn tensor_ptr(tensor: &Arc<Tensor>) -> usize {
-    Arc::as_ptr(tensor) as usize
+fn owned_tensor_from_arc(tensor: Arc<Tensor>) -> Result<Tensor> {
+    match Arc::try_unwrap(tensor) {
+        Ok(tensor) => Ok(tensor),
+        Err(tensor) => tensor.as_ref().duplicate().map_err(Error::from),
+    }
+}
+
+fn tensor_ptr_ref(tensor: &Tensor) -> usize {
+    tensor as *const Tensor as usize
 }
 
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
@@ -2650,7 +2660,7 @@ impl EagerTensor {
             requires_grad,
             trace: None,
             semantic_trace: Some(semantic_trace),
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             register_value: true,
         })
@@ -2690,7 +2700,7 @@ impl EagerTensor {
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
             metadata_scopes,
             register_value: true,
         })
@@ -2711,7 +2721,7 @@ impl EagerTensor {
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
             metadata_scopes,
             register_value: false,
         })
@@ -2863,8 +2873,9 @@ impl EagerTensor {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn detach(&self) -> Self {
-        let semantic_trace = self.value.as_tensor_arc().and_then(|tensor| {
-            TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(tensor)).ok()
+        let semantic_trace = self.value.as_tensor().and_then(|tensor| {
+            let tensor = tensor.duplicate().ok()?;
+            TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(tensor)).ok()
         });
         Self::new_untracked_value_result_with_semantic_trace(
             self.ctx.clone(),
@@ -2958,9 +2969,9 @@ impl EagerTensor {
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
-        if let Some(tensor) = self.value.as_tensor_arc() {
+        if let Some(tensor) = self.value.as_tensor() {
             self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(Arc::clone(tensor));
+            return Ok(Arc::new(tensor.duplicate()?));
         }
         if let Some(tensor) = self.materialized_cache.get() {
             self.ctx.try_register_value_record_ptr(&self._record)?;
