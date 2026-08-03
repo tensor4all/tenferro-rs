@@ -30,10 +30,11 @@ ACTIVE_IDS = frozenset(
         "p1-contract-document",
         "p1-api-parity",
         "p1-element-access-baseline",
+        "p2-root-claims",
     }
 )
 DEFERRED_CORRECTIONS = {
-    "p2-root-claims": "P2",
+    "p4-production-borrow-contract": "P4",
 }
 
 CHECKER_CLI = {
@@ -445,10 +446,10 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         manifest = _replace_row_state(
             _replace_row_state(
                 _manifest_text(),
-                "p1-element-access-baseline",
-                '{ kind = "deferred", activation_unit = "P1", promotion = { mode = "activate-in-place" } }',
+                "p2-root-claims",
+                '{ kind = "deferred", activation_unit = "P2", promotion = { mode = "activate-in-place" } }',
             ),
-            "p2-root-claims",
+            "p4-production-borrow-contract",
             '{ kind = "active" }',
         )
         result = _run_checker(manifest, extra=("--diagnostics-json",))
@@ -457,9 +458,9 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             result,
             "E_GRAPH_PREREQUISITE_INCOMPLETE",
             {
-                "source_unit": "P1",
-                "target_unit": "P2",
-                "obligation_id": "p1-element-access-baseline",
+                "source_unit": "P2",
+                "target_unit": "P4",
+                "obligation_id": "p2-root-claims",
             },
         )
 
@@ -469,7 +470,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         for row in deferred:
             self.assertFalse((ROOT / row["artifact"]["path"]).exists(), row["id"])
 
-        row = next(row for row in deferred if row["id"] == "p2-root-claims")
+        row = next(row for row in deferred if row["id"] == "p4-production-borrow-contract")
         files = _fixture_files()
         files[row["artifact"]["path"]] = "not a fabricated production artifact\n"
         result = _run_checker(
@@ -867,7 +868,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 self.assertEqual(execution["artifact_path"], row["artifact"]["path"])
                 self.assertEqual(execution["exit_code"], 0)
             cargo_argv = (root / "cargo-argv").read_text(encoding="utf-8").splitlines()
-            self.assertEqual(cargo_argv, ["test", "-p", "tenferro-tensor", "--test", "storage_api_parity"])
+            self.assertEqual(cargo_argv, ["test", "-p", "tenferro-tensor", "--test", "storage_root_claims"])
             checked = _checker_with_receipt(root, base, receipt_path)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
             self.assertEqual(json.loads(checked.stdout), {"terminal": False})
@@ -1063,7 +1064,6 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             encoding="utf-8"
         )
         for removed_requirement in (
-            "RootResourcePin",
             "UseLease",
             "single typed provider bridge",
             "generational descriptors",

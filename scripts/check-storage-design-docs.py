@@ -27,7 +27,7 @@ REQUIRED_MARKERS = (
     "p0-control-plane",
     "p1-element-access-baseline",
     "p2-root-claims",
-    "current production state deliberately activates only",
+    "current production state activates the four P1 rows",
     "state = { kind = \"deferred\"",
     "tenferro.storage-ownership-receipt.v1",
     "candidate_commit",
