@@ -237,7 +237,7 @@ where
     assert_eq!(T::as_slice(&tensor).unwrap(), data.as_slice());
     assert_eq!(tensor.as_slice::<T>().unwrap(), data.as_slice());
 
-    let mut mutable = tensor.clone();
+    let mut mutable = tensor.duplicate().unwrap();
     assert_eq!(T::as_slice_mut(&mut mutable).unwrap(), data.as_slice());
 
     let typed = T::into_typed(tensor).unwrap();
@@ -735,7 +735,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
         },
     )
     .unwrap();
-    let col_err = tensor.clone().into_vec_col_major().unwrap_err();
+    let col_err = tensor.into_vec_col_major().unwrap_err();
 
     assert!(matches!(col_err, Error::RuntimeState { .. }));
     assert!(col_err
@@ -781,7 +781,7 @@ fn typed_tensor_exports_col_major_order() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
             .unwrap();
 
-    let (shape, col) = tensor.clone().into_vec_col_major().unwrap();
+    let (shape, col) = tensor.into_vec_col_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(col, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 }
@@ -792,7 +792,7 @@ fn tensor_col_major_roundtrips_dynamic_dtype() {
 
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[1, 3, 2, 4]);
     assert_eq!(
-        tensor.clone().into_vec_col_major::<i64>().unwrap(),
+        tensor.into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
 }
@@ -1057,7 +1057,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
     assert!(tensor.host_data().is_err());
-    let erased = Tensor::F64(tensor.clone());
+    let erased = Tensor::F64(tensor);
     assert!(erased.as_slice::<f64>().is_err());
     assert!(erased.get::<f64>(&[0]).is_err());
 
@@ -1068,7 +1068,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     )
     .unwrap();
     assert!(mutable_tensor.host_data_mut().is_err());
-    let mut erased_mut = Tensor::F64(mutable_tensor.clone());
+    let mut erased_mut = Tensor::F64(mutable_tensor);
     assert!(erased_mut.as_slice_mut::<f64>().is_err());
     assert!(erased_mut.get_mut::<f64>(&[0]).is_err());
 }
@@ -2120,4 +2120,14 @@ fn backend_region_view_mut_rejects_aliasing_layout() {
     assert!(tensor
         .backend_region_view(vec![2, 2], vec![0, 1], 0)
         .is_ok());
+}
+#[test]
+fn as_view_paths_do_not_allocate_or_clone_storage() {
+    let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]).unwrap();
+    let view = tensor.as_view();
+    assert_eq!(view.shape(), &[2, 2]);
+
+    let mut tensor = tensor.duplicate().unwrap();
+    let view_mut = tensor.as_view_mut();
+    assert_eq!(view_mut.shape(), &[2, 2]);
 }
