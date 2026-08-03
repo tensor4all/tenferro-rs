@@ -34,7 +34,7 @@ fn registration(
     ))
 }
 
-struct TwoEngineFixture {
+struct EngineFixture {
     builder: RuntimeConfigBuilder,
     first_id: EngineId,
     second_id: EngineId,
@@ -42,7 +42,7 @@ struct TwoEngineFixture {
     storage: StorageClass,
 }
 
-fn two_engine_fixture() -> Result<TwoEngineFixture, RuntimeConfigError> {
+fn engine_fixture() -> Result<EngineFixture, RuntimeConfigError> {
     let first_id = EngineId::new("tenferro.test.phase0.device0")?;
     let second_id = EngineId::new("tenferro.test.phase0.device1")?;
     let third_id = EngineId::new("tenferro.test.phase0.device2")?;
@@ -55,7 +55,7 @@ fn two_engine_fixture() -> Result<TwoEngineFixture, RuntimeConfigError> {
         storage.clone(),
     )?)?;
     builder.register_engine(registration(third_id.clone(), "device:2", storage.clone())?)?;
-    Ok(TwoEngineFixture {
+    Ok(EngineFixture {
         builder,
         first_id,
         second_id,
@@ -102,7 +102,7 @@ impl EventToken for ForeignToken {
 #[test]
 fn caller_selected_engines_have_distinct_physical_and_event_identity(
 ) -> Result<(), Box<dyn StdError>> {
-    let mut fixture = two_engine_fixture()?;
+    let mut fixture = engine_fixture()?;
     let error = fixture
         .builder
         .register_engine(registration(
@@ -143,7 +143,7 @@ fn caller_selected_engines_have_distinct_physical_and_event_identity(
 
 #[test]
 fn transfer_routes_are_keyed_by_the_complete_endpoint_pair() -> Result<(), Box<dyn StdError>> {
-    let mut fixture = two_engine_fixture()?;
+    let mut fixture = engine_fixture()?;
     let first = TransferEndpoint::new(fixture.first_id.clone(), fixture.storage.clone());
     let second = TransferEndpoint::new(fixture.second_id.clone(), fixture.storage.clone());
     let third = TransferEndpoint::new(fixture.third_id.clone(), fixture.storage.clone());
@@ -193,7 +193,7 @@ fn transfer_routes_are_keyed_by_the_complete_endpoint_pair() -> Result<(), Box<d
 
 #[test]
 fn event_domain_rejects_a_foreign_dependency_before_launch() -> Result<(), Box<dyn StdError>> {
-    let fixture = two_engine_fixture()?;
+    let fixture = engine_fixture()?;
     let runtime = fixture.builder.build()?;
     let snapshot = runtime.snapshot()?;
     let destination = snapshot
