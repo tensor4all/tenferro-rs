@@ -240,7 +240,7 @@ fn lazy_tensor_value_tags_its_fresh_base() {
         .unwrap()
         .unwrap();
 
-    assert!(matches!(value, TensorValue::View(_)));
+    assert!(value.is_view());
     let affinity = match value.tensor_read() {
         TensorRead::Tensor(tensor) => tensor.placement().cpu_affinity,
         TensorRead::View(view) => match view {

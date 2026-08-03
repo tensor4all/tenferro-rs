@@ -8,7 +8,7 @@ use std::thread;
 
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, Placement, Tensor, TensorOwnedView, TensorValue, TypedTensor,
+    HostWriteGuard, Placement, Tensor, TensorValue, TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -283,7 +283,7 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
     let handle = submit_with_spawner(
         &runtime,
         &program,
-        ExecutionInputs::new(vec![input.duplicate()?]),
+        ExecutionInputs::new(vec![input.duplicate()?])?,
         &spawner,
     )?;
     started.wait();
@@ -390,7 +390,7 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
     }));
     let base: Tensor =
         TypedTensor::<f64>::from_buffer_col_major(vec![4], buffer, Placement::default())?.into();
-    let view = TensorOwnedView::from_parts(Arc::new(base), vec![2], vec![2], 0)?;
+    let view = TensorValue::from_parts(base, vec![2], vec![2], 0)?;
     let program = crate::exec::ExecProgram {
         instructions: Vec::new(),
         input_slots: vec![0],

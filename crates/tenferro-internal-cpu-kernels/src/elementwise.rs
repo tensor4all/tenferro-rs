@@ -1,7 +1,6 @@
 use std::mem::{size_of_val, MaybeUninit};
 use std::ops::{Add, Div, Mul, Neg, Rem as StdRem, Sub};
 use std::ptr::NonNull;
-use std::sync::Arc;
 
 use num_complex::Complex;
 use num_traits::{One, Zero};
@@ -19,8 +18,8 @@ use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionOp, ElementwiseFusionPlan,
 };
 use tenferro_tensor::{
-    col_major_strides, CompareDir, DType, Tensor, TensorOwnedView, TensorRank, TensorRead,
-    TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    col_major_strides, CompareDir, DType, Tensor, TensorRank, TensorRead, TensorScalar,
+    TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
@@ -2046,12 +2045,7 @@ fn lazy_outer_product_value(
     shape: Vec<usize>,
     strides: Vec<isize>,
 ) -> crate::Result<TensorValue> {
-    Ok(TensorValue::View(TensorOwnedView::from_parts(
-        Arc::new(tensor),
-        shape,
-        strides,
-        0,
-    )?))
+    TensorValue::from_parts(tensor, shape, strides, 0)
 }
 
 fn try_lazy_outer_product_with_pool<T>(

@@ -1542,7 +1542,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical f32 outer product should stay lazy");
-    assert!(matches!(value_f32, TensorValue::View(_)));
+    assert!(value_f32.is_view());
     assert_eq!(
         crate::materialize_tensor_read(&mut buffers, "test", value_f32.tensor_read())
             .unwrap()
@@ -1565,7 +1565,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical i32 outer product should stay lazy");
-    assert!(matches!(value_i32, TensorValue::View(_)));
+    assert!(value_i32.is_view());
 
     let lhs_i64_data = [1_i64, 2, 3, 4, 5, 6];
     let rhs_i64_data = [2_i64, 3, 4, 5];
@@ -1582,7 +1582,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical i64 outer product should stay lazy");
-    assert!(matches!(value_i64, TensorValue::View(_)));
+    assert!(value_i64.is_view());
 
     let lhs_c32_data = [
         c32(1.0, 0.0),
@@ -1606,7 +1606,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical c32 outer product should stay lazy");
-    assert!(matches!(value_c32, TensorValue::View(_)));
+    assert!(value_c32.is_view());
 
     let lhs_c64_data = [
         c64(1.0, 0.0),
@@ -1630,7 +1630,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical c64 outer product should stay lazy");
-    assert!(matches!(value_c64, TensorValue::View(_)));
+    assert!(value_c64.is_view());
 
     let same_shape_i64_lhs =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![2, 3]).unwrap());
@@ -1647,7 +1647,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("same-shape multiply should materialize");
-    assert!(matches!(materialized, TensorValue::Tensor(_)));
+    assert!(materialized.as_tensor().is_some());
     assert_eq!(
         crate::materialize_tensor_read(&mut buffers, "test", materialized.tensor_read())
             .unwrap()

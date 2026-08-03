@@ -6,9 +6,9 @@ use crate::types::{
     col_major_strides, flat_to_multi, AllocationDomainId, AllocationId, BackendBuffer, Buffer,
     BufferHandle, CpuDomainId, DType, DeviceId, DeviceKind, GpuBackendKind, HostAccessError,
     HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor,
-    TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead,
-    TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
+    TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorRank, TensorRead, TensorScalar,
+    TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, TypedTensorWrite,
 };
 use crate::{
     Error, ErrorKind, ShapeMismatch, ShapeVec, SliceConfig, ValidationError, ValidationKind,
@@ -286,7 +286,7 @@ fn tensor_value_keeps_owned_transpose_as_view() {
     let tensor = Arc::new(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap(),
     );
-    let value = TensorValue::from_tensor_arc(tensor);
+    let value = TensorValue::from_tensor((*tensor).duplicate().unwrap());
     let transposed = value.transpose_view([1, 0]).unwrap();
 
     assert_eq!(transposed.shape(), &[3, 2]);
@@ -301,7 +301,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     let base = Arc::new(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
-    let owned = TensorOwnedView::from_tensor(Arc::clone(&base));
+    let owned =
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![2, 3], vec![1, 2], 0).unwrap();
 
     assert_eq!(owned.dtype(), DType::F64);
     assert_eq!(owned.shape(), &[2, 3]);
@@ -311,13 +312,10 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         TensorView::F64(view) => assert_eq!(view.get(&[1, 2]), Some(&6.0)),
         other => panic!("expected f64 view, got {other:?}"),
     }
-    match owned.tensor_read() {
-        TensorRead::View(TensorView::F64(view)) => assert_eq!(view.shape(), &[2, 3]),
-        other => panic!("owned view should expose TensorRead::View, got {other:?}"),
-    }
+    assert!(matches!(owned.tensor_read(), TensorRead::Tensor(_)));
 
     let explicit =
-        TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
     assert_eq!(explicit.shape(), &[3, 2]);
     assert_eq!(explicit.strides(), &[2, 1]);
 
@@ -344,7 +342,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         other => panic!("expected f64 view, got {other:?}"),
     }
 
-    let vector = TensorOwnedView::from_parts(Arc::clone(&base), vec![2], vec![1], 0).unwrap();
+    let vector =
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![2], vec![1], 0).unwrap();
     let broadcast = vector.broadcast_in_dim_view([2, 3], [0]).unwrap();
     assert_eq!(broadcast.shape(), &[2, 3]);
     assert_eq!(broadcast.strides(), &[1, 0]);
@@ -375,14 +374,14 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         ));
     }
 
-    let value = TensorValue::from_tensor_arc(Arc::clone(&base));
-    assert!(Arc::ptr_eq(value.as_tensor_arc().unwrap(), &base));
+    let value = TensorValue::from_tensor((*base).duplicate().unwrap());
+    assert!(value.as_tensor().is_some());
     assert_eq!(value.dtype(), DType::F64);
     assert_eq!(value.shape(), &[2, 3]);
     assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
 
     let view_value = value.transpose_view([1, 0]).unwrap();
-    assert!(view_value.as_tensor_arc().is_none());
+    assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.dtype(), DType::F64);
     assert_eq!(view_value.shape(), &[3, 2]);
     let original_order = view_value.transpose_view([1, 0]).unwrap();

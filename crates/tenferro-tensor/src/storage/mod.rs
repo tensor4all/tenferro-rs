@@ -16,9 +16,8 @@ mod root;
 #[allow(dead_code)]
 mod span;
 
-pub(crate) use group::{
-    AllocationGroup, DescriptorSlot, GroupError, GroupReadView, GroupWriteView,
-};
+pub use group::{AllocationGroup, DescriptorSlot, GroupError};
+pub(crate) use group::{GroupReadView, GroupWriteView};
 
 #[cfg(test)]
 pub(crate) use diagnostics::{

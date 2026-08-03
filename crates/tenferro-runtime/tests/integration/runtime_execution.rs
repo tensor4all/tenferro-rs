@@ -3673,7 +3673,7 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
     let submit_error = runtime
-        .submit(&program, ExecutionInputs::new(vec![input.duplicate()?]))
+        .submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)
         .unwrap_err();
     let submit_prepare_error = submit_error
         .source()
@@ -3706,7 +3706,7 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
     let input_placement = input.placement().clone();
 
     let error = runtime
-        .submit(&program, ExecutionInputs::new(vec![input]))
+        .submit(&program, ExecutionInputs::new(vec![input])?)
         .unwrap_err();
 
     let prepare_error = error
@@ -3734,7 +3734,7 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let handle = runtime.submit(&program, ExecutionInputs::new(vec![input.duplicate()?]))?;
+    let handle = runtime.submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)?;
     let output = match handle.wait()? {
         tenferro_runtime::ExecutionOutcome::Completed(output) => output,
         other => panic!("unexpected submission outcome: {other:?}"),

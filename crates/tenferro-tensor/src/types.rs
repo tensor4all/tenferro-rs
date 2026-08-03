@@ -2950,58 +2950,44 @@ pub enum TensorWrite<'a> {
     View(TensorViewMut<'a>),
 }
 
-/// Owned lazy tensor view over a shared base tensor.
+/// The single physical owner retained by an owned tensor value.
+#[derive(Debug)]
+struct TensorOwnerRecord {
+    tensor: Tensor,
+}
+
+/// Owned tensor value with a compact owner and metadata-only layout.
 ///
-/// This stores only ownership of the base allocation plus logical layout
-/// metadata. Borrow it as [`TensorRead`] and materialize it through an active
-/// backend session when compact storage is required.
+/// Cloning this value clones only the immutable owner record handle. Use
+/// [`TensorValue::duplicate`] when a second physical owner is required.
 #[derive(Clone, Debug)]
-pub struct TensorOwnedView {
-    base: Arc<Tensor>,
+pub struct TensorValue {
+    owner: Arc<TensorOwnerRecord>,
     layout: TensorLayout<DynRank>,
 }
 
-/// Owned tensor value that can be compact or a lazy view.
-///
-/// `TensorValue` is the owned counterpart to [`TensorRead`]. It is suitable for
-/// storing eager results that should remain lazy until an operation actually
-/// requires compact materialized storage.
-#[derive(Clone, Debug)]
-pub enum TensorValue {
-    Tensor(Arc<Tensor>),
-    View(TensorOwnedView),
-}
-
-impl TensorOwnedView {
-    /// Explicitly duplicate the backing owner and retain this logical layout.
+impl TensorValue {
+    /// Explicitly duplicate the physical owner represented by this value.
     pub fn duplicate(&self) -> crate::Result<Self> {
-        let base = self.base.as_ref().duplicate()?;
+        let tensor = self.owner.tensor.duplicate()?;
         Self::from_parts(
-            Arc::new(base),
+            tensor,
             self.shape().to_vec(),
             self.strides().to_vec(),
             self.offset(),
         )
     }
 
-    /// Create an owned view preserving the base tensor's current layout.
-    pub fn from_tensor(base: Arc<Tensor>) -> Self {
-        let layout = tensor_layout(base.as_ref());
-        Self { base, layout }
+    pub fn from_tensor(tensor: Tensor) -> Self {
+        let layout = tensor_layout(&tensor);
+        Self {
+            owner: Arc::new(TensorOwnerRecord { tensor }),
+            layout,
+        }
     }
 
-    /// Create an owned view with explicit layout metadata.
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
-    /// `strides` have different ranks,
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// layout exceeds the base tensor buffer, or
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
-    /// arithmetic overflow.
     pub fn from_parts(
-        base: Arc<Tensor>,
+        tensor: Tensor,
         shape: Vec<usize>,
         strides: Vec<isize>,
         offset: isize,
@@ -3010,14 +2996,43 @@ impl TensorOwnedView {
             shape.into(),
             strides.into(),
             offset,
-            tensor_buffer_len(&base),
+            tensor_buffer_len(&tensor),
         )
-        .map_err(|err| tensor_layout_error("TensorOwnedView::from_parts", err))?;
-        Ok(Self { base, layout })
+        .map_err(|err| tensor_layout_error("TensorValue::from_parts", err))?;
+        Ok(Self {
+            owner: Arc::new(TensorOwnerRecord { tensor }),
+            layout,
+        })
+    }
+
+    /// Consume an unshared compact value and return its physical owner.
+    pub fn into_tensor(self) -> crate::Result<Tensor> {
+        if self.layout != tensor_layout(&self.owner.tensor) {
+            return Err(crate::Error::unsupported(
+                "TensorValue::into_tensor",
+                "a metadata-only view has no compact tensor owner",
+            ));
+        }
+        Arc::try_unwrap(self.owner)
+            .map(|record| record.tensor)
+            .map_err(|_| {
+                crate::Error::runtime_state(
+                    "TensorValue::into_tensor",
+                    "the tensor owner is retained by another value",
+                )
+            })
+    }
+
+    pub fn as_tensor(&self) -> Option<&Tensor> {
+        (self.layout == tensor_layout(&self.owner.tensor)).then_some(&self.owner.tensor)
+    }
+
+    pub fn is_view(&self) -> bool {
+        self.as_tensor().is_none()
     }
 
     pub fn dtype(&self) -> DType {
-        self.base.dtype()
+        self.owner.tensor.dtype()
     }
 
     pub fn shape(&self) -> &[usize] {
@@ -3033,218 +3048,13 @@ impl TensorOwnedView {
     }
 
     pub fn tensor_view(&self) -> TensorView<'_> {
-        tensor_view_with_layout(self.base.as_ref(), self.layout.clone())
+        tensor_view_with_layout(&self.owner.tensor, self.layout.clone())
     }
 
     pub fn tensor_read(&self) -> TensorRead<'_> {
-        TensorRead::from_view(self.tensor_view())
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
-    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
-    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
-    /// not a valid permutation of the view rank.
-    pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
-        let layout = self
-            .layout
-            .transpose_view(axes)
-            .map_err(|err| tensor_layout_error("TensorOwnedView::transpose_view", err))?;
-        Ok(Self {
-            base: Arc::clone(&self.base),
-            layout,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
-    /// the source is not compact column-major,
-    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
-    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
-    /// records the counts) when element counts differ,
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
-    /// arithmetic overflow, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// reshaped view exceeds the base buffer.
-    pub fn reshape_view(
-        &self,
-        shape: impl tenferro_tensor_core::IntoShapeVec,
-    ) -> crate::Result<Self> {
-        let shape = shape.into_shape_vec();
-        let layout = reshape_layout_dyn(
-            &self.layout,
-            &shape,
-            tensor_buffer_len(&self.base),
-            "TensorOwnedView::reshape_view",
-        )?;
-        Ok(Self {
-            base: Arc::clone(&self.base),
-            layout,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a slice
-    /// vector does not match the view rank,
-    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when a bound
-    /// or stride cannot be represented or is invalid,
-    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
-    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for slice
-    /// parameters, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
-    /// for slice arithmetic overflow, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// result exceeds the base buffer.
-    pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
-        let op = "TensorOwnedView::slice_view";
-        if config.starts.len() != self.shape().len() {
-            return Err(crate::Error::validation(
-                op,
-                ValidationError::RankMismatch {
-                    expected: self.shape().len(),
-                    actual: config.starts.len(),
-                },
-            ));
-        }
-        if config.limits.len() != self.shape().len() {
-            return Err(crate::Error::validation(
-                op,
-                ValidationError::RankMismatch {
-                    expected: self.shape().len(),
-                    actual: config.limits.len(),
-                },
-            ));
-        }
-        if config.strides.len() != self.shape().len() {
-            return Err(crate::Error::validation(
-                op,
-                ValidationError::RankMismatch {
-                    expected: self.shape().len(),
-                    actual: config.strides.len(),
-                },
-            ));
-        }
-
-        let mut slices = Vec::with_capacity(self.shape().len());
-        for ((&start, &limit), &stride) in config
-            .starts
-            .iter()
-            .zip(config.limits.iter())
-            .zip(config.strides.iter())
-        {
-            let start = isize::try_from(start).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "slice start",
-                    format!("slice start {start} does not fit in isize"),
-                )
-            })?;
-            let limit = isize::try_from(limit).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "slice limit",
-                    format!("slice limit {limit} does not fit in isize"),
-                )
-            })?;
-            let stride = isize::try_from(stride).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "slice stride",
-                    format!("slice stride {stride} does not fit in isize"),
-                )
-            })?;
-            slices.push(StridedSliceSpec::new(start, Some(limit), stride));
-        }
-
-        let specs = core_slice_specs(&slices, self.shape(), op)?;
-        let layout = self
-            .layout
-            .slice_view(&specs, tensor_buffer_len(&self.base))
-            .map_err(|err| tensor_layout_error(op, err))?;
-        Ok(Self {
-            base: Arc::clone(&self.base),
-            layout,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`],
-    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
-    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] for invalid
-    /// dimension mappings,
-    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] for
-    /// incompatible extents,
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// result exceeds the base buffer, or
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
-    /// arithmetic overflow.
-    pub fn broadcast_in_dim_view(
-        &self,
-        shape: impl tenferro_tensor_core::IntoShapeVec,
-        dims: impl AsRef<[usize]>,
-    ) -> crate::Result<Self> {
-        let shape = shape.into_shape_vec();
-        let layout = self
-            .layout
-            .broadcast_in_dim_view::<DynRank>(shape, dims, tensor_buffer_len(&self.base))
-            .map_err(|err| tensor_layout_error("TensorOwnedView::broadcast_in_dim_view", err))?;
-        Ok(Self {
-            base: Arc::clone(&self.base),
-            layout,
-        })
-    }
-}
-
-impl TensorValue {
-    /// Explicitly duplicate the physical owner represented by this value.
-    pub fn duplicate(&self) -> crate::Result<Self> {
-        match self {
-            Self::Tensor(tensor) => tensor.as_ref().duplicate().map(Self::from_tensor),
-            Self::View(view) => view.duplicate().map(Self::View),
-        }
-    }
-
-    pub fn from_tensor(tensor: Tensor) -> Self {
-        Self::Tensor(Arc::new(tensor))
-    }
-
-    pub fn from_tensor_arc(tensor: Arc<Tensor>) -> Self {
-        Self::Tensor(tensor)
-    }
-
-    pub fn as_tensor_arc(&self) -> Option<&Arc<Tensor>> {
-        match self {
-            Self::Tensor(tensor) => Some(tensor),
-            Self::View(_) => None,
-        }
-    }
-
-    pub fn dtype(&self) -> DType {
-        match self {
-            Self::Tensor(tensor) => tensor.dtype(),
-            Self::View(view) => view.dtype(),
-        }
-    }
-
-    pub fn shape(&self) -> &[usize] {
-        match self {
-            Self::Tensor(tensor) => tensor.shape(),
-            Self::View(view) => view.shape(),
-        }
-    }
-
-    pub fn tensor_read(&self) -> TensorRead<'_> {
-        match self {
-            Self::Tensor(tensor) => TensorRead::from_tensor(tensor.as_ref()),
-            Self::View(view) => view.tensor_read(),
-        }
+        self.as_tensor()
+            .map(TensorRead::from_tensor)
+            .unwrap_or_else(|| TensorRead::from_view(self.tensor_view()))
     }
 
     /// # Errors
@@ -3255,12 +3065,14 @@ impl TensorValue {
     /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
     /// not a valid permutation of the value rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
-        match self {
-            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .transpose_view(axes)
-                .map(Self::View),
-            Self::View(view) => view.transpose_view(axes).map(Self::View),
-        }
+        let layout = self
+            .layout
+            .transpose_view(axes)
+            .map_err(|err| tensor_layout_error("TensorValue::transpose_view", err))?;
+        Ok(Self {
+            owner: Arc::clone(&self.owner),
+            layout,
+        })
     }
 
     /// # Errors
@@ -3280,12 +3092,16 @@ impl TensorValue {
         shape: impl tenferro_tensor_core::IntoShapeVec,
     ) -> crate::Result<Self> {
         let shape = shape.into_shape_vec();
-        match self {
-            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .reshape_view(shape.clone())
-                .map(Self::View),
-            Self::View(view) => view.reshape_view(shape).map(Self::View),
-        }
+        let layout = reshape_layout_dyn(
+            &self.layout,
+            &shape,
+            tensor_buffer_len(&self.owner.tensor),
+            "TensorValue::reshape_view",
+        )?;
+        Ok(Self {
+            owner: Arc::clone(&self.owner),
+            layout,
+        })
     }
 
     /// # Errors
@@ -3302,12 +3118,58 @@ impl TensorValue {
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// result exceeds the backing buffer.
     pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
-        match self {
-            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .slice_view(config)
-                .map(Self::View),
-            Self::View(view) => view.slice_view(config).map(Self::View),
+        let op = "TensorValue::slice_view";
+        if config.starts.len() != self.shape().len()
+            || config.limits.len() != self.shape().len()
+            || config.strides.len() != self.shape().len()
+        {
+            return Err(crate::Error::validation(
+                op,
+                ValidationError::RankMismatch {
+                    expected: self.shape().len(),
+                    actual: config.starts.len(),
+                },
+            ));
         }
+        let mut slices = Vec::with_capacity(self.shape().len());
+        for ((&start, &limit), &stride) in config
+            .starts
+            .iter()
+            .zip(config.limits.iter())
+            .zip(config.strides.iter())
+        {
+            let start = isize::try_from(start).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice start",
+                    "slice start does not fit in isize",
+                )
+            })?;
+            let limit = isize::try_from(limit).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice limit",
+                    "slice limit does not fit in isize",
+                )
+            })?;
+            let stride = isize::try_from(stride).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice stride",
+                    "slice stride does not fit in isize",
+                )
+            })?;
+            slices.push(StridedSliceSpec::new(start, Some(limit), stride));
+        }
+        let specs = core_slice_specs(&slices, self.shape(), op)?;
+        let layout = self
+            .layout
+            .slice_view(&specs, tensor_buffer_len(&self.owner.tensor))
+            .map_err(|err| tensor_layout_error(op, err))?;
+        Ok(Self {
+            owner: Arc::clone(&self.owner),
+            layout,
+        })
     }
 
     /// # Errors
@@ -3329,13 +3191,14 @@ impl TensorValue {
         dims: impl AsRef<[usize]>,
     ) -> crate::Result<Self> {
         let shape = shape.into_shape_vec();
-        let dims = dims.as_ref();
-        match self {
-            Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .broadcast_in_dim_view(shape.clone(), dims)
-                .map(Self::View),
-            Self::View(view) => view.broadcast_in_dim_view(shape, dims).map(Self::View),
-        }
+        let layout = self
+            .layout
+            .broadcast_in_dim_view::<DynRank>(shape, dims, tensor_buffer_len(&self.owner.tensor))
+            .map_err(|err| tensor_layout_error("TensorValue::broadcast_in_dim_view", err))?;
+        Ok(Self {
+            owner: Arc::clone(&self.owner),
+            layout,
+        })
     }
 }
 
