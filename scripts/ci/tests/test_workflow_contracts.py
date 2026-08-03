@@ -362,6 +362,26 @@ class WorkflowContractTests(unittest.TestCase):
                 for match in re.finditer(r"cargo nextest archive[\s\S]{0,280}", text):
                     self.assertNotIn("--release", match.group(0))
 
+    def test_cuda_correctness_gate_excludes_a100_performance_benchmark(self) -> None:
+        benchmark = "cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark"
+        structural_tests = read(
+            "crates/tenferro-gpu/src/cubecl/tests/structural_tests.rs"
+        )
+        self.assertIn(f"fn {benchmark}()", structural_tests)
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            text = read(path)
+            cuda_tests = text[
+                text.index("      - name: Run CUDA tests from archive") :
+                text.index("      - name: Run OpenXLA PJRT E2E tests from archive")
+            ]
+            with self.subTest(path=path):
+                self.assertEqual(
+                    cuda_tests.count(f"-E 'not test({benchmark})'"), 1
+                )
+
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (
             ".github/workflows/runpod-gpu-test.yml",
