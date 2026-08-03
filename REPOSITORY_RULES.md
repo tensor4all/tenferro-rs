@@ -558,14 +558,18 @@ Tests follow implementation ownership.
   an explicit zeroed/initialized acquisition path, keep raw acquisition unsafe
   and documented for full-overwrite kernels only, and add regression coverage
   for both contracts.
-- An in-place write into a buffer reachable through `Arc` ownership requires a
-  local uniqueness proof at the write site, such as `Arc::get_mut`,
-  `Arc::try_unwrap`, `Arc::make_mut`, or an `Arc::ptr_eq` alias rejection for
-  backend buffers. The alternative is exclusive runtime ownership of the buffer
-  for its whole lifetime, such as dispatch-loop slots. Do not infer uniqueness
-  from `&mut Tensor` when backend buffers can wrap shared device allocations.
-  Add mutation-after-handoff tests when an optimization preserves aliases or
-  views that a previous implementation copied.
+- While a backend still exposes a cloneable owner-like `Arc` buffer, an
+  in-place write requires a local uniqueness proof such as `Arc::get_mut` or
+  exclusive runtime ownership for the whole operation. This rule applies to
+  that legacy owner representation, not to lifetime-only root retention.
+  Under the final storage contract, an `Arc<RootResource>` may be shared by
+  disjoint claims, read-only retained records, or retirement records; its
+  strong count is neither write authority nor a reason to reject an otherwise
+  valid write. Write authority comes only from provenance-carrying
+  `StorageMut` derived from an exclusive Rust borrow (or a fresh output), with
+  checked span and injectivity proofs. Add mutation-after-handoff and disjoint-
+  claim tests where an optimization preserves aliases or views that a previous
+  implementation copied.
 
 ## Complexity Budget
 
