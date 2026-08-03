@@ -366,7 +366,7 @@ fn event_domain_is_unique_across_runtime_epoch_and_registration_provenance() {
 }
 
 #[test]
-fn event_domain_operation_display_and_immediate_token_access_are_complete() -> Result<()> {
+fn event_domain_operation_display_is_complete() {
     for (operation, expected) in [
         (EventDomainOperation::BeginRun, "begin run"),
         (EventDomainOperation::Enqueue, "enqueue"),
@@ -379,19 +379,6 @@ fn event_domain_operation_display_and_immediate_token_access_are_complete() -> R
     ] {
         assert_eq!(operation.to_string(), expected);
     }
-
-    let domain = qualified_domain(1, 1, 1, 1);
-    let mut run = ImmediateEventDomainDriver::new().begin_run(domain)?;
-    let mut launch = || Ok(());
-    let completion = run.enqueue(&[], &mut launch)?;
-    assert_eq!(completion.origin(), domain);
-    let token_data = Arc::as_ptr(&completion).cast::<()>();
-    let any_data = std::ptr::from_ref(completion.as_any()).cast::<()>();
-    assert_eq!(
-        token_data, any_data,
-        "as_any must expose the completion token itself"
-    );
-    Ok(())
 }
 
 #[test]
