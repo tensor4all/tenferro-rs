@@ -1345,32 +1345,17 @@ values (#1555, "Disjoint views and allocation groups"; #1561).
 
 ```rust
 pub struct AllocationGroup {
-    allocations: Vec<OwnedStorage>,   // private: each owned span exactly once
-    values: GenerationalDescriptors,  // private: interpretation + slot
+    allocations: Vec<OwnedStorage>, // private: one owner/claim per span
+    descriptors: Vec<Option<DescriptorRecord>>, // private, group-local table
 }
 
-pub struct TensorDescriptor {
-    slot: AllocationSlot,             // index into `allocations`
+pub struct DescriptorSlot(u32); // opaque; meaningful only under its group borrow
+
+struct DescriptorRecord {
+    allocation: AllocationSlot,       // index into `allocations`
     dtype: DType,
     layout: TensorLayout,
     placement: Placement,
-}
-
-pub struct ValueId {
-    group: GroupId,
-    slot: u32,
-    generation: u32,
-}
-
-struct GenerationalDescriptors {
-    group: GroupId,
-    slots: SlotMap<DescriptorSlot>,
-}
-
-struct DescriptorSlot {
-    generation: u32,
-    descriptor: Option<TensorDescriptor>,
-    roots: DescriptorRoots, // handles, tape, checkpoint, execution
 }
 ```
 
@@ -1380,49 +1365,58 @@ Construction preconditions (safe constructors):
   move semantics, and overlapping owner spans for one key are rejected;
 - every descriptor is validated against its slot's span (G1 revalidation
   rules) at construction;
-- descriptors may alias freely, including exact duplicates.
-- A `ValueId` is stable only while its descriptor slot and generation are
-  live. Removing a descriptor tombstones the slot; reuse increments the
-  generation. Stale IDs fail with a structured error and can never resolve
-  to a later value. The group component prevents an ID from resolving in a
-  different group even when slot and generation happen to match. Slot
-  indices, vector addresses, and provider handles are not public identity.
-- `GroupId` is opaque, non-forgeable outside the registry, and is never
-  reused while a stale `ValueId` could exist. Exhaustion is a structured
-  construction error, never wraparound. Group identity is descriptor-table
-  identity only and cannot authorize allocation access.
-- `GenerationalDescriptors` is the sole authoritative descriptor-liveness
-  registry. Root registration/release and descriptor lookup are atomic with
-  respect to slot tombstoning. G2 extraction and G7 handle operations consult
-  this registry; no side table or provider reference count may override it.
+- descriptors may alias freely, including exact duplicates;
+- an occupied slot is never silently rebound. Removing a descriptor leaves
+  its table entry vacant; later insertion may append a new entry and is not
+  required to fill vacant entries;
+- `DescriptorSlot` is only a local lookup key. It carries no allocation,
+  root, provider, or write authority, and it is meaningful only when resolved
+  through a borrow of the group that owns the table;
+- physical lifetime comes from the `OwnedStorage` claims and their
+  `Arc<RootResource>` roots (G1). Mutation and extraction require the
+  exclusive group borrow or an explicitly transferred disjoint claim;
+- descriptor records are ordinary group-owned metadata. No out-of-band
+  descriptor liveness roots or cross-group identity participate in access or
+  reclamation.
 
 ### Operation contracts
 
 ```rust
-fn view(&self, id: ValueId) -> Result<TensorView<'_>, GroupError>;
-fn view_mut(&mut self, id: ValueId) -> Result<TensorViewMut<'_>, GroupError>;
-fn split_mut(&mut self, ids: &[ValueId])
+fn view(&self, slot: DescriptorSlot) -> Result<TensorView<'_>, GroupError>;
+fn view_mut(&mut self, slot: DescriptorSlot)
+    -> Result<TensorViewMut<'_>, GroupError>;
+fn split_mut(&mut self, slots: &[DescriptorSlot])
     -> Result<Vec<TensorViewMut<'_>>, DisjointViewError>;
-fn try_extract(&mut self, id: ValueId) -> Result<Tensor, ExtractError>;
-fn into_tensor(self, id: ValueId) -> Result<Tensor, (Self, ExtractError)>;
+fn try_extract(&mut self, slot: DescriptorSlot) -> Result<Tensor, ExtractError>;
+fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError)>;
 ```
 
+- Every operation resolves its `DescriptorSlot` through the borrowed group:
+  a shared receiver yields a borrowed descriptor record and read view, while
+  an exclusive receiver yields the write or extraction path. A slot alone
+  cannot expose storage or a provider binding.
 - `view` borrows the group shared; any number of aliasing read views may
-  coexist.
-- `view_mut` exclusively borrows the whole group; one at a time.
-- `split_mut` returns N simultaneous mutable views only after the central
-  disjointness proof (below). Children are non-cloneable and hold the
-  exclusive borrow of the group; the root is inaccessible while any child
-  lives.
-- `try_extract` removes descriptor `id` and moves its allocation out as a
-  standalone owner only when no remaining descriptor or registered external
-  descriptor handle references the same allocation slot. On failure the
-  group is unchanged and the error carries a typed reason. Removing the
-  descriptor invalidates its generation. There is no copy or materialization
-  fallback (I4).
-- `into_tensor` consumes the group, selecting one descriptor and explicitly
-  discarding the rest; it never duplicates ownership to preserve them. On
-  failure it returns the unchanged group.
+  coexist. The returned view is bounded by that borrow.
+- `view_mut` exclusively borrows the whole group; one mutable view exists at
+  a time. The Rust borrow is the write authority; the slot is only the record
+  selected by that borrow.
+- `split_mut` resolves all requested slots under one exclusive group borrow,
+  rejects duplicate slots, and returns N simultaneous mutable views only
+  after the central disjointness proof (below). Children are non-cloneable
+  and hold the exclusive borrow of the group; the root is inaccessible while
+  any child lives.
+- `try_extract` resolves `slot` under `&mut AllocationGroup`. It succeeds
+  only when the selected record is the sole descriptor in this group that
+  refers to its `AllocationSlot`; the record is removed and its owned
+  allocation is moved out. If another local descriptor aliases that
+  allocation, the operation returns a typed reason and leaves the group
+  unchanged. A removed entry remains vacant, and no copy or materialization
+  fallback is permitted (I4).
+- `into_tensor` consumes the group, resolves one local slot, and explicitly
+  discards all other descriptor records. It never duplicates ownership to
+  preserve them. On failure it returns the unchanged group.
+- Persistent AD handle behavior is outside G2 and is specified by G7; these
+  operations do not consult AD handle bookkeeping.
 
 ### Central disjointness proof
 
@@ -1447,11 +1441,11 @@ unsupported provider span. Every error leaves the group unchanged.
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
 | construct group | owning (consumes owners) | none | none | owners returned to caller or dropped exactly once, per constructor contract | no partially observable group | owners' G1 rules |
-| `view` | shared | group, guard-free descriptor view | none (host access goes through G1 guards) | error, group unchanged | view drop is borrow end | n/a |
-| `view_mut` | exclusive | whole group for view lifetime | none | error, group unchanged | borrow end; bytes written stay written | n/a |
-| `split_mut` | exclusive | whole group, transferred to children | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
-| `try_extract` | exclusive | none after return | none | typed reason, group unchanged | n/a | extracted owner follows G1 |
-| `into_tensor` | owning | none | none | group returned unchanged with reason | n/a | discarded owners follow G1 drop rules |
+| `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
+| `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
+| `split_mut` | exclusive | requested slots are resolved under one group borrow; children receive disjoint claims | none | structured `DisjointViewError`, group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
+| `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | removed entry stays vacant; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |
+| `into_tensor` | owning | consuming group resolves one local slot and discards other records | none | group returned unchanged with reason | unselected records and claims follow G1 drop rules | selected owner follows G1 |
 
 ## G3. Submission
 
@@ -2351,7 +2345,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 | Gate | Enforcement | Owning phases |
 |---|---|---|
 | G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
-| G2 group, splitting, extraction | N-way split cases (N=0,1,>2, empty, reverse-stride, overflow); permutation-independence property tests; group-qualified stale-generation tests; compile-fail (root access while children live); extraction counters | #1561 |
+| G2 group, splitting, extraction | N-way split cases (N=0,1,>2, empty, reverse-stride, overflow); permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters | #1561 |
 | G3 submission terminal semantics | rejection carriers return identical allocation keys; hybrid scoped identity/metadata/new-output bundles; borrowed-output extraction rejection; scoped result bounded by `'env` but not `'s`; explicit scope-exit and quarantine outcomes; cancellation/panic/detach/unobserved-error suites; compile-fail (scoped handle escape, host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
@@ -2368,8 +2362,8 @@ phase issues carry the full inventories; this index is the cross-reference.
   `docs/testing/storage-element-access-baseline.json`; P10 may compare it only
   under the compatible-environment rule above.
 - #1558 owns the root pin, non-`Clone` claim, and the single typed provider
-  bridge. #1560 owns access/retirement. #1561 owns groups and generational
-  descriptors. None waits for the public host cutover.
+  bridge. #1560 owns access/retirement. #1561 owns groups and direct borrowed
+  descriptor slots. None waits for the public host cutover.
 - #1559 and #1565 are one atomic promotion cohort. The cohort lands public
   host ownership, final detached/scoped runtime ownership, and direct AD group
   retention together.
