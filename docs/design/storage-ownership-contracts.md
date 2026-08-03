@@ -203,6 +203,17 @@ Every member obligation of an atomic cohort must make that transition in the
 same candidate; partial cohort activation is rejected. A changed artifact,
 command, ID, unit, or gate is a new obligation, not a promotion.
 
+Contract revision is distinct from promotion. `registry.revision` is a
+positive monotonic integer (the original field-less v2 registry is revision
+1). A candidate may advance it by exactly one while preserving the complete
+unit/gate/edge/cohort topology, obligation membership, and every tagged state.
+During that revision-only transition, active obligation identities remain
+immutable; only still-deferred rows may revise their gates, artifact, or
+command to reflect the reviewed implementation contract. Revision and
+promotion cannot occur in the same candidate. Once an obligation is active,
+later contract revisions cannot rewrite its evidence. This is the explicit
+design-amendment path; it is not an exception to promotion immutability.
+
 Every registered unit owns at least one required obligation. A unit is
 complete only when all of its required obligations are active and the
 candidate-bound receipt contains a successful execution result for every one

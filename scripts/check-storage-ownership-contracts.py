@@ -458,8 +458,15 @@ def _validate_registry(data: dict[str, object]) -> dict[str, object]:
     if "ownerships" in registry:
         _fail("E_OBSOLETE_OWNERSHIP_TABLE", {"table": "registry.ownerships"}, "parallel ownership table is not permitted")
     for key in registry:
-        if key not in {"gates", "units", "edges", "cohorts"}:
+        if key not in {"revision", "gates", "units", "edges", "cohorts"}:
             _fail("E_SCHEMA_UNKNOWN_TABLE", {"table": f"registry.{key}"}, "registry contains an unknown table")
+    revision = registry.get("revision", 1)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        _fail(
+            "E_PROMOTION_REGISTRY",
+            {"component": "revision"},
+            "registry revision must be a positive integer",
+        )
     values = [registry.get(key) for key in ("gates", "units", "edges", "cohorts")]
     if not all(isinstance(value, list) for value in values):
         raise ValueError("registry tables must be arrays")
@@ -500,6 +507,7 @@ def _validate_registry(data: dict[str, object]) -> dict[str, object]:
     if cohort != {"id": "cutover", "prerequisites": ["P0", "P5"], "members": ["P3", "P9"]}:
         _fail("E_COHORT_DEFINITION", {"cohort_id": "cutover"}, "cutover cohort is not canonical")
     return {
+        "revision": revision,
         "units": unit_ids,
         "gates": gate_ids,
         "edges": edges,
@@ -654,15 +662,29 @@ def _promotion_check(root: Path, data: dict[str, object], *, base_commit: str | 
     base_data = _load_toml_bytes(_git_bytes(root, base_commit, manifest_relative))
     base_registry = base_data.get("registry")
     candidate_registry = data.get("registry")
-    if base_registry != candidate_registry:
+    if not isinstance(base_registry, dict) or not isinstance(candidate_registry, dict):
+        _fail(
+            "E_PROMOTION_REGISTRY",
+            {"component": "registry"},
+            "promotion changed the canonical registry",
+        )
+    base_revision = base_registry.get("revision", 1)
+    candidate_revision = candidate_registry.get("revision", 1)
+    if not isinstance(base_revision, int) or isinstance(base_revision, bool):
+        base_revision = 1
+    if not isinstance(candidate_revision, int) or isinstance(candidate_revision, bool):
+        candidate_revision = -1
+    base_topology = {key: value for key, value in base_registry.items() if key != "revision"}
+    candidate_topology = {
+        key: value for key, value in candidate_registry.items() if key != "revision"
+    }
+    if base_topology != candidate_topology:
         components = ("units", "edges", "gates", "cohorts")
         component = next(
             (
                 key
                 for key in components
-                if not isinstance(base_registry, dict)
-                or not isinstance(candidate_registry, dict)
-                or base_registry.get(key) != candidate_registry.get(key)
+                if base_registry.get(key) != candidate_registry.get(key)
             ),
             "registry",
         )
@@ -670,6 +692,13 @@ def _promotion_check(root: Path, data: dict[str, object], *, base_commit: str | 
             "E_PROMOTION_REGISTRY",
             {"component": component},
             "promotion changed the canonical registry",
+        )
+    revision_changed = candidate_revision != base_revision
+    if revision_changed and candidate_revision != base_revision + 1:
+        _fail(
+            "E_PROMOTION_REGISTRY",
+            {"component": "revision"},
+            "contract revision must advance by exactly one",
         )
     base_rows = base_data.get("obligations")
     candidate_rows = data.get("obligations")
@@ -689,7 +718,21 @@ def _promotion_check(root: Path, data: dict[str, object], *, base_commit: str | 
             continue
         if base_state.get("kind") == ACTIVE_STATE and candidate_state.get("kind") != ACTIVE_STATE:
             _fail("E_PROMOTION_IDENTITY", {"obligation_id": str(obligation_id)}, "an active obligation cannot be deferred")
-        if any(base.get(key) != candidate.get(key) for key in immutable):
+        identity_changed = any(base.get(key) != candidate.get(key) for key in immutable)
+        if revision_changed:
+            if base_state != candidate_state:
+                _fail(
+                    "E_PROMOTION_IDENTITY",
+                    {"obligation_id": str(obligation_id)},
+                    "contract revision cannot change obligation state",
+                )
+            if base_state.get("kind") == ACTIVE_STATE and identity_changed:
+                _fail(
+                    "E_PROMOTION_IDENTITY",
+                    {"obligation_id": str(obligation_id)},
+                    "contract revision changed active obligation identity",
+                )
+        elif identity_changed:
             _fail("E_PROMOTION_IDENTITY", {"obligation_id": str(obligation_id)}, "candidate changed immutable obligation identity")
 
 

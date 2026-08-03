@@ -667,6 +667,164 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                 finally:
                     temporary.cleanup()
 
+    def test_contract_revision_may_change_only_deferred_identity(self) -> None:
+        base_manifest = _manifest_text().replace("revision = 2", "revision = 1", 1)
+        revised = base_manifest.replace("revision = 1", "revision = 2", 1)
+        revised = _replace_once(
+            revised,
+            'gates = ["G1", "G2", "G4"]\nartifact = { id = "artifact-reinterpret"',
+            'gates = ["G4"]\nartifact = { id = "artifact-reinterpret"',
+        )
+        temporary, root, base, _ = _git_repository(
+            base_manifest, _fixture_files(base_manifest)
+        )
+        try:
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                revised, encoding="utf-8"
+            )
+            _commit(root, "revise deferred contract")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base,
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            changed_active = _replace_once(
+                revised,
+                'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-ledger"',
+                'gates = ["G1"]\nartifact = { id = "artifact-ledger"',
+            )
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                changed_active, encoding="utf-8"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base,
+                    "--diagnostics-json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            _assert_error(
+                self,
+                result,
+                "E_PROMOTION_IDENTITY",
+                {"obligation_id": "p1-ledger"},
+            )
+        finally:
+            temporary.cleanup()
+
+    def test_contract_revision_must_be_single_step_and_cannot_promote(self) -> None:
+        base_manifest = _manifest_text().replace("revision = 2", "revision = 1", 1)
+        for revision in (1, 3):
+            with self.subTest(revision=revision):
+                candidate = base_manifest.replace(
+                    "revision = 1", f"revision = {revision}", 1
+                )
+                candidate = _replace_once(
+                    candidate,
+                    'gates = ["G1", "G2", "G4"]\nartifact = { id = "artifact-reinterpret"',
+                    'gates = ["G4"]\nartifact = { id = "artifact-reinterpret"',
+                )
+                temporary, root, base, _ = _git_repository(
+                    base_manifest, _fixture_files(base_manifest)
+                )
+                try:
+                    (root / "scripts/storage-ownership-contracts.toml").write_text(
+                        candidate, encoding="utf-8"
+                    )
+                    _commit(root, "invalid contract revision")
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(CHECKER),
+                            "--root",
+                            str(root),
+                            "--manifest",
+                            "scripts/storage-ownership-contracts.toml",
+                            "--base-commit",
+                            base,
+                            "--diagnostics-json",
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    _assert_error(
+                        self,
+                        result,
+                        "E_PROMOTION_REGISTRY" if revision == 3 else "E_PROMOTION_IDENTITY",
+                        {"component": "revision"} if revision == 3 else {"obligation_id": "p6-reinterpret"},
+                    )
+                finally:
+                    temporary.cleanup()
+
+        promoted = base_manifest.replace("revision = 1", "revision = 2", 1)
+        promoted = _replace_once(
+            promoted,
+            'state = { kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }',
+            'state = { kind = "active" }',
+        )
+        files = _fixture_files(promoted)
+        row = next(row for row in _manifest_rows(promoted) if row["id"] == "p0-control-plane")
+        files[row["artifact"]["path"]] = "candidate artifact\n"
+        temporary, root, base, _ = _git_repository(
+            base_manifest, _fixture_files(base_manifest)
+        )
+        try:
+            _write_files(root, files)
+            (root / "scripts/storage-ownership-contracts.toml").write_text(
+                promoted, encoding="utf-8"
+            )
+            _commit(root, "invalid mixed revision and promotion")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CHECKER),
+                    "--root",
+                    str(root),
+                    "--manifest",
+                    "scripts/storage-ownership-contracts.toml",
+                    "--base-commit",
+                    base,
+                    "--diagnostics-json",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            _assert_error(
+                self,
+                result,
+                "E_PROMOTION_IDENTITY",
+                {"obligation_id": "p0-control-plane"},
+            )
+        finally:
+            temporary.cleanup()
+
     def test_partial_cutover_cohort_is_rejected(self) -> None:
         manifest = _replace_row_state(_manifest_text(), "p3-host-owner", '{ kind = "active" }')
         files = _fixture_files(manifest)

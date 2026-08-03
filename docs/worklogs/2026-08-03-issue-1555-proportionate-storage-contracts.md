@@ -69,3 +69,14 @@ child issue body for the removed concepts above. Explicit statements that a
 mechanism is forbidden are allowed; normative requirements to implement it are
 not. Phase 13 repeats the same scan over source and live documentation and
 deletes `HANDOFF-2026-07-25-tenferro-unification6-wip.md` plus inbound links.
+
+## CI contract revision
+
+The proportional review changed evidence contracts for deferred phases, while
+the ledger checker previously treated every base/candidate comparison as an
+implementation promotion. The ledger now records `registry.revision = 2` and
+distinguishes a design-only contract revision from promotion. A revision is a
+single monotonic step, preserves the graph, membership, all states, and every
+active obligation identity, and may update only deferred evidence contracts.
+It cannot be combined with activation. This lets the design phase correct
+future obligations without weakening immutable evidence after implementation.

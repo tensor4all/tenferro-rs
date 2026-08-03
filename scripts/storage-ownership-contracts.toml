@@ -1,6 +1,7 @@
 schema = "tenferro.storage-ownership-contracts.v2"
 
 [registry]
+revision = 2
 
 [[registry.gates]]
 id = "G1"
