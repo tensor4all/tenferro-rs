@@ -195,6 +195,8 @@ impl ProviderId {
 ///
 /// The target identity is opaque to the runtime and is canonicalized by the
 /// provider. It is not [`tenferro_tensor::DeviceId`] or tensor placement data.
+/// This immutable provider/target pair is the durable identity carried by
+/// runtime snapshots, execution locations, and transfer requests.
 /// Because this value appears in structured diagnostics and debug output, it
 /// accepts nonempty ASCII graphic text (no controls, whitespace, or Unicode
 /// confusables). Providers that need byte-level or Unicode identities must
@@ -343,7 +345,11 @@ impl HardwareClassId {
 
 /// Opaque runtime-local identity assigned to one frozen engine registration.
 ///
-/// Its debug output exposes the useful ordinal but never the private issuer.
+/// The identity is part of the durable registration contract: it is preserved
+/// when the same registration is carried into a later snapshot, changes when
+/// that registration is replaced, and participates in event-domain identity.
+/// Its equality, ordering, and hashing include the private issuer and ordinal;
+/// debug output exposes only the useful ordinal.
 ///
 /// # Examples
 ///
