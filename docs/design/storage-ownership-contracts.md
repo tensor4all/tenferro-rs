@@ -1543,12 +1543,17 @@ pub enum OutputRef<'a> {
     Metadata(&'a OutputMetadata),
 }
 
+pub enum OutputExtractError {
+    InvalidOutput,
+    MetadataOutput,
+    Extract(ExtractError),
+}
+
 impl ExecutionBundle {
     pub fn output(&self, output: usize)
         -> Result<OutputRef<'_>, OutputAccessError>;
-    pub fn try_extract(&mut self, output: usize)
-        -> Result<Tensor, OutputExtractError>;
-    pub fn into_parts(self) -> (AllocationGroup, Box<[ExecutionOutput]>);
+    pub fn into_output(self, output: usize)
+        -> Result<Tensor, (Self, OutputExtractError)>;
 }
 ```
 
@@ -1558,9 +1563,11 @@ resources only after provider retirement. `ExecutionBundle::output` returns a
 borrowed tensor view or metadata reference. A tensor output slot is resolved
 in the returned group and may be an existing identity or repeated slot, or a
 slot newly inserted for a fresh allocation; neither case copies storage.
-`try_extract` delegates tensor extraction to G2, and `into_parts` consumes the
-bundle while preserving its group and output map. `Metadata` is genuinely
-storage-free.
+`into_output` consumes the entire bundle and delegates the selected tensor slot
+to G2 `into_tensor`. On success, repeated or duplicate output aliases, the
+remaining group, and the output map disappear together; no extracted-state
+flags remain. On rejection it returns the exact bundle and typed error.
+`Metadata` is genuinely storage-free.
 
 `CompletionUnproven` exposes only its typed cause and diagnostic keys; it never
 returns an owner or other owning resource. The provider-private permanent
@@ -1620,10 +1627,8 @@ pub enum ScopedOutputExtractError {
 impl<'env> ScopedExecutionBundle<'env> {
     pub fn output(&self, output: usize)
         -> Result<OutputRef<'_>, OutputAccessError>;
-    pub fn try_extract(&mut self, output: usize)
-        -> Result<Tensor, ScopedOutputExtractError>;
-    pub fn into_parts(self)
-        -> (AllocationGroup, Box<[ScopedOutput<'env>]>);
+    pub fn into_owned_output(self, output: usize)
+        -> Result<Tensor, (Self, ScopedOutputExtractError)>;
 }
 ```
 
@@ -1639,9 +1644,12 @@ Identity and repeated outputs are `Borrowed` descriptor views bounded by
 `Owned` slots. `Metadata` is storage-free. None of these paths copies or
 materializes input storage, and fresh owned outputs become observable only
 after retirement. `output` reborrows either tensor form as an immutable view.
-`try_extract` delegates `Owned` slots to G2; a `Borrowed` output returns
-`ScopedOutputExtractError::BorrowedOutput` and never copies. `into_parts`
-consumes the bundle and preserves the owned group and output map.
+`into_owned_output` consumes the whole bundle and succeeds only for an `Owned`
+slot by delegating to G2 `into_tensor`. Success discards repeated or duplicate
+owned aliases and the remaining output map together. A `Borrowed` output
+returns the exact bundle with `ScopedOutputExtractError::BorrowedOutput`; a
+metadata output returns the exact bundle with the typed metadata rejection.
+Neither rejection copies, and no extracted-state flags exist.
 
 Scoped read-only execution supports only host/CPU providers whose operation is
 synchronous through retirement. CUDA, WebGPU, Metal, and any provider that can
@@ -2401,7 +2409,7 @@ phase issues carry the full inventories; this index is the cross-reference.
 |---|---|---|
 | G1 ordering, guards, revalidation, retirement | deterministic fake-timeline transition tests; claim provenance/split/overlap and exactly-once root-deallocator tests; compile-fail (guard across consuming submit, write guard from shared); corrupt-descriptor rejection at map and enqueue; immediate-drop-after-enqueue; quarantine poisoning; Miri on host guard slices; constant resolve/map/lease/dispatch counts and no per-element abstraction work | #1560, performance evidence in #1566, providers in #1563/#1564 |
 | G2 group, splitting, extraction | construction-time invalid layout/range/storage/provider rejection and retained-metadata counters; N-way split cases (N=0,1,>2, empty, reverse-stride) proving validation counters do not increase; write injectivity checked only when its retained proof is absent; pairwise-disjointness and permutation-independence property tests; direct borrowed-slot resolution for shared/exclusive group borrows, including empty entries; structural extraction-uniqueness tests (aliased records reject, sole record moves one owner, consuming extraction discards the rest); compile-fail (root access while children live); extraction counters; map/enqueue tests assert no validation rerun | #1561 |
-| G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; output view, metadata, consuming-parts, G2 extraction, and zero-copy scoped `BorrowedOutput` cases; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
+| G3 submission terminal semantics | executable checks prove exact detached/scoped rejection recovery; host/CPU synchronous scoped acceptance and CUDA/WebGPU/Metal or asynchronous-provider rejection before admission; no borrowed work at return or unwind and no panic-catch/`Drop` safety; borrowed output-view coverage; consuming `into_output`/`into_owned_output` cases prove repeated and duplicate-output aliases plus the remaining map disappear together, failures return the exact bundle, and scoped borrowed/metadata rejection never copies; source checks reject extracted-state flags; worker/provider panic drains to typed `RetiredFailed` when completion is proven and ownerless `CompletionUnproven` otherwise; handle-detach and terminal-outcome suites; compile-fail (host guard across submit) | #1565, hardware in #1568 |
 | G4 method distribution | API-parity contract with one canonical method list; compile-fail (no `Clone` on owners/capabilities); source scan (no mutable owner projections); static-rank preservation; allocation-free O(1) view construction; release traversal and fixed-rank codegen evidence | #1557 harness, #1559, #1566 |
 | G5 raw handles, reclamation | fake backend proving internal `Arc` clones cannot write or mint owners; sealed `TensorWrite` construction and audited raw-write binder inventory proving `StorageMut` input; enqueue-failure capability recovery; retirement/quarantine tests; source scans (no shared-to-exclusive transition, no safe unleased pointer) | #1558, #1563, #1564 |
 | G6 documentation | rendered stale-language checker; doctests; checked cost-model content; runnable owner/view/view-mut traversal tutorial; tutorial-code checks; source-blind audit | #1569, #1567 |
