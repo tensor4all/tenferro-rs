@@ -190,7 +190,7 @@ fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     reset_refreshes();
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
-    let before_registration = cpu.registration_identity.clone();
+    let before_registration = cpu.registration_identity;
     let before_epoch = runtime.runtime.snapshot().unwrap().epoch();
 
     runtime

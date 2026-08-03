@@ -35,7 +35,7 @@ pub(crate) enum EagerBackend {
 enum EagerBackendRegistration {
     #[cfg(test)]
     NoEngine,
-    Install(EngineRegistration),
+    Install(Box<EngineRegistration>),
 }
 
 impl std::fmt::Debug for EagerBackend {
@@ -108,7 +108,7 @@ pub(crate) fn eager_runtime_for_backend(
         #[cfg(test)]
         EagerBackendRegistration::NoEngine => {}
         EagerBackendRegistration::Install(registration) => {
-            builder.register_engine(registration)?;
+            builder.register_engine(*registration)?;
         }
     }
     builder.build()
@@ -118,22 +118,22 @@ fn eager_engine_registration_for_backend(
     backend: &EagerBackend,
 ) -> Result<EagerBackendRegistration, RuntimeConfigError> {
     match backend {
-        EagerBackend::Cpu(backend) => Ok(EagerBackendRegistration::Install(
+        EagerBackend::Cpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
             cpu_runtime_engine_registration(backend)?,
-        )),
+        ))),
         #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
         EagerBackend::Cuda(backend) => {
             let engine_id = EngineId::new("tenferro-ad.cuda.default.v1")?;
-            Ok(EagerBackendRegistration::Install(
+            Ok(EagerBackendRegistration::Install(Box::new(
                 tenferro_gpu::cuda_runtime_engine_registration(backend, engine_id)?,
-            ))
+            )))
         }
         #[cfg(feature = "webgpu")]
-        EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(
+        EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
             tenferro_gpu::webgpu_runtime_engine_registration(backend)?,
-        )),
+        ))),
     }
 }
 
