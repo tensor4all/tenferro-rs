@@ -15,6 +15,8 @@ fn key(domain: AllocationDomainId, local: u64) -> AllocationKey {
 #[test]
 fn checked_ranges_reject_overflow_before_alignment() {
     let allocation_key = key(AllocationDomainId::fresh(), 1);
+    let same_local_other_domain = key(AllocationDomainId::fresh(), 1);
+    assert_ne!(allocation_key, same_local_other_domain);
 
     assert_eq!(
         RootResourceExtent::try_new(allocation_key, usize::MAX, 1, 0),
@@ -31,6 +33,29 @@ fn checked_ranges_reject_overflow_before_alignment() {
 }
 
 #[test]
+fn byte_ranges_expose_checked_bounds_and_overlap_only_when_positive() {
+    let left = ByteRange::new(8, 16);
+    let touching = ByteRange::new(24, 8);
+    let overlapping = ByteRange::new(16, 16);
+    let empty = ByteRange::new(24, 0);
+
+    assert_eq!(left.byte_offset(), 8);
+    assert_eq!(left.byte_len(), 16);
+    assert_eq!(left.checked_end(), Ok(24));
+    assert!(!left.is_empty());
+    assert_eq!(left.overlaps(touching), Ok(false));
+    assert_eq!(left.overlaps(overlapping), Ok(true));
+    assert_eq!(left.overlaps(empty), Ok(false));
+    assert_eq!(
+        ByteRange::new(usize::MAX, 1).checked_end(),
+        Err(SpanValidationError::RangeOverflow {
+            byte_offset: usize::MAX,
+            byte_len: 1,
+        })
+    );
+}
+
+#[test]
 fn relative_range_overflow_precedes_malformed_root_alignment() {
     let allocation_key = key(AllocationDomainId::fresh(), 2);
     let malformed = RootResourceExtent::test_corrupt(
@@ -42,6 +67,34 @@ fn relative_range_overflow_precedes_malformed_root_alignment() {
 
     assert_eq!(
         malformed.validate_relative_range(ByteRange::new(usize::MAX, 1)),
+        Err(SpanValidationError::RangeOverflow {
+            byte_offset: usize::MAX,
+            byte_len: 1,
+        })
+    );
+}
+
+#[test]
+fn relative_offset_and_child_end_overflow_precede_containment_and_alignment() {
+    let allocation_key = key(AllocationDomainId::fresh(), 7);
+    let near_limit = RootResourceExtent::try_new(allocation_key, usize::MAX, 0, 1)
+        .expect("zero-length root at usize::MAX is representable");
+    assert_eq!(
+        near_limit.validate_relative_range(ByteRange::new(1, 0)),
+        Err(SpanValidationError::OffsetOverflow {
+            base_byte_offset: usize::MAX,
+            relative_byte_offset: 1,
+        })
+    );
+
+    let malformed = RootResourceExtent::test_corrupt(
+        allocation_key,
+        usize::MAX - 8,
+        8,
+        NonZeroUsize::new(3).expect("nonzero test alignment"),
+    );
+    assert_eq!(
+        malformed.validate_relative_range(ByteRange::new(8, 1)),
         Err(SpanValidationError::RangeOverflow {
             byte_offset: usize::MAX,
             byte_len: 1,
@@ -74,6 +127,13 @@ fn root_bound_spans_retain_exact_root_provenance() {
             actual: second.root_resource(),
         })
     );
+
+    assert_eq!(extent.key().domain(), allocation_key.domain());
+    assert_eq!(extent.key().local(), allocation_key.local());
+    assert_eq!(extent.byte_offset(), 0);
+    assert_eq!(extent.byte_len(), 64);
+    assert_eq!(extent.guaranteed_alignment().get(), 8);
+    assert_ne!(first.root_resource().get().get(), 0);
 }
 
 #[test]
@@ -102,6 +162,20 @@ fn child_alignment_is_conservative_and_empty_spans_do_not_overlap() {
     );
     assert_eq!(empty.overlaps(&left), Ok(false));
     assert_eq!(empty.overlaps(&right), Ok(false));
+    assert_eq!(left.byte_offset(), 0);
+    assert_eq!(left.byte_len(), 32);
+    assert!(!left.is_empty());
+    assert_eq!(left.overlaps(&right), Ok(false));
+    assert_eq!(left.contains(&empty), Ok(true));
+    assert_eq!(left.contains(&right), Ok(false));
+    assert_eq!(right.contains(&left), Ok(false));
+
+    let root_again = RootResourceIdentity::try_new(extent).expect("second root identity");
+    let same_range_other_root = root_again
+        .bind_relative_range(ByteRange::new(0, 32))
+        .expect("same range under another root");
+    assert_eq!(left.overlaps(&same_range_other_root), Ok(false));
+    assert_eq!(left.contains(&same_range_other_root), Ok(false));
 }
 
 #[test]
@@ -159,10 +233,23 @@ fn operation_context_retains_requested_metadata_and_bound_resolution() {
     );
 
     assert_eq!(error.context().requested(), requested);
+    assert_eq!(
+        error.context().operation(),
+        StorageOperation::ImportUniqueRoot
+    );
     assert_eq!(error.context().resolved_span(), Some(span));
     assert_eq!(
         error.source().to_string(),
         "requested span lies outside the root resource extent"
     );
     assert!(error.to_string().contains("import_unique_root"));
+
+    let unresolved = StorageOperationContext::unresolved(
+        StorageOperation::ClaimSplit,
+        RequestedIdentity::Raw(ByteRange::new(0, 0)),
+    );
+    assert_eq!(unresolved.operation(), StorageOperation::ClaimSplit);
+    assert_eq!(unresolved.resolved_span(), None);
+    assert!(unresolved.to_string().contains("unresolved"));
+    assert_eq!(StorageOperation::ClaimSplit.to_string(), "claim_split");
 }
