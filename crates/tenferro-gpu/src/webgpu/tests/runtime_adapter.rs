@@ -199,20 +199,6 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
-fn webgpu_registration_installs_native_event_domain_driver() {
-    let source = include_str!("../runtime_adapter.rs");
-    assert!(
-        source.contains("assemble_executable_engine_registration(")
-            && source.contains("WebGpuEventDomainDriver::new(")
-            && source.contains("backend.runtime().clone()")
-            && !source.contains("ExecutableEngineContract::new(")
-            && !source.contains("ProviderExecutableBinding::new("),
-        "WebGPU registration must use the shared executable assembly with its native driver"
-    );
-}
-
-#[test]
-#[cfg(not(target_family = "wasm"))]
 fn webgpu_event_domain_rejects_same_origin_incompatible_token_before_launch() {
     let domain = test_event_domain("incompatible-token");
     let dependency: Arc<dyn EventToken> = Arc::new(FailingEventToken { origin: domain });

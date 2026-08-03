@@ -707,16 +707,18 @@ workspace. All providers obey the engine-selected `ParallelMode`.
 
 ## Prepared Graphs and Common Execution
 
-`PreparedGraph` contains a common `ScheduledGraph` plus runtime-binding
+`PreparedCompiledGraph` contains a common `ScheduledGraph` plus runtime-binding
 metadata. The production CPU/runtime path currently stores this state in the
 crate-private prepared-program root. Same-storage `Operation` nodes are already
-the synchronous `Runtime::run_compiled*` execution source. The post-U3
-substrate additionally tracks per-slot execution endpoints and invokes
-registered transfer providers on the production scheduled path when a downstream
-operation uses a different endpoint. First-class `Transfer` nodes, Collective,
-cross-domain event scheduling, and full asynchronous admission remain reserved
-work. The schedule is shared by CPU, GPU, extension, transfer, and multi-device
-execution. Its nodes are conceptually:
+the synchronous `Runtime::run_compiled*` execution source. The production
+substrate also tracks per-slot execution endpoints, emits first-class
+`ScheduledTransfer` nodes for endpoint changes, and invokes the registered
+transfer provider from the scheduled path. Every operation, transfer, and
+explicit barrier carries event dependencies and executes through its event
+domain driver; cross-domain completion is bridged at the transfer node. The
+schedule is shared by CPU, GPU, extension, transfer, and multi-device
+execution. Collective nodes remain reserved until their provider and admission
+contracts are implemented. Its nodes are:
 
 ```rust
 pub enum ScheduledNode {
@@ -754,12 +756,13 @@ producing a destination-domain completion dependency; the scheduler understands
 its buffer lifetime, ordering, failure, and resource requirements. A collective
 similarly has explicit participants, ordering, event-domain behavior, and communication
 resources. Provider registries may supply their implementations, but cannot
-hide them inside an opaque extension op. The current post-U3 substrate registers
-transfer providers by endpoint pair and calls them from the scheduled execution
-loop; promoting these calls to explicit `ScheduledTransfer` nodes is
-the next scheduler step. Reserving the core collective node prevents a later
-sharding design from bypassing common scheduling and
-lifetime rules.
+hide them inside an opaque extension op. The current substrate registers
+transfer providers by endpoint pair and embeds the resolved provider in each
+`ScheduledTransfer`. The scheduler therefore owns the transfer's buffer
+lifetime, ordering, event-domain bridge, and failure handling in the same
+execution loop as operations. The core collective node is reserved until a
+collective child defines its provider, participant, and admission contracts; it
+cannot bypass common scheduling and lifetime rules.
 
 The common execution bridge is owned by `Runtime`; it is not generic over one
 `TensorBackend`. This permits a single graph to contain CPU work, GPU work,

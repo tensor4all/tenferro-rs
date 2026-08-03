@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 use super::{IdentityError, IdentityKind};
 
-/// Opaque runtime identity, created only inside the runtime in A0.
+/// Opaque identity allocated for one [`Runtime`](super::Runtime) instance.
 ///
-/// B0 supplies the public creation path.
+/// The runtime uses this value to namespace snapshots, event domains, and
+/// prepared execution. Construction and numeric access remain crate-private so
+/// callers can compare identities without manufacturing one.
 ///
 /// # Examples
 ///
@@ -22,22 +24,25 @@ use super::{IdentityError, IdentityKind};
 pub struct RuntimeId(NonZeroU64);
 
 impl RuntimeId {
-    // INVARIANT: A0 exposes crate-private construction for runtime-owned callers; B0 is its first production owner.
+    // INVARIANT: Runtime construction is the sole production allocator; the
+    // crate-private constructor keeps the numeric representation opaque.
     #[allow(dead_code)]
     pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
         Self(value)
     }
 
-    // INVARIANT: A0 module-local tests are the only current consumer; B0 runtime ownership will read this opaque value.
+    // INVARIANT: Runtime internals read the value only to namespace runtime
+    // snapshots, event domains, and prepared-work validation.
     #[allow(dead_code)]
     pub(crate) const fn get(self) -> NonZeroU64 {
         self.0
     }
 }
 
-/// Opaque runtime epoch, created only inside the runtime in A0.
+/// Opaque monotonically increasing configuration epoch for one runtime.
 ///
-/// B0 supplies the public creation path.
+/// A new epoch is published when a runtime reconfiguration changes its
+/// execution snapshot; prepared work from an older epoch is rejected.
 ///
 /// # Examples
 ///
@@ -52,25 +57,29 @@ impl RuntimeId {
 pub struct RuntimeEpoch(NonZeroU64);
 
 impl RuntimeEpoch {
-    // INVARIANT: A0 defines epoch-one construction for the later B0 runtime owner without a public constructor.
+    // INVARIANT: A newly built runtime starts at epoch one; publication is the
+    // only production path that advances it.
     #[allow(dead_code)]
     pub(crate) const fn one() -> Self {
         Self(NonZeroU64::MIN)
     }
 
-    // INVARIANT: A0 module-local tests cover crate-private epoch construction until B0 creates epochs in production.
+    // INVARIANT: Snapshot construction supplies validated nonzero epochs while
+    // keeping the representation private to the runtime crate.
     #[allow(dead_code)]
     pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
         Self(value)
     }
 
-    // INVARIANT: A0 module-local tests cover opaque access until B0 owns epoch state transitions.
+    // INVARIANT: Runtime snapshot and prepared-work validation are the only
+    // production consumers of the numeric epoch.
     #[allow(dead_code)]
     pub(crate) const fn get(self) -> NonZeroU64 {
         self.0
     }
 
-    // INVARIANT: A0 module-local tests cover overflow termination until B0 maps it to a runtime reconfiguration error.
+    // INVARIANT: Reconfiguration uses `None` to report epoch exhaustion before
+    // publishing a wrapped value.
     #[allow(dead_code)]
     pub(crate) fn checked_next(self) -> Option<Self> {
         self.0
@@ -186,7 +195,7 @@ impl ProviderId {
 ///
 /// The target identity is opaque to the runtime and is canonicalized by the
 /// provider. It is not [`tenferro_tensor::DeviceId`] or tensor placement data.
-/// Because this value appears in structured diagnostics and debug output, A0.1
+/// Because this value appears in structured diagnostics and debug output, it
 /// accepts nonempty ASCII graphic text (no controls, whitespace, or Unicode
 /// confusables). Providers that need byte-level or Unicode identities must
 /// first canonicalize them into an escaped diagnostic-safe ASCII form.
@@ -332,10 +341,9 @@ impl HardwareClassId {
     }
 }
 
-/// Opaque runtime-local registration identity, created only inside the runtime in A0.
+/// Opaque runtime-local identity assigned to one frozen engine registration.
 ///
-/// B0 supplies the public creation path. Its debug output exposes the useful
-/// ordinal but never the private issuer.
+/// Its debug output exposes the useful ordinal but never the private issuer.
 ///
 /// # Examples
 ///
@@ -353,7 +361,8 @@ pub struct RegistrationIdentity {
 }
 
 impl RegistrationIdentity {
-    // INVARIANT: A0 module-local tests require crate-private construction; B0 owns all production registration issuance.
+    // INVARIANT: The runtime registration allocator is the sole production
+    // issuer; callers receive and compare the opaque identity only.
     #[allow(dead_code)]
     pub(crate) const fn new(issuer: NonZeroU64, ordinal: NonZeroU64) -> Self {
         Self { issuer, ordinal }

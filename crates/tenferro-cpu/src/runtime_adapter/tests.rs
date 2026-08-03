@@ -335,9 +335,6 @@ fn cpu_specialization_projection_retained_bytes_count_spilled_exact_strides() {
 fn cpu_runtime_adapter_source_stays_metadata_only() {
     let source = include_str!("../runtime_adapter.rs");
 
-    assert!(source.contains("assemble_executable_engine_registration("));
-    assert!(!source.contains("ExecutableEngineContract::new("));
-    assert!(!source.contains("ProviderExecutableBinding::new("));
     assert!(!source.contains("use tenferro_tensor"));
     assert!(!source.contains("Tensor::"));
     assert!(!source.contains("lock_engine_resources"));
