@@ -385,9 +385,11 @@ fn event_domain_operation_display_and_immediate_token_access_are_complete() -> R
     let mut launch = || Ok(());
     let completion = run.enqueue(&[], &mut launch)?;
     assert_eq!(completion.origin(), domain);
+    let token_data = Arc::as_ptr(&completion).cast::<()>();
+    let any_data = std::ptr::from_ref(completion.as_any()).cast::<()>();
     assert_eq!(
-        completion.as_any().type_id(),
-        completion.as_ref().as_any().type_id()
+        token_data, any_data,
+        "as_any must expose the completion token itself"
     );
     Ok(())
 }
