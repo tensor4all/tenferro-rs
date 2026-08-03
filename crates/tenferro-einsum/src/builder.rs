@@ -31,7 +31,7 @@
 // Execution-level optimizations:
 //   - Stride-aware engine: v1 inspects strides at dispatch time and uses
 //     BLAS trans flags for transposed inputs. v2 engine does physical copies.
-//   - Buffer pooling: v1 reuses buffers via Arc refcount + pool.
+//   - StorageBuffer pooling: v1 reuses buffers via Arc refcount + pool.
 //     v2 has last_use liveness analysis but no pool.
 
 use std::collections::{HashMap, HashSet};

@@ -345,8 +345,8 @@ mod signature {
         InputSignature, InputSignatureEntry, InputSignatureError, LayoutClass, PrepareError,
     };
     use tenferro_tensor::{
-        BackendBuffer, Buffer, BufferHandle, DType, MemoryKind, Placement, ShapeVec, StrideVec,
-        Tensor, TensorRead, TensorScalar, TypedTensor, TypedTensorView,
+        BackendStorage, BackendStorageHandle, DType, MemoryKind, Placement, ShapeVec,
+        StorageBuffer, StrideVec, Tensor, TensorRead, TensorScalar, TypedTensor, TypedTensorView,
     };
 
     fn assert_debug<T: Debug>() {}
@@ -509,15 +509,15 @@ mod signature {
 
     #[test]
     fn signature_backend_read_records_unknown_alignment_and_retains_no_buffer() {
-        let allocation = Arc::new(BufferHandle::<f64>::new_with_len(7, 2));
+        let allocation = Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 2));
         let weak = Arc::downgrade(&allocation);
-        let erased: Arc<dyn BackendBuffer<f64>> = allocation.clone();
+        let erased: Arc<dyn BackendStorage<f64>> = allocation.clone();
         drop(allocation);
 
         let signature = {
             let tensor = TypedTensor::from_buffer_col_major(
                 vec![2],
-                Buffer::Backend(erased),
+                StorageBuffer::Backend(erased),
                 Placement {
                     memory_kind: MemoryKind::Device,
                     device: None,

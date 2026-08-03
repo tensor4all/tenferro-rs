@@ -7,8 +7,8 @@ use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 
 use tenferro_tensor::{
-    AllocationDomainId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, Placement, Tensor, TensorValue, TypedTensor,
+    AllocationDomainId, BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard,
+    Placement, StorageBuffer, Tensor, TensorValue, TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -54,7 +54,7 @@ struct ForeignProbeBuffer {
     domain: AllocationDomainId,
 }
 
-impl BackendBuffer<f64> for ForeignProbeBuffer {
+impl BackendStorage<f64> for ForeignProbeBuffer {
     fn backend_family(&self) -> &'static str {
         "tenferro-test.foreign-output-probe"
     }
@@ -384,7 +384,7 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
     let domain = AllocationDomainId::fresh();
-    let buffer = Buffer::Backend(Arc::new(ForeignProbeBuffer {
+    let buffer = StorageBuffer::Backend(Arc::new(ForeignProbeBuffer {
         values: Arc::new(Mutex::new(vec![1.0, 2.0, 3.0, 4.0])),
         domain,
     }));

@@ -8,7 +8,7 @@ use super::{
     ensure_resident_on_runtime, typed_from_webgpu, webgpu_handle_from_backend, WebGpuBuffer,
     WebGpuRuntime,
 };
-use crate::{Buffer, Tensor, TypedTensor};
+use crate::{StorageBuffer, Tensor, TypedTensor};
 
 /// Upload a host tensor into a CubeCL-managed WebGPU allocation.
 ///
@@ -73,8 +73,8 @@ pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
+        StorageBuffer::Host(data) => data,
+        StorageBuffer::Backend(buffer) => {
             return Err(crate::Error::runtime_state(
                 "webgpu_upload",
                 format!(
@@ -100,13 +100,15 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
     let handle = match typed.buffer() {
-        Buffer::Host(_) => {
+        StorageBuffer::Host(_) => {
             return Err(crate::Error::runtime_state(
                 "webgpu_download",
                 "expected WebGPU backend buffer",
             ));
         }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
+        StorageBuffer::Backend(buffer) => {
+            webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?
+        }
     };
 
     if typed.n_elements() == 0 {
@@ -123,8 +125,8 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
 
 fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
+        StorageBuffer::Host(data) => data,
+        StorageBuffer::Backend(buffer) => {
             return Err(crate::Error::runtime_state(
                 "webgpu_upload",
                 format!(
@@ -141,7 +143,7 @@ fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<T
     rt.record_upload(bytes.len());
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Arc::new(buffer)),
         super::webgpu_placement(rt),
     )
 }
@@ -153,13 +155,15 @@ fn download_bool(
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
     let handle = match typed.buffer() {
-        Buffer::Host(_) => {
+        StorageBuffer::Host(_) => {
             return Err(crate::Error::runtime_state(
                 "webgpu_download",
                 "expected WebGPU backend buffer",
             ));
         }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
+        StorageBuffer::Backend(buffer) => {
+            webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?
+        }
     };
 
     if typed.n_elements() == 0 {

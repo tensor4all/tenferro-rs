@@ -78,12 +78,12 @@ pub use config::{
 };
 pub use error::{BoxError, Error, Result};
 pub use types::{
-    col_major_strides, AllocationDomainId, AllocationId, BackendBuffer, Buffer, BufferHandle,
+    col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
     CpuDomainId, DType, DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError,
     HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, SharedTensorAllocationDomain,
-    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorRank,
-    TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
+    StorageBuffer, StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar,
+    TensorStorageRef, TensorStorageRefMut, TensorValue, TensorView, TensorViewMut, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
 };
 
 mod storage;

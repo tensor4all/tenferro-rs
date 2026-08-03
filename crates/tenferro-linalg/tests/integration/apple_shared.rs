@@ -5,7 +5,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{upload_webgpu_tensor, AppleContext, WebGpuRuntime};
 use tenferro_linalg::{EagerTensorLinalgExt, LinalgBackend, TracedTensorLinalgExt};
 use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_tensor::{Buffer, HostAccessError, Tensor};
+use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor};
 
 use super::support;
 
@@ -23,7 +23,7 @@ fn mapped_f32(tensor: &Tensor) -> Vec<f32> {
     let Tensor::F32(tensor) = tensor else {
         panic!("expected F32 tensor")
     };
-    let Buffer::Backend(buffer) = tensor.buffer() else {
+    let StorageBuffer::Backend(buffer) = tensor.buffer() else {
         panic!("expected managed backend storage")
     };
     buffer.map_read().unwrap().to_vec()
@@ -110,7 +110,7 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected F64 output")
     };
-    let Buffer::Backend(buffer) = f64_output.buffer() else {
+    let StorageBuffer::Backend(buffer) = f64_output.buffer() else {
         panic!("expected managed F64 output")
     };
     assert_lower_real(&buffer.map_read().unwrap(), |value| value);
@@ -128,7 +128,7 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected C32 output")
     };
-    let Buffer::Backend(buffer) = c32_output.buffer() else {
+    let StorageBuffer::Backend(buffer) = c32_output.buffer() else {
         panic!("expected managed C32 output")
     };
     let values = buffer.map_read().unwrap();
@@ -149,7 +149,7 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected C64 output")
     };
-    let Buffer::Backend(buffer) = c64_output.buffer() else {
+    let StorageBuffer::Backend(buffer) = c64_output.buffer() else {
         panic!("expected managed C64 output")
     };
     let values = buffer.map_read().unwrap();

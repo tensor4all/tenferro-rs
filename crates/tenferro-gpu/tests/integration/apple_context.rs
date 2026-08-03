@@ -1,7 +1,7 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
 use tenferro_gpu::{AppleContext, AppleTransferStats};
-use tenferro_tensor::{Buffer, HostAccessError, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor, TensorDot, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -52,7 +52,7 @@ fn managed_upload_maps_without_post_creation_transfers_and_keeps_identity() {
     };
     assert_eq!(typed.allocation_domain(), Some(context.domain_id()));
     let allocation = typed.allocation_id().unwrap();
-    let Buffer::Backend(buffer) = typed.buffer() else {
+    let StorageBuffer::Backend(buffer) = typed.buffer() else {
         panic!("expected managed backend buffer")
     };
     assert_eq!(&*buffer.map_read().unwrap(), &[1.0, 2.0]);
@@ -84,7 +84,7 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
         panic!("expected f64 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let StorageBuffer::Backend(buffer) = output.buffer() else {
         panic!("expected managed output")
     };
     buffer
@@ -109,7 +109,7 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
         panic!("expected f32 lhs")
     };
     let lhs_allocation = lhs_typed.allocation_id().unwrap();
-    let Buffer::Backend(lhs_buffer) = lhs_typed.buffer() else {
+    let StorageBuffer::Backend(lhs_buffer) = lhs_typed.buffer() else {
         panic!("expected managed lhs")
     };
     assert_eq!(&*lhs_buffer.map_read().unwrap(), &[2.0]);
@@ -136,7 +136,7 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
     assert_eq!(context.transfer_stats(), before);
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let StorageBuffer::Backend(buffer) = output.buffer() else {
         panic!("expected managed backend output")
     };
     assert_eq!(&*buffer.map_read().unwrap(), &[6.0]);

@@ -118,7 +118,7 @@ pub(crate) struct StorageMut<'a> {
 /// guard can retain the allocation for the complete prepared borrow.
 pub(crate) struct HostAllocation<T> {
     extent: RootResourceExtent,
-    data: UnsafeCell<crate::Buffer<T>>,
+    data: UnsafeCell<crate::StorageBuffer<T>>,
 }
 
 /// Lifetime-only pin for one root resource. Host roots stay inline so the
@@ -274,7 +274,7 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         // SAFETY: shared provider mappings are retained only under a shared
         // group borrow; the vector is never resized after import.
         let data = unsafe { &*self.data.get() };
-        let crate::Buffer::Host(data) = data else {
+        let crate::StorageBuffer::Host(data) = data else {
             return Err(AccessError::Unsupported { backend: "host" });
         };
         let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
@@ -298,7 +298,7 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         // SAFETY: `GroupWriteView` provides the exclusive capability before
         // calling this provider hook; the vector is never resized after import.
         let data = unsafe { &mut *self.data.get() };
-        let crate::Buffer::Host(data) = data else {
+        let crate::StorageBuffer::Host(data) = data else {
             return Err(AccessError::Unsupported { backend: "host" });
         };
         let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
@@ -327,38 +327,38 @@ impl<T: TensorScalar> HostRoot for T {
         match T::dtype() {
             DType::F32 => RootResourcePin::HostF32(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::F64 => RootResourcePin::HostF64(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::I32 => RootResourcePin::HostI32(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::I64 => RootResourcePin::HostI64(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::Bool => RootResourcePin::HostBool(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::C32 => RootResourcePin::HostC32(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
             DType::C64 => RootResourcePin::HostC64(HostAllocation {
                 extent,
-                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+                data: UnsafeCell::new(crate::StorageBuffer::Host(cast_host_vec(data))),
             }),
         }
     }
 }
 
 impl RootResourcePin {
-    fn host_buffer<T: 'static>(&self) -> Option<&crate::Buffer<T>> {
+    fn host_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         let allocation = self.as_any().downcast_ref::<HostAllocation<T>>()?;
         // SAFETY: the returned reference is bounded by the shared root borrow;
         // host buffers never resize after import.
@@ -598,7 +598,7 @@ impl OwnedStorage {
         self.claim.span
     }
 
-    pub(crate) fn host_buffer<T: 'static>(&self) -> Option<&crate::Buffer<T>> {
+    pub(crate) fn host_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         self.pin.host_buffer::<T>()
     }
 
@@ -612,7 +612,7 @@ impl OwnedStorage {
             })?;
         // SAFETY: the move-only root pin proves there are no other owners, so
         // taking the vector cannot race with a provider mapping.
-        let crate::Buffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
+        let crate::StorageBuffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
             return Err(AccessError::Unsupported {
                 backend: "non-host",
             });
@@ -672,7 +672,7 @@ impl<'a> StorageRef<'a> {
             .ok_or(AccessError::Unsupported {
                 backend: "non-host",
             })?;
-        let crate::Buffer::Host(data) = (unsafe { &*allocation.data.get() }) else {
+        let crate::StorageBuffer::Host(data) = (unsafe { &*allocation.data.get() }) else {
             return Err(AccessError::Unsupported {
                 backend: "non-host",
             });
@@ -740,7 +740,7 @@ impl<'a> StorageMut<'a> {
             .ok_or(AccessError::Unsupported {
                 backend: "non-host",
             })?;
-        let crate::Buffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
+        let crate::StorageBuffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
             return Err(AccessError::Unsupported {
                 backend: "non-host",
             });

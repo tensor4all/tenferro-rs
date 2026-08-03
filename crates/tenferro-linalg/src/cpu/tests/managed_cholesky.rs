@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, Tensor, TensorRead,
-    TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
+    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
+    TensorRead, TypedTensor,
 };
 
 use super::with_cpu_linalg;
@@ -67,7 +67,7 @@ impl<T> fmt::Debug for FakeManagedBuffer<T> {
     }
 }
 
-impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> {
+impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "fake-managed"
     }
@@ -167,7 +167,7 @@ impl FakeDomain {
         };
         TypedTensor::from_buffer_col_major(
             shape.to_vec(),
-            Buffer::Backend(Arc::new(buffer)),
+            StorageBuffer::Backend(Arc::new(buffer)),
             Placement {
                 memory_kind,
                 device: None,
@@ -286,7 +286,7 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
                 assert_eq!(output.placement().cpu_affinity, Some(selected));
-                let Buffer::Backend(buffer) = output.buffer() else {
+                let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
                 let mapped = buffer.map_read().unwrap();
@@ -311,7 +311,7 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
                 assert_eq!(output.placement().cpu_affinity, Some(selected));
-                let Buffer::Backend(buffer) = output.buffer() else {
+                let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
                 let mapped = buffer.map_read().unwrap();

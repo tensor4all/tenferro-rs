@@ -137,7 +137,7 @@ impl<T> CubeclBuffer<T> {
 }
 
 #[cfg(feature = "cuda")]
-impl<T: Send + Sync + 'static> BackendBuffer<T> for CubeclBuffer<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "cubecl"
     }

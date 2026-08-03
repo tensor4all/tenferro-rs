@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    Buffer, BufferHandle, MemoryKind, Placement, TensorViewCanonicalization, TypedTensorView,
-    TypedTensorViewMut,
+    BackendStorageHandle, MemoryKind, Placement, StorageBuffer, TensorViewCanonicalization,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 fn opaque_backend_placement() -> Placement {
@@ -210,18 +210,19 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
         }) if message.contains("destination") && message.contains("host placement")
     ));
 
-    let shared = Arc::new(BufferHandle::<f64>::new_with_len(91, 2));
+    let shared = Arc::new(BackendStorageHandle::<f64>::new_with_len(91, 2));
     let placement = opaque_backend_placement();
     let aliased_src = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![2],
-            Buffer::Backend(shared.clone()),
+            StorageBuffer::Backend(shared.clone()),
             placement.clone(),
         )
         .unwrap(),
     );
     let mut aliased_dst = Tensor::F64(
-        TypedTensor::from_buffer_col_major(vec![2], Buffer::Backend(shared), placement).unwrap(),
+        TypedTensor::from_buffer_col_major(vec![2], StorageBuffer::Backend(shared), placement)
+            .unwrap(),
     );
     assert!(matches!(
         backend.copy_read_into(
@@ -272,7 +273,7 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
     let mut backend = CpuBackend::new();
     let src = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(9, 2))),
+        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(9, 2))),
         opaque_backend_placement(),
     )
     .unwrap();
@@ -297,7 +298,7 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 2))),
+        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(8, 2))),
         opaque_backend_placement(),
     )
     .unwrap();
@@ -1134,9 +1135,9 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
 fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() {
     let backend_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        tenferro_tensor::Buffer::Backend(Arc::new(
-            tenferro_tensor::BufferHandle::<f64>::new_with_len(17, 2),
-        )),
+        tenferro_tensor::StorageBuffer::Backend(Arc::new(tenferro_tensor::BackendStorageHandle::<
+            f64,
+        >::new_with_len(17, 2))),
         tenferro_tensor::Placement {
             memory_kind: tenferro_tensor::MemoryKind::Device,
             device: Some(tenferro_tensor::DeviceId {

@@ -1512,7 +1512,7 @@ fn host_storage_identity<T>(data: &[T]) -> StorageIdentity {
 }
 
 fn backend_storage_identity<T: 'static>(
-    buffer: &std::sync::Arc<dyn crate::BackendBuffer<T>>,
+    buffer: &std::sync::Arc<dyn crate::BackendStorage<T>>,
 ) -> StorageIdentity {
     StorageIdentity::Backend {
         domain: buffer.allocation_domain(),

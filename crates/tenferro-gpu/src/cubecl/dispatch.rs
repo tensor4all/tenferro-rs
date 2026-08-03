@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::config::CompareDir;
 use crate::cubecl::CudaRuntime;
 use crate::types::{
-    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
-    TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    Tensor, TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{
     CapabilityAxis, CapabilityQuery, DType, TensorBackendCapability as TensorBackendCapabilityTrait,
@@ -50,12 +50,12 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     match tensor.buffer() {
-        Buffer::Host(_) => Err(crate::Error::runtime_state(
+        StorageBuffer::Host(_) => Err(crate::Error::runtime_state(
             op,
             "expected CubeCL GPU tensor, got host tensor. \
                       Use upload_tensor() to transfer to GPU before calling GPU ops.",
         )),
-        Buffer::Backend(buffer) => buffer
+        StorageBuffer::Backend(buffer) => buffer
             .as_any()
             .downcast_ref::<CubeclBuffer<T>>()
             .ok_or_else(|| {
@@ -415,7 +415,7 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Arc::new(buffer)),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

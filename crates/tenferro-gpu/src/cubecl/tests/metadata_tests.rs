@@ -7,7 +7,8 @@ use crate::cubecl::dispatch::{
 };
 use crate::cubecl::{CudaBackend, CudaExtensionCache};
 use crate::{
-    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
+    CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    TypedTensor,
 };
 use tenferro_tensor::{CacheStats, Error, ErrorKind, ValidationError, ValidationKind};
 
@@ -256,7 +257,7 @@ fn cubecl_tensor_with_len(
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0))),
+        StorageBuffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

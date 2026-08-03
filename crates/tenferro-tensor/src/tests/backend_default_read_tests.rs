@@ -732,8 +732,8 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
 
 #[test]
 fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
-    let shared: std::sync::Arc<dyn crate::BackendBuffer<f64>> =
-        std::sync::Arc::new(crate::BufferHandle::<f64>::new_with_len(17, 1));
+    let shared: std::sync::Arc<dyn crate::BackendStorage<f64>> =
+        std::sync::Arc::new(crate::BackendStorageHandle::<f64>::new_with_len(17, 1));
     let placement = crate::Placement {
         memory_kind: crate::MemoryKind::Device,
         device: Some(crate::DeviceId {
@@ -745,15 +745,19 @@ fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
     let lhs = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![1],
-            crate::Buffer::Backend(std::sync::Arc::clone(&shared)),
+            crate::StorageBuffer::Backend(std::sync::Arc::clone(&shared)),
             placement.clone(),
         )
         .unwrap(),
     );
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut out = Tensor::F64(
-        TypedTensor::from_buffer_col_major(vec![1], crate::Buffer::Backend(shared), placement)
-            .unwrap(),
+        TypedTensor::from_buffer_col_major(
+            vec![1],
+            crate::StorageBuffer::Backend(shared),
+            placement,
+        )
+        .unwrap(),
     );
 
     let error = DefaultReadBackend::default()
@@ -1622,8 +1626,8 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
     let input = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![2],
-            crate::Buffer::Backend(std::sync::Arc::new(
-                crate::BufferHandle::<f64>::new_with_len(41, 2),
+            crate::StorageBuffer::Backend(std::sync::Arc::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(41, 2),
             )),
             crate::Placement {
                 memory_kind: crate::MemoryKind::Device,

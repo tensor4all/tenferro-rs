@@ -185,19 +185,19 @@ impl Default for Placement {
 
 /// Backend-owned buffer handle.
 ///
-/// `BufferHandle::new` creates an empty opaque handle. Use
-/// [`BufferHandle::new_with_len`] when test or adapter code needs to model a
+/// `BackendStorageHandle::new` creates an empty opaque handle. Use
+/// [`BackendStorageHandle::new_with_len`] when test or adapter code needs to model a
 /// non-empty backend allocation.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::BufferHandle;
+/// use tenferro_tensor::BackendStorageHandle;
 ///
-/// let handle = BufferHandle::<f64>::new(7);
+/// let handle = BackendStorageHandle::<f64>::new(7);
 /// ```
 #[derive(Clone)]
-pub struct BufferHandle<T> {
+pub struct BackendStorageHandle<T> {
     id: u64,
     len: usize,
     _phantom: std::marker::PhantomData<T>,
@@ -511,24 +511,24 @@ impl<'a, T> HostWriteGuard<'a, T> {
     }
 }
 
-impl<T> Debug for BufferHandle<T> {
+impl<T> Debug for BackendStorageHandle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BufferHandle")
+        f.debug_struct("BackendStorageHandle")
             .field("id", &self.id)
             .finish()
     }
 }
 
-impl<T> BufferHandle<T> {
+impl<T> BackendStorageHandle<T> {
     /// Create a new backend buffer handle.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::BufferHandle;
+    /// use tenferro_tensor::BackendStorageHandle;
     ///
-    /// let handle = BufferHandle::<f64>::new(1);
-    /// assert_eq!(tenferro_tensor::BackendBuffer::len(&handle), 0);
+    /// let handle = BackendStorageHandle::<f64>::new(1);
+    /// assert_eq!(tenferro_tensor::BackendStorage::len(&handle), 0);
     /// ```
     pub fn new(id: u64) -> Self {
         Self::new_with_len(id, 0)
@@ -539,10 +539,10 @@ impl<T> BufferHandle<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{BackendBuffer, BufferHandle};
+    /// use tenferro_tensor::{BackendStorage, BackendStorageHandle};
     ///
-    /// let handle = BufferHandle::<f64>::new_with_len(1, 4);
-    /// assert_eq!(BackendBuffer::len(&handle), 4);
+    /// let handle = BackendStorageHandle::<f64>::new_with_len(1, 4);
+    /// assert_eq!(BackendStorage::len(&handle), 4);
     /// ```
     pub fn new_with_len(id: u64, len: usize) -> Self {
         Self {
@@ -563,13 +563,13 @@ impl<T> BufferHandle<T> {
 ///
 /// ```rust
 /// use std::sync::Arc;
-/// use tenferro_tensor::{BackendBuffer, BufferHandle};
+/// use tenferro_tensor::{BackendStorage, BackendStorageHandle};
 ///
-/// let buffer: Arc<dyn BackendBuffer<f64>> = Arc::new(BufferHandle::<f64>::new_with_len(7, 2));
+/// let buffer: Arc<dyn BackendStorage<f64>> = Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 2));
 /// assert_eq!(buffer.backend_family(), "opaque");
 /// assert_eq!(buffer.len(), 2);
 /// ```
-pub trait BackendBuffer<T>: Debug + Send + Sync + 'static {
+pub trait BackendStorage<T>: Debug + Send + Sync + 'static {
     /// Stable backend family identifier.
     fn backend_family(&self) -> &'static str;
 
@@ -619,7 +619,7 @@ pub trait BackendBuffer<T>: Debug + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
 }
 
-impl<T: Send + Sync + 'static> BackendBuffer<T> for BufferHandle<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for BackendStorageHandle<T> {
     fn backend_family(&self) -> &'static str {
         "opaque"
     }
@@ -638,25 +638,25 @@ impl<T: Send + Sync + 'static> BackendBuffer<T> for BufferHandle<T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::Buffer;
+/// use tenferro_tensor::StorageBuffer;
 ///
-/// let host = Buffer::Host(vec![1.0_f64, 2.0]);
+/// let host = StorageBuffer::Host(vec![1.0_f64, 2.0]);
 /// ```
 #[derive(Clone, Debug)]
-pub enum Buffer<T> {
+pub enum StorageBuffer<T> {
     Host(Vec<T>),
-    Backend(Arc<dyn BackendBuffer<T>>),
+    Backend(Arc<dyn BackendStorage<T>>),
 }
 
-impl<T: 'static> Buffer<T> {
+impl<T: 'static> StorageBuffer<T> {
     /// Return the physical element count in this buffer.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::Buffer;
+    /// use tenferro_tensor::StorageBuffer;
     ///
-    /// assert_eq!(Buffer::Host(vec![1_i32, 2]).len(), 2);
+    /// assert_eq!(StorageBuffer::Host(vec![1_i32, 2]).len(), 2);
     /// ```
     pub fn len(&self) -> usize {
         match self {
@@ -670,9 +670,9 @@ impl<T: 'static> Buffer<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::Buffer;
+    /// use tenferro_tensor::StorageBuffer;
     ///
-    /// assert!(Buffer::<i32>::Host(Vec::new()).is_empty());
+    /// assert!(StorageBuffer::<i32>::Host(Vec::new()).is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -683,9 +683,9 @@ impl<T: 'static> Buffer<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::Buffer;
+    /// use tenferro_tensor::StorageBuffer;
     ///
-    /// assert!(!Buffer::Host(vec![1_i32]).is_backend());
+    /// assert!(!StorageBuffer::Host(vec![1_i32]).is_backend());
     /// ```
     pub fn is_backend(&self) -> bool {
         matches!(self, Self::Backend(_))
@@ -719,7 +719,7 @@ impl<T: 'static> Buffer<T> {
 /// The dtype-erased [`Tensor`] enum remains dynamic-rank.
 #[derive(Debug)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
-    buffer: Buffer<T>,
+    buffer: StorageBuffer<T>,
     group: Option<OwnedTensorGroup<R>>,
     layout: TensorLayout<R>,
     placement: Placement,
@@ -765,7 +765,7 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
             .map_err(|error| group_error("TypedTensor::group_view_mut", error))
     }
 
-    fn host_buffer<T: 'static>(&self) -> Option<&Buffer<T>> {
+    fn host_buffer<T: 'static>(&self) -> Option<&StorageBuffer<T>> {
         self.group.host_buffer::<T>(self.slot)
     }
 
@@ -785,19 +785,19 @@ fn group_error(op: &'static str, error: GroupError) -> crate::Error {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::TensorBufferRef;
+/// use tenferro_tensor::TensorStorageRef;
 ///
 /// let data = [1_i32, 2];
-/// let buffer = TensorBufferRef::Host(&data);
+/// let buffer = TensorStorageRef::Host(&data);
 /// assert_eq!(buffer.len(), 2);
 /// ```
 #[derive(Debug)]
-pub enum TensorBufferRef<'a, T> {
+pub enum TensorStorageRef<'a, T> {
     Host(&'a [T]),
-    Backend(Arc<dyn BackendBuffer<T>>),
+    Backend(Arc<dyn BackendStorage<T>>),
 }
 
-impl<T> Clone for TensorBufferRef<'_, T> {
+impl<T> Clone for TensorStorageRef<'_, T> {
     fn clone(&self) -> Self {
         match self {
             Self::Host(data) => Self::Host(data),
@@ -806,16 +806,16 @@ impl<T> Clone for TensorBufferRef<'_, T> {
     }
 }
 
-impl<T: 'static> TensorBufferRef<'_, T> {
+impl<T: 'static> TensorStorageRef<'_, T> {
     /// Return the logical length of the backing allocation.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::TensorBufferRef;
+    /// use tenferro_tensor::TensorStorageRef;
     ///
     /// let data = [1_i32, 2, 3];
-    /// assert_eq!(TensorBufferRef::Host(&data).len(), 3);
+    /// assert_eq!(TensorStorageRef::Host(&data).len(), 3);
     /// ```
     pub fn len(&self) -> usize {
         match self {
@@ -829,10 +829,10 @@ impl<T: 'static> TensorBufferRef<'_, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::TensorBufferRef;
+    /// use tenferro_tensor::TensorStorageRef;
     ///
     /// let data: [f64; 0] = [];
-    /// assert!(TensorBufferRef::Host(&data).is_empty());
+    /// assert!(TensorStorageRef::Host(&data).is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -847,28 +847,28 @@ impl<T: 'static> TensorBufferRef<'_, T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::TensorBufferRefMut;
+/// use tenferro_tensor::TensorStorageRefMut;
 ///
 /// let mut data = [1_i32, 2];
-/// let buffer = TensorBufferRefMut::Host(&mut data);
+/// let buffer = TensorStorageRefMut::Host(&mut data);
 /// assert_eq!(buffer.len(), 2);
 /// ```
 #[derive(Debug)]
-pub enum TensorBufferRefMut<'a, T> {
+pub enum TensorStorageRefMut<'a, T> {
     Host(&'a mut [T]),
-    Backend(Arc<dyn BackendBuffer<T>>),
+    Backend(Arc<dyn BackendStorage<T>>),
 }
 
-impl<T: 'static> TensorBufferRefMut<'_, T> {
+impl<T: 'static> TensorStorageRefMut<'_, T> {
     /// Return the logical length of the backing allocation.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::TensorBufferRefMut;
+    /// use tenferro_tensor::TensorStorageRefMut;
     ///
     /// let mut data = [1_i32, 2, 3];
-    /// assert_eq!(TensorBufferRefMut::Host(&mut data).len(), 3);
+    /// assert_eq!(TensorStorageRefMut::Host(&mut data).len(), 3);
     /// ```
     pub fn len(&self) -> usize {
         match self {
@@ -882,10 +882,10 @@ impl<T: 'static> TensorBufferRefMut<'_, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::TensorBufferRefMut;
+    /// use tenferro_tensor::TensorStorageRefMut;
     ///
     /// let mut data: [f64; 0] = [];
-    /// assert!(TensorBufferRefMut::Host(&mut data).is_empty());
+    /// assert!(TensorStorageRefMut::Host(&mut data).is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -917,7 +917,7 @@ impl<T: 'static> TensorBufferRefMut<'_, T> {
 /// ```
 #[derive(Clone, Debug)]
 pub struct TypedTensorView<'a, T, R: TensorRank = DynRank> {
-    buffer: TensorBufferRef<'a, T>,
+    buffer: TensorStorageRef<'a, T>,
     layout: TensorLayout<R>,
     placement: Placement,
 }
@@ -950,7 +950,7 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
             shape_vec(layout.shape()),
             stride_vec(layout.strides()),
             layout.offset(),
-            TensorBufferRef::Host(data),
+            TensorStorageRef::Host(data),
             default_placement(),
             "TypedTensorView::from_col_major",
         )
@@ -988,7 +988,7 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
             shape_vec(shape.as_ref()),
             stride_vec(strides.as_ref()),
             offset,
-            TensorBufferRef::Host(data),
+            TensorStorageRef::Host(data),
             default_placement(),
             "TypedTensorView::from_slice",
         )
@@ -1028,7 +1028,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             shape,
             strides,
             offset,
-            TensorBufferRef::Host(data),
+            TensorStorageRef::Host(data),
             default_placement(),
             "TypedTensorView::from_slice_ranked",
         )
@@ -1038,7 +1038,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
         offset: isize,
-        buffer: TensorBufferRef<'a, T>,
+        buffer: TensorStorageRef<'a, T>,
         placement: Placement,
         op: &'static str,
     ) -> crate::Result<Self> {
@@ -1127,8 +1127,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage(&self) -> crate::Result<&'a [T]> {
         match &self.buffer {
-            TensorBufferRef::Host(data) => Ok(data),
-            TensorBufferRef::Backend(_) => Err(crate::Error::runtime_state(
+            TensorStorageRef::Host(data) => Ok(data),
+            TensorStorageRef::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorView::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -1191,10 +1191,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
 
     /// Return the backend allocation for backend integrations.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendBuffer<T>>> {
+    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
         match &self.buffer {
-            TensorBufferRef::Host(_) => None,
-            TensorBufferRef::Backend(buffer) => Some(buffer),
+            TensorStorageRef::Host(_) => None,
+            TensorStorageRef::Backend(buffer) => Some(buffer),
         }
     }
 
@@ -1332,8 +1332,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     pub fn get(&self, indices: &[usize]) -> Option<&T> {
         let offset = self.linear_offset(indices)?;
         match &self.buffer {
-            TensorBufferRef::Host(data) => data.get(offset),
-            TensorBufferRef::Backend(_) => None,
+            TensorStorageRef::Host(data) => data.get(offset),
+            TensorStorageRef::Backend(_) => None,
         }
     }
 
@@ -1365,8 +1365,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     pub fn as_slice(&self) -> crate::Result<&'a [T]> {
         let data =
             match &self.buffer {
-                TensorBufferRef::Host(data) => data,
-                TensorBufferRef::Backend(_) => return Err(crate::Error::runtime_state(
+                TensorStorageRef::Host(data) => data,
+                TensorStorageRef::Backend(_) => return Err(crate::Error::runtime_state(
                     "TypedTensorView::as_slice",
                     "backend buffers cannot be inspected as host slices; download explicitly first",
                 )),
@@ -1529,7 +1529,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
 /// ```
 #[derive(Debug)]
 pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
-    buffer: TensorBufferRefMut<'a, T>,
+    buffer: TensorStorageRefMut<'a, T>,
     layout: TensorLayout<R>,
     placement: Placement,
 }
@@ -1539,11 +1539,11 @@ pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{StridedSliceSpec, TypedTensorViewMut, TypedTensorViewMutPair};
+/// use tenferro_tensor::{StridedSliceSpec, TypedTensorViewMut, TypedTensorViewMutSplit};
 ///
 /// let mut data = [1_i32, 2, 3, 4];
 /// let mut view = TypedTensorViewMut::from_slice(vec![4], vec![1], 0, &mut data)?;
-/// let pair: TypedTensorViewMutPair<'_, i32> = view
+/// let pair: TypedTensorViewMutSplit<'_, i32> = view
 ///     .try_multi_slice_mut(
 ///         &[StridedSliceSpec::new(0, Some(2), 1)],
 ///         &[StridedSliceSpec::new(2, Some(4), 1)],
@@ -1554,7 +1554,7 @@ pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
 /// assert_eq!(pair.1.shape(), &[2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub type TypedTensorViewMutPair<'a, T, R = DynRank> =
+pub type TypedTensorViewMutSplit<'a, T, R = DynRank> =
     (TypedTensorViewMut<'a, T, R>, TypedTensorViewMut<'a, T, R>);
 
 impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
@@ -1584,7 +1584,7 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
             shape_vec(layout.shape()),
             stride_vec(layout.strides()),
             layout.offset(),
-            TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data),
             default_placement(),
             "TypedTensorViewMut::from_col_major",
         )
@@ -1624,7 +1624,7 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
             shape_vec(shape.as_ref()),
             stride_vec(strides.as_ref()),
             offset,
-            TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data),
             default_placement(),
             "TypedTensorViewMut::from_slice",
         )
@@ -1665,7 +1665,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             shape,
             strides,
             offset,
-            TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data),
             default_placement(),
             "TypedTensorViewMut::from_slice_ranked",
         )
@@ -1675,7 +1675,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
         offset: isize,
-        buffer: TensorBufferRefMut<'a, T>,
+        buffer: TensorStorageRefMut<'a, T>,
         placement: Placement,
         op: &'static str,
     ) -> crate::Result<Self> {
@@ -1767,8 +1767,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage(&self) -> crate::Result<&[T]> {
         match &self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
+            TensorStorageRefMut::Host(data) => Ok(data),
+            TensorStorageRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -1798,8 +1798,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
+            TensorStorageRefMut::Host(data) => Ok(data),
+            TensorStorageRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage_mut",
                 "backend buffers cannot expose mutable host storage; download explicitly first",
             )),
@@ -1862,10 +1862,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
 
     /// Return the backend allocation for backend integrations.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendBuffer<T>>> {
+    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
         match &self.buffer {
-            TensorBufferRefMut::Host(_) => None,
-            TensorBufferRefMut::Backend(buffer) => Some(buffer),
+            TensorStorageRefMut::Host(_) => None,
+            TensorStorageRefMut::Backend(buffer) => Some(buffer),
         }
     }
 
@@ -1998,8 +1998,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     pub fn get(&self, indices: &[usize]) -> Option<&T> {
         let offset = self.linear_offset(indices)?;
         match &self.buffer {
-            TensorBufferRefMut::Host(data) => data.get(offset),
-            TensorBufferRefMut::Backend(_) => None,
+            TensorStorageRefMut::Host(data) => data.get(offset),
+            TensorStorageRefMut::Backend(_) => None,
         }
     }
 
@@ -2019,8 +2019,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     pub fn get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
         let offset = self.linear_offset(indices)?;
         match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => data.get_mut(offset),
-            TensorBufferRefMut::Backend(_) => None,
+            TensorStorageRefMut::Host(data) => data.get_mut(offset),
+            TensorStorageRefMut::Backend(_) => None,
         }
     }
 
@@ -2038,8 +2038,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn as_read_only(&self) -> TypedTensorView<'_, T, R> {
         let buffer = match &self.buffer {
-            TensorBufferRefMut::Host(data) => TensorBufferRef::Host(data),
-            TensorBufferRefMut::Backend(buffer) => TensorBufferRef::Backend(Arc::clone(buffer)),
+            TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
+            TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
         };
         TypedTensorView {
             buffer,
@@ -2062,8 +2062,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn into_read_only(self) -> TypedTensorView<'a, T, R> {
         let buffer = match self.buffer {
-            TensorBufferRefMut::Host(data) => TensorBufferRef::Host(data),
-            TensorBufferRefMut::Backend(buffer) => TensorBufferRef::Backend(buffer),
+            TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
+            TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(buffer),
         };
         TypedTensorView {
             buffer,
@@ -2111,13 +2111,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             .validate_mutable_no_overlap()
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
         match buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Host(data),
                 layout,
                 placement,
             }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(buffer),
+            TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Backend(buffer),
                 layout,
                 placement,
             }),
@@ -2164,13 +2164,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_slice", err))?;
         let placement = self.placement.clone();
         match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Host(data),
                 layout,
                 placement,
             }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+            TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
                 layout,
                 placement,
             }),
@@ -2253,7 +2253,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         &mut self,
         first: &[StridedSliceSpec],
         second: &[StridedSliceSpec],
-    ) -> crate::Result<Option<TypedTensorViewMutPair<'_, T, R>>> {
+    ) -> crate::Result<Option<TypedTensorViewMutSplit<'_, T, R>>> {
         let op = "TypedTensorViewMut::try_multi_slice_mut";
         let first_specs = core_slice_specs(first, self.shape(), op)?;
         let second_specs = core_slice_specs(second, self.shape(), op)?;
@@ -2289,13 +2289,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 let first_offset = adjusted_view_offset(first_layout.offset(), first_span.0)?;
                 let second_offset = adjusted_view_offset(second_layout.offset(), second_span.0)?;
                 let (first_data, second_data) = match &mut self.buffer {
-                    TensorBufferRefMut::Host(data) => {
+                    TensorStorageRefMut::Host(data) => {
                         match split_two_mut_ranges(data, first_span, second_span) {
                             Some(ranges) => ranges,
                             None => return Ok(None),
                         }
                     }
-                    TensorBufferRefMut::Backend(_) => return Ok(None),
+                    TensorStorageRefMut::Backend(_) => return Ok(None),
                 };
                 let first_view = view_mut_from_layout_and_slice(
                     &first_layout,
@@ -2314,8 +2314,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             (None, Some(second_span)) => {
                 let second_offset = adjusted_view_offset(second_layout.offset(), second_span.0)?;
                 let (_, after_start) = match &mut self.buffer {
-                    TensorBufferRefMut::Host(data) => data.split_at_mut(second_span.0),
-                    TensorBufferRefMut::Backend(_) => return Ok(None),
+                    TensorStorageRefMut::Host(data) => data.split_at_mut(second_span.0),
+                    TensorStorageRefMut::Backend(_) => return Ok(None),
                 };
                 let (second_data, _) = after_start.split_at_mut(second_span.1 - second_span.0 + 1);
                 let first_view = view_mut_from_layout_and_slice(
@@ -2335,8 +2335,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             (Some(first_span), None) => {
                 let first_offset = adjusted_view_offset(first_layout.offset(), first_span.0)?;
                 let (_, after_start) = match &mut self.buffer {
-                    TensorBufferRefMut::Host(data) => data.split_at_mut(first_span.0),
-                    TensorBufferRefMut::Backend(_) => return Ok(None),
+                    TensorStorageRefMut::Host(data) => data.split_at_mut(first_span.0),
+                    TensorStorageRefMut::Backend(_) => return Ok(None),
                 };
                 let (first_data, _) = after_start.split_at_mut(first_span.1 - first_span.0 + 1);
                 let first_view = view_mut_from_layout_and_slice(
@@ -2411,13 +2411,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_reshape", err))?;
         let placement = self.placement.clone();
         match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(data),
+            TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Host(data),
                 layout,
                 placement,
             }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+            TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
                 layout,
                 placement,
             }),
@@ -3243,11 +3243,11 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
     layout: TensorLayout<DynRank>,
 ) -> TypedTensorView<'_, T> {
     let buffer = if tensor.group.is_some() {
-        TensorBufferRef::Host(tensor.group_host_slice())
+        TensorStorageRef::Host(tensor.group_host_slice())
     } else {
         match &tensor.buffer {
-            Buffer::Host(data) => TensorBufferRef::Host(data),
-            Buffer::Backend(buffer) => TensorBufferRef::Backend(Arc::clone(buffer)),
+            StorageBuffer::Host(data) => TensorStorageRef::Host(data),
+            StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
         }
     };
     TypedTensorView {
@@ -4087,10 +4087,10 @@ impl<'a> TensorRead<'a> {
     }
 }
 
-fn buffer_backend_family<T: 'static>(buffer: &Buffer<T>) -> Option<&'static str> {
+fn buffer_backend_family<T: 'static>(buffer: &StorageBuffer<T>) -> Option<&'static str> {
     match buffer {
-        Buffer::Host(_) => None,
-        Buffer::Backend(buffer) => Some(buffer.backend_family()),
+        StorageBuffer::Host(_) => None,
+        StorageBuffer::Backend(buffer) => Some(buffer.backend_family()),
     }
 }
 
@@ -4511,7 +4511,7 @@ fn view_mut_from_layout_and_slice<'a, T: 'static, R: TensorRank>(
         shape,
         strides,
         offset,
-        TensorBufferRefMut::Host(data),
+        TensorStorageRefMut::Host(data),
         placement,
         "TypedTensorViewMut::try_multi_slice_mut",
     )
@@ -4754,7 +4754,7 @@ where
     Ok(TypedTensor {
         // Host values are owned by `group`; the legacy field is retained only
         // while backend-facing call sites finish moving to owner-scoped APIs.
-        buffer: Buffer::Host(Vec::new()),
+        buffer: StorageBuffer::Host(Vec::new()),
         group: Some(group),
         layout,
         placement: default_placement(),
@@ -4776,7 +4776,7 @@ fn try_typed_tensor_zeros<T: TensorScalar + Clone + Zero, R: TensorRank>(
         .map_err(|err| tensor_layout_error("zeros", err))?;
     let group = OwnedTensorGroup::from_host_vec(group_shape, vec![T::zero(); n])?;
     Ok(TypedTensor {
-        buffer: Buffer::Host(Vec::new()),
+        buffer: StorageBuffer::Host(Vec::new()),
         group: Some(group),
         layout,
         placement: default_placement(),
@@ -4798,7 +4798,7 @@ fn try_typed_tensor_ones<T: TensorScalar + Clone + One + Zero, R: TensorRank>(
         .map_err(|err| tensor_layout_error("ones", err))?;
     let group = OwnedTensorGroup::from_host_vec(group_shape, vec![T::one(); n])?;
     Ok(TypedTensor {
-        buffer: Buffer::Host(Vec::new()),
+        buffer: StorageBuffer::Host(Vec::new()),
         group: Some(group),
         layout,
         placement: default_placement(),
@@ -4807,7 +4807,7 @@ fn try_typed_tensor_ones<T: TensorScalar + Clone + One + Zero, R: TensorRank>(
 
 fn typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
     shape: impl Into<R::Shape>,
-    buffer: Buffer<T>,
+    buffer: StorageBuffer<T>,
     placement: Placement,
 ) -> crate::Result<TypedTensor<T, R>> {
     try_typed_tensor_from_buffer_col_major(shape, buffer, placement)
@@ -4815,7 +4815,7 @@ fn typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
 
 fn try_typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
     shape: impl Into<R::Shape>,
-    buffer: Buffer<T>,
+    buffer: StorageBuffer<T>,
     placement: Placement,
 ) -> crate::Result<TypedTensor<T, R>> {
     let layout = try_compact_layout(shape, "from_buffer_col_major")?;
@@ -4880,11 +4880,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Buffer, Placement, TypedTensor};
+    /// use tenferro_tensor::{StorageBuffer, Placement, TypedTensor};
     ///
     /// let tensor = TypedTensor::<f64>::from_buffer_col_major(
     ///     vec![2],
-    ///     Buffer::Host(vec![1.0, 2.0]),
+    ///     StorageBuffer::Host(vec![1.0, 2.0]),
     ///     Placement {
     ///         memory_kind: tenferro_tensor::MemoryKind::UnpinnedHost,
     ///         device: None,
@@ -4905,7 +4905,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// rank-specific shape cannot be represented.
     pub fn from_buffer_col_major(
         shape: impl Into<R::Shape>,
-        buffer: Buffer<T>,
+        buffer: StorageBuffer<T>,
         placement: Placement,
     ) -> crate::Result<Self>
     where
@@ -5037,12 +5037,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Buffer, TypedTensor};
+    /// use tenferro_tensor::{StorageBuffer, TypedTensor};
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// assert!(matches!(t.buffer(), Buffer::Host(_)));
+    /// assert!(matches!(t.buffer(), StorageBuffer::Host(_)));
     /// ```
-    pub fn buffer(&self) -> &Buffer<T>
+    pub fn buffer(&self) -> &StorageBuffer<T>
     where
         T: 'static,
     {
@@ -5056,10 +5056,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Return the opaque backend buffer for backend-owned tensors.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendBuffer<T>>> {
+    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
         match &self.buffer {
-            Buffer::Host(_) => None,
-            Buffer::Backend(buffer) => Some(buffer),
+            StorageBuffer::Host(_) => None,
+            StorageBuffer::Backend(buffer) => Some(buffer),
         }
     }
 
@@ -5090,8 +5090,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         match &self.buffer {
-            Buffer::Host(_) => None,
-            Buffer::Backend(buffer) => buffer.allocation_domain(),
+            StorageBuffer::Host(_) => None,
+            StorageBuffer::Backend(buffer) => buffer.allocation_domain(),
         }
     }
 
@@ -5111,8 +5111,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         match &self.buffer {
-            Buffer::Host(_) => None,
-            Buffer::Backend(buffer) => buffer.allocation_id(),
+            StorageBuffer::Host(_) => None,
+            StorageBuffer::Backend(buffer) => buffer.allocation_id(),
         }
     }
 
@@ -5184,11 +5184,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: TensorScalar + 'static,
     {
         let buffer = if self.group.is_some() {
-            TensorBufferRef::Host(self.group_host_slice())
+            TensorStorageRef::Host(self.group_host_slice())
         } else {
             match &self.buffer {
-                Buffer::Host(data) => TensorBufferRef::Host(data),
-                Buffer::Backend(buffer) => TensorBufferRef::Backend(Arc::clone(buffer)),
+                StorageBuffer::Host(data) => TensorStorageRef::Host(data),
+                StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
             }
         };
         TypedTensorView {
@@ -5216,11 +5216,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         let layout = self.layout.clone();
         let placement = self.placement.clone();
         let buffer = if self.group.is_some() {
-            TensorBufferRefMut::Host(self.group_host_slice_mut())
+            TensorStorageRefMut::Host(self.group_host_slice_mut())
         } else {
             match &mut self.buffer {
-                Buffer::Host(data) => TensorBufferRefMut::Host(data),
-                Buffer::Backend(buffer) => TensorBufferRefMut::Backend(Arc::clone(buffer)),
+                StorageBuffer::Host(data) => TensorStorageRefMut::Host(data),
+                StorageBuffer::Backend(buffer) => TensorStorageRefMut::Backend(Arc::clone(buffer)),
             }
         };
         TypedTensorViewMut {
@@ -5269,7 +5269,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let op = "TypedTensor::backend_region_view";
-        let Buffer::Backend(buffer) = &self.buffer else {
+        let StorageBuffer::Backend(buffer) = &self.buffer else {
             return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; host tensors use \
@@ -5279,7 +5279,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
             .map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensorView {
-            buffer: TensorBufferRef::Backend(Arc::clone(buffer)),
+            buffer: TensorStorageRef::Backend(Arc::clone(buffer)),
             layout,
             placement: self.placement.clone(),
         })
@@ -5333,7 +5333,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let op = "TypedTensor::backend_region_view_mut";
-        let Buffer::Backend(buffer) = &self.buffer else {
+        let StorageBuffer::Backend(buffer) = &self.buffer else {
             return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; mutable host regions use \
@@ -5346,7 +5346,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             .validate_mutable_no_overlap()
             .map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensorViewMut {
-            buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+            buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
             layout,
             placement: self.placement.clone(),
         })
@@ -5371,15 +5371,15 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Buffer, TypedTensor};
+    /// use tenferro_tensor::{StorageBuffer, TypedTensor};
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// let (buffer, layout, placement) = t.into_parts();
-    /// assert!(matches!(buffer, Buffer::Host(_)));
+    /// assert!(matches!(buffer, StorageBuffer::Host(_)));
     /// assert_eq!(layout.shape(), &[2]);
     /// assert!(placement.device.is_none());
     /// ```
-    pub fn into_parts(self) -> (Buffer<T>, TensorLayout<R>, Placement)
+    pub fn into_parts(self) -> (StorageBuffer<T>, TensorLayout<R>, Placement)
     where
         T: TensorScalar,
     {
@@ -5391,8 +5391,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         } = self;
         let buffer = match group {
             Some(group) => match group.into_host_vec::<T>() {
-                Ok(data) => Buffer::Host(data),
-                Err(_) => Buffer::Host(Vec::new()),
+                Ok(data) => StorageBuffer::Host(data),
+                Err(_) => StorageBuffer::Host(Vec::new()),
             },
             None => buffer,
         };
@@ -5434,7 +5434,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             .map_err(|err| tensor_layout_error("TypedTensor::duplicate", err))?;
         let group = OwnedTensorGroup::from_host_vec(shape, data)?;
         Ok(Self {
-            buffer: Buffer::Host(Vec::new()),
+            buffer: StorageBuffer::Host(Vec::new()),
             group: Some(group),
             layout: self.layout.clone(),
             placement: self.placement.clone(),
@@ -5463,8 +5463,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             return Ok((shape, group.into_host_vec::<T>()?));
         }
         match self.buffer {
-            Buffer::Host(data) => Ok((shape, data)),
-            Buffer::Backend(_) => Err(crate::Error::runtime_state(
+            StorageBuffer::Host(data) => Ok((shape, data)),
+            StorageBuffer::Backend(_) => Err(crate::Error::runtime_state(
                 "into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
             )),
@@ -5479,8 +5479,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             return group.into_host_vec::<T>();
         }
         match self.buffer {
-            Buffer::Host(data) => Ok(data),
-            Buffer::Backend(_) => Err(crate::Error::runtime_state(
+            StorageBuffer::Host(data) => Ok(data),
+            StorageBuffer::Backend(_) => Err(crate::Error::runtime_state(
                 "into_host_vec",
                 "backend buffers cannot be exported as host Vec",
             )),
@@ -5511,8 +5511,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             });
         }
         match &self.buffer {
-            Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::runtime_state(
+            StorageBuffer::Host(v) => Ok(v),
+            StorageBuffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data",
                 "backend buffers cannot be inspected as host slices; download explicitly first",
             )),
@@ -5566,8 +5566,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             });
         }
         match &mut self.buffer {
-            Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::runtime_state(
+            StorageBuffer::Host(v) => Ok(v),
+            StorageBuffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data_mut",
                 "backend buffers cannot be mutated as host slices; download explicitly first",
             )),

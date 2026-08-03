@@ -5,7 +5,7 @@ use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::Buffer;
+use tenferro_tensor::StorageBuffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -34,8 +34,8 @@ fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: 
 }
 
 fn assert_device_backed(tensor: &Tensor) {
-    fn is_cubecl<T: 'static>(buffer: &Buffer<T>) -> bool {
-        matches!(buffer, Buffer::Backend(buffer) if buffer.backend_family() == "cubecl")
+    fn is_cubecl<T: 'static>(buffer: &StorageBuffer<T>) -> bool {
+        matches!(buffer, StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl")
     }
 
     match tensor {

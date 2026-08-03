@@ -4,8 +4,9 @@ use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuExecSession;
 use tenferro_tensor::{
-    AllocationDomainId, Buffer, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
-    SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
+    AllocationDomainId, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
+    SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
+    TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -243,7 +244,7 @@ fn with_managed_read<T, R>(
 where
     T: Send + Sync + 'static,
 {
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             op,
             HostAccessError::Unsupported { backend: "host" },
@@ -304,7 +305,7 @@ where
             "shared allocation owner returned a non-managed output",
         ));
     }
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let StorageBuffer::Backend(buffer) = output.buffer() else {
         return Err(tenferro_tensor::Error::runtime_state(
             op,
             "shared allocation owner returned a host output",

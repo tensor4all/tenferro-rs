@@ -6,9 +6,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
     DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView,
     ValidationError,
@@ -63,7 +63,9 @@ fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
     Tensor::F64(
         TypedTensor::<f64>::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
+            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(
+                handle_id, len,
+            ))),
             opaque_backend_placement(),
         )
         .unwrap(),

@@ -8,7 +8,9 @@ use tenferro_runtime::{
     HardwareClassId, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity, ProviderId,
     Runtime, StorageClass, TracedTensor,
 };
-use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
+use tenferro_tensor::{
+    BackendStorage, DeviceId, StorageBuffer, Tensor, TensorElementwise, TypedTensor,
+};
 
 use super::*;
 use crate::{
@@ -137,7 +139,7 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .event_domain_id()
 }
 
-impl BackendBuffer<f32> for TestCudaBuffer {
+impl BackendStorage<f32> for TestCudaBuffer {
     fn backend_family(&self) -> &'static str {
         self.family
     }
@@ -154,7 +156,7 @@ impl BackendBuffer<f32> for TestCudaBuffer {
 fn input(family: &'static str, ordinal: usize) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(TestCudaBuffer { family })),
+        StorageBuffer::Backend(Arc::new(TestCudaBuffer { family })),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -203,12 +205,12 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     let Tensor::F32(typed) = &input else {
         unreachable!("uploaded f32 tensor")
     };
-    let Buffer::Backend(buffer) = typed.buffer() else {
+    let StorageBuffer::Backend(buffer) = typed.buffer() else {
         unreachable!("uploaded CUDA buffer")
     };
     let relabeled = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::clone(buffer)),
+        StorageBuffer::Backend(Arc::clone(buffer)),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
