@@ -38,13 +38,11 @@ Long-term architecture quality gate:
 - New APIs are derived from ownership and lifetime requirements in this
   document, not shaped around preserving legacy call sites. Backward
   compatibility is not a requirement for #1555.
-- One typed, crate-private provider bridge is permitted while an accelerator
-  provider is still being migrated. It must already use the final
-  claim/pin/access/lease/retirement contract, cannot mint ownership or writes,
-  and is removed by the CUDA and WebGPU/Metal migration phases. No AD,
-  submission, or conservative-synchronization adapter is permitted. The
-  completed redesign has no dual storage stack, permanent compatibility
-  adapter, or provider-specific authority escape hatch.
+- Old and new storage representations coexist without conversion only until
+  the atomic CUTOVER. No migration, legacy, provider, compatibility,
+  submission, or conservative-synchronization bridge ships; CUTOVER switches
+  every owner, access, retention, runtime, and AD user together and deletes the
+  old representation.
 - A phase is incomplete when it merely adds the new path: it must also delete
   the replaced path and update contract tests, documentation, and source
   inventories. Exceptions require a contract change reviewed before the
@@ -170,9 +168,10 @@ the only place where public host ownership, detached/scoped runtime ownership,
 and direct group-based AD retention are introduced. There is no Phase 3
 AD-retention adapter, Phase 4 AD bridge, minimal submit bridge, or
 conservative pre-retirement synchronization path to promote or delete.
-The sole provider bridge is a separate typed obligation under the root/provider
-phase; its implementation already obeys the final lease and retirement
-contract and its removal is part of the accelerator migration.
+Until atomic CUTOVER, the old and new representations coexist without
+conversion. No provider or legacy bridge is a production obligation or
+shippable artifact; CUTOVER activates the final representation and deletes the
+old one atomically.
 
 ### v2 manifest and promotion contract
 
@@ -429,8 +428,9 @@ In particular, the canonical obligation set includes:
 - P3/G1+G4: a compile contract using the repository compile-test harness or
   static assertions for `UseLease`/`BackendRawLease: Send + !Sync` and
   `BackendRawMapping`/host guards: `!Send + !Sync`;
-- P4/G1+G3: a provider runtime test for take-before-call, exactly-once release,
-  callback panic containment, and root quarantine after release panic.
+- P4/G1+G3: a provider event-retirement runtime test proving exactly-once
+  release after proven completion and intentional retain/leak plus a typed
+  `CompletionUnproven` error when completion is unproven.
 
 These are ordinary immutable artifact-command rows, so all-active terminal
 proof necessarily includes their successful runner results. A synthetic
@@ -457,11 +457,12 @@ owned span and is deliberately non-`Clone` (and non-`Copy`). Writes are
 authorized only by ordinary Rust exclusive borrows (`&mut`/`StorageMut`), never
 by a registry, lease, event, retry, or callback.
 
-`prepare_read` and `prepare_write` are the access-preparation boundary. Each
-validates the requested span, layout, and access mode exactly once, then
-returns prepared access carrying `CheckedLayout`. The hot loop consumes that
-checked metadata through `iter_contiguous`; it does not revalidate, decode
-coordinates, or perform registry lookups per element.
+`prepare_read` and `prepare_write` are the access-preparation boundary. Together
+they validate bounds, layout, dtype, exact root span, alignment, storage,
+provider, and, for writes, write injectivity exactly once, then return prepared
+access carrying `CheckedLayout`. The hot loop consumes that checked metadata
+through `iter_contiguous`; it does not revalidate, decode coordinates, or
+perform registry lookups per element.
 
 Providers retain the completion event, together with the `Arc<RootResource>`
 that it protects, until the event proves completion. If completion is
@@ -470,12 +471,14 @@ intentionally retains or leaks the allocation and event resources; speculative
 release is forbidden. This is completion-unproven retention.
 
 The permanent model explicitly removes quarantine / poison / `catch_unwind` /
-registry / retry / legacy bridge / repeated validation. Later G1
-implementation sketches in this document that still describe quarantine,
-poison, unwind containment, registries, retries, legacy bridges, or
-revalidation are **superseded pending deletion in this same PR**. This commit
-is internally authoritative but not final; until those sketches are deleted,
-this subsection controls.
+registry / retry / legacy bridge / repeated validation. **All later conflicting
+text anywhere in this document**, including G1, G3, G5, and the test index, is
+superseded by this subsection and pending physical deletion in this same PR.
+That supersession covers pseudocode, tables, transitions, obligations, and
+tests that describe quarantine, poison, unwind containment, registries,
+retries, legacy or provider bridges, repeated validation, or release without
+proven completion. This commit is internally authoritative but not final;
+until that text is deleted, this subsection controls.
 
 ### Types and acquisition surface
 
