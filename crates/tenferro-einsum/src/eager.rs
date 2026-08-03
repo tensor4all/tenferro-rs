@@ -19,6 +19,8 @@ use profile::{
 
 const EAGER_EINSUM_OP: &str = "eager_einsum";
 
+// INVARIANT: this local read/owned dispatch enum intentionally keeps the
+// allocation-free borrowed path adjacent to the explicit owned copy path.
 #[allow(clippy::large_enum_variant)]
 enum TensorValue<'a> {
     Borrowed(&'a Tensor),

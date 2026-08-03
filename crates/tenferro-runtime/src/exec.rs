@@ -75,6 +75,8 @@ pub(crate) enum DispatchMode {
     Segmented,
 }
 
+// INVARIANT: execution slots carry either a move-only tensor or a borrowed
+// read; the enum is the single dispatch boundary and is not cloned.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ExecSlot<'a> {
     Owned(Tensor),
