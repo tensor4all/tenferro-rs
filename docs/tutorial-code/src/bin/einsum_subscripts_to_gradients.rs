@@ -54,12 +54,16 @@ fn trace_and_run(
     optimize: EinsumOptimize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
     let mut trace = TraceContext::new();
-    let values = inputs
+    let owned_inputs = inputs
         .iter()
+        .map(|tensor| tensor.duplicate())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let values = owned_inputs
+        .into_iter()
         .map(|tensor| {
             trace.input_with_default(
                 ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-                Arc::new(tensor.clone()),
+                Arc::new(tensor),
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -77,8 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let b_tensor = matrix_b()?;
     let c_tensor = matrix_c()?;
     let runtime = EagerRuntime::new()?;
-    let a = runtime.variable_from(a_tensor.clone())?;
-    let b = runtime.variable_from(b_tensor.clone())?;
+    let a = runtime.variable_from(a_tensor.duplicate()?)?;
+    let b = runtime.variable_from(b_tensor.duplicate()?)?;
     let product = [&a, &b].einsum("ij,jk->ik")?;
 
     assert_eq!(product.shape(), &[2, 2]);

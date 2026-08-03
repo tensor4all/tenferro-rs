@@ -43,6 +43,9 @@ unsafe impl BackendAllocation for UnsupportedAllocation {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -90,6 +93,9 @@ unsafe impl BackendAllocation for MisalignedAllocation {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 
     fn map_write(
         &self,
@@ -116,6 +122,9 @@ unsafe impl BackendAllocation for WrongLengthAllocation {
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 
@@ -154,6 +163,9 @@ unsafe impl BackendAllocation for ByteAllocation {
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
 

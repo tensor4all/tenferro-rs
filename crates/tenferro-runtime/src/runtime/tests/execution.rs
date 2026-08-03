@@ -20,7 +20,7 @@ use crate::runtime::execution::{
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
+    ExecutableEngineContract, ExecutionContextIdentity, ExecutionInputs, HardwareClassId,
     ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
     InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
     ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
@@ -150,7 +150,11 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
         _operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<Tensor>> {
-        Ok(inputs.iter().map(|input| (*input).clone()).collect())
+        inputs
+            .iter()
+            .map(|input| input.duplicate())
+            .collect::<tenferro_tensor::Result<Vec<_>>>()
+            .map_err(Error::from)
     }
 
     fn execute_values(
@@ -168,10 +172,11 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
         _operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<TensorValue>> {
-        Ok(inputs
+        inputs
             .iter()
-            .map(|input| TensorValue::from_tensor((*input).clone()))
-            .collect())
+            .map(|input| input.duplicate().map(TensorValue::from_tensor))
+            .collect::<tenferro_tensor::Result<Vec<_>>>()
+            .map_err(Error::from)
     }
 
     fn execute_slot_instruction<'input>(
@@ -199,7 +204,8 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
             ));
         }
         slot.as_tensor("AdmissionTestExecutor::materialize_slot")
-            .cloned()
+            .map_err(|error| Error::Internal(error.to_string()))
+            .and_then(|tensor| tensor.duplicate().map_err(Error::from))
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> crate::Result<TensorValue> {
@@ -274,7 +280,12 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
     };
     let admitted_epoch = runtime.epoch()?;
 
-    let handle = submit_with_spawner(&runtime, &program, &[&input], &spawner)?;
+    let handle = submit_with_spawner(
+        &runtime,
+        &program,
+        ExecutionInputs::new(vec![input.duplicate()?]),
+        &spawner,
+    )?;
     started.wait();
     runtime.reconfigure(|edit| {
         edit.replace_engine(admission_test_registration(true)?)?;
@@ -283,7 +294,10 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
     assert_ne!(runtime.epoch()?, admitted_epoch);
     release.wait();
 
-    let output = handle.wait()?;
+    let output = match handle.wait()? {
+        crate::runtime::ExecutionOutcome::Completed(output) => output,
+        other => panic!("unexpected submission outcome: {other:?}"),
+    };
     assert_eq!(output[0].as_slice::<f64>()?, &[1.0, 2.0]);
     Ok(())
 }

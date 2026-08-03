@@ -489,8 +489,8 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
         [-1.0, 22.0, 28.0, -1.0, 49.0, 64.0, -1.0, -1.0]
     );
 
-    let lhs_erased = Tensor::from(lhs.clone());
-    let rhs_erased = Tensor::from(rhs.clone());
+    let lhs_erased = Tensor::from(lhs.duplicate().unwrap());
+    let rhs_erased = Tensor::from(rhs.duplicate().unwrap());
     let mut strided_data = [-1.0_f64; 8];
     {
         let out_view = TensorViewMut::F64(
@@ -593,8 +593,8 @@ fn concrete_einsum_plan_executes_read_and_typed_inputs() {
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
     let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik").unwrap();
-    let lhs_erased = Tensor::from(lhs.clone());
-    let rhs_erased = Tensor::from(rhs.clone());
+    let lhs_erased = Tensor::from(lhs.duplicate().unwrap());
+    let rhs_erased = Tensor::from(rhs.duplicate().unwrap());
 
     let mut backend = CpuBackend::new();
     let typed = plan.execute_typed([&lhs, &rhs], &mut backend).unwrap();

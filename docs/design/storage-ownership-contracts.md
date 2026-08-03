@@ -175,10 +175,11 @@ P1 obligation. The current production state activates the four P1 rows
 (`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
 `p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row; the
 already reconciled P0 `p0-control-plane` row is active as their prerequisite.
-The five P4 access-retirement rows and the selected P5 allocation-group row are
-now active with their real private proof artifacts. P3/P9 and all later rows
-remain deferred until their own phase gates and verifiers land. No missing
-deferred artifact is fabricated to make a phase terminal.
+The five P4 access-retirement rows, the selected P5 allocation-group row, and
+the atomic P3/P9 cutover rows are active with their real private proof
+artifacts. P6 and all later rows remain deferred until their own phase gates
+and verifiers land. No missing deferred artifact is fabricated to make a phase
+terminal.
 
 ### One canonical graph
 
@@ -493,10 +494,8 @@ comparison. The runner integration uses the real active Python verifiers and a
 temporary local cargo executable to prove that the canonical argv is executed;
 this fixture is not a production command mode or a lifecycle authority.
 
-P4 and the selected P5 obligation are active; the CUTOVER candidate still
-requires successful runner evidence for the complete P4/P5 set before
-atomically activating all P3/P9 obligations. In particular, the canonical
-obligation set includes:
+P4, the selected P5 obligation, and the atomic P3/P9 cohort are active. The
+canonical obligation set includes:
 
 - P4/G1+G4: a deferred production-code-bound compile/test artifact for the
   prepared read/write borrow shape and exact capability recovery before
@@ -811,8 +810,9 @@ layout metadata and root-bound spans in append-only local tables, resolves
 opaque descriptor slots only through a group borrow, and creates borrowed read
 or write children without copying storage. `split_mut` performs the single
 central injectivity/disjoint-envelope proof and `try_extract` performs the
-sole-local-descriptor ownership move. This is the P5 proof boundary; public
-API cutover and the atomic P3/P9 transition remain deferred.
+sole-local-descriptor ownership move. This is the P5 proof boundary; the
+atomic P3/P9 transition is now active, while the later public API normalization
+remains deferred.
 
 ### Types
 

@@ -20,7 +20,7 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 fn eval_tensor(traced: TracedTensor) -> Tensor {
     let engine = cpu_runtime();
     let traced = traced;
-    traced.run_with(&engine).unwrap().clone()
+    traced.run_with(&engine).unwrap().duplicate().unwrap()
 }
 
 #[test]

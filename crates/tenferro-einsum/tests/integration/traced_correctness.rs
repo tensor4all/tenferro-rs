@@ -17,7 +17,7 @@ fn spec(tensor: &Tensor) -> ProgramInputSpec {
 
 fn trace_default(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
     trace
-        .input_with_default(spec(tensor), Arc::new(tensor.clone()))
+        .input_with_default(spec(tensor), Arc::new(tensor.duplicate().unwrap()))
         .unwrap()
 }
 

@@ -75,6 +75,7 @@ pub(crate) enum DispatchMode {
     Segmented,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ExecSlot<'a> {
     Owned(Tensor),
     Value(TensorValue),
@@ -122,11 +123,11 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),
-            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref().clone()),
+            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref().duplicate()?),
             Self::Value(TensorValue::View(view)) => {
                 Ok(exec.to_contiguous_read(view.tensor_read())?)
             }
-            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.clone()),
+            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.duplicate()?),
             Self::Read(read @ TensorRead::View(_)) => Ok(exec.to_contiguous_read(read)?),
         }
     }
@@ -135,7 +136,9 @@ impl<'a> ExecSlot<'a> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
-            Self::Read(TensorRead::Tensor(tensor)) => Ok(TensorValue::from_tensor(tensor.clone())),
+            Self::Read(TensorRead::Tensor(tensor)) => {
+                Ok(TensorValue::from_tensor(tensor.duplicate()?))
+            }
             Self::Read(read @ TensorRead::View(_)) => {
                 Ok(TensorValue::from_tensor(exec.to_contiguous_read(read)?))
             }
@@ -499,13 +502,13 @@ fn tensor_value_for_lazy_view<'input>(
             Ok(value)
         }
         Some(ExecSlot::Value(value)) => {
-            let output = value.clone();
+            let output = value.duplicate()?;
             slots[slot] = Some(ExecSlot::Value(value));
             Ok(output)
         }
         Some(ExecSlot::Read(read)) => {
             let output = match read.clone() {
-                TensorRead::Tensor(tensor) => TensorValue::from_tensor(tensor.clone()),
+                TensorRead::Tensor(tensor) => TensorValue::from_tensor(tensor.duplicate()?),
                 read @ TensorRead::View(_) => {
                     TensorValue::from_tensor(exec.to_contiguous_read(read)?)
                 }

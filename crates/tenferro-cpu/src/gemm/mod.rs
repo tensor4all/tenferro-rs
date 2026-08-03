@@ -14,8 +14,8 @@ use crate::provider::{
 use crate::{Error, Result};
 use tenferro_tensor::backend::GroupedGemmConfig;
 use tenferro_tensor::{
-    col_major_strides, Buffer, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, ValidationError,
+    col_major_strides, TensorRead, TensorScalar, TensorView, TensorViewMut, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut, ValidationError,
 };
 use tenferro_tensor::{CacheStats, RuntimeCacheControl};
 use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DotGeneralConfig};
@@ -120,7 +120,7 @@ trait TypedTensorRead<T> {
     fn host_data_opt(&self) -> crate::Result<Option<&[T]>>;
 }
 
-impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
+impl<T: TensorScalar> TypedTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
         self.layout().shape()
     }
@@ -134,10 +134,7 @@ impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     }
 
     fn host_data_opt(&self) -> crate::Result<Option<&[T]>> {
-        Ok(match self.buffer() {
-            Buffer::Host(v) => Some(v.as_slice()),
-            Buffer::Backend(_) => None,
-        })
+        Ok(self.host_data().ok())
     }
 }
 
@@ -160,24 +157,6 @@ impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
         } else {
             Ok(Some(self.host_storage()?))
         }
-    }
-}
-
-impl<T: Clone> TypedTensorRead<T> for std::borrow::Cow<'_, TypedTensor<T>> {
-    fn shape(&self) -> &[usize] {
-        self.as_ref().shape()
-    }
-
-    fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {
-        self.as_ref().strides()
-    }
-
-    fn offset(&self) -> isize {
-        self.as_ref().offset()
-    }
-
-    fn host_data_opt(&self) -> crate::Result<Option<&[T]>> {
-        self.as_ref().host_data_opt()
     }
 }
 

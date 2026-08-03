@@ -61,6 +61,115 @@ pub struct ExecutionHandle {
     submission: Arc<InFlightSubmission>,
 }
 
+/// Move-only input package for detached runtime submission.
+pub struct ExecutionInputs {
+    tensors: Vec<Tensor>,
+}
+
+impl ExecutionInputs {
+    /// Construct a package from already-owned tensors.
+    pub fn new(tensors: Vec<Tensor>) -> Self {
+        Self { tensors }
+    }
+
+    pub(crate) fn as_refs(&self) -> Vec<&Tensor> {
+        self.tensors.iter().collect()
+    }
+
+    pub(crate) fn into_tensors(self) -> Vec<Tensor> {
+        self.tensors
+    }
+}
+
+impl fmt::Debug for ExecutionInputs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionInputs")
+            .field("len", &self.tensors.len())
+            .finish()
+    }
+}
+
+/// The result of a detached submission after the provider retirement point.
+///
+/// An ordinary execution failure is reported with the input package restored
+/// only after the worker has returned and the provider has retired its work.
+/// A worker panic or equivalent loss of the retirement witness is returned as
+/// the outer error and carries no owner.
+#[derive(Debug)]
+pub enum ExecutionOutcome {
+    /// The scheduled graph completed and produced owned output tensors.
+    Completed(Vec<Tensor>),
+    /// The graph retired with an ordinary execution error; the input owner is
+    /// available again because retirement was observed.
+    RetiredFailed {
+        error: Error,
+        inputs: ExecutionInputs,
+    },
+}
+
+/// A detached submission failed before ownership could be transferred to the
+/// in-flight worker, or the worker could not be created after admission.
+#[derive(Debug)]
+pub enum SubmitError {
+    /// Preparation/admission rejected the request. The exact input package is
+    /// returned unchanged to the caller.
+    PreAdmission {
+        source: Box<Error>,
+        inputs: ExecutionInputs,
+    },
+    /// The worker could not be spawned after admission. The in-flight record
+    /// retains the admitted owner; no recovery owner is manufactured here.
+    WorkerSpawn { source: Box<Error> },
+}
+
+impl SubmitError {
+    /// Recover the unchanged package from a pre-admission rejection.
+    pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
+        match self {
+            Self::PreAdmission { source, inputs } => Some((*source, inputs)),
+            Self::WorkerSpawn { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for SubmitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PreAdmission { source, .. } => {
+                write!(formatter, "submission rejected before admission: {source}")
+            }
+            Self::WorkerSpawn { source } => write!(
+                formatter,
+                "submission worker failed after admission: {source}"
+            ),
+        }
+    }
+}
+
+impl StdError for SubmitError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::PreAdmission { source, .. } | Self::WorkerSpawn { source } => {
+                // Keep the pre-admission typed source at the same depth as the
+                // historical runtime error chain while the owner travels in
+                // this wrapper.
+                source.source().or(Some(source.as_ref()))
+            }
+        }
+    }
+}
+
+impl From<SubmitError> for Error {
+    fn from(error: SubmitError) -> Self {
+        match error {
+            SubmitError::PreAdmission { source, .. } | SubmitError::WorkerSpawn { source } => {
+                *source
+            }
+        }
+    }
+}
+
 impl ExecutionHandle {
     /// Wait for submitted work to finish and return its tensor outputs.
     ///
@@ -69,7 +178,7 @@ impl ExecutionHandle {
     /// Returns the submitted runtime execution [`Error`], including
     /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
     /// when the handle was already consumed or the worker panicked.
-    pub fn wait(self) -> Result<Vec<Tensor>> {
+    pub fn wait(self) -> Result<ExecutionOutcome> {
         self.submission.wait()
     }
 }
@@ -85,7 +194,7 @@ impl fmt::Debug for ExecutionHandle {
 
 pub(super) struct InFlightSubmission {
     work: Mutex<Option<InFlightWork>>,
-    completion: Mutex<Option<Result<Vec<Tensor>>>>,
+    completion: Mutex<Option<Result<ExecutionOutcome>>>,
     completed: Condvar,
 }
 
@@ -101,11 +210,11 @@ enum InFlightWork {
 }
 
 impl InFlightSubmission {
-    fn new(prepared: PreparedCompiledGraph, inputs: Vec<Tensor>) -> Self {
+    fn new(prepared: PreparedCompiledGraph, inputs: ExecutionInputs) -> Self {
         Self {
             work: Mutex::new(Some(InFlightWork::Admitted(AdmittedExecution {
                 prepared,
-                inputs,
+                inputs: inputs.into_tensors(),
             }))),
             completion: Mutex::new(None),
             completed: Condvar::new(),
@@ -128,11 +237,18 @@ impl InFlightSubmission {
         };
         let result = catch_unwind(AssertUnwindSafe(|| match work {
             Some(InFlightWork::Admitted(admitted)) => {
-                let input_refs = admitted.inputs.iter().collect::<Vec<_>>();
-                execute_admitted(&admitted.prepared, &input_refs)
+                let AdmittedExecution { prepared, inputs } = admitted;
+                let input_refs = inputs.iter().collect::<Vec<_>>();
+                match execute_admitted(&prepared, &input_refs) {
+                    Ok(outputs) => Ok(ExecutionOutcome::Completed(outputs)),
+                    Err(error) => Ok(ExecutionOutcome::RetiredFailed {
+                        error,
+                        inputs: ExecutionInputs::new(inputs),
+                    }),
+                }
             }
             #[cfg(test)]
-            Some(InFlightWork::Test(work)) => work(),
+            Some(InFlightWork::Test(work)) => work().map(ExecutionOutcome::Completed),
             None => Err(Error::runtime_state(
                 "Runtime::submit",
                 ErrorPhase::Execution,
@@ -161,7 +277,7 @@ impl InFlightSubmission {
         self.completed.notify_all();
     }
 
-    fn wait(&self) -> Result<Vec<Tensor>> {
+    fn wait(&self) -> Result<ExecutionOutcome> {
         let mut completion = self.completion.lock().map_err(|_| {
             Error::runtime_state(
                 "ExecutionHandle::wait",
@@ -741,25 +857,31 @@ pub(super) fn prepare_compiled(
 pub(super) fn submit(
     runtime: &Runtime,
     program: &CompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<ExecutionHandle> {
+    inputs: ExecutionInputs,
+) -> std::result::Result<ExecutionHandle, SubmitError> {
     submit_with_spawner(runtime, program, inputs, &OsThreadSpawner)
 }
 
 pub(super) fn submit_with_spawner(
     runtime: &Runtime,
     program: &CompiledGraph,
-    inputs: &[&Tensor],
+    inputs: ExecutionInputs,
     spawner: &dyn SubmissionSpawner,
-) -> Result<ExecutionHandle> {
-    let inputs = resolve_input_refs(program, inputs)?
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let input_refs = inputs.iter().collect::<Vec<_>>();
-    let prepared = prepare_compiled(runtime, program, &input_refs)?;
+) -> std::result::Result<ExecutionHandle, SubmitError> {
+    let input_refs = inputs.as_refs();
+    let prepared = match prepare_compiled(runtime, program, &input_refs) {
+        Ok(prepared) => prepared,
+        Err(source) => {
+            return Err(SubmitError::PreAdmission {
+                source: Box::new(source),
+                inputs,
+            })
+        }
+    };
     let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
-    spawn_in_flight(submission, spawner)
+    spawn_in_flight(submission, spawner).map_err(|source| SubmitError::WorkerSpawn {
+        source: Box::new(source),
+    })
 }
 
 pub(super) fn run_prepared(
@@ -2289,7 +2411,7 @@ mod tests {
                 })?;
             let materialized =
                 backend.with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))?;
-            self.probe_reentrant_call(materialized.clone());
+            self.probe_reentrant_call(materialized.duplicate()?);
             Ok(vec![materialized])
         }
     }

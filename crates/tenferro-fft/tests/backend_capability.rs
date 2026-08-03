@@ -116,12 +116,12 @@ macro_rules! impl_minimal_tensor_backend {
         impl TensorDeviceTransfer for $ty {
             fn download_to_host(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                Ok(tensor.clone())
+                tensor.duplicate()
             }
 
             fn upload_host_tensor(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                Ok(tensor.clone())
+                tensor.duplicate()
             }
         }
         impl BackendCachedDot for $ty {}
@@ -196,7 +196,7 @@ impl FftBackend for MockNonCpuSession {
             self.plan_builds += 1;
             store.put(cache_key, MockNonCpuPlan { key: plan_key }, 96);
         }
-        Ok(input.clone())
+        input.duplicate()
     }
 }
 

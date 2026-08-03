@@ -23,7 +23,7 @@ fn tensor_value_view_paths_materialize_and_read() {
     assert_eq!(borrowed.as_tensor().unwrap().shape(), &[2]);
     assert_eq!(borrowed.tensor_read().shape(), &[2]);
 
-    let owned = TensorValue::Owned(tensor.clone());
+    let owned = TensorValue::Owned(tensor.duplicate().unwrap());
     assert_eq!(owned.as_tensor().unwrap().shape(), &[2]);
     assert_eq!(owned.tensor_read().shape(), &[2]);
 

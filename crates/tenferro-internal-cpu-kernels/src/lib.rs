@@ -22,7 +22,7 @@ use num_complex::{Complex32, Complex64};
 use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView};
 #[cfg(test)]
 use strided_kernel::{map_into, Identity};
-use tenferro_tensor::{Buffer, DType, TensorRank, TypedTensor, TypedTensorView};
+use tenferro_tensor::{DType, TensorRank, TensorScalar, TypedTensor, TypedTensorView};
 #[cfg(test)]
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
@@ -80,28 +80,27 @@ impl ConjElem for Complex64 {
     }
 }
 
-pub(crate) fn typed_host_data<'a, T>(
+pub(crate) fn typed_host_data<'a, T: TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> Result<&'a [T]> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok(data.as_slice()),
-        Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
     }
+    tensor.host_data()
 }
 
-pub(crate) fn typed_view<'a, T: Copy>(
+pub(crate) fn typed_view<'a, T: Copy + TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> Result<StridedView<'a, T>> {
-    match tensor.buffer() {
-        Buffer::Host(data) => {
-            let strides = kernel_col_major_strides(tensor.shape());
-            StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
-                .map_err(|err| Error::backend_source(op, err))
-        }
-        Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
     }
+    let data = tensor.host_data()?;
+    let strides = kernel_col_major_strides(tensor.shape());
+    StridedView::new(data, tensor.shape(), &strides, 0)
+        .map_err(|err| Error::backend_source(op, err))
 }
 
 pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
@@ -137,7 +136,7 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> Result<Tensor> {
     macro_rules! clone_host {
         ($variant:ident, $tensor:expr) => {{
             typed_host_data(op, $tensor)?;
-            Ok(Tensor::$variant($tensor.clone()))
+            Ok(Tensor::$variant($tensor.duplicate()?))
         }};
     }
 
@@ -206,9 +205,7 @@ where
     let out = unsafe { out.assume_init_as::<R>()? };
     let shape = R::shape_from_vec(view.shape().to_vec().into())
         .map_err(|err| Error::backend_source(op, err))?;
-    TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Host(out.into_vec_col_major()?.1),
-        view.placement().clone(),
-    )
+    let mut tensor = TypedTensor::from_vec_col_major(shape, out.into_vec_col_major()?.1)?;
+    tensor.set_placement(view.placement().clone());
+    Ok(tensor)
 }

@@ -2,7 +2,7 @@ use std::alloc::Layout;
 use std::mem::{ManuallyDrop, MaybeUninit};
 
 use strided_kernel::StridedViewMut;
-use tenferro_tensor::{validate::checked_shape_product, TensorRank, TypedTensor};
+use tenferro_tensor::{validate::checked_shape_product, TensorRank, TensorScalar, TypedTensor};
 
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
 use crate::{Error, Result};
@@ -181,7 +181,10 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// Returns `Error::Validation` if tensor construction rejects the shape or
     /// data length. Dynamic-rank conversion itself is infallible, so this
     /// method does not produce a rank-conversion `Error::BackendSource`.
-    pub unsafe fn assume_init(self) -> Result<TypedTensor<T>> {
+    pub unsafe fn assume_init(self) -> Result<TypedTensor<T>>
+    where
+        T: TensorScalar,
+    {
         // SAFETY: this method has the same full-initialization precondition.
         unsafe { self.assume_init_as::<tenferro_tensor::DynRank>() }
     }
@@ -211,7 +214,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```
     pub unsafe fn assume_init_as<R: TensorRank>(mut self) -> Result<TypedTensor<T, R>>
     where
-        T: Clone,
+        T: TensorScalar,
     {
         let shape = R::shape_from_vec(std::mem::take(&mut self.shape).into())
             .map_err(|err| Error::backend_source("pooled_uninit_output", err))?;

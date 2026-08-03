@@ -263,14 +263,18 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         eig_values_calls: 0,
     };
 
-    let eig_values = Tensor::F64(input.clone()).eigvals(&mut backend).unwrap();
+    let eig_values = Tensor::F64(input.duplicate().unwrap())
+        .eigvals(&mut backend)
+        .unwrap();
     assert_eq!(backend.eig_values_calls, 1);
     assert_eq!(
         c64_values(&eig_values),
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
     );
 
-    let err = backend.lu_factor(&Tensor::F64(input.clone())).unwrap_err();
+    let err = backend
+        .lu_factor(&Tensor::F64(input.duplicate().unwrap()))
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
@@ -279,7 +283,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let err = backend.svd_values(&Tensor::F64(input.clone())).unwrap_err();
+    let err = backend
+        .svd_values(&Tensor::F64(input.duplicate().unwrap()))
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
@@ -288,7 +294,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let owned_input = Tensor::F64(input.clone());
+    let owned_input = Tensor::F64(input.duplicate().unwrap());
 
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f64, 11.0]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64; 2]).unwrap();
@@ -373,7 +379,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .eigh_values(&Tensor::F64(input.clone()))
+        .eigh_values(&Tensor::F64(input.duplicate().unwrap()))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -386,10 +392,10 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let err = backend
         .lu_solve_prepared(
-            &Tensor::F64(input.clone()),
-            &Tensor::F64(input.clone()),
+            &Tensor::F64(input.duplicate().unwrap()),
+            &Tensor::F64(input.duplicate().unwrap()),
             &pivots,
-            &Tensor::F64(input.clone()),
+            &Tensor::F64(input.duplicate().unwrap()),
             false,
             false,
         )

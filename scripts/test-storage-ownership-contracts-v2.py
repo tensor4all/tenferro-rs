@@ -37,6 +37,11 @@ ACTIVE_IDS = frozenset(
         "p4-traversal-resolution-counts",
         "p4-prepared-access-api",
         "p5-allocation-group",
+        "p3-host-owner",
+        "p3-static-rank-preservation",
+        "p3-as-view-zero-allocation",
+        "p3-auto-trait-contract",
+        "p9-submission",
     }
 )
 DEFERRED_CORRECTIONS: dict[str, str] = {}
@@ -831,10 +836,12 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             temporary.cleanup()
 
     def test_partial_cutover_cohort_is_rejected(self) -> None:
-        manifest = _replace_row_state(_manifest_text(), "p3-host-owner", '{ kind = "active" }')
+        manifest = _replace_row_state(
+            _manifest_text(),
+            "p9-submission",
+            '{ kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }',
+        )
         files = _fixture_files(manifest)
-        row = next(row for row in _manifest_rows(manifest) if row["id"] == "p3-host-owner")
-        files[row["artifact"]["path"]] = "candidate artifact\n"
         result = _run_checker(manifest, files=files, extra=("--diagnostics-json",))
         _assert_error(self, result, "E_COHORT_PARTIAL_PROMOTION", {"cohort_id": "cutover"})
 

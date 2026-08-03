@@ -898,8 +898,8 @@ impl Runtime {
     pub fn submit(
         &self,
         program: &CompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<super::execution::ExecutionHandle> {
+        inputs: super::execution::ExecutionInputs,
+    ) -> std::result::Result<super::execution::ExecutionHandle, super::execution::SubmitError> {
         super::execution::submit(self, program, inputs)
     }
 

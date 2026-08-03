@@ -350,28 +350,27 @@ impl ConjElem for num_complex::Complex64 {
     }
 }
 
-pub(crate) fn typed_host_data<'a, T>(
+pub(crate) fn typed_host_data<'a, T: TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<&'a [T]> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok(data.as_slice()),
-        Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
     }
+    tensor.host_data()
 }
 
-pub(crate) fn typed_view<'a, T: Copy>(
+pub(crate) fn typed_view<'a, T: Copy + TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<StridedView<'a, T>> {
-    match tensor.buffer() {
-        Buffer::Host(data) => {
-            let strides = kernel_col_major_strides(tensor.shape());
-            StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
-                .map_err(|err| crate::Error::backend_source(op, err))
-        }
-        Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
     }
+    let data = tensor.host_data()?;
+    let strides = kernel_col_major_strides(tensor.shape());
+    StridedView::new(data, tensor.shape(), &strides, 0)
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
@@ -447,7 +446,7 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
         ($variant:ident, $tensor:expr) => {{
             structural::validate_cpu_host_placement(op, "source", $tensor.placement())?;
             typed_host_data(op, $tensor)?;
-            Ok(Tensor::$variant($tensor.clone()))
+            $tensor.duplicate().map(Tensor::$variant)
         }};
     }
 
@@ -505,18 +504,12 @@ pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
 }
 
 #[cfg(test)]
-pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
+pub(crate) fn tensor_from_array<T: Clone + tenferro_tensor::TensorScalar>(
+    array: StridedArray<T>,
+) -> TypedTensor<T> {
     // Invariant: `StridedArray` owns data whose length matches its validated dimensions.
     TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())
         .expect("strided array dimensions match owned data length")
-}
-
-pub(crate) fn default_placement() -> Placement {
-    Placement {
-        memory_kind: MemoryKind::UnpinnedHost,
-        device: None,
-        cpu_affinity: None,
-    }
 }
 
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {

@@ -124,7 +124,9 @@ impl fmt::Debug for BufferPool {
 /// buf.copy_from_slice(&[3.0, 4.0]);
 /// <f64 as PoolScalar>::pool_release(&mut pool, buf);
 /// ```
-pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
+pub trait PoolScalar:
+    Copy + Sized + Send + Sync + tenferro_tensor::TensorScalar + private::Sealed
+{
     /// Zero value used to initialize acquired buffers.
     fn pool_zero() -> Self;
 

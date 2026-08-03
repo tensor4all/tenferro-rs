@@ -13,8 +13,8 @@
 use num_complex::{Complex32, Complex64};
 
 use crate::{
-    DType, DotGeneralConfig, Error, ErrorKind, Result, ShapeMismatch, Tensor, TypedTensor,
-    ValidationError,
+    DType, DotGeneralConfig, Error, ErrorKind, Result, ShapeMismatch, Tensor, TensorScalar,
+    TypedTensor, ValidationError,
 };
 
 /// Domain-specific reasons reported by triangular-factor validation.
@@ -362,7 +362,7 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 /// [`DiagonalError::SingularOrNonFinite`] source for a singular or non-finite
 /// diagonal, or an unsupported [`crate::Error::Extension`] with a typed
 /// [`DiagonalError::UnsupportedDType`] source for integer and boolean inputs.
-pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
+pub fn check_singular_diagonal<T: DiagSingularity + TensorScalar + std::fmt::Debug>(
     t: &TypedTensor<T>,
 ) -> Result<()> {
     if t.shape().len() < 2 {

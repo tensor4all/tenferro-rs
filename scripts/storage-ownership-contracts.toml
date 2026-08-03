@@ -234,9 +234,9 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p3-host-owner"
 unit = "P3"
 gates = ["G4"]
-artifact = { id = "artifact-owner-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/fail/owned_storage_not_clone.rs" }
+artifact = { id = "artifact-owner-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/fail/typed_tensor_not_clone.rs" }
 command = { id = "cmd-owner-compile", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"], cwd = ".", path_args = [], artifact_id = "artifact-owner-compile" }
-state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -245,7 +245,7 @@ unit = "P3"
 gates = ["G4"]
 artifact = { id = "artifact-static-rank-preservation", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_static_rank.rs" }
 command = { id = "cmd-static-rank-preservation", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_static_rank"], cwd = ".", path_args = [], artifact_id = "artifact-static-rank-preservation" }
-state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -254,7 +254,7 @@ unit = "P3"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-as-view-zero-allocation", kind = "allocation-borrow-contract", path = "crates/tenferro-tensor/tests/storage_as_view_allocation.rs" }
 command = { id = "cmd-as-view-zero-allocation", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_as_view_allocation"], cwd = ".", path_args = [], artifact_id = "artifact-as-view-zero-allocation" }
-state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -263,7 +263,7 @@ unit = "P3"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-storage-auto-traits", kind = "compile-contract", path = "crates/tenferro-tensor/tests/storage_auto_traits.rs" }
 command = { id = "cmd-storage-auto-traits", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_auto_traits"], cwd = ".", path_args = [], artifact_id = "artifact-storage-auto-traits" }
-state = { kind = "deferred", activation_unit = "P3", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -317,7 +317,7 @@ unit = "P9"
 gates = ["G2", "G3", "G7"]
 artifact = { id = "artifact-submit-compile", kind = "trybuild", path = "crates/tenferro-tensor/tests/ui/storage/pass/consuming_submission.rs" }
 command = { id = "cmd-submit-compile", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract"], cwd = ".", path_args = [], artifact_id = "artifact-submit-compile" }
-state = { kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

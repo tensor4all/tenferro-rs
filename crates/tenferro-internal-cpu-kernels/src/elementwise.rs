@@ -577,7 +577,8 @@ where
 
 fn complex_scalar_tensor<T>(scalar: T) -> crate::Result<TypedTensor<Complex<T>>>
 where
-    T: Copy + Clone + Zero,
+    T: Copy + Clone + Zero + tenferro_tensor::TensorScalar,
+    Complex<T>: tenferro_tensor::TensorScalar,
 {
     TypedTensor::from_vec_col_major(vec![], vec![Complex::new(scalar, T::zero())])
 }
@@ -586,7 +587,8 @@ fn complex_scalar_tensor_from_tensor<T>(
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<Complex<T>>>
 where
-    T: Copy + Clone + Zero,
+    T: Copy + Clone + Zero + tenferro_tensor::TensorScalar,
+    Complex<T>: tenferro_tensor::TensorScalar,
 {
     complex_scalar_tensor(typed_host_data("add", input)?[0])
 }
@@ -595,7 +597,8 @@ fn complex_scalar_tensor_from_view<T, R>(
     input: &TypedTensorView<'_, T, R>,
 ) -> crate::Result<TypedTensor<Complex<T>>>
 where
-    T: Copy + Clone + Zero + 'static,
+    T: Copy + Clone + Zero + 'static + tenferro_tensor::TensorScalar,
+    Complex<T>: tenferro_tensor::TensorScalar,
     R: TensorRank,
 {
     complex_scalar_tensor(typed_view_from_view("add", input)?.get(&[]))
@@ -1508,7 +1511,7 @@ fn typed_same_shape_binary_view_with_pool<T, O, L, R>(
     f: impl Fn(T, T) -> O + Copy + Sync,
 ) -> crate::Result<TypedTensor<O>>
 where
-    T: Copy + Send + Sync + 'static,
+    T: Copy + Send + Sync + TensorScalar + 'static,
     O: Copy + PoolScalar,
     L: TensorRank,
     R: TensorRank,
@@ -3810,7 +3813,7 @@ fn typed_map_with_pool<T, O>(
     f: impl Fn(T) -> O + Copy + Sync,
 ) -> crate::Result<TypedTensor<O>>
 where
-    T: Copy + Send + Sync + 'static,
+    T: Copy + Send + Sync + TensorScalar + 'static,
     O: Clone + PoolScalar,
 {
     let mut out = PooledUninitOutput::<O>::new(buffers, input.shape().to_vec())?;
@@ -3895,6 +3898,7 @@ fn typed_complex_abs_with_pool<T>(
 ) -> crate::Result<TypedTensor<T>>
 where
     T: num_traits::Float + PoolScalar + 'static,
+    Complex<T>: TensorScalar,
 {
     typed_map_with_pool("abs", buffers, input, |x| x.norm())
 }
@@ -4003,7 +4007,7 @@ pub fn typed_compare_with_pool<T>(
     dir: &CompareDir,
 ) -> crate::Result<TypedTensor<bool>>
 where
-    T: CompareElem,
+    T: CompareElem + TensorScalar,
 {
     if lhs.shape() != rhs.shape() {
         return Err(crate::Error::shape_mismatch(

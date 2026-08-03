@@ -558,6 +558,7 @@ fn broadcast_in_dim<T: TensorScalar>(
     into_typed_result("broadcast_in_dim", out)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
     Owned(Tensor),

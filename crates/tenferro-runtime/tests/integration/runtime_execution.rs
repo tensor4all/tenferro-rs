@@ -19,16 +19,17 @@ use tenferro_runtime::{
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
     ErasedExecutionContext, Error, ErrorPhase, EventDomainId, ExecutableEngineRegistrationConfig,
-    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, GraphCompiler, HardwareClassId, IndexingRuntime, InputIngressContract,
-    InputIngressContractError, InputPlacementContract, InputSignatureContract, LayoutRuntime,
-    PreparationOnlyEngineRegistrationConfig, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, ResidentOutputContract,
-    Runtime, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError,
-    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
-    TransferProvider, TransferProviderContractError, TransferRequest,
+    ExecutionContextIdentity, ExecutionInputs, ExtensionCacheStore, ExtensionEngine,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
+    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
+    IndexingRuntime, InputIngressContract, InputIngressContractError, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, PreparationOnlyEngineRegistrationConfig,
+    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
+    PreparedOperationExecutor, PreparedOperationPlan, ProviderDeviceIdentity, ProviderId,
+    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
+    RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError, SpecializationProjection,
+    StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -606,11 +607,11 @@ impl TransferProvider for RecordingTransferProvider {
                 }
                 output
             }
-            None => {
-                request.input().as_tensor().cloned().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?
-            }
+            None => request
+                .input()
+                .as_tensor()
+                .ok_or_else(|| Error::Internal("test transfer expected an owned tensor".into()))?
+                .duplicate()?,
         };
         self.materialized_domains
             .lock()
@@ -659,9 +660,13 @@ impl TransferProvider for FaultyTransferProvider {
             FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
             FaultyTransferOutput::Placement => {
-                let mut tensor = request.input().as_tensor().cloned().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?;
+                let mut tensor = request
+                    .input()
+                    .as_tensor()
+                    .ok_or_else(|| {
+                        Error::Internal("test transfer expected an owned tensor".into())
+                    })?
+                    .duplicate()?;
                 let Tensor::F64(tensor) = &mut tensor else {
                     return Err(Error::Internal(
                         "test transfer expected an f64 tensor".into(),
@@ -672,7 +677,7 @@ impl TransferProvider for FaultyTransferProvider {
                     device: None,
                     cpu_affinity: None,
                 });
-                Ok(tensor.clone().into())
+                Ok(tensor.duplicate()?.into())
             }
             FaultyTransferOutput::BufferLength => {
                 let len = Arc::new(AtomicUsize::new(2));
@@ -984,15 +989,23 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             .into()]);
         }
         if inputs[0].allocation_domain() == backend.allocation_domain() {
-            return inputs[0]
-                .as_tensor()
-                .cloned()
-                .map(|tensor| vec![tensor])
-                .ok_or_else(|| {
-                    Error::Internal(
-                        "allocation-domain test executor expected an owned tensor".into(),
-                    )
-                });
+            let tensor = inputs[0].as_tensor().ok_or_else(|| {
+                Error::Internal("allocation-domain test executor expected an owned tensor".into())
+            })?;
+            let Tensor::F64(tensor) = tensor else {
+                return Err(Error::Internal(
+                    "allocation-domain test executor currently expects f64 tensors".into(),
+                ));
+            };
+            return match tensor.buffer() {
+                Buffer::Host(_) => Ok(vec![tensor.duplicate()?.into()]),
+                Buffer::Backend(buffer) => Ok(vec![TypedTensor::from_buffer_col_major(
+                    tensor.shape().to_vec(),
+                    Buffer::Backend(Arc::clone(buffer)),
+                    tensor.placement().clone(),
+                )?
+                .into()]),
+            };
         }
         Ok(vec![backend.with_backend_session(|session| {
             session.to_contiguous_read(inputs[0].clone())
@@ -3659,7 +3672,9 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
-    let submit_error = runtime.submit(&program, &[&input]).unwrap_err();
+    let submit_error = runtime
+        .submit(&program, ExecutionInputs::new(vec![input.duplicate()?]))
+        .unwrap_err();
     let submit_prepare_error = submit_error
         .source()
         .and_then(StdError::source)
@@ -3688,8 +3703,11 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let foreign_domain = AllocationDomainId::fresh();
     let input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
+    let input_placement = input.placement().clone();
 
-    let error = runtime.submit(&program, &[&input]).unwrap_err();
+    let error = runtime
+        .submit(&program, ExecutionInputs::new(vec![input]))
+        .unwrap_err();
 
     let prepare_error = error
         .source()
@@ -3701,7 +3719,7 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
         PrepareError::NoInputIngress {
             input_index: 0,
             placement,
-        } if placement == input.placement()
+        } if placement == &input_placement
     ));
     Ok(())
 }
@@ -3716,8 +3734,11 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let handle = runtime.submit(&program, &[&input])?;
-    let output = handle.wait()?;
+    let handle = runtime.submit(&program, ExecutionInputs::new(vec![input.duplicate()?]))?;
+    let output = match handle.wait()? {
+        tenferro_runtime::ExecutionOutcome::Completed(output) => output,
+        other => panic!("unexpected submission outcome: {other:?}"),
+    };
 
     assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
     assert!(runtime.cache_stats()?.prepared_plans.entries > 0);

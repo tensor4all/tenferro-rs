@@ -434,7 +434,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
                 .collect::<tenferro_tensor::Result<Vec<_>>>();
             let materialized_inputs = materialized_inputs?;
             let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-            Ok(vec![input_refs[0].clone()])
+            Ok(vec![input_refs[0].duplicate()?])
         },
     )
     .expect("eager extension dispatch");

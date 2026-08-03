@@ -291,7 +291,10 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
         .unwrap();
     let input_value = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
-    let result = run_compiled_one(&program, vec![matching_shape_ref, input_value.clone()]);
+    let result = run_compiled_one(
+        &program,
+        vec![matching_shape_ref, input_value.duplicate().unwrap()],
+    );
     assert_eq!(result.shape(), &[2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 

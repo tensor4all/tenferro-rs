@@ -1366,7 +1366,7 @@ impl EagerRuntime {
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
         if let Some(tensor) = value.as_tensor_arc() {
-            return Ok(tensor.as_ref().clone());
+            return tensor.as_ref().duplicate().map_err(Error::from);
         }
 
         let mut backend = self.lock_backend()?;
@@ -2248,14 +2248,14 @@ fn semantic_eager_vjp_optional(
 
     let cotangent_tensor = cotangent.materialized_arc()?;
     let input_count = derivative_program.input_count();
-    let mut owned_inputs = vec![None; input_count];
+    let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
         let Some(slot) = owned_inputs.get_mut(source_input_index) else {
             return Err(Error::Internal(format!(
                 "semantic eager VJP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.clone());
+        *slot = Some(tensor.duplicate()?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2263,7 +2263,7 @@ fn semantic_eager_vjp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(cotangent_tensor.as_ref().clone());
+    *slot = Some(cotangent_tensor.as_ref().duplicate()?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2293,10 +2293,11 @@ fn semantic_eager_vjp_optional(
         prepared_runtime
     };
     let outputs = ctx.runtime.run_prepared(&prepared_runtime, &input_refs)?;
-    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+    let output_count = outputs.len();
+    let Some(result) = outputs.into_iter().nth(derivative_output_index) else {
         return Err(Error::Internal(format!(
             "semantic eager VJP derivative output index {derivative_output_index} is outside {} outputs",
-            outputs.len()
+            output_count
         )));
     };
     let cotangent_trace =
@@ -2396,14 +2397,14 @@ fn semantic_eager_jvp_optional(
     let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
     let tangent_tensor = tangent.materialized_arc()?;
     let input_count = derivative_program.input_count();
-    let mut owned_inputs = vec![None; input_count];
+    let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
         let Some(slot) = owned_inputs.get_mut(source_input_index) else {
             return Err(Error::Internal(format!(
                 "semantic eager JVP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.clone());
+        *slot = Some(tensor.duplicate()?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2411,7 +2412,7 @@ fn semantic_eager_jvp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(tangent_tensor.as_ref().clone());
+    *slot = Some(tangent_tensor.as_ref().duplicate()?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2424,10 +2425,11 @@ fn semantic_eager_jvp_optional(
         })
         .collect::<Result<Vec<_>>>()?;
     let outputs = ctx.runtime.run_compiled(&derivative_program, &input_refs)?;
-    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+    let output_count = outputs.len();
+    let Some(result) = outputs.into_iter().nth(derivative_output_index) else {
         return Err(Error::Internal(format!(
             "semantic eager JVP derivative output index {derivative_output_index} is outside {} outputs",
-            outputs.len()
+            output_count
         )));
     };
     let tangent_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tangent_tensor))?;

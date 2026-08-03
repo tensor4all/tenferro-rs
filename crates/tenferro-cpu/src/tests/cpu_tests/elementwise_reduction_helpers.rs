@@ -679,7 +679,7 @@ fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
 #[test]
 fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
     let bool_tensor = TypedTensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
-    let bools = Tensor::Bool(bool_tensor.clone());
+    let bools = Tensor::Bool(bool_tensor.duplicate().unwrap());
     let mut backend = CpuBackend::new();
 
     let sum_owned = reduce_sum(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
