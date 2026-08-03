@@ -106,7 +106,7 @@ def _policy(
 COMMAND_POLICY = {
     "cmd-control-plane": _policy(
         "cargo-test",
-        ("cargo", "test", "-p", "tenferro-runtime", "--test", "execution_engine_identity"),
+        ("cargo", "test", "-p", "tenferro-runtime", "--test", "integration"),
         (),
         "artifact-control-plane",
     ),
