@@ -6,6 +6,9 @@ This worklog records the narrow correction gate selected after the P0/P1
 checkpoint. The candidate starts from exact `origin/main` commit
 `5bbd4a0613b3c801ce924cdc4339df2c77c1ab62` in the isolated branch
 `codex/issue-1558-task2-corrections`.
+The implementation candidate is exact commit
+`a476c324c81cb5f70e3bd84bc79bd8760f3c16c2`; the evidence commit containing
+this worklog follows it.
 
 ## Scope and authority
 
@@ -54,10 +57,26 @@ were absent and compilation failed at the declared module boundary. After the
 minimal implementation:
 
 - `cargo build` — passed on the clean base;
-- `cargo test -p tenferro-tensor --lib storage::tests::span_validation` — 6
+- `cargo test -p tenferro-tensor --lib storage::tests::span_validation` — 8
   passed;
-- `python3 scripts/test-storage-ownership-contracts-v2.py` — 24 passed on the
-  clean base.
+- `cargo test -p tenferro-tensor --lib` — 224 passed;
+- `cargo clippy -p tenferro-tensor --all-targets -- -D warnings` — passed;
+- `cargo llvm-cov -p tenferro-tensor --lib --summary-only` — storage modules
+  passed the repository's 90% line-coverage target;
+- `cargo test -p tenferro-tensor --test storage_api_parity` and
+  `cargo test -p tenferro-tensor --test storage_compile_contract` — passed;
+- `python3 scripts/test-storage-ownership-contracts-v2.py` — 24 passed;
+- `python3 scripts/check-storage-ownership-contracts.py` and
+  `python3 scripts/check-storage-design-docs.py` — passed;
+- `python3 scripts/repository-rules-review.py --base origin/main --head
+  a476c324c81cb5f70e3bd84bc79bd8760f3c16c2 --output-json
+  /tmp/p2-task2-rules-review.json` — passed with zero findings.
+
+The initial review found an unchecked crate-visible span constructor and
+candidate-provenance gaps. The constructor is now private to the span module,
+the schematic G1 span now explicitly records exact root identity, and this
+worklog records candidate-scoped evidence. These changes require a fresh exact
+commit review before Task 3.
 
 The full correction-gate verification is run after the documentation and
 contract checks are committed. Evidence is identified by the exact Git commit
