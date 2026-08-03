@@ -927,6 +927,7 @@ fn runtime_missing(message: impl Into<String>) -> Error {
 /// let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 ///
 /// assert_eq!(out.shape(), &[2, 4]);
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 ///
 /// # Errors

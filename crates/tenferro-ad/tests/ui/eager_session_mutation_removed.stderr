@@ -1,3 +1,9 @@
+error[E0576]: cannot find method or associated constant `parts_mut` in trait `BackendSession`
+  --> tests/ui/eager_session_mutation_removed.rs:32:62
+   |
+32 |     let (owner, _) = <dyn BackendSession as BackendSession>::parts_mut(session);
+   |                                                              ^^^^^^^^^ not found in `BackendSession`
+
 error[E0308]: mismatched types
  --> tests/ui/eager_session_mutation_removed.rs:8:16
   |
@@ -63,15 +69,3 @@ error[E0599]: no method named `backend_mut` found for mutable reference `&mut dy
    |
 27 |     let owner: &mut CpuBackend = session.backend_mut();
    |                                          ^^^^^^^^^^^ method not found in `&mut dyn BackendSession`
-
-error[E0599]: no method named `parts_mut` found for mutable reference `&mut dyn BackendSession` in the current scope
-  --> tests/ui/eager_session_mutation_removed.rs:32:30
-   |
-32 |     let (owner, _) = session.parts_mut();
-   |                              ^^^^^^^^^
-   |
-help: there is a method `rb_mut` with a similar name
-   |
-32 -     let (owner, _) = session.parts_mut();
-32 +     let (owner, _) = session.rb_mut();
-   |

@@ -388,12 +388,56 @@ fn explicit_backend_kind_constructor_records_selection() {
     assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
 }
 
+#[derive(Debug)]
+struct IdentityTestGemmProvider;
+
+impl crate::provider::CpuGemmProvider for IdentityTestGemmProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        Ok(crate::provider::CpuProviderOutcome::Unsupported(
+            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        Ok(crate::provider::CpuProviderOutcome::Unsupported(
+            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        Ok(crate::provider::CpuProviderOutcome::Unsupported(
+            crate::provider::CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+}
+
 #[test]
 fn cpu_runtime_identity_changes_when_provider_bundle_changes() {
     let backend = CpuBackend::new();
     let replacement = backend
         .clone()
-        .with_provider_bundle(CpuProviderBundle::builder(backend.kind()).build().unwrap())
+        .with_provider_bundle(
+            CpuProviderBundle::builder(backend.kind())
+                .gemm_provider(Arc::new(IdentityTestGemmProvider))
+                .build()
+                .unwrap(),
+        )
         .unwrap();
 
     assert_eq!(

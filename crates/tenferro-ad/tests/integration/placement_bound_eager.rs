@@ -7,14 +7,19 @@ use std::thread;
 use std::time::Duration;
 
 use tenferro_ad::{CpuPlacementBoundEager, EagerRuntime, EagerTensor};
+use tenferro_cpu::provider::{
+    CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
+};
 use tenferro_cpu::{
-    discover_cpu_topology, CpuBackend, CpuDomainExecutor, CpuDomainExecutorCapabilities,
-    CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown,
-    CpuInnerParallelism, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, ExternalCpuDomain,
-    NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
+    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
+    CpuPlacementControl, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
+    CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{CpuDomainId, ErrorKind, Tensor, TensorElementwise};
+use tenferro_tensor::{CpuDomainId, Error as TensorError, ErrorKind, Tensor, TensorElementwise};
 
 #[derive(Debug, Default)]
 struct ExecutorCounters {
@@ -66,6 +71,55 @@ impl CpuDomainExecutor for CountingExecutor {
     }
 }
 
+#[derive(Debug)]
+struct PlacementTestGemmProvider;
+
+impl PlacementTestGemmProvider {
+    fn fail(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(TensorError::backend_failure(
+            "placement_bound_eager",
+            "GEMM is not part of the placement-bound eager fixture",
+        ))
+    }
+}
+
+impl CpuGemmProvider for PlacementTestGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        CpuProviderExecutionCapabilities {
+            thread_count: CpuThreadCountControl::Sequential,
+            placement: CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
+    fn gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.fail()
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.fail()
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.fail()
+    }
+}
+
 fn placement() -> CpuPlacement {
     CpuPlacement::NumaNode(NumaNodeId::new(0))
 }
@@ -83,7 +137,16 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
         CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
-    CpuBackend::from_external_managed_domains(CpuDomainId::new(41), [domain]).unwrap()
+    let providers = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .gemm_provider(Arc::new(PlacementTestGemmProvider))
+        .build()
+        .unwrap();
+    CpuBackend::from_external_managed_domains_with_provider_bundle(
+        CpuDomainId::new(41),
+        [domain],
+        providers,
+    )
+    .unwrap()
 }
 
 fn add_one(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad::Result<Tensor> {

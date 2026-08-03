@@ -149,7 +149,9 @@ def run_profiles(
                 continue
             environment = os.environ.copy()
             if profile == "workspace-blas":
-                environment["RUSTFLAGS"] = "-l dylib=openblas -l dylib=lapack"
+                rustflags = "-l dylib=openblas -l dylib=lapack"
+                environment["RUSTFLAGS"] = rustflags
+                environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = rustflags
             try:
                 # Commands are repository constants, not caller-provided shell text.
                 subprocess.run(

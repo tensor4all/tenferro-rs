@@ -257,6 +257,10 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             calls[2]["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
         )
+        self.assertEqual(
+            calls[2]["TENFERRO_TRYBUILD_RUSTFLAGS"],
+            "-l dylib=openblas -l dylib=lapack",
+        )
 
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()

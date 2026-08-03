@@ -29,7 +29,7 @@ fn replace_via_backend_mut(session: &mut dyn BackendSession) {
 }
 
 fn replace_via_parts_mut(session: &mut dyn BackendSession) {
-    let (owner, _) = session.parts_mut();
+    let (owner, _) = <dyn BackendSession as BackendSession>::parts_mut(session);
     let owner: &mut CpuBackend = owner;
     *owner = CpuBackend::new();
 }
