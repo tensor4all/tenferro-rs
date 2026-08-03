@@ -9,10 +9,9 @@ implementation PRs against.
 
 Authority and change control:
 
-- The #1555 issue body owns the architecture invariants (referenced below as
-  I1 through I10, numbered as in its "Required invariants" section). This
-  document owns the contracts. The phase issues (#1556 through #1569) own
-  work decomposition and verification inventories.
+- The #1555 issue body owns the named bullets in its "Fixed architecture"
+  section. This document owns the detailed contracts. The phase issues (#1556
+  through #1569) own work decomposition and verification inventories.
 - Any semantic change to a contract in this document must update this
   document and its tests in the same PR.
 - Signature sketches are normative in shape: which capability a call
@@ -57,10 +56,12 @@ Terminology:
   metadata (a domain-qualified key plus byte range), never an access
   capability or proof of ownership.
 - **Owner**: the unique, non-cloneable ownership token for an allocation span
-  (`OwnedStorage`, or a tensor/group wrapping it). Invariant I1.
+  (`OwnedStorage`, or a tensor/group wrapping it); this is the umbrella's
+  one-owner rule.
 - **Capability**: the right to access storage, expressed as Rust
   ownership/borrows: shared (`StorageRef`, views), exclusive (`StorageMut`,
-  mutable views), or owning (consuming APIs). Invariant I2.
+  mutable views), or owning (consuming APIs); Rust borrowing is the write
+  authority.
 - **Descriptor**: a typed interpretation (dtype, layout, placement) referring
   to an allocation slot. Descriptors never own storage.
 - **Group**: one or more owners plus descriptors (`AllocationGroup`), the only
@@ -71,7 +72,7 @@ Terminology:
   from `AllocationDomainId`, which is allocation identity (#1555, "Identity
   vs endpoints").
 - **Retirement**: the point when all provider events covering an access have
-  completed and retained resources may be released. Invariant I6.
+  completed and retained resources may be released.
 - **Prepared access**: the result of pairing a Rust capability with retained
   construction-time descriptor proofs and completing access-time provider
   mapping/synchronization. It carries the `CheckedLayout` and Rust borrow
@@ -92,7 +93,7 @@ six review-checklist questions from #1557, abbreviated as:
 |--------|---------|
 | cap | capability required (shared / exclusive / owning / none) |
 | borrow | what is borrowed and for how long |
-| sync | provider synchronization performed (waits are documented synchronization points, never copies; invariant I4) |
+| sync | provider synchronization performed (waits are documented synchronization points, never copies) |
 | fail | return on failure (ownership must be recovered or provably retained) |
 | panic/drop | state retained if the caller panics or drops mid-operation |
 | reclaim | when reclamation of the affected allocation becomes legal |
@@ -454,10 +455,13 @@ prove the structural capability/borrow/recovery contract through the real
 crate harness.
 
 The proof layers remain distinct: Rust borrowing/private constructors prove
-write safety; trybuild, Miri, property, corruption, and provider tests exercise
-dynamic boundaries; source inventories record deletion drift; and the
-source-blind documentation audit checks stale public language. None of these
-is allowed to manufacture ownership proof from an allocation ID or a lock.
+write safety; trybuild, Miri, property, invalid-constructor/input-boundary, and
+provider tests exercise dynamic boundaries before checked descriptors or
+prepared access are published; source inventories record deletion drift; and
+the source-blind documentation audit checks stale public language. None of
+these is allowed to manufacture ownership proof from an allocation ID or a
+lock. These tests do not introduce a post-construction corruption hook or
+repeated map/enqueue validation protocol.
 
 ## G1. Span access and retirement
 
@@ -531,9 +535,11 @@ result. Every host or device access then consumes a capability already paired
 with that checked descriptor into a prepared object:
 
 ```rust
-struct CheckedLayout<R: TensorRank> {
-    element_count: usize,
-    traversal: CheckedTraversal<R>,
+enum CheckedLayout<R: TensorRank> {
+    Contiguous {
+        element_range: Range<usize>,
+    },
+    Strided(CheckedStrided<R>),
 }
 
 struct CheckedDescriptor<R: TensorRank> {
@@ -550,21 +556,14 @@ struct CheckedInjectiveDescriptor<R: TensorRank> {
 struct CheckedRead<'a, R: TensorRank>(private::CheckedReadBundle<'a, R>);
 struct CheckedWrite<'a, R: TensorRank>(private::CheckedWriteBundle<'a, R>);
 
-enum CheckedTraversal<R: TensorRank> {
-    Contiguous { element_range: Range<usize> },
-    Strided(CheckedStrided<R>),
+enum PreparedRead<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousRead<'a, T, R>),
+    Strided(PreparedStridedRead<'a, T, R>),
 }
 
-struct PreparedRead<'a, T, R: TensorRank> {
-    checked: CheckedRead<'a, R>,
-    mapping: ProviderReadMapping<'a>,
-    _scalar: PhantomData<T>,
-}
-
-struct PreparedWrite<'a, T, R: TensorRank> {
-    checked: CheckedWrite<'a, R>,
-    mapping: ProviderWriteMapping<'a>,
-    _scalar: PhantomData<T>,
+enum PreparedWrite<'a, T, R: TensorRank> {
+    Contiguous(PreparedContiguousWrite<'a, T, R>),
+    Strided(PreparedStridedWrite<'a, T, R>),
 }
 
 fn prepare_read<'a, T, R: TensorRank>(
@@ -618,19 +617,9 @@ prepared access exposes the already checked typed range as a slice and an
 `iter_contiguous()`-equivalent slice iterator. A strided prepared access owns a
 precomputed incremental plan:
 
-```rust
-impl<'a, T, R: TensorRank> PreparedRead<'a, T, R> {
-    fn as_contiguous_slice(&self) -> Option<&[T]>;
-    fn iter_contiguous(&self) -> Option<slice::Iter<'_, T>>;
-    fn iter_strided(&self) -> Option<PreparedStridedIter<'_, T, R>>;
-}
-
-impl<'a, T, R: TensorRank> PreparedWrite<'a, T, R> {
-    fn as_contiguous_slice_mut(&mut self) -> Option<&mut [T]>;
-    fn iter_contiguous_mut(&mut self) -> Option<slice::IterMut<'_, T>>;
-    fn iter_strided_mut(&mut self) -> Option<PreparedStridedIterMut<'_, T, R>>;
-}
-```
+The authoritative `PreparedRead`/`PreparedWrite` enums select exactly one
+contiguous or strided state. Their variant payloads and traversal methods are
+specified once in G4 below; there is no optional second traversal surface.
 
 The exact names may change in the owning phase, but equivalent code generation
 and verification properties are mandatory. Contiguous inner loops perform only
@@ -670,10 +659,8 @@ struct RetirementRecord {
 Enqueue consumes each `DeviceRead`/`DeviceWrite` into a
 `ProviderRetirementBinding` that owns any mapping, reservation, or raw-binding
 lifetime the provider requires after enqueue. The record owns every binding,
-event, root, and context needed until completion is proven. A provider may use
-a smaller retirement payload only when its unsafe enqueue contract documents
-and tests that submission transferred all required lifetime into the event or
-queue itself. Dropping a user-visible completion handle only detaches
+event, root, and provider context until completion is proven. Dropping a
+user-visible completion handle only detaches
 observation; the worker or provider reaper retains the record. After proven
 completion, the record releases bindings, event, and root/context references
 exactly once and publishes a completed or typed failed outcome.
@@ -829,7 +816,7 @@ fn into_tensor(self, slot: DescriptorSlot) -> Result<Tensor, (Self, ExtractError
   aliases that allocation, the operation returns a typed reason and leaves
   the group unchanged. The removed descriptor entry remains vacant for the
   rest of the group's lifetime, and no copy or materialization fallback is
-  permitted (I4).
+  permitted by the no-hidden-copy rule.
 - `into_tensor` consumes the group, resolves one local slot, and explicitly
   discards all other descriptor records. It never duplicates ownership to
   preserve them. On failure it returns the unchanged group.
@@ -1198,27 +1185,11 @@ per-element dispatch. The release codegen artifact
 must show a slice-equivalent inner loop without storage/provider abstraction
 work.
 
-Phase 4 must expose a concrete prepared-access boundary equivalent to this
-shape:
+Phase 4 implements the authoritative G1 `CheckedLayout`, `PreparedRead`, and
+`PreparedWrite` hierarchy with these variant payloads and methods. It does not
+define a second host-preparation surface:
 
 ```rust
-enum CheckedLayout<R: TensorRank> {
-    Contiguous {
-        element_range: core::ops::Range<usize>,
-    },
-    Strided(CheckedStrided<R>),
-}
-
-enum PreparedHostRead<'a, T, R: TensorRank> {
-    Contiguous(PreparedContiguousRead<'a, T, R>),
-    Strided(PreparedStridedRead<'a, T, R>),
-}
-
-enum PreparedHostWrite<'a, T, R: TensorRank> {
-    Contiguous(PreparedContiguousWrite<'a, T, R>),
-    Strided(PreparedStridedWrite<'a, T, R>),
-}
-
 struct PreparedContiguousRead<'a, T, R: TensorRank> {
     guard: HostReadGuard<'a, T>,
     element_range: core::ops::Range<usize>,
@@ -1264,13 +1235,13 @@ struct PreparedStridedIterMut<'i, T, R: TensorRank> {
 impl<'a, T, R: TensorRank> TypedTensorView<'a, T, R> {
     fn prepare_host(
         self,
-    ) -> Result<PreparedHostRead<'a, T, R>, (Self, AccessError)>;
+    ) -> Result<PreparedRead<'a, T, R>, (Self, AccessError)>;
 }
 
 impl<'a, T, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     fn prepare_host_mut(
         self,
-    ) -> Result<PreparedHostWrite<'a, T, R>, (Self, AccessError)>;
+    ) -> Result<PreparedWrite<'a, T, R>, (Self, AccessError)>;
 }
 
 impl<'a, T, R: TensorRank> PreparedContiguousRead<'a, T, R> {
@@ -1302,6 +1273,13 @@ impl<'i, T, R: TensorRank> Iterator for PreparedStridedIterMut<'i, T, R> {
 }
 ```
 
+These view methods are public convenience wrappers around the private G1
+`prepare_read`/`prepare_write` transition, not another preparation layer. They
+create the opaque checked bundle from the view's co-located capability and
+descriptor, call that transition, and reconstruct the unchanged view when it
+returns the checked bundle with an error. Both paths publish the same
+`PreparedRead`/`PreparedWrite` enum values.
+
 `RankIndex<R>` is the rank-preserving cursor representation: inline for fixed
 rank and initialized once outside iteration for dynamic rank.
 `CheckedStrided<R>` owns the checked start offset, extents, strides, element
@@ -1313,10 +1291,10 @@ root-span containment, alignment, provider compatibility, and write
 injectivity required here. The fallible `prepare_host*` constructor consumes
 that checked capability/descriptor pairing without recomputing those proofs;
 it performs only access-time mapping and synchronization before publishing
-`PreparedHostRead` or `PreparedHostWrite`. Failure releases any temporary
+`PreparedRead` or `PreparedWrite`. Failure releases any temporary
 provider mapping and returns the unchanged view with a typed `AccessError`; no
 prepared object or iterator exists on failure. The constructor selects exactly
-one `PreparedHost*` enum variant from the retained `CheckedLayout`. Matching
+one `Prepared*` enum variant from the retained `CheckedLayout`. Matching
 that variant performs no validation or provider work.
 
 `as_slice*` and `iter_contiguous*` perform only typed slice access after one
@@ -1324,7 +1302,7 @@ range extraction outside the loop. `PreparedStridedIter*::next` performs only
 typed pointer/slice access, the necessary incremental stride/carry updates,
 and loop termination. It does not decode a flat index into coordinates or
 repeat bounds, layout, span, alignment, capability, provider, map, or
-synchronization checks. The `PreparedHost*` and `CheckedLayout` enums are the
+synchronization checks. The `Prepared*` and `CheckedLayout` enums are the
 state authorities; independent booleans such as `is_checked`, `is_contiguous`,
 `is_mapped`, and `is_writable` must not encode these states.
 
@@ -1571,6 +1549,7 @@ Common validation commands:
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
+| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 The Phase 12 element-access section must distinguish O(rank) checked random
 access, contiguous typed-slice/guard traversal, prepared strided traversal,
@@ -1582,7 +1561,6 @@ states whether the operation allocates, dispatches through a provider,
 synchronizes, performs per-element bounds/stride work, preserves static rank,
 or can transfer/materialize. The source-blind reviewer must be able to select
 the zero-overhead path without reading implementation source.
-| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
 
 ## G7. AD value retention
 
@@ -1629,7 +1607,7 @@ not an accepted migration.
 - Handle types may remain `Clone` because they are read-only descriptor
   references, not owners or capabilities. A handle has no method that returns
   an owner, creates a write capability, or produces a mutable view. The non-`Clone`
-  rule (I1) applies to owners and capabilities.
+  one-owner rule applies to owners and capabilities.
 - `ValueKey` is only a local associative key inside a tape/checkpoint
   container. It is never used to reconstruct a descriptor, prove uniqueness,
   or authorize access.

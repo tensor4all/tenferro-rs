@@ -80,3 +80,15 @@ single monotonic step, preserves the graph, membership, all states, and every
 active obligation identity, and may update only deferred evidence contracts.
 It cannot be combined with activation. This lets the design phase correct
 future obligations without weakening immutable evidence after implementation.
+
+## Final consistency review
+
+The final Sol review found and the design now resolves five cross-artifact
+contradictions: G1/G4/G5 use one `CheckedLayout` and one
+`PreparedRead`/`PreparedWrite` hierarchy; retirement always retains bindings,
+event, roots, and provider context; #1557 describes the revision-only path;
+obsolete I1--I10 references were replaced by the live umbrella's named rules;
+and #1558 uses the same root-bound-claim shape as G1. The Phase 13
+documentation row is inside the G6 table, and dynamic-boundary testing is
+described as invalid constructor/input rejection rather than a corruption-hook
+or repeated-validation protocol.
