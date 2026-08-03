@@ -269,8 +269,8 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p4-access-retirement"
 unit = "P4"
 gates = ["G1", "G3"]
-artifact = { id = "artifact-corruption-map", kind = "corruption-test", path = "crates/tenferro-tensor/src/storage/tests/corruption_map.rs" }
-command = { id = "cmd-corruption-map", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"], cwd = ".", path_args = [], artifact_id = "artifact-corruption-map" }
+artifact = { id = "artifact-prepared-validation-boundary", kind = "validation-boundary-test", path = "crates/tenferro-tensor/tests/storage_prepared_validation.rs" }
+command = { id = "cmd-prepared-validation-boundary", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_validation"], cwd = ".", path_args = [], artifact_id = "artifact-prepared-validation-boundary" }
 state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
@@ -278,8 +278,8 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p4-provider-release-lifecycle"
 unit = "P4"
 gates = ["G1", "G3"]
-artifact = { id = "artifact-provider-release-lifecycle", kind = "provider-test", path = "crates/tenferro-tensor/src/storage/tests/provider_release_lifecycle.rs" }
-command = { id = "cmd-provider-release-lifecycle", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::provider_release_lifecycle"], cwd = ".", path_args = [], artifact_id = "artifact-provider-release-lifecycle" }
+artifact = { id = "artifact-provider-event-retirement", kind = "provider-test", path = "crates/tenferro-tensor/tests/storage_provider_event_retirement.rs" }
+command = { id = "cmd-provider-event-retirement", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_provider_event_retirement"], cwd = ".", path_args = [], artifact_id = "artifact-provider-event-retirement" }
 state = { kind = "deferred", activation_unit = "P4", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 

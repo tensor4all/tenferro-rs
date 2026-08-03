@@ -170,17 +170,17 @@ COMMAND_POLICY = {
         (),
         "artifact-storage-auto-traits",
     ),
-    "cmd-corruption-map": _policy(
+    "cmd-prepared-validation-boundary": _policy(
         "cargo-test",
-        ("cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::corruption_map"),
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_prepared_validation"),
         (),
-        "artifact-corruption-map",
+        "artifact-prepared-validation-boundary",
     ),
-    "cmd-provider-release-lifecycle": _policy(
+    "cmd-provider-event-retirement": _policy(
         "cargo-test",
-        ("cargo", "test", "-p", "tenferro-tensor", "--lib", "storage::tests::provider_release_lifecycle"),
+        ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_provider_event_retirement"),
         (),
-        "artifact-provider-release-lifecycle",
+        "artifact-provider-event-retirement",
     ),
     "cmd-traversal-resolution-counts": _policy(
         "cargo-test",
