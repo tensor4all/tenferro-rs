@@ -4,6 +4,8 @@
 #[allow(dead_code)]
 mod diagnostics;
 #[allow(dead_code)]
+mod group;
+#[allow(dead_code)]
 mod identity;
 #[allow(dead_code)]
 mod prepared;
