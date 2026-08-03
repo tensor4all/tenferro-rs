@@ -266,7 +266,7 @@ impl InputIngressContract {
 /// let _ = metadata;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EngineRegistrationMetadata {
     engine_id: EngineId,
     provider_device_identity: ProviderDeviceIdentity,
@@ -361,6 +361,19 @@ pub struct ExecutableEngineRegistrationConfig<B> {
     cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
 }
 
+impl<B> fmt::Debug for ExecutableEngineRegistrationConfig<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutableEngineRegistrationConfig")
+            .field("metadata", &self.metadata)
+            .field("backend_type", &std::any::type_name::<B>())
+            .field("event_domain_driver_present", &true)
+            .field("ingress_present", &true)
+            .field("cache_owner_present", &self.cache_owner.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<B> ExecutableEngineRegistrationConfig<B> {
     /// Construct an executable registration descriptor.
     pub fn new(
@@ -418,6 +431,7 @@ impl<B> ExecutableEngineRegistrationConfig<B> {
 /// let _ = config;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+#[derive(Debug)]
 pub struct PreparationOnlyEngineRegistrationConfig {
     metadata: EngineRegistrationMetadata,
     context_identity: ExecutionContextIdentity,
