@@ -16,6 +16,10 @@ mod root;
 #[allow(dead_code)]
 mod span;
 
+pub(crate) use group::{
+    AllocationGroup, DescriptorSlot, GroupError, GroupReadView, GroupWriteView,
+};
+
 #[cfg(test)]
 pub(crate) use diagnostics::{
     RequestedIdentity, StorageOperation, StorageOperationContext, StorageOperationError,

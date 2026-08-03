@@ -3,6 +3,7 @@ use std::mem::{align_of, size_of};
 use std::ptr::NonNull;
 
 use crate::{DType, DynRank, TensorLayout, TensorRank, TensorScalar};
+use smallvec::SmallVec;
 
 use super::prepared::{
     prepare_read, prepare_write, validate_descriptor, AccessError, AccessTarget, CheckedDescriptor,
@@ -172,8 +173,12 @@ pub(crate) enum ExtractError {
 /// One group of move-only owners and append-only logical descriptors.
 #[derive(Default)]
 pub(crate) struct AllocationGroup {
-    allocations: Vec<Option<OwnedStorage>>,
-    descriptors: Vec<Option<DescriptorRecord>>,
+    // Most public tensors contain one root and one descriptor. Keep that
+    // common case inline so the ownership boundary does not add a per-result
+    // metadata allocation to CPU hot paths; the vectors still grow for
+    // explicit multi-descriptor groups.
+    allocations: SmallVec<[Option<OwnedStorage>; 1]>,
+    descriptors: SmallVec<[Option<DescriptorRecord>; 1]>,
 }
 
 /// A shared descriptor child bounded by the group's shared borrow.
@@ -192,7 +197,7 @@ impl<T: TensorScalar, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R>
     }
 }
 
-impl<T: TensorScalar, R: TensorRank> GroupReadView<'_, T, R> {
+impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
     pub(crate) fn descriptor(&self) -> &DescriptorRecord {
         &self.descriptor
     }
@@ -219,6 +224,16 @@ impl<T: TensorScalar, R: TensorRank> GroupReadView<'_, T, R> {
         )
         .map_err(|failure| failure.1)
     }
+
+    pub(crate) fn host_slice(&self) -> Result<&'a [T], AccessError> {
+        // SAFETY: `owner` is bounded by the group borrow carried by `'a`.
+        unsafe {
+            self.owner
+                .as_ref()
+                .as_ref()
+                .host_slice(self.descriptor.span, self.descriptor.dtype)
+        }
+    }
 }
 
 /// A non-cloneable mutable descriptor child bounded by the group's exclusive
@@ -239,7 +254,7 @@ impl<T: TensorScalar, R: TensorRank> std::fmt::Debug for GroupWriteView<'_, T, R
     }
 }
 
-impl<T: TensorScalar, R: TensorRank> GroupWriteView<'_, T, R> {
+impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
     pub(crate) fn descriptor(&self) -> &DescriptorRecord {
         &self.descriptor
     }
@@ -266,6 +281,17 @@ impl<T: TensorScalar, R: TensorRank> GroupWriteView<'_, T, R> {
             WriteInjectivityProof,
         );
         prepare_write(checked, AccessTarget::Host).map_err(|failure| failure.1)
+    }
+
+    pub(crate) fn host_slice_mut(&mut self) -> Result<&'a mut [T], AccessError> {
+        // SAFETY: the group borrow is exclusive for `'a` and the descriptor
+        // retains the checked span used by the private host root.
+        unsafe {
+            self.owner
+                .as_mut()
+                .as_mut()
+                .host_slice_mut(self.descriptor.span, self.descriptor.dtype)
+        }
     }
 }
 
@@ -443,6 +469,17 @@ impl AllocationGroup {
         })
     }
 
+    pub(crate) fn host_buffer<T: 'static>(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<&crate::Buffer<T>> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        self.allocations
+            .get(descriptor.allocation.index())?
+            .as_ref()?
+            .host_buffer::<T>()
+    }
+
     pub(crate) fn view_mut<T: TensorScalar, R: TensorRank>(
         &mut self,
         slot: DescriptorSlot,
@@ -581,6 +618,7 @@ impl AllocationGroup {
             .map_err(ExtractError::from)
     }
 
+    #[allow(clippy::result_large_err)]
     pub(crate) fn into_owner(
         mut self,
         slot: DescriptorSlot,
@@ -590,6 +628,18 @@ impl AllocationGroup {
             Ok(owner) => Ok(owner),
             Err(error) => Err((self, error)),
         }
+    }
+
+    pub(crate) fn into_host_vec<T: TensorScalar>(
+        self,
+        slot: DescriptorSlot,
+    ) -> Result<Vec<T>, String> {
+        let owner = self
+            .into_owner(slot)
+            .map_err(|(_, error)| error.to_string())?;
+        owner
+            .into_host_vec::<T>()
+            .map_err(|error| error.to_string())
     }
 
     fn resolve_descriptor(

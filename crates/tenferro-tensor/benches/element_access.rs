@@ -60,7 +60,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("direct_slice_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let data = tensor.host_data_mut().unwrap();
                 let mut sum = 0.0;
@@ -108,7 +108,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("get_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for index in &indices {
@@ -124,7 +124,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("get_unchecked_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for index in &indices {
@@ -184,7 +184,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("get_mut2", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for [i, j] in &indices {
@@ -237,7 +237,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("get_mut3", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for [i, j, k] in &indices {
@@ -295,7 +295,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
 
     group.bench_function("tensor_iter_mut", |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for value in tensor.iter_mut().unwrap() {
@@ -310,7 +310,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
 
     group.bench_function("dynamic_tensor_iter_mut", |b| {
         b.iter_batched(
-            || dynamic_tensor.clone(),
+            || dynamic_tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for value in tensor.iter_mut::<f64>().unwrap() {

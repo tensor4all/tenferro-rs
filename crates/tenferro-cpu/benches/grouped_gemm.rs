@@ -6,7 +6,6 @@ use tenferro_tensor::{
     DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorView, TensorWrite,
 };
 
-#[derive(Clone)]
 struct GroupedFixture {
     lhs: Tensor,
     rhs: Tensor,
@@ -102,14 +101,14 @@ fn run_grouped_views_into(
 
 fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-    let mut out = fixture.out.clone();
+    let mut out = fixture.out.duplicate().unwrap();
     let config = grouped_config(fixture, 1.0);
     run_grouped_into(backend, &mut cache, fixture, &config, &mut out);
     out
 }
 
 fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
-    let mut out = fixture.out.clone();
+    let mut out = fixture.out.duplicate().unwrap();
     let dot_config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -204,7 +203,7 @@ fn bench_grouped_gemm_steady_state(c: &mut Criterion) {
     let rhs = f64_view(&fixture.rhs);
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-    let mut out = fixture.out.clone();
+    let mut out = fixture.out.duplicate().unwrap();
 
     // Match the steady-state profile that motivated issue #1385: warm the
     // backend, then issue six small grouped-GEMM calls per measured iteration.

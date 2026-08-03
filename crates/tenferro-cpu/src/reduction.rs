@@ -72,7 +72,7 @@ fn reduction_empty_axes_noop(
     validate_axes(op, axes, input.shape().len())?;
     // INVARIANT: empty-axis reduction is semantic identity, but this public
     // owned-output API must return an independently owned tensor.
-    Ok(axes.is_empty().then(|| input.clone()))
+    axes.is_empty().then(|| input.duplicate()).transpose()
 }
 
 fn reduction_read_empty_axes_noop(
@@ -659,7 +659,7 @@ fn typed_reduce<T, M, R>(
     label: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync,
+    T: Copy + Clone + Send + Sync + TensorScalar,
     M: Fn(T) -> T + Copy + Sync,
     R: Fn(T, T) -> T + Copy + Sync,
 {
@@ -667,7 +667,7 @@ where
     if axes.is_empty() {
         // INVARIANT: empty-axis typed reductions preserve values exactly while
         // satisfying the owned-output contract.
-        return Ok(input.clone());
+        return input.duplicate();
     }
 
     let output_shape: Vec<usize> = input
@@ -683,7 +683,7 @@ where
     let Some((&first_axis, remaining_axes)) = sorted_axes.split_first() else {
         // INVARIANT: this is the same empty-axis owned identity case handled
         // above; it remains here to keep split-first control flow total.
-        return Ok(input.clone());
+        return input.duplicate();
     };
 
     let input_view = typed_view(label, input)?;
@@ -712,7 +712,7 @@ where
     if axes.is_empty() {
         // INVARIANT: empty-axis typed reductions preserve values exactly while
         // satisfying the owned-output contract.
-        return Ok(input.clone());
+        return input.duplicate();
     }
 
     let output_shape = reduction_output_shape(input.shape(), axes);
@@ -772,7 +772,7 @@ pub(crate) fn typed_reduce_view<T, M, R, TR>(
     label: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync + 'static,
+    T: Copy + Clone + Send + Sync + TensorScalar + 'static,
     M: Fn(T) -> T + Copy + Sync,
     R: Fn(T, T) -> T + Copy + Sync,
     TR: TensorRank,
@@ -934,7 +934,7 @@ where
 /// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_max<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Float + Send + Sync,
+    T: Float + Send + Sync + TensorScalar,
 {
     validate_reduced_axes_nonempty("reduce_max", input.shape(), axes)?;
     typed_reduce(
@@ -952,7 +952,7 @@ fn typed_reduce_max_integer<T>(
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingReductionElem,
+    T: WrappingReductionElem + TensorScalar,
 {
     validate_reduced_axes_nonempty("reduce_max", input.shape(), axes)?;
     typed_reduce(
@@ -972,7 +972,7 @@ where
 /// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_min<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
-    T: Float + Send + Sync,
+    T: Float + Send + Sync + TensorScalar,
 {
     validate_reduced_axes_nonempty("reduce_min", input.shape(), axes)?;
     typed_reduce(
@@ -990,7 +990,7 @@ fn typed_reduce_min_integer<T>(
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: WrappingReductionElem,
+    T: WrappingReductionElem + TensorScalar,
 {
     validate_reduced_axes_nonempty("reduce_min", input.shape(), axes)?;
     typed_reduce(

@@ -31,7 +31,7 @@ fn linear_offset_invariant_violation(shape: &[usize]) -> ! {
     panic!("linear offset overflow for validated tensor shape {shape:?}");
 }
 
-impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
+impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// Iterate over the contiguous column-major host buffer.
     ///
     /// # Examples

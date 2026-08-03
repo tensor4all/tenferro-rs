@@ -39,6 +39,9 @@ unsafe impl BackendAllocation for CountingAllocation {
     fn as_any(&self) -> &dyn Any {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 fn allocation_key(local: u64) -> AllocationKey {

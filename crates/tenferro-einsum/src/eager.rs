@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -20,6 +19,7 @@ use profile::{
 
 const EAGER_EINSUM_OP: &str = "eager_einsum";
 
+#[allow(clippy::large_enum_variant)]
 enum TensorValue<'a> {
     Borrowed(&'a Tensor),
     View(TensorView<'a>),
@@ -37,7 +37,7 @@ impl TensorValue<'_> {
 
     fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self {
-            Self::Borrowed(tensor) => Ok(tensor.clone()),
+            Self::Borrowed(tensor) => tensor.duplicate(),
             Self::View(view) => exec.to_contiguous_read(TensorRead::from_view(view)),
             Self::Owned(tensor) => Ok(tensor),
         }
@@ -212,10 +212,10 @@ impl LabeledTensor<'_> {
         self.tensor.tensor_read()
     }
 
-    fn tensor_cow(&self, exec: &mut dyn BackendSession) -> Result<Cow<'_, Tensor>> {
+    fn tensor_owned(&self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self.tensor() {
-            Some(tensor) => Ok(Cow::Borrowed(tensor)),
-            None => Ok(Cow::Owned(exec.to_contiguous_read(self.tensor_read())?)),
+            Some(tensor) => tensor.duplicate(),
+            None => exec.to_contiguous_read(self.tensor_read()),
         }
     }
 
@@ -352,7 +352,7 @@ fn reduce_tensor<'a>(
         .filter(|(axis, _)| !reduce_set.contains(axis))
         .map(|(_, label)| *label)
         .collect();
-    let operand_tensor = operand.tensor_cow(exec)?;
+    let operand_tensor = operand.tensor_owned(exec)?;
     let tensor = exec.reduce_sum(&operand_tensor, &reduce_axes)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -379,7 +379,7 @@ fn diagonalize_repeated<'a>(
             return Ok(operand);
         };
 
-        let operand_tensor = operand.tensor_cow(exec)?;
+        let operand_tensor = operand.tensor_owned(exec)?;
         let tensor = exec.extract_diagonal(&operand_tensor, axis_a, axis_b)?;
         let mut labels = operand.labels.clone();
         labels.remove(axis_b);
@@ -411,7 +411,7 @@ fn embed_repeated<'a>(
             if output_count > current_count {
                 let axis_a = find_label_axis(&operand.labels, label)?;
                 let axis_b = axis_a + 1;
-                let operand_tensor = operand.tensor_cow(exec)?;
+                let operand_tensor = operand.tensor_owned(exec)?;
                 let tensor = exec.embed_diagonal(&operand_tensor, axis_a, axis_b)?;
                 let mut labels = operand.labels.clone();
                 labels.insert(axis_b, label);
@@ -449,7 +449,7 @@ fn transpose_to_labels<'a>(
         return Ok(operand);
     }
 
-    let operand_tensor = operand.tensor_cow(exec)?;
+    let operand_tensor = operand.tensor_owned(exec)?;
     let tensor = exec.transpose(&operand_tensor, &perm)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -507,8 +507,8 @@ fn outer_product<'a>(
         ) {
             (Some(lhs_read), Some(rhs_read)) => exec.mul_read(lhs_read?, rhs_read?)?,
             _ => {
-                let lhs_input = lhs.tensor_cow(exec)?;
-                let rhs_input = rhs.tensor_cow(exec)?;
+                let lhs_input = lhs.tensor_owned(exec)?;
+                let rhs_input = rhs.tensor_owned(exec)?;
                 let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
                 let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
                 let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;

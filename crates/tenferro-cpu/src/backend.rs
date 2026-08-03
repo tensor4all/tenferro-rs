@@ -28,7 +28,7 @@ use crate::{
     CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
+    CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
@@ -3583,7 +3583,7 @@ impl TensorDeviceTransfer for CpuBackend {
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.duplicate()
     }
 
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
@@ -3593,17 +3593,18 @@ impl TensorDeviceTransfer for CpuBackend {
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.duplicate()
     }
 }
 
 impl TensorBackend for CpuBackend {}
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
-    let (buffer, _, _) = typed.into_parts();
-    match buffer {
-        Buffer::Host(data) => T::pool_release(pool, data),
-        Buffer::Backend(_) => {}
+    if typed.backend_buffer().is_some() {
+        return;
+    }
+    if let Ok(data) = typed.into_host_vec() {
+        T::pool_release(pool, data);
     }
 }
 

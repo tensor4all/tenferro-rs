@@ -50,7 +50,9 @@ pub use event_domain::{
     EventDomainDriver, EventDomainError, EventDomainOperation, EventDomainRun, EventToken,
     ImmediateEventDomainDriver,
 };
-pub use execution::{ExecutionHandle, PreparedCompiledGraph};
+pub use execution::{
+    ExecutionHandle, ExecutionInputs, ExecutionOutcome, PreparedCompiledGraph, SubmitError,
+};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{

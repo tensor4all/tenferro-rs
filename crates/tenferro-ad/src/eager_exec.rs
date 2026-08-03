@@ -845,7 +845,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let target_size = reference.shape()[*axis];
                 let current_size = input.shape()[*axis];
                 if current_size >= target_size {
-                    vec![input.clone()]
+                    vec![input.duplicate()?]
                 } else {
                     let rank = input.shape().len();
                     let mut high = vec![0i64; rank];

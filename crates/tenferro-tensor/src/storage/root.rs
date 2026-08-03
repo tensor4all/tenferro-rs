@@ -1,7 +1,6 @@
 use std::any::Any;
+use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut, Range};
-use std::sync::Arc;
-use std::sync::Mutex;
 
 use crate::BackendId;
 use crate::{DType, TensorScalar};
@@ -57,6 +56,7 @@ pub(crate) unsafe trait BackendAllocation:
     fn provider_kind(&self) -> ProviderKind;
     fn capabilities(&self) -> ProviderCapabilities;
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Map the checked span to initialized bytes with valid `TensorScalar`
     /// representations for the requested dtype. The mapping must keep the
@@ -89,17 +89,6 @@ pub(crate) unsafe trait BackendAllocation:
     }
 }
 
-/// The physical root and its provider allocation. It is held only by the
-/// lifetime pin; it grants no access capability by itself.
-pub(crate) struct RootResource {
-    identity: RootResourceIdentity,
-    extent: RootResourceExtent,
-    allocation: Box<dyn BackendAllocation>,
-}
-
-/// Lifetime-only pin for one root resource. It is intentionally not `Clone`.
-pub(crate) struct RootResourcePin(Arc<RootResource>);
-
 /// One non-`Clone` root-bound span authority.
 pub(crate) struct OwnedSpanClaim {
     root: RootResourceIdentity,
@@ -127,20 +116,40 @@ pub(crate) struct StorageMut<'a> {
 /// The mutex is only the provider mapping guard. Rust access authority still
 /// comes from `StorageRef`/`StorageMut`; the provider trait takes `&self` so a
 /// guard can retain the allocation for the complete prepared borrow.
-struct HostAllocation<T: TensorScalar> {
+pub(crate) struct HostAllocation<T> {
     extent: RootResourceExtent,
-    data: Mutex<Vec<T>>,
+    data: UnsafeCell<crate::Buffer<T>>,
+}
+
+/// Lifetime-only pin for one root resource. Host roots stay inline so the
+/// common CPU owner path does not allocate a second box merely to erase a
+/// scalar-specific host allocation. Backend roots retain their provider box.
+pub(crate) enum RootResourcePin {
+    HostF32(HostAllocation<f32>),
+    HostF64(HostAllocation<f64>),
+    HostI32(HostAllocation<i32>),
+    HostI64(HostAllocation<i64>),
+    HostBool(HostAllocation<bool>),
+    HostC32(HostAllocation<num_complex::Complex32>),
+    HostC64(HostAllocation<num_complex::Complex64>),
+    Backend(Box<dyn BackendAllocation>),
 }
 
 struct HostByteReadGuard<'a, T: TensorScalar> {
-    guard: std::sync::MutexGuard<'a, Vec<T>>,
+    data: &'a [T],
     range: Range<usize>,
 }
 
 struct HostByteWriteGuard<'a, T: TensorScalar> {
-    guard: std::sync::MutexGuard<'a, Vec<T>>,
+    data: &'a mut [T],
     range: Range<usize>,
 }
+
+// SAFETY: the allocation is accessed through the group-owned shared/exclusive
+// capabilities. `map_write` is called only for an exclusive group child; the
+// provider trait's `&self` receiver is not itself an access capability.
+unsafe impl<T: TensorScalar> Send for HostAllocation<T> {}
+unsafe impl<T: TensorScalar> Sync for HostAllocation<T> {}
 
 fn host_bytes<T: TensorScalar>(data: &[T], range: Range<usize>) -> &[u8] {
     let byte_len = data
@@ -179,7 +188,7 @@ impl<T: TensorScalar> Deref for HostByteReadGuard<'_, T> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        host_bytes(&self.guard, self.range.clone())
+        host_bytes(self.data, self.range.clone())
     }
 }
 
@@ -193,13 +202,13 @@ impl<T: TensorScalar> Deref for HostByteWriteGuard<'_, T> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        host_bytes(&self.guard, self.range.clone())
+        host_bytes(self.data, self.range.clone())
     }
 }
 
 impl<T: TensorScalar> DerefMut for HostByteWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        host_bytes_mut(&mut self.guard, self.range.clone())
+        host_bytes_mut(self.data, self.range.clone())
     }
 }
 
@@ -222,7 +231,9 @@ impl<T: TensorScalar> std::fmt::Debug for HostAllocation<T> {
             .field("extent", &self.extent)
             .field(
                 "element_count",
-                &self.data.lock().map_or(0, |data| data.len()),
+                // SAFETY: debug inspection is read-only and the allocation's
+                // length is immutable after import.
+                unsafe { &(*self.data.get()).len() },
             )
             .finish()
     }
@@ -245,6 +256,10 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn map_read(
         &self,
         span: RootBoundSpan,
@@ -256,12 +271,15 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
                 actual: dtype,
             });
         }
-        let data = self.data.lock().map_err(|_| AccessError::Provider {
-            message: "host allocation mapping lock poisoned".to_string(),
-        })?;
+        // SAFETY: shared provider mappings are retained only under a shared
+        // group borrow; the vector is never resized after import.
+        let data = unsafe { &*self.data.get() };
+        let crate::Buffer::Host(data) = data else {
+            return Err(AccessError::Unsupported { backend: "host" });
+        };
         let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
         Ok(ProviderReadMapping::from_guard(HostByteReadGuard {
-            guard: data,
+            data,
             range,
         }))
     }
@@ -277,14 +295,160 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
                 actual: dtype,
             });
         }
-        let data = self.data.lock().map_err(|_| AccessError::Provider {
-            message: "host allocation mapping lock poisoned".to_string(),
-        })?;
+        // SAFETY: `GroupWriteView` provides the exclusive capability before
+        // calling this provider hook; the vector is never resized after import.
+        let data = unsafe { &mut *self.data.get() };
+        let crate::Buffer::Host(data) = data else {
+            return Err(AccessError::Unsupported { backend: "host" });
+        };
         let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
         Ok(ProviderWriteMapping::from_guard(HostByteWriteGuard {
-            guard: data,
+            data,
             range,
         }))
+    }
+}
+
+pub(crate) trait HostRoot: TensorScalar {
+    fn into_pin(extent: RootResourceExtent, data: Vec<Self>) -> RootResourcePin;
+}
+
+fn cast_host_vec<T: TensorScalar, U: TensorScalar>(data: Vec<T>) -> Vec<U> {
+    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+    debug_assert_eq!(std::mem::align_of::<T>(), std::mem::align_of::<U>());
+    let mut data = std::mem::ManuallyDrop::new(data);
+    // SAFETY: TensorScalar is sealed to the seven scalar types below. The
+    // matching dtype branch preserves size, alignment, and representation.
+    unsafe { Vec::from_raw_parts(data.as_mut_ptr().cast::<U>(), data.len(), data.capacity()) }
+}
+
+impl<T: TensorScalar> HostRoot for T {
+    fn into_pin(extent: RootResourceExtent, data: Vec<Self>) -> RootResourcePin {
+        match T::dtype() {
+            DType::F32 => RootResourcePin::HostF32(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::F64 => RootResourcePin::HostF64(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::I32 => RootResourcePin::HostI32(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::I64 => RootResourcePin::HostI64(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::Bool => RootResourcePin::HostBool(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::C32 => RootResourcePin::HostC32(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+            DType::C64 => RootResourcePin::HostC64(HostAllocation {
+                extent,
+                data: UnsafeCell::new(crate::Buffer::Host(cast_host_vec(data))),
+            }),
+        }
+    }
+}
+
+impl RootResourcePin {
+    fn host_buffer<T: 'static>(&self) -> Option<&crate::Buffer<T>> {
+        let allocation = self.as_any().downcast_ref::<HostAllocation<T>>()?;
+        // SAFETY: the returned reference is bounded by the shared root borrow;
+        // host buffers never resize after import.
+        Some(unsafe { &*allocation.data.get() })
+    }
+
+    fn root_extent(&self) -> RootResourceExtent {
+        match self {
+            Self::HostF32(root) => root.root_extent(),
+            Self::HostF64(root) => root.root_extent(),
+            Self::HostI32(root) => root.root_extent(),
+            Self::HostI64(root) => root.root_extent(),
+            Self::HostBool(root) => root.root_extent(),
+            Self::HostC32(root) => root.root_extent(),
+            Self::HostC64(root) => root.root_extent(),
+            Self::Backend(root) => root.root_extent(),
+        }
+    }
+
+    fn provider_kind(&self) -> ProviderKind {
+        match self {
+            Self::HostF32(root) => root.provider_kind(),
+            Self::HostF64(root) => root.provider_kind(),
+            Self::HostI32(root) => root.provider_kind(),
+            Self::HostI64(root) => root.provider_kind(),
+            Self::HostBool(root) => root.provider_kind(),
+            Self::HostC32(root) => root.provider_kind(),
+            Self::HostC64(root) => root.provider_kind(),
+            Self::Backend(root) => root.provider_kind(),
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        match self {
+            Self::HostF32(root) => root,
+            Self::HostF64(root) => root,
+            Self::HostI32(root) => root,
+            Self::HostI64(root) => root,
+            Self::HostBool(root) => root,
+            Self::HostC32(root) => root,
+            Self::HostC64(root) => root,
+            Self::Backend(root) => root.as_any(),
+        }
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        match self {
+            Self::HostF32(root) => root,
+            Self::HostF64(root) => root,
+            Self::HostI32(root) => root,
+            Self::HostI64(root) => root,
+            Self::HostBool(root) => root,
+            Self::HostC32(root) => root,
+            Self::HostC64(root) => root,
+            Self::Backend(root) => root.as_any_mut(),
+        }
+    }
+
+    fn map_read(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderReadMapping<'_>, AccessError> {
+        match self {
+            Self::HostF32(root) => root.map_read(span, dtype),
+            Self::HostF64(root) => root.map_read(span, dtype),
+            Self::HostI32(root) => root.map_read(span, dtype),
+            Self::HostI64(root) => root.map_read(span, dtype),
+            Self::HostBool(root) => root.map_read(span, dtype),
+            Self::HostC32(root) => root.map_read(span, dtype),
+            Self::HostC64(root) => root.map_read(span, dtype),
+            Self::Backend(root) => root.map_read(span, dtype),
+        }
+    }
+
+    fn map_write(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderWriteMapping<'_>, AccessError> {
+        match self {
+            Self::HostF32(root) => root.map_write(span, dtype),
+            Self::HostF64(root) => root.map_write(span, dtype),
+            Self::HostI32(root) => root.map_write(span, dtype),
+            Self::HostI64(root) => root.map_write(span, dtype),
+            Self::HostBool(root) => root.map_write(span, dtype),
+            Self::HostC32(root) => root.map_write(span, dtype),
+            Self::HostC64(root) => root.map_write(span, dtype),
+            Self::Backend(root) => root.map_write(span, dtype),
+        }
     }
 }
 
@@ -345,14 +509,8 @@ pub(crate) fn import_unique_root(
         ))
     })?;
     let span = identity.root_span();
-    let resource = Arc::new(RootResource {
-        identity,
-        extent,
-        allocation,
-    });
-
     Ok(OwnedStorage {
-        pin: RootResourcePin(resource),
+        pin: RootResourcePin::Backend(allocation),
         claim: OwnedSpanClaim {
             root: identity,
             span,
@@ -401,10 +559,26 @@ pub(crate) fn import_host_vec<T: TensorScalar>(
             ))
         },
     )?;
-    import_unique_root(Box::new(HostAllocation {
-        extent,
-        data: Mutex::new(data),
-    }))
+    let identity = RootResourceIdentity::try_new(extent).map_err(|source| {
+        Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Keyed {
+                    key,
+                    range: ByteRange::new(0, byte_len),
+                },
+            ),
+            RootImportError::Identity(source),
+        ))
+    })?;
+    let span = identity.root_span();
+    Ok(OwnedStorage {
+        pin: T::into_pin(extent, data),
+        claim: OwnedSpanClaim {
+            root: identity,
+            span,
+        },
+    })
 }
 
 impl OwnedStorage {
@@ -423,6 +597,28 @@ impl OwnedStorage {
     pub(crate) const fn root_span(&self) -> RootBoundSpan {
         self.claim.span
     }
+
+    pub(crate) fn host_buffer<T: 'static>(&self) -> Option<&crate::Buffer<T>> {
+        self.pin.host_buffer::<T>()
+    }
+
+    pub(crate) fn into_host_vec<T: TensorScalar>(mut self) -> Result<Vec<T>, AccessError> {
+        let allocation = self
+            .pin
+            .as_any_mut()
+            .downcast_mut::<HostAllocation<T>>()
+            .ok_or(AccessError::Unsupported {
+                backend: "non-host",
+            })?;
+        // SAFETY: the move-only root pin proves there are no other owners, so
+        // taking the vector cannot race with a provider mapping.
+        let crate::Buffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
+            return Err(AccessError::Unsupported {
+                backend: "non-host",
+            });
+        };
+        Ok(std::mem::take(data))
+    }
 }
 
 impl<'a> StorageRef<'a> {
@@ -435,7 +631,7 @@ impl<'a> StorageRef<'a> {
     }
 
     pub(crate) fn provider_kind(&self) -> ProviderKind {
-        self.owner.pin.0.allocation.provider_kind()
+        self.owner.pin.provider_kind()
     }
 
     pub(super) fn map_read(
@@ -443,7 +639,7 @@ impl<'a> StorageRef<'a> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<ProviderReadMapping<'a>, AccessError> {
-        let mapping = self.owner.pin.0.allocation.map_read(span, dtype)?;
+        let mapping = self.owner.pin.map_read(span, dtype)?;
         if mapping.bytes().len() != span.byte_len() {
             return Err(AccessError::LengthMismatch {
                 expected: span.byte_len(),
@@ -455,6 +651,43 @@ impl<'a> StorageRef<'a> {
         Ok(unsafe {
             std::mem::transmute::<ProviderReadMapping<'_>, ProviderReadMapping<'a>>(mapping)
         })
+    }
+
+    pub(super) fn host_slice<T: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&'a [T], AccessError> {
+        if dtype != T::dtype() {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let allocation = self
+            .owner
+            .pin
+            .as_any()
+            .downcast_ref::<HostAllocation<T>>()
+            .ok_or(AccessError::Unsupported {
+                backend: "non-host",
+            })?;
+        let crate::Buffer::Host(data) = (unsafe { &*allocation.data.get() }) else {
+            return Err(AccessError::Unsupported {
+                backend: "non-host",
+            });
+        };
+        let range = host_byte_range(
+            allocation.extent,
+            span,
+            data.len(),
+            std::mem::size_of::<T>(),
+        )?;
+        let start = range.start / std::mem::size_of::<T>();
+        let end = range.end / std::mem::size_of::<T>();
+        // SAFETY: the returned slice is bounded by the shared root borrow and
+        // the vector cannot reallocate after import.
+        Ok(unsafe { std::mem::transmute::<&[T], &'a [T]>(&data[start..end]) })
     }
 }
 
@@ -472,7 +705,7 @@ impl<'a> StorageMut<'a> {
         span: RootBoundSpan,
         dtype: DType,
     ) -> Result<ProviderWriteMapping<'a>, AccessError> {
-        let mapping = self.owner.pin.0.allocation.map_write(span, dtype)?;
+        let mapping = self.owner.pin.map_write(span, dtype)?;
         if mapping.len() != span.byte_len() {
             let actual = mapping.len();
             return Err(AccessError::LengthMismatch {
@@ -486,5 +719,42 @@ impl<'a> StorageMut<'a> {
         Ok(unsafe {
             std::mem::transmute::<ProviderWriteMapping<'_>, ProviderWriteMapping<'a>>(mapping)
         })
+    }
+
+    pub(super) fn host_slice_mut<T: TensorScalar>(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<&'a mut [T], AccessError> {
+        if dtype != T::dtype() {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let allocation = self
+            .owner
+            .pin
+            .as_any()
+            .downcast_ref::<HostAllocation<T>>()
+            .ok_or(AccessError::Unsupported {
+                backend: "non-host",
+            })?;
+        let crate::Buffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
+            return Err(AccessError::Unsupported {
+                backend: "non-host",
+            });
+        };
+        let range = host_byte_range(
+            allocation.extent,
+            span,
+            data.len(),
+            std::mem::size_of::<T>(),
+        )?;
+        let start = range.start / std::mem::size_of::<T>();
+        let end = range.end / std::mem::size_of::<T>();
+        // SAFETY: the caller holds the group's exclusive borrow and the vector
+        // cannot reallocate after import.
+        Ok(unsafe { std::mem::transmute::<&mut [T], &'a mut [T]>(&mut data[start..end]) })
     }
 }

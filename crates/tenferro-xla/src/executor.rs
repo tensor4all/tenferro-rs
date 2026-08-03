@@ -449,7 +449,7 @@ mod tests {
     fn single_output_tensor_rejects_zero_or_multiple_outputs() {
         let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
         assert_eq!(
-            single_output_tensor(vec![tensor.clone()])
+            single_output_tensor(vec![tensor.duplicate().unwrap()])
                 .unwrap()
                 .as_slice::<f64>()
                 .unwrap(),
@@ -462,7 +462,7 @@ mod tests {
             "expected zero-output error, got {err:?}"
         );
 
-        let err = single_output_tensor(vec![tensor.clone(), tensor]).unwrap_err();
+        let err = single_output_tensor(vec![tensor.duplicate().unwrap(), tensor]).unwrap_err();
         assert!(
             err.to_string().contains("got 2"),
             "expected multi-output error, got {err:?}"

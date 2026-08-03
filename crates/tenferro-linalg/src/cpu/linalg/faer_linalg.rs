@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
-use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     type Real: Copy + Clone + PoolScalar;
@@ -103,7 +103,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>>;
     fn qr_2d(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -118,7 +118,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>>;
 
     /// Wrap a compact column-major slice as a faer MatRef.
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self>;
@@ -209,7 +209,7 @@ fn square_matrix_dim<T>(
     Ok(rows)
 }
 
-fn tensor_from_vec_with_template<T: Clone>(
+fn tensor_from_vec_with_template<T: Clone + TensorScalar>(
     shape: Vec<usize>,
     data: Vec<T>,
     placement: &tenferro_tensor::Placement,
@@ -230,7 +230,7 @@ fn tensor_from_pooled_slice_with_template<T: Clone + PoolScalar>(
     tensor_from_vec_with_template(shape, owned, placement)
 }
 
-fn refill_tensor_from_slice<T: Copy>(
+fn refill_tensor_from_slice<T: Copy + TensorScalar>(
     tensor: &mut TypedTensor<T>,
     data: &[T],
 ) -> tenferro_tensor::Result<()> {
@@ -1657,7 +1657,7 @@ macro_rules! impl_faer_linalg_for_real {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data()?, m, n);
@@ -1709,7 +1709,7 @@ macro_rules! impl_faer_linalg_for_real {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
         let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
         let mut values = Diag::zeros(n);
@@ -2477,7 +2477,7 @@ macro_rules! impl_faer_linalg_for_complex {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), m, n);
@@ -2534,7 +2534,7 @@ macro_rules! impl_faer_linalg_for_complex {
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
         let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
         let mut values = Diag::zeros(n);
@@ -3191,7 +3191,7 @@ pub(crate) fn svd_values<T: FaerLinalg>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as FaerLinalg>::Real>> {
     if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "svd_values")?;
         let k = m.min(n);
@@ -3263,7 +3263,7 @@ pub(crate) fn eigh_values<T: FaerLinalg>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as FaerLinalg>::Real>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "eigh_values")?;
         return tensor_from_vec_with_template(

@@ -362,7 +362,7 @@ fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(y_data.clone()).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(y_data.duplicate().unwrap()).unwrap();
 
     let z = (&x + &y).unwrap();
 

@@ -354,7 +354,9 @@ fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
 }
 
 impl GraphOperation for StdTensorOp {
-    type Operand = tenferro_tensor::Tensor;
+    // This graph is metadata-only; execution owns tensors in the runtime
+    // submission layer rather than as graph operands.
+    type Operand = ();
     type Context = ();
     type InputKey = TensorInputKey;
 

@@ -2,7 +2,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::{
-    Buffer, TensorRank, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
+    TensorRank, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use crate::validate::validate_convert_dtype;
@@ -750,17 +750,16 @@ fn dim_stride(op: &'static str, dim: usize, role: &'static str) -> crate::Result
     })
 }
 
-fn typed_read_storage<'a, T>(
+fn typed_read_storage<'a, T: crate::TensorScalar>(
     tensor: &'a TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<(&'a [T], isize)> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok((data, 0)),
-        Buffer::Backend(_) => Err(crate::Error::runtime_state(
+    tensor.host_data().map(|data| (data, 0)).map_err(|_| {
+        crate::Error::runtime_state(
             op,
             "grouped GEMM default path requires host-backed tensor storage",
-        )),
-    }
+        )
+    })
 }
 
 fn grouped_gemm_default_config() -> DotGeneralConfig {
@@ -1523,12 +1522,16 @@ fn backend_storage_identity<T: 'static>(
     }
 }
 
-fn typed_tensor_storage_identity<T: 'static>(
+fn typed_tensor_storage_identity<T: crate::TensorScalar>(
     tensor: &TypedTensor<T>,
 ) -> crate::Result<StorageIdentity> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok(host_storage_identity(data)),
-        Buffer::Backend(buffer) => Ok(backend_storage_identity(buffer)),
+    if tensor.backend_buffer().is_some() {
+        let buffer = tensor.backend_buffer().ok_or_else(|| {
+            crate::Error::runtime_state("typed_tensor_storage_identity", "backend buffer missing")
+        })?;
+        Ok(backend_storage_identity(buffer))
+    } else {
+        Ok(host_storage_identity(tensor.host_data()?))
     }
 }
 

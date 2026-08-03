@@ -5,7 +5,7 @@ use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuExecSession;
 use tenferro_tensor::{
     AllocationDomainId, Buffer, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
-    SharedTensorAllocationDomain, Tensor, TensorRead, TensorView, TypedTensor,
+    SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -427,7 +427,8 @@ fn execute_c2c<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_c2c_data(input.shape(), input_data, axis, n, forward, norm, plans)
@@ -444,7 +445,7 @@ fn execute_c2c_data<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
 {
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
@@ -498,7 +499,8 @@ fn execute_r2c<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_r2c_data(input.shape(), input_data, axis, n, onesided, norm, plans)
@@ -568,7 +570,8 @@ fn execute_c2r<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<T>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_c2r_data(input.shape(), input_data, axis, n, norm, plans)

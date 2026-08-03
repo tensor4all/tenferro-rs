@@ -23,7 +23,7 @@ fn traced_input(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::
     trace
         .input_with_default(
             ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-            Arc::new(tensor.clone()),
+            Arc::new(tensor.duplicate().unwrap()),
         )
         .unwrap()
 }

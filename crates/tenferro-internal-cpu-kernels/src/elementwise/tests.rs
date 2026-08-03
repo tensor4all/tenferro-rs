@@ -79,8 +79,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
             let owned = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(other.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(other.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
@@ -93,7 +93,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
             let broadcast = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
                 &[],
                 &[],
                 TensorRead::from_tensor(&Tensor::$variant(other)),
@@ -112,8 +112,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             ];
             let owned_scalar_vector = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned_scalar_vector.shape(), &[3]);
@@ -123,8 +123,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let owned_vector_scalar = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned_vector_scalar.shape(), &[3]);
@@ -158,10 +158,10 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
                 &[3],
                 &[],
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
                 &[3],
                 &[0],
             )
@@ -1157,12 +1157,12 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     )
     .unwrap();
 
-    let f32_b_tensor = Tensor::F32(f32_b.clone());
-    let f64_b_tensor = Tensor::F64(f64_b.clone());
-    let c32_b_tensor = Tensor::C32(c32_b.clone());
-    let c64_b_tensor = Tensor::C64(c64_b.clone());
-    let f32_scalar_tensor = Tensor::F32(f32_scalar.clone());
-    let f64_scalar_tensor = Tensor::F64(f64_scalar.clone());
+    let f32_b_tensor = Tensor::F32(f32_b.duplicate().unwrap());
+    let f64_b_tensor = Tensor::F64(f64_b.duplicate().unwrap());
+    let c32_b_tensor = Tensor::C32(c32_b.duplicate().unwrap());
+    let c64_b_tensor = Tensor::C64(c64_b.duplicate().unwrap());
+    let f32_scalar_tensor = Tensor::F32(f32_scalar.duplicate().unwrap());
+    let f64_scalar_tensor = Tensor::F64(f64_scalar.duplicate().unwrap());
 
     let add_f32 = add_read_with_pool(
         &mut buffers,

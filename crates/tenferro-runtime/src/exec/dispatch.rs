@@ -409,7 +409,7 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
     let target_size = reference.shape()[*axis];
     let current_size = input.shape()[*axis];
     if current_size >= target_size {
-        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(input.clone()));
+        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(input.duplicate()?));
     } else {
         let rank = input.shape().len();
         let mut high = vec![0i64; rank];
