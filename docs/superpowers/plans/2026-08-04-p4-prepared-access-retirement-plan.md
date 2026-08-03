@@ -6,7 +6,7 @@
 
 **Architecture:** Extend the private P2 `BackendAllocation` boundary with borrowed byte-mapping hooks. Add private `CheckedLayout`/`CheckedRead`/`CheckedWrite` and enum-authoritative `PreparedRead`/`PreparedWrite` states under `storage/prepared.rs`; typed host guards convert the already checked mapping once and traverse contiguous or precomputed strided layouts. Add `storage/retirement.rs` with one consuming retirement record that drops resources exactly once after proven completion and intentionally retains the complete record when completion is unproven. Existing public tensor APIs remain unchanged until P3.
 
-**Tech Stack:** Rust 2021, `TensorRank`/`TensorScalar`, `TensorLayout` checked arithmetic, private `BackendAllocation`, trybuild, nested Cargo library-proof integration tests, TOML ledger v2, Python contract/doc checkers.
+**Tech Stack:** Rust 2021, `TensorRank`/`TensorScalar`, `TensorLayout` checked arithmetic, private `BackendAllocation`, the existing trybuild borrow suite, nested Cargo library-proof integration tests, TOML ledger v2, Python contract/doc checkers.
 
 ---
 
@@ -21,8 +21,6 @@
 - Create: `crates/tenferro-tensor/tests/storage_provider_event_retirement.rs`
 - Create: `crates/tenferro-tensor/tests/storage_traversal_resolution.rs`
 - Create: `crates/tenferro-tensor/tests/storage_prepared_access.rs`
-- Create: `crates/tenferro-tensor/tests/ui/storage/fail/prepared_write_from_shared.rs`
-- Create: `crates/tenferro-tensor/tests/ui/storage/fail/prepared_guard_escape.rs`
 - Modify: `scripts/storage-ownership-contracts.toml`
 - Modify: `scripts/test-storage-ownership-contracts-v2.py`
 
@@ -174,8 +172,6 @@ git commit -m "feat(storage): add p4 checked prepared states"
 **Files:**
 - Modify: `crates/tenferro-tensor/src/storage/prepared.rs`
 - Modify: `crates/tenferro-tensor/src/storage/tests/prepared_access.rs`
-- Create: `crates/tenferro-tensor/tests/ui/storage/fail/prepared_write_from_shared.stderr`
-- Create: `crates/tenferro-tensor/tests/ui/storage/fail/prepared_guard_escape.stderr`
 
 - [ ] **Step 1: Add contiguous accessors.**
 
@@ -189,10 +185,14 @@ exhaustion, accesses the proven typed offset, decrements the count, and updates
 the carry. Keep unsafe conversion adjacent to `// SAFETY:`/`// INVARIANT:`
 comments naming the constructor's bounds and injectivity proof.
 
-- [ ] **Step 3: Make borrow fixtures pass.**
+- [ ] **Step 3: Reuse the existing public borrow fixtures.**
 
-The first fixture calls write preparation from `&StorageRef`; the second stores
-a prepared guard past its owner borrow. Both must fail through trybuild:
+The prepared types are private to the storage module, so an external trybuild
+crate cannot name them without adding a public test-only surface. The existing
+`storage_compile_contract` suite continues to prove public view borrow
+restrictions, while the private `CheckedRead`/`CheckedWrite` signatures and
+their nested Cargo proof wrappers prove the P4 owner-borrow lifetime directly.
+Do not duplicate the same restrictions as external fixtures:
 
 ```bash
 cargo test -p tenferro-tensor --test storage_compile_contract --quiet
@@ -200,7 +200,7 @@ cargo test -p tenferro-tensor --test storage_prepared_access --quiet
 ```
 
 Assert values for empty, singleton, reverse, and noncontiguous layouts. Commit
-the prepared module, unit proofs, and UI fixtures.
+the prepared module and private unit proofs.
 
 ### Task 5: Implement one-shot retirement and pre-admission recovery
 
