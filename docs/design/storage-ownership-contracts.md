@@ -517,29 +517,29 @@ authority, liveness table, or reconstructable identity protocol.
 
 ```rust
 struct RootResource {
-    provider: Arc<ProviderContext>,
-    allocation: ProviderAllocation,
-    capacity_bytes: usize,
-    diagnostics: AllocationDiagnostics,
+    identity: RootResourceIdentity,
+    extent: RootResourceExtent,
+    allocation: Box<dyn BackendAllocation>,
 }
 
+struct RootResourcePin(Arc<RootResource>);
+
 struct OwnedSpanClaim {
-    root: Arc<RootResource>,
-    byte_range: Range<usize>,
+    root: RootResourceIdentity,
+    span: RootBoundSpan,
 }
 
 struct OwnedStorage {
+    pin: RootResourcePin,
     claim: OwnedSpanClaim,
 }
 
 struct StorageRef<'a> {
-    root: &'a Arc<RootResource>,
-    byte_range: Range<usize>,
+    owner: &'a OwnedStorage,
 }
 
 struct StorageMut<'a> {
-    root: &'a mut Arc<RootResource>,
-    byte_range: Range<usize>,
+    owner: &'a mut OwnedStorage,
 }
 
 struct RootBoundSpan {
@@ -549,9 +549,10 @@ struct RootBoundSpan {
 }
 ```
 
-The G1 sketch above is schematic; the executable P2 `RootBoundSpan` carries
-the exact `RootResourceIdentity` and checked alignment shown here. It is not
-constructible from a range alone.
+The G1 shape above is the P2 root-kernel boundary: the executable
+`RootBoundSpan` carries the exact `RootResourceIdentity` and checked alignment,
+and is not constructible from a range alone. Later G1 access fields are added
+only by their owning prepared-access phase.
 
 `OwnedStorage` and `OwnedSpanClaim` are non-`Clone`. `Arc<RootResource>` is
 cloneable only where direct physical lifetime must survive asynchronous work or
