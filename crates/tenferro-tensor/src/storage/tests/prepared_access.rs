@@ -1,3 +1,4 @@
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +49,57 @@ unsafe impl BackendAllocation for UnsupportedAllocation {
 struct WrongLengthAllocation {
     extent: RootResourceExtent,
     bytes: Mutex<Vec<u8>>,
+}
+
+#[derive(Debug)]
+struct MisalignedGuard<'a>(std::sync::MutexGuard<'a, Vec<u8>>);
+
+impl Deref for MisalignedGuard<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[1..]
+    }
+}
+
+impl DerefMut for MisalignedGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0[1..]
+    }
+}
+
+#[derive(Debug)]
+struct MisalignedAllocation {
+    extent: RootResourceExtent,
+    bytes: Mutex<Vec<u8>>,
+}
+
+unsafe impl BackendAllocation for MisalignedAllocation {
+    fn root_extent(&self) -> RootResourceExtent {
+        self.extent
+    }
+
+    fn provider_kind(&self) -> ProviderKind {
+        BackendId::Cpu
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::none()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn map_write(
+        &self,
+        _span: super::super::RootBoundSpan,
+        _dtype: DType,
+    ) -> Result<ProviderWriteMapping<'_>, AccessError> {
+        Ok(ProviderWriteMapping::from_guard(MisalignedGuard(
+            self.bytes.lock().expect("misaligned write lock"),
+        )))
+    }
 }
 
 unsafe impl BackendAllocation for WrongLengthAllocation {
@@ -271,6 +323,27 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
         Ok(_) => panic!("provider write unsupported"),
     };
     assert!(matches!(error.1, AccessError::Unsupported { .. }));
+
+    let extent = RootResourceExtent::try_new(key(25), 0, 8, 8).expect("misaligned extent");
+    let mut owner = import_unique_root(Box::new(MisalignedAllocation {
+        extent,
+        bytes: Mutex::new(vec![0; 9]),
+    }))
+    .expect("misaligned root import");
+    let span = owner.as_ref().span();
+    let checked = CheckedWrite::<DynRank>::new::<f64>(
+        owner.as_mut(),
+        span,
+        vec![1].into(),
+        vec![1].into(),
+        0,
+    )
+    .expect("checked misaligned write");
+    let error = match prepare_write::<f64, DynRank>(checked, AccessTarget::Host) {
+        Err(error) => error,
+        Ok(_) => panic!("misaligned mapping must fail"),
+    };
+    assert!(matches!(error.1, AccessError::Misaligned { required: 8 }));
 }
 
 #[test]

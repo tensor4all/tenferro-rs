@@ -498,18 +498,30 @@ struct TypedWriteAccess<'a, T: TensorScalar> {
 }
 
 impl<'a, T: TensorScalar> TypedWriteAccess<'a, T> {
-    fn new(mut mapping: ProviderWriteMapping<'a>, expected_bytes: usize) -> Self {
+    fn new(
+        mut mapping: ProviderWriteMapping<'a>,
+        expected_bytes: usize,
+    ) -> Result<Self, AccessError> {
         let bytes = mapping.bytes_mut();
-        debug_assert_eq!(bytes.len(), expected_bytes);
-        debug_assert_eq!(bytes.as_ptr().align_offset(align_of::<T>()), 0);
+        if bytes.len() != expected_bytes {
+            return Err(AccessError::LengthMismatch {
+                expected: expected_bytes,
+                actual: bytes.len(),
+            });
+        }
+        if bytes.as_ptr().align_offset(align_of::<T>()) != 0 {
+            return Err(AccessError::Misaligned {
+                required: align_of::<T>(),
+            });
+        }
         let len = bytes.len() / size_of::<T>();
         let pointer = NonNull::new(bytes.as_mut_ptr() as *mut T).unwrap_or_else(NonNull::dangling);
-        Self {
+        Ok(Self {
             mapping,
             pointer,
             len,
             _borrow: PhantomData,
-        }
+        })
     }
 
     fn as_slice_mut(&mut self, range: Range<usize>) -> &mut [T] {
@@ -814,7 +826,10 @@ pub(crate) fn prepare_write<'a, T: TensorScalar, R: TensorRank>(
         Ok(mapping) => mapping,
         Err(error) => return Err(Box::new((CheckedWrite { owner, descriptor }, error))),
     };
-    let access = TypedWriteAccess::new(mapping, span.byte_len());
+    let access = match TypedWriteAccess::new(mapping, span.byte_len()) {
+        Ok(access) => access,
+        Err(error) => return Err(Box::new((CheckedWrite { owner, descriptor }, error))),
+    };
     let host = match descriptor_value.layout {
         CheckedLayout::Contiguous { element_range } => {
             PreparedHostWrite::Contiguous(PreparedContiguousWrite {
