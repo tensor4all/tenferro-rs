@@ -1,8 +1,10 @@
 use std::any::Any;
+use std::ops::{Deref, DerefMut, Range};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::BackendId;
-use crate::DType;
+use crate::{DType, TensorScalar};
 
 use super::diagnostics::{
     RequestedIdentity, StorageOperation, StorageOperationContext, StorageOperationError,
@@ -23,6 +25,14 @@ pub(crate) struct ProviderCapabilities {
 impl ProviderCapabilities {
     pub(crate) const fn none() -> Self {
         Self { host_access: false }
+    }
+
+    pub(crate) const fn host() -> Self {
+        Self { host_access: true }
+    }
+
+    pub(crate) const fn host_access(self) -> bool {
+        self.host_access
     }
 }
 
@@ -112,6 +122,205 @@ pub(crate) struct StorageMut<'a> {
     owner: &'a mut OwnedStorage,
 }
 
+/// Move-only host allocation used by the P3 owner boundary.
+///
+/// The mutex is only the provider mapping guard. Rust access authority still
+/// comes from `StorageRef`/`StorageMut`; the provider trait takes `&self` so a
+/// guard can retain the allocation for the complete prepared borrow.
+struct HostAllocation<T: TensorScalar> {
+    extent: RootResourceExtent,
+    data: Mutex<Vec<T>>,
+}
+
+struct HostByteReadGuard<'a, T: TensorScalar> {
+    guard: std::sync::MutexGuard<'a, Vec<T>>,
+    range: Range<usize>,
+}
+
+struct HostByteWriteGuard<'a, T: TensorScalar> {
+    guard: std::sync::MutexGuard<'a, Vec<T>>,
+    range: Range<usize>,
+}
+
+fn host_bytes<T: TensorScalar>(data: &[T], range: Range<usize>) -> &[u8] {
+    let byte_len = data
+        .len()
+        .checked_mul(std::mem::size_of::<T>())
+        .unwrap_or(0);
+    debug_assert!(range.end <= byte_len);
+    // SAFETY: `TensorScalar` is initialized, plain-data storage with a stable
+    // size/alignment. The checked range is within the Vec allocation.
+    unsafe {
+        std::slice::from_raw_parts(
+            (data.as_ptr() as *const u8).add(range.start),
+            range.end - range.start,
+        )
+    }
+}
+
+fn host_bytes_mut<T: TensorScalar>(data: &mut [T], range: Range<usize>) -> &mut [u8] {
+    let byte_len = data
+        .len()
+        .checked_mul(std::mem::size_of::<T>())
+        .unwrap_or(0);
+    debug_assert!(range.end <= byte_len);
+    // SAFETY: `TensorScalar` is initialized, plain-data storage with a stable
+    // size/alignment. The checked range is within the Vec allocation and the
+    // mutex guard holds exclusive provider access for the borrow.
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            (data.as_mut_ptr() as *mut u8).add(range.start),
+            range.end - range.start,
+        )
+    }
+}
+
+impl<T: TensorScalar> Deref for HostByteReadGuard<'_, T> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        host_bytes(&self.guard, self.range.clone())
+    }
+}
+
+impl<T: TensorScalar> AsRef<[u8]> for HostByteReadGuard<'_, T> {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl<T: TensorScalar> Deref for HostByteWriteGuard<'_, T> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        host_bytes(&self.guard, self.range.clone())
+    }
+}
+
+impl<T: TensorScalar> DerefMut for HostByteWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        host_bytes_mut(&mut self.guard, self.range.clone())
+    }
+}
+
+impl<T: TensorScalar> AsRef<[u8]> for HostByteWriteGuard<'_, T> {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl<T: TensorScalar> AsMut<[u8]> for HostByteWriteGuard<'_, T> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
+impl<T: TensorScalar> std::fmt::Debug for HostAllocation<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostAllocation")
+            .field("extent", &self.extent)
+            .field(
+                "element_count",
+                &self.data.lock().map_or(0, |data| data.len()),
+            )
+            .finish()
+    }
+}
+
+unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
+    fn root_extent(&self) -> RootResourceExtent {
+        self.extent
+    }
+
+    fn provider_kind(&self) -> ProviderKind {
+        ProviderKind::Cpu
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::host()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn map_read(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderReadMapping<'_>, AccessError> {
+        if dtype != T::dtype() {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let data = self.data.lock().map_err(|_| AccessError::Provider {
+            message: "host allocation mapping lock poisoned".to_string(),
+        })?;
+        let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
+        Ok(ProviderReadMapping::from_guard(HostByteReadGuard {
+            guard: data,
+            range,
+        }))
+    }
+
+    fn map_write(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderWriteMapping<'_>, AccessError> {
+        if dtype != T::dtype() {
+            return Err(AccessError::DTypeMismatch {
+                expected: T::dtype(),
+                actual: dtype,
+            });
+        }
+        let data = self.data.lock().map_err(|_| AccessError::Provider {
+            message: "host allocation mapping lock poisoned".to_string(),
+        })?;
+        let range = host_byte_range(self.extent, span, data.len(), std::mem::size_of::<T>())?;
+        Ok(ProviderWriteMapping::from_guard(HostByteWriteGuard {
+            guard: data,
+            range,
+        }))
+    }
+}
+
+fn host_byte_range(
+    extent: RootResourceExtent,
+    span: RootBoundSpan,
+    element_count: usize,
+    element_size: usize,
+) -> Result<Range<usize>, AccessError> {
+    let start = span
+        .byte_offset()
+        .checked_sub(extent.byte_offset())
+        .ok_or_else(|| AccessError::Provider {
+            message: "host mapping span precedes allocation".to_string(),
+        })?;
+    let end = start
+        .checked_add(span.byte_len())
+        .ok_or_else(|| AccessError::Provider {
+            message: "host mapping span overflows".to_string(),
+        })?;
+    let total = element_count
+        .checked_mul(element_size)
+        .ok_or_else(|| AccessError::Provider {
+            message: "host allocation byte length overflows".to_string(),
+        })?;
+    if end > total
+        || !start.is_multiple_of(element_size)
+        || !span.byte_len().is_multiple_of(element_size)
+    {
+        return Err(AccessError::Provider {
+            message: "host mapping span is not an element-aligned subrange".to_string(),
+        });
+    }
+    Ok(start..end)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RootImportError {
     #[error("root-resource identity validation failed: {0}")]
@@ -151,6 +360,53 @@ pub(crate) fn import_unique_root(
     })
 }
 
+/// Import one host vector as the unique root for a typed tensor owner.
+pub(crate) fn import_host_vec<T: TensorScalar>(
+    data: Vec<T>,
+) -> Result<OwnedStorage, Box<StorageOperationError<RootImportError>>> {
+    static NEXT_HOST_ALLOCATION: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(1);
+    let element_size = std::mem::size_of::<T>();
+    let byte_len = data.len().checked_mul(element_size).ok_or_else(|| {
+        Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Raw(ByteRange::new(0, usize::MAX)),
+            ),
+            RootImportError::Identity(RootResourceIdentityError::Extent(
+                super::span::SpanValidationError::RangeOverflow {
+                    byte_offset: 0,
+                    byte_len: usize::MAX,
+                },
+            )),
+        ))
+    })?;
+    let key = super::identity::AllocationKey::new(
+        crate::AllocationDomainId::fresh(),
+        crate::AllocationId::from_backend_id(
+            NEXT_HOST_ALLOCATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ),
+    );
+    let extent = RootResourceExtent::try_new(key, 0, byte_len, std::mem::align_of::<T>()).map_err(
+        |source| {
+            Box::new(StorageOperationError::new(
+                StorageOperationContext::unresolved(
+                    StorageOperation::ImportUniqueRoot,
+                    RequestedIdentity::Keyed {
+                        key,
+                        range: ByteRange::new(0, byte_len),
+                    },
+                ),
+                RootImportError::Identity(RootResourceIdentityError::Extent(source)),
+            ))
+        },
+    )?;
+    import_unique_root(Box::new(HostAllocation {
+        extent,
+        data: Mutex::new(data),
+    }))
+}
+
 impl OwnedStorage {
     pub(crate) const fn as_ref(&self) -> StorageRef<'_> {
         StorageRef { owner: self }
@@ -162,6 +418,10 @@ impl OwnedStorage {
 
     pub(crate) fn into_root_pin(self) -> RootResourcePin {
         self.pin
+    }
+
+    pub(crate) const fn root_span(&self) -> RootBoundSpan {
+        self.claim.span
     }
 }
 
