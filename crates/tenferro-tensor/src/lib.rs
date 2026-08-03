@@ -86,6 +86,8 @@ pub use types::{
     TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
 };
 
+mod storage;
+
 pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {
     match dtype {
         DType::F32 => tenferro_tensor_core::DType::F32,
