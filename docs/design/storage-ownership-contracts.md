@@ -458,10 +458,10 @@ authorized only by ordinary Rust exclusive borrows (`&mut`/`StorageMut`), never
 by a registry, lease, event, retry, or callback.
 
 `prepare_read` and `prepare_write` are the access-preparation boundary. Together
-they validate bounds, layout, dtype, exact root span, alignment, storage,
-provider, and, for writes, write injectivity exactly once, then return prepared
-access carrying `CheckedLayout`. The hot loop consumes that checked metadata
-through `iter_contiguous`; it does not revalidate, decode coordinates, or
+they validate bounds, layout, dtype, exact root-bound span (`RootBoundSpan`),
+alignment, storage, provider, and, for writes, write injectivity exactly once,
+then return prepared access carrying `CheckedLayout`. The hot loop consumes
+that checked metadata through `iter_contiguous`; it does not revalidate, decode
 perform registry lookups per element.
 
 Providers retain the completion event, together with the `Arc<RootResource>`
