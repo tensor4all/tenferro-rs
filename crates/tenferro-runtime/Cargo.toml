@@ -44,3 +44,7 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "execution_engine_identity"
+path = "tests/execution_engine_identity.rs"
