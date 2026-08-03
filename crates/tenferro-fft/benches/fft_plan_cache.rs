@@ -1,10 +1,22 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{BackendSessionHost, Tensor};
 
 const CASES: &[(usize, usize)] = &[(256, 1), (1024, 16)];
+
+fn with_cpu_session<R>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, f).expect("CpuBackend must expose a CPU execution session")
+    })
+}
 
 fn c64_input(fft_len: usize, lanes: usize) -> Tensor {
     let len = fft_len * lanes;
@@ -36,9 +48,10 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
             let mut backend = CpuBackend::new();
             bench.iter(|| {
-                let output = black_box(&input)
-                    .fft(None, 0, FftNorm::Backward, &mut backend)
-                    .unwrap();
+                let output = with_cpu_session(&mut backend, |session| {
+                    black_box(&input).fft(None, 0, FftNorm::Backward, session)
+                })
+                .unwrap();
                 black_box(output);
             });
         });
@@ -46,15 +59,17 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("executor_warm_cache", &id), |bench| {
             let mut backend = CpuBackend::new();
             let mut executor = FftExecutor::default();
-            executor
-                .fft(&input, None, 0, FftNorm::Backward, &mut backend)
-                .unwrap();
+            with_cpu_session(&mut backend, |session| {
+                executor.fft(&input, None, 0, FftNorm::Backward, session)
+            })
+            .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = executor
-                    .fft(black_box(&input), None, 0, FftNorm::Backward, &mut backend)
-                    .unwrap();
+                let output = with_cpu_session(&mut backend, |session| {
+                    executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
+                })
+                .unwrap();
                 black_box(output);
             });
         });
@@ -72,9 +87,10 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
             let mut backend = CpuBackend::new();
             bench.iter(|| {
-                let output = black_box(&input)
-                    .rfft(None, 0, FftNorm::Backward, &mut backend)
-                    .unwrap();
+                let output = with_cpu_session(&mut backend, |session| {
+                    black_box(&input).rfft(None, 0, FftNorm::Backward, session)
+                })
+                .unwrap();
                 black_box(output);
             });
         });
@@ -82,15 +98,17 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("executor_warm_cache", &id), |bench| {
             let mut backend = CpuBackend::new();
             let mut executor = FftExecutor::default();
-            executor
-                .rfft(&input, None, 0, FftNorm::Backward, &mut backend)
-                .unwrap();
+            with_cpu_session(&mut backend, |session| {
+                executor.rfft(&input, None, 0, FftNorm::Backward, session)
+            })
+            .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = executor
-                    .rfft(black_box(&input), None, 0, FftNorm::Backward, &mut backend)
-                    .unwrap();
+                let output = with_cpu_session(&mut backend, |session| {
+                    executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
+                })
+                .unwrap();
                 black_box(output);
             });
         });
