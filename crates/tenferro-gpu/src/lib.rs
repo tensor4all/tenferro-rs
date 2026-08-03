@@ -3,8 +3,10 @@
 //! # Examples
 //!
 //! ```rust
+//! #[cfg(feature = "cuda")]
 //! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
 //!
+//! #[cfg(feature = "cuda")]
 //! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
 //!     let devices = cuda_devices()?;
 //!     let Some(device) = devices.first() else {
@@ -15,6 +17,7 @@
 //!
 //! // This ordinary doctest checks the discovery-based selection API without
 //! // requiring CUDA hardware at test time.
+//! #[cfg(feature = "cuda")]
 //! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
 

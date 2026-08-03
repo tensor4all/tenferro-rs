@@ -107,9 +107,9 @@ pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
-    CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue,
-    TensorView, TypedTensor, TypedTensorView,
+    BackendSessionHost, CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar,
+    TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
 

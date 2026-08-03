@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
     assert_eq!(outputs.remove(0).shape(), &[2, 2]);
 
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new()?;
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
     let outer = [&u, &v].einsum("i,j->ij")?;
@@ -72,9 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -95,7 +95,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let outputs = LinalgBackend::full_piv_lu(&mut backend, &a)?;
+    let outputs = backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, |exec_session| {
+            LinalgBackend::full_piv_lu(exec_session, &a)
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+    })?;
     let p = &outputs[0];
     let l = &outputs[1];
     let u = &outputs[2];
@@ -113,7 +118,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(parity_value == 1.0 || parity_value == -1.0);
 
     let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
-    let x = LinalgBackend::full_piv_lu_solve(&mut backend, &a, &b, false)?;
+    let x = backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, |exec_session| {
+            LinalgBackend::full_piv_lu_solve(exec_session, &a, &b, false)
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+    })?;
     assert_eq!(x.shape(), &[2, 1]);
 
     Ok(())
@@ -149,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mask = sum.compare(&product, CompareDir::Lt, &mut backend)?;
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new()?;
     let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
     assert_eq!(tracked.shape(), &[1]);
 
