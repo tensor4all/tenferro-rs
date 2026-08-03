@@ -1934,6 +1934,13 @@ The engine owns:
 An ordinary physical `Tensor` remains single-device in the initial refactor.
 No initial public `DistributedTensor` is introduced.
 
+Phase 0 multi-CUDA evidence uses one runtime with distinct caller-selected
+engine registrations. When each input is already resident on its selected CUDA
+device, the registration's input-ingress contract constrains preparation to the
+matching engine; no cross-device transfer provider or event route is required.
+This proves independent same-process device, engine, and event-domain execution
+without adding a public engine-selector or a distributed-tensor abstraction.
+
 ### Future sharding model
 
 The design reserves a future logical-tensor placement layer with:

@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 use tenferro_runtime::{
-    assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, ProviderDeviceIdentity, ProviderId, Runtime,
-    StorageClass,
+    assemble_preparation_only_engine_registration, CoreCapabilityBundle, DType, EngineId,
+    EventDomainId, ExecutionContextIdentity, GraphCompiler, HardwareClassId,
+    ProviderDeviceIdentity, ProviderId, Runtime, StorageClass, TracedTensor,
 };
 use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TensorElementwise, TypedTensor};
 
@@ -276,17 +276,30 @@ fn cuda_event_domain_rejects_same_origin_incompatible_token_before_launch() {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
-    if !gpu_available() {
-        return;
-    }
-    let devices = cuda_devices().expect("CUDA device discovery");
+    let devices = match cuda_devices() {
+        Ok(devices) => devices,
+        Err(_) => {
+            println!(
+                "SKIP cuda_registration_preserves_two_caller_selected_engine_ids_and_devices: \
+                 reason=cuda-unavailable detected_count=0"
+            );
+            return;
+        }
+    };
     if devices.len() < 2 {
+        println!(
+            "SKIP cuda_registration_preserves_two_caller_selected_engine_ids_and_devices: \
+             reason=fewer-than-two-cuda-devices detected_count={}",
+            devices.len()
+        );
         return;
     }
     let first_device = devices[0].id();
     let second_device = devices[1].id();
     let first_backend = CudaBackend::new(first_device).expect("first CUDA backend");
     let second_backend = CudaBackend::new(second_device).expect("second CUDA backend");
+    let first_runtime = first_backend.runtime().clone();
+    let second_runtime = second_backend.runtime().clone();
     let first_engine =
         EngineId::new("tenferro-cuda.test.selected.first.v1").expect("first CUDA engine ID");
     let second_engine =
@@ -299,6 +312,10 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
 
     assert_eq!(first_backend.device_id(), first_device);
     assert_eq!(second_backend.device_id(), second_device);
+    assert_eq!(first_runtime.device_id(), first_device);
+    assert_eq!(second_runtime.device_id(), second_device);
+    assert_ne!(first_device, second_device);
+    assert_ne!(first_engine, second_engine);
     assert_eq!(first_registration.engine_id(), &first_engine);
     assert_eq!(second_registration.engine_id(), &second_engine);
     assert_eq!(
@@ -314,6 +331,24 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
         format!("device:{}", second_device.ordinal())
     );
     assert_eq!(
+        first_registration
+            .provider_device_identity()
+            .provider_id()
+            .as_str(),
+        "tenferro.cuda"
+    );
+    assert_eq!(
+        second_registration
+            .provider_device_identity()
+            .provider_id()
+            .as_str(),
+        "tenferro.cuda"
+    );
+    assert_ne!(
+        first_registration.provider_device_identity(),
+        second_registration.provider_device_identity()
+    );
+    assert_eq!(
         first_registration.hardware_class(),
         &cuda_runtime_hardware_class().expect("CUDA hardware class")
     );
@@ -321,6 +356,144 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
         second_registration.hardware_class(),
         &cuda_runtime_hardware_class().expect("CUDA hardware class")
     );
+
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(first_registration)
+        .expect("register first selected CUDA engine");
+    builder
+        .register_engine(second_registration)
+        .expect("register second selected CUDA engine");
+    let runtime = builder.build().expect("build two-engine CUDA runtime");
+    let snapshot = runtime.snapshot().expect("two-engine CUDA snapshot");
+    assert_eq!(snapshot.engine_count(), 2);
+    assert_eq!(snapshot.transfer_provider_count(), 0);
+
+    let first_view = snapshot
+        .engine(&first_engine)
+        .expect("first selected CUDA engine snapshot");
+    let second_view = snapshot
+        .engine(&second_engine)
+        .expect("second selected CUDA engine snapshot");
+    assert_eq!(first_view.engine_id(), &first_engine);
+    assert_eq!(second_view.engine_id(), &second_engine);
+    assert_eq!(
+        first_view.provider_device_identity().provider_id().as_str(),
+        "tenferro.cuda"
+    );
+    assert_eq!(
+        second_view
+            .provider_device_identity()
+            .provider_id()
+            .as_str(),
+        "tenferro.cuda"
+    );
+    assert_eq!(
+        first_view.provider_device_identity().target_identity(),
+        format!("device:{}", first_device.ordinal())
+    );
+    assert_eq!(
+        second_view.provider_device_identity().target_identity(),
+        format!("device:{}", second_device.ordinal())
+    );
+    assert_ne!(
+        first_view.provider_device_identity(),
+        second_view.provider_device_identity()
+    );
+    let first_event_domain = first_view.event_domain_id();
+    let second_event_domain = second_view.event_domain_id();
+    assert_ne!(first_event_domain, second_event_domain);
+
+    let first_graph_input =
+        TracedTensor::input_symbolic_shape(DType::F32, 1).expect("first graph input");
+    let first_graph_output = first_graph_input
+        .add(&first_graph_input)
+        .expect("first graph elementwise add");
+    let first_program = GraphCompiler::new()
+        .compile_with_input_specs(
+            &first_graph_output,
+            &[(&first_graph_input, DType::F32, &[4])],
+        )
+        .expect("compile first CUDA elementwise graph");
+
+    let second_graph_input =
+        TracedTensor::input_symbolic_shape(DType::F32, 1).expect("second graph input");
+    let second_graph_output = second_graph_input
+        .add(&second_graph_input)
+        .expect("second graph elementwise add");
+    let second_program = GraphCompiler::new()
+        .compile_with_input_specs(
+            &second_graph_output,
+            &[(&second_graph_input, DType::F32, &[4])],
+        )
+        .expect("compile second CUDA elementwise graph");
+
+    let first_host = Tensor::from_vec_col_major(vec![4], vec![1.0_f32, 2.0, 3.0, 4.0])
+        .expect("first host input");
+    let second_host = Tensor::from_vec_col_major(vec![4], vec![-1.0_f32, 0.5, 2.0, 3.5])
+        .expect("second host input");
+    let first_input = upload_tensor(&first_runtime, &first_host).expect("upload first input");
+    let second_input = upload_tensor(&second_runtime, &second_host).expect("upload second input");
+    assert_eq!(
+        TensorRead::from_tensor(&first_input)
+            .placement()
+            .device
+            .as_ref()
+            .expect("first input CUDA device")
+            .ordinal,
+        first_device.ordinal() as usize
+    );
+    assert_eq!(
+        TensorRead::from_tensor(&second_input)
+            .placement()
+            .device
+            .as_ref()
+            .expect("second input CUDA device")
+            .ordinal,
+        second_device.ordinal() as usize
+    );
+
+    let first_prepared = runtime
+        .prepare_compiled(&first_program, &[&first_input])
+        .expect("prepare first CUDA graph");
+    let second_prepared = runtime
+        .prepare_compiled(&second_program, &[&second_input])
+        .expect("prepare second CUDA graph");
+
+    let (first_values, second_values) = std::thread::scope(|scope| {
+        let first_run = scope.spawn(|| {
+            let outputs = runtime
+                .run_prepared(&first_prepared, &[&first_input])
+                .expect("execute first prepared CUDA graph");
+            let output = outputs.into_iter().next().expect("first CUDA graph output");
+            download_tensor(&first_runtime, &output)
+                .expect("download first CUDA graph output")
+                .as_slice::<f32>()
+                .expect("first host output values")
+                .to_vec()
+        });
+        let second_run = scope.spawn(|| {
+            let outputs = runtime
+                .run_prepared(&second_prepared, &[&second_input])
+                .expect("execute second prepared CUDA graph");
+            let output = outputs
+                .into_iter()
+                .next()
+                .expect("second CUDA graph output");
+            download_tensor(&second_runtime, &output)
+                .expect("download second CUDA graph output")
+                .as_slice::<f32>()
+                .expect("second host output values")
+                .to_vec()
+        });
+        (
+            first_run.join().expect("first CUDA graph thread"),
+            second_run.join().expect("second CUDA graph thread"),
+        )
+    });
+
+    assert_eq!(first_values, vec![2.0_f32, 4.0, 6.0, 8.0]);
+    assert_eq!(second_values, vec![-2.0_f32, 1.0, 4.0, 7.0]);
 }
 
 #[test]
