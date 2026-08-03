@@ -122,8 +122,8 @@ impl RetirementRecord {
                 RetirementOutcome::Failed(error)
             }
             EventCompletion::Unproven(error) => {
-                // SAFETY: the complete record is intentionally retained when
-                // completion cannot be proven; no owner or retry handle escapes.
+                // INTENTIONAL: retain the complete record when completion
+                // cannot be proven; no owner or retry handle escapes.
                 let _retained: &'static mut RetirementRecord = Box::leak(Box::new(self));
                 RetirementOutcome::CompletionUnproven(error)
             }
