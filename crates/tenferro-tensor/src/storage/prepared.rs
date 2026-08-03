@@ -400,6 +400,10 @@ where
 }
 
 impl<'a, R: TensorRank> CheckedRead<'a, R> {
+    pub(crate) fn from_validated(owner: StorageRef<'a>, descriptor: CheckedDescriptor<R>) -> Self {
+        Self { owner, descriptor }
+    }
+
     pub(crate) fn new<T: TensorScalar>(
         owner: StorageRef<'a>,
         span: RootBoundSpan,
@@ -418,6 +422,17 @@ impl<'a, R: TensorRank> CheckedRead<'a, R> {
 }
 
 impl<'a, R: TensorRank> CheckedWrite<'a, R> {
+    pub(crate) fn from_validated(
+        owner: StorageMut<'a>,
+        descriptor: CheckedDescriptor<R>,
+        proof: WriteInjectivityProof,
+    ) -> Self {
+        Self {
+            owner,
+            descriptor: CheckedInjectiveDescriptor { descriptor, proof },
+        }
+    }
+
     pub(crate) fn new<T: TensorScalar>(
         owner: StorageMut<'a>,
         span: RootBoundSpan,
@@ -440,6 +455,18 @@ impl<'a, R: TensorRank> CheckedWrite<'a, R> {
     pub(crate) const fn descriptor(&self) -> &CheckedInjectiveDescriptor<R> {
         &self.descriptor
     }
+}
+
+/// Build the one checked descriptor retained by an allocation-group record.
+pub(crate) fn validate_descriptor<T: TensorScalar, R: TensorRank>(
+    owner: &RootResourceIdentity,
+    span: RootBoundSpan,
+    shape: R::Shape,
+    strides: R::Strides,
+    offset: isize,
+    require_injective: bool,
+) -> Result<(CheckedDescriptor<R>, Option<WriteInjectivityProof>), AccessError> {
+    make_descriptor::<T, R>(owner, span, shape, strides, offset, require_injective)
 }
 
 struct TypedReadAccess<'a, T: TensorScalar> {
