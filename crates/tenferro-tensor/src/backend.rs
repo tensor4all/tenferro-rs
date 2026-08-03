@@ -2831,7 +2831,7 @@ pub trait TensorStructural {
                 "default materialization accepts only host-owned tensors; use the storage's owning backend",
             ));
         }
-        Ok(input.clone())
+        input.duplicate()
     }
 
     /// Overwrite caller-provided storage from a readable tensor or view.
@@ -3800,7 +3800,7 @@ pub trait TensorDeviceTransfer {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        Ok(tensor.clone())
+        tensor.duplicate()
     }
 
     /// # Errors
@@ -3810,7 +3810,7 @@ pub trait TensorDeviceTransfer {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        Ok(tensor.clone())
+        tensor.duplicate()
     }
 }
 

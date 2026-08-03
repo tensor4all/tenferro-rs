@@ -11,4 +11,3 @@ fn owner_and_reborrows_preserve_static_rank() {
     assert_eq!(duplicate.rank(), 2);
     assert_eq!(duplicate.shape(), &[2, 2]);
 }
-

@@ -255,10 +255,10 @@ impl TensorStructural for DefaultReadBackend {
                     "default materialization accepts only host-owned tensors; use the storage's owning backend",
                 ));
             }
-            return Ok(tensor.clone());
+            return tensor.duplicate();
         }
         match input {
-            TensorRead::Tensor(tensor) => Ok(tensor.clone()),
+            TensorRead::Tensor(tensor) => tensor.duplicate(),
             TensorRead::View(TensorView::F32(view)) => materialize_host_view(view),
             TensorRead::View(TensorView::F64(view)) => materialize_host_view(view),
             TensorRead::View(TensorView::I32(view)) => materialize_host_view(view),
@@ -424,7 +424,7 @@ impl TensorIndexing for DefaultReadBackend {
     ) -> crate::Result<Tensor> {
         let _ = operand;
         self.calls.push("gather");
-        self.gather_indices = Some(start_indices.clone());
+        self.gather_indices = Some(start_indices.duplicate().unwrap());
         self.gather_config = Some(config.clone());
         Ok(marker())
     }
@@ -484,7 +484,11 @@ impl TensorDot for DefaultReadBackend {
         _config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         self.calls.push("dot_general");
-        Ok(self.dot_result.clone().unwrap_or_else(marker))
+        self.dot_result
+            .as_ref()
+            .map(Tensor::duplicate)
+            .transpose()
+            .map(|result| result.unwrap_or_else(marker))
     }
 }
 
@@ -1329,7 +1333,7 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
-    let mut out_mut = out.clone();
+    let mut out_mut = out.duplicate().unwrap();
     let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
 
     let rhs_f32 = Tensor::from_vec_col_major(vec![2], vec![3.0_f32, 4.0]).unwrap();

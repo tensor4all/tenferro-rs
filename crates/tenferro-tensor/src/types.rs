@@ -714,7 +714,7 @@ impl<T: 'static> Buffer<T> {
 /// The `R` parameter stores rank metadata. It defaults to dynamic rank
 /// (`DynRank`); use [`Rank<N>`](Rank) for compile-time rank validation.
 /// The dtype-erased [`Tensor`] enum remains dynamic-rank.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
     buffer: Buffer<T>,
     layout: TensorLayout<R>,
@@ -1006,6 +1006,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     pub fn shape(&self) -> &[usize] {
         self.layout.shape()
+    }
+
+    /// Return the logical rank carried by this view.
+    pub fn rank(&self) -> usize {
+        self.shape().len()
     }
 
     /// Return strides in element units.
@@ -1641,6 +1646,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn shape(&self) -> &[usize] {
         self.layout.shape()
+    }
+
+    /// Return the logical rank carried by this mutable view.
+    pub fn rank(&self) -> usize {
+        self.shape().len()
     }
 
     /// Return strides in element units.
@@ -2661,7 +2671,7 @@ impl_tensor_scalar!(Complex32, f32, C32, C32);
 /// let erased = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
 /// assert_eq!(erased.shape().len(), 2);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Tensor {
     F32(TypedTensor<f32>),
     F64(TypedTensor<f64>),
@@ -5400,6 +5410,28 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
 
+    /// Make an explicit owning copy of this tensor.
+    ///
+    /// Host storage is copied into a fresh allocation. Backend-owned storage
+    /// must be duplicated by the active backend, so this generic tensor layer
+    /// reports that operation as unsupported.
+    pub fn duplicate(&self) -> crate::Result<Self> {
+        let buffer = match &self.buffer {
+            Buffer::Host(data) => Buffer::Host(data.clone()),
+            Buffer::Backend(_) => {
+                return Err(crate::Error::runtime_state(
+                    "TypedTensor::duplicate",
+                    "backend-owned tensors must be duplicated by their active backend",
+                ))
+            }
+        };
+        Ok(Self {
+            buffer,
+            layout: self.layout.clone(),
+            placement: self.placement.clone(),
+        })
+    }
+
     /// Consume this tensor and return its owned column-major host buffer.
     ///
     /// # Examples
@@ -5668,6 +5700,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
 }
 
 impl Tensor {
+    /// Make an explicit owning copy of this dtype-erased tensor.
+    pub fn duplicate(&self) -> crate::Result<Self> {
+        match self {
+            Tensor::F32(t) => t.duplicate().map(Tensor::F32),
+            Tensor::F64(t) => t.duplicate().map(Tensor::F64),
+            Tensor::I32(t) => t.duplicate().map(Tensor::I32),
+            Tensor::I64(t) => t.duplicate().map(Tensor::I64),
+            Tensor::Bool(t) => t.duplicate().map(Tensor::Bool),
+            Tensor::C32(t) => t.duplicate().map(Tensor::C32),
+            Tensor::C64(t) => t.duplicate().map(Tensor::C64),
+        }
+    }
+
     /// Create a tensor from a shape and column-major flat data.
     ///
     /// This is the `Tensor`-level equivalent of
