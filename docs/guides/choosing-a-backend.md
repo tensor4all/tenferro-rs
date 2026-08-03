@@ -33,8 +33,9 @@ cargo test -p tenferro-gpu --features cuda --lib \
 ```
 
 The test uses discovered device IDs, registers both caller-selected engines in
-one runtime, and reports an explicit `SKIP` with the detected count when CUDA is
-unavailable or fewer than two devices are visible.
+one runtime, and reports an explicit `SKIP` with the detected count only when
+successful discovery finds fewer than two visible devices. A discovery error
+fails the test with the original typed error.
 
 ## CPU Provider Choice
 

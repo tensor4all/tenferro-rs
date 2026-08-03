@@ -1940,6 +1940,9 @@ device, the registration's input-ingress contract constrains preparation to the
 matching engine; no cross-device transfer provider or event route is required.
 This proves independent same-process device, engine, and event-domain execution
 without adding a public engine-selector or a distributed-tensor abstraction.
+The evidence test uses a two-party barrier immediately before each
+`run_prepared` call, proving concurrent host submission attempts from separate
+scoped threads; it does not guarantee overlap during CUDA kernel execution.
 
 ### Future sharding model
 

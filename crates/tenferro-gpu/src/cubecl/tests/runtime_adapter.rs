@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 use tenferro_runtime::{
@@ -276,16 +276,9 @@ fn cuda_event_domain_rejects_same_origin_incompatible_token_before_launch() {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
-    let devices = match cuda_devices() {
-        Ok(devices) => devices,
-        Err(_) => {
-            println!(
-                "SKIP cuda_registration_preserves_two_caller_selected_engine_ids_and_devices: \
-                 reason=cuda-unavailable detected_count=0"
-            );
-            return;
-        }
-    };
+    let devices = cuda_devices().unwrap_or_else(|error| {
+        panic!("CUDA device discovery failed: {error}");
+    });
     if devices.len() < 2 {
         println!(
             "SKIP cuda_registration_preserves_two_caller_selected_engine_ids_and_devices: \
@@ -460,8 +453,10 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
         .prepare_compiled(&second_program, &[&second_input])
         .expect("prepare second CUDA graph");
 
+    let submission_barrier = Barrier::new(2);
     let (first_values, second_values) = std::thread::scope(|scope| {
         let first_run = scope.spawn(|| {
+            submission_barrier.wait();
             let outputs = runtime
                 .run_prepared(&first_prepared, &[&first_input])
                 .expect("execute first prepared CUDA graph");
@@ -473,6 +468,7 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
                 .to_vec()
         });
         let second_run = scope.spawn(|| {
+            submission_barrier.wait();
             let outputs = runtime
                 .run_prepared(&second_prepared, &[&second_input])
                 .expect("execute second prepared CUDA graph");
