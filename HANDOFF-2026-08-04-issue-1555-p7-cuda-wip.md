@@ -17,6 +17,30 @@ origin/codex/issue-1558-task3-root-kernel
 This is a continuation checkpoint, not a completion or closure handoff.
 Issue #1555 remains open.
 
+## Clippy status (2026-08-04, post-review addendum)
+
+CI-parity clippy fails on this branch and must be cleared during the
+cutover:
+
+- `cargo clippy -p tenferro-tensor --all-targets -- -D warnings
+  -D clippy::missing_errors_doc -D clippy::missing_panics_doc` reports
+  38 errors: 36 missing `# Errors` sections on public
+  `Result`-returning functions in crates/tenferro-tensor/src/types.rs,
+  one missing `# Panics` section, and one too-many-arguments lint on
+  the nine-parameter `DeviceAccessRequest::new`. The hosted CI clippy
+  job lints tenferro-tensor without the cuda feature, so any PR fails
+  until these are fixed. Deleting the review-listed dead request
+  fields shrinks `new` below the argument threshold naturally.
+- `cargo clippy -p tenferro-gpu --features cuda --no-deps -- -D warnings
+  -D clippy::missing_errors_doc -D clippy::missing_panics_doc` reports
+  23 errors (unnecessary casts, clone-on-Copy, manual assign ops, one
+  unused type parameter, one eight-argument function). Hosted CI never
+  lints cuda-gated code, so part of this may predate the branch; clear
+  at least every lint in files the cutover touches.
+
+Run both commands together with the final-commit gates before
+activating the P7 ledger row.
+
 ## Objective and authority
 
 The persistent objective is to complete Issue #1555 only after the P13-B
