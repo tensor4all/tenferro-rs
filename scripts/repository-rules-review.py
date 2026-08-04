@@ -11,6 +11,7 @@ When ``.env`` exists at the repository root it is loaded automatically.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -30,9 +31,12 @@ PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
 PROMPT_VERSION = "1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
-MAX_DIFF_CHARS = 120_000
+MAX_DIFF_CHARS = 60_000
 MAX_FILE_DIFF_CHARS = 40_000
 MAX_FINDINGS_PER_CHUNK = 8
+HUNK_HEADER = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$"
+)
 MAX_ROUTED_SECTION_LINES = 100
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
@@ -46,13 +50,59 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bAuthorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
-SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b("
+SECRET_NAME = (
     r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
     r"private[_-]?key)[\w.-]*"
-    r"\s*[:=]\s*)"
-    r"([^\s#]+)"
 )
+# A typed declaration puts the type between the name and the value:
+#   const API_KEY: &str = "....";     let api_key: String = "...".into();
+# Matching only `name <sep> value` redacts the type and leaves the literal, so
+# allow a short annotation before the separator that precedes the value.
+SECRET_ANNOTATION = r"(?:[ \t]*:[^=\n]{0,40})?"
+# The value alternatives are ordered quoted-first so a quoted secret is
+# consumed whole. Putting the bare-token alternative first would stop at the
+# first space inside a quoted passphrase and upload the remainder. (Spelling
+# out an example assignment here would make this file trip its own guard.)
+SECRET_VALUE = r"""(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s#]+)"""
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?P<name>" + SECRET_NAME + r")(?P<sep>" + SECRET_ANNOTATION
+    + r"[ \t]*[:=][ \t]*)(?P<value>" + SECRET_VALUE + r")"
+)
+# Quoted credentials may legitimately contain spaces (a diceware passphrase is
+# prose by construction), so the value shape cannot be the discriminator.
+QUOTED_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"\s*[:=]\s*"
+    r"""(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}')"""
+)
+# An assignment whose value has not started yet on this line: the credential
+# lands on the following line, where no credential-shaped name is in sight.
+OPEN_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"[ \t]*[:=][ \t]*$"
+)
+# A value standing alone on its own line, as the continuation of the above.
+STANDALONE_VALUE = re.compile(r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}')[ \t]*[,;]?[ \t]*$""")
+# A quote opened on this line and closed on a later one hides the value from
+# any single-line pattern, so treat the opening alone as disqualifying.
+UNTERMINATED_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION
+    + r"""\s*[:=]\s*["'][^"'\r\n]*$"""
+)
+# Since the value may be prose, the name has to carry the discrimination.
+# `token_type`, `secret_name`, and `key_path` describe a credential rather than
+# holding one, and their values are ordinary text.
+SECRET_NAME_METADATA = re.compile(
+    r"(?i)[_-]?(?:type|kind|name|names|id|ids|len|length|size|count|path|paths"
+    r"|file|files|dir|env|var|vars|header|prefix|suffix|field|fields|url|uri"
+    r"|list|set|map|schema|format|scheme|class|enum|error|regex|pattern|label"
+    r"|source|store|provider|policy|status|state|mode|version)$"
+)
+
+
+def is_credential_name(name: str) -> bool:
+    """Whether a matched identifier holds a credential rather than describes one."""
+    return not SECRET_NAME_METADATA.search(name)
+
+
 SEVERITY_ALIASES = {
     "block": "block",
     "blocker": "block",
@@ -66,14 +116,6 @@ SEVERITY_ALIASES = {
     "info": "warn",
     "informational": "warn",
 }
-QUOTED_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b"
-    r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
-    r"private[_-]?key)[\w.-]*"
-    r"\s*[:=]\s*"
-    r'''(?:"[^\s"\r\n]{12,}"|'[^\s'\r\n]{12,}')'''
-)
-
 ALWAYS_SECTIONS = frozenset(
     {
         "Public Surface Discipline",
@@ -230,6 +272,44 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
 )
 
 
+# Signals in the changed lines themselves. Path routing cannot see that a file
+# under a generic path just gained an `unsafe` block or a cache.
+CONTENT_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
+    (
+        re.compile(r"\bunsafe\b|get_unchecked|from_raw_parts|\bas_ptr\b|\bas_mut_ptr\b"),
+        frozenset({"Unsafe Code Boundary", "Range Checks And Slicing"}),
+    ),
+    (
+        re.compile(r"rayon|par_iter|num_threads|thread_pool"),
+        frozenset({"CPU Threading Contract"}),
+    ),
+    (
+        re.compile(r"to_dense\(|materiali[sz]e|\bvec!\[|collect::<Vec"),
+        frozenset({"Materialization And Copies"}),
+    ),
+    (
+        re.compile(r"OnceLock|lazy_static|thread_local!|struct \w*Cache\b"),
+        frozenset({"Cache Ownership"}),
+    ),
+    (
+        re.compile(r"\bfaer\b|faer::"),
+        frozenset({"Faer Integration"}),
+    ),
+    (
+        re.compile(r"ADRule|linearize|transpose_rule|autodiff"),
+        frozenset({"Rule Source Of Truth", "AD Rule Coverage"}),
+    ),
+    (
+        re.compile(r"// INVARIANT:|#\[allow\("),
+        frozenset({"Invariant Markers"}),
+    ),
+    (
+        re.compile(r"#\[cfg\(test\)\]|\binclude!\("),
+        frozenset({"Unit Test Organization"}),
+    ),
+)
+
+
 @dataclass(frozen=True)
 class Finding:
     id: str
@@ -252,28 +332,56 @@ class Finding:
         }
 
 
-def run_git(args: list[str], cwd: Path = ROOT) -> str:
+def run_git(args: list[str], cwd: Path = ROOT, *, check: bool = True) -> str:
+    # Without this git C-quotes non-ASCII pathnames ("\346\227\245..."), and
+    # the quoted form matches no real path: per_file_diffs yields nothing and
+    # the extension-based deterministic checks never recognise the file.
     completed = subprocess.run(
-        ["git", *args],
+        ["git", "-c", "core.quotePath=false", *args],
         cwd=cwd,
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
     )
     return completed.stdout
 
 
+def untracked_files() -> list[str]:
+    """Paths git does not track yet, honouring .gitignore."""
+    output = run_git(["ls-files", "--others", "--exclude-standard"])
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def untracked_file_diff(path: str) -> str:
+    """Synthesize an all-added diff for a file with no committed counterpart.
+
+    `git diff <base>` compares the working tree against a commit, so an
+    untracked path has no object to compare and is omitted entirely. In
+    worktree mode -- the documented local preview -- that means a brand new
+    file is reviewed by nothing at all and the preview reports a false pass.
+    `--no-index` against /dev/null gives a normal diff without touching the
+    index; it exits 1 because the inputs differ, which is not an error here.
+    """
+    return run_git(
+        ["diff", "--unified=3", "--no-index", "--", "/dev/null", path],
+        check=False,
+    )
+
+
 def changed_files(base: str, head: str, *, worktree: bool = False) -> list[str]:
     if worktree:
         output = run_git(["diff", "--name-only", base])
-    else:
-        output = run_git(["diff", "--name-only", f"{base}...{head}"])
+        tracked = [line.strip() for line in output.splitlines() if line.strip()]
+        return sorted({*tracked, *untracked_files()})
+    output = run_git(["diff", "--name-only", f"{base}...{head}"])
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def unified_diff(base: str, head: str, *, worktree: bool = False) -> str:
     if worktree:
-        return run_git(["diff", "--unified=3", base])
+        pieces = [run_git(["diff", "--unified=3", base])]
+        pieces.extend(untracked_file_diff(path) for path in untracked_files())
+        return "\n".join(piece for piece in pieces if piece.strip())
     return run_git(["diff", "--unified=3", f"{base}...{head}"])
 
 
@@ -285,8 +393,11 @@ def per_file_diffs(
     worktree: bool = False,
 ) -> dict[str, str]:
     diffs: dict[str, str] = {}
+    untracked = set(untracked_files()) if worktree else set()
     for path in files:
-        if worktree:
+        if path in untracked:
+            diff = untracked_file_diff(path)
+        elif worktree:
             diff = run_git(["diff", "--unified=3", base, "--", path])
         else:
             diff = run_git(["diff", "--unified=3", f"{base}...{head}", "--", path])
@@ -341,13 +452,36 @@ def parse_repository_rules_sections(path: Path = RULES_PATH) -> dict[str, str]:
     return sections
 
 
-def select_rule_sections(files: list[str]) -> list[str]:
+def select_rule_sections(
+    files: list[str],
+    added: dict[str, list[tuple[int, str]]] | None = None,
+) -> list[str]:
+    """Pick the rule sections to show the reviewer.
+
+    Path routing alone misses rule-relevant code added under a generic path:
+    an `unsafe` block in a file whose name matches no trigger meant the unsafe
+    rules were never supplied -- and the prompt forbids inventing requirements
+    that were not supplied, making the rule unenforceable there. Content
+    triggers close that gap without making every safety section unconditional.
+
+    HUMAN_ONLY_SECTIONS is now subtracted explicitly. It used to be excluded
+    only because no trigger happened to name one, which left the guarantee in
+    "Performance-Gated Experiment Protocol" -- "intentionally not routed to the
+    diff-scoped review bot" -- resting on an accident.
+    """
     selected = set(ALWAYS_SECTIONS)
     for path in files:
         for pattern, section_names in SECTION_TRIGGERS:
             if pattern.search(path):
                 selected.update(section_names)
-    return sorted(selected)
+
+    if added:
+        for entries in added.values():
+            for _line_no, text in entries:
+                for pattern, section_names in CONTENT_TRIGGERS:
+                    if pattern.search(text):
+                        selected.update(section_names)
+    return sorted(selected - HUMAN_ONLY_SECTIONS)
 
 
 def build_rules_payload(section_names: list[str]) -> str:
@@ -391,6 +525,36 @@ def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
+def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
+    """Map each file to its added ``(new_line_number, text)`` pairs."""
+    result: dict[str, list[tuple[int, str]]] = {}
+    current_file: str | None = None
+    new_line = 0
+
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+            current_file = None if raw == "/dev/null" else raw
+            if current_file is not None:
+                result.setdefault(current_file, [])
+            continue
+        if line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            new_line = int(match.group(1)) if match else 0
+            continue
+        if current_file is None:
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            result[current_file].append((new_line, line[1:]))
+            new_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            continue
+        elif line.startswith(" "):
+            new_line += 1
+
+    return result
+
+
 def split_diff_chunks(file_diffs: dict[str, str]) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []
@@ -423,6 +587,23 @@ def joined_line_len(lines: list[str]) -> int:
     return len("\n".join(lines))
 
 
+def line_deltas(line: str) -> tuple[int, int]:
+    """How one diff body line advances the old and new file cursors."""
+    if line.startswith("+"):
+        return (0, 1)
+    if line.startswith("-"):
+        return (1, 0)
+    if line.startswith("\\"):
+        return (0, 0)
+    return (1, 1)
+
+
+def format_hunk_header(
+    old_start: int, old_count: int, new_start: int, new_count: int, suffix: str
+) -> str:
+    return f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{suffix}"
+
+
 def split_overlong_diff_line(prefix: list[str], line: str) -> list[str]:
     prefix_len = joined_line_len(prefix)
     line_budget = MAX_FILE_DIFF_CHARS - prefix_len - 1
@@ -440,17 +621,88 @@ def split_overlong_diff_line(prefix: list[str], line: str) -> list[str]:
 
 
 def split_oversized_hunk(header: list[str], hunk: list[str]) -> list[str]:
-    """Split one oversized hunk while repeating file and hunk headers."""
+    """Split one oversized hunk, rewriting the header for every emitted chunk.
+
+    Repeating the original header would tell the model that each chunk starts
+    at the hunk's first line, so findings in later chunks come back with line
+    numbers thousands of lines too small. `filter_findings` then drops them, or
+    worse keeps them against an unrelated added line that happens to collide.
+    """
     if not hunk:
         return []
 
+    parsed = HUNK_HEADER.match(hunk[0])
+    if parsed is None:
+        # Not a header we can renumber; fall back to repeating it verbatim
+        # rather than inventing offsets.
+        return split_oversized_hunk_verbatim(header, hunk)
+
+    old_start = int(parsed.group(1))
+    new_start = int(parsed.group(3))
+    suffix = parsed.group(5)
+
+    chunks: list[str] = []
+    body: list[str] = []
+    body_old = body_new = 0
+    cursor_old, cursor_new = old_start, new_start
+
+    def flush() -> None:
+        nonlocal body, body_old, body_new, cursor_old, cursor_new
+        if not body:
+            return
+        hunk_header = format_hunk_header(
+            cursor_old, body_old, cursor_new, body_new, suffix
+        )
+        chunks.append("\n".join([*header, hunk_header, *body]))
+        cursor_old += body_old
+        cursor_new += body_new
+        body = []
+        body_old = body_new = 0
+
+    for line in hunk[1:]:
+        delta_old, delta_new = line_deltas(line)
+        single_header = format_hunk_header(
+            cursor_old + body_old, delta_old, cursor_new + body_new, delta_new, suffix
+        )
+        if joined_line_len([*header, single_header, line]) > MAX_FILE_DIFF_CHARS:
+            flush()
+            single_header = format_hunk_header(
+                cursor_old, delta_old, cursor_new, delta_new, suffix
+            )
+            chunks.extend(
+                split_overlong_diff_line([*header, single_header], line)
+            )
+            cursor_old += delta_old
+            cursor_new += delta_new
+            continue
+
+        candidate_header = format_hunk_header(
+            cursor_old, body_old + delta_old, cursor_new, body_new + delta_new, suffix
+        )
+        if (
+            body
+            and joined_line_len([*header, candidate_header, *body, line])
+            > MAX_FILE_DIFF_CHARS
+        ):
+            flush()
+        body.append(line)
+        body_old += delta_old
+        body_new += delta_new
+
+    flush()
+    if not chunks:
+        chunks.append("\n".join([*header, hunk[0]]))
+    return chunks
+
+
+def split_oversized_hunk_verbatim(header: list[str], hunk: list[str]) -> list[str]:
+    """Fallback for a hunk header this script cannot parse."""
     hunk_header = hunk[0]
-    body = hunk[1:]
     prefix = [*header, hunk_header]
     chunks: list[str] = []
     current = list(prefix)
 
-    for line in body:
+    for line in hunk[1:]:
         if joined_line_len([*prefix, line]) > MAX_FILE_DIFF_CHARS:
             if current != prefix:
                 chunks.append("\n".join(current))
@@ -534,7 +786,12 @@ def redact_sensitive_text(text: str) -> str:
     redacted = text
     for pattern in SECRET_VALUE_PATTERNS:
         redacted = pattern.sub("[REDACTED_SECRET]", redacted)
-    return SECRET_ASSIGNMENT.sub(r"\1[REDACTED_SECRET]", redacted)
+    def mask(match: re.Match[str]) -> str:
+        if not is_credential_name(match.group("name")):
+            return match.group(0)
+        return f"{match.group('name')}{match.group('sep')}[REDACTED_SECRET]"
+
+    return SECRET_ASSIGNMENT.sub(mask, redacted)
 
 
 def redact_file_diffs(file_diffs: dict[str, str]) -> dict[str, str]:
@@ -542,9 +799,13 @@ def redact_file_diffs(file_diffs: dict[str, str]) -> dict[str, str]:
 
 
 def contains_sensitive_text(text: str) -> bool:
-    return any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS) or bool(
-        QUOTED_SECRET_ASSIGNMENT.search(text)
-    )
+    if any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS):
+        return True
+    for pattern in (QUOTED_SECRET_ASSIGNMENT, UNTERMINATED_SECRET_ASSIGNMENT):
+        for match in pattern.finditer(text):
+            if is_credential_name(match.group("name")):
+                return True
+    return False
 
 
 def added_diff_text(diff_text: str) -> str:
@@ -556,24 +817,52 @@ def added_diff_text(diff_text: str) -> str:
 
 
 def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
+    """Locate the first added line that must not be uploaded.
+
+    Lines are examined in diff order rather than per file, because a credential
+    can be split across two: the assignment stays unchanged on a context line
+    and only the value line is replaced. Checking added lines in isolation sees
+    a bare string literal with no credential-shaped name anywhere on it.
+    """
     current_file: str | None = None
-    new_line: int | None = None
+    new_line = 0
+    # Set when the previous surviving line opened an assignment whose value has
+    # not appeared yet, so the next line's literal is that value.
+    awaiting_value = False
+
     for line in diff_text.splitlines():
         if line.startswith("+++ "):
-            raw_path = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = None if raw_path == "/dev/null" else raw_path
+            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+            current_file = None if raw == "/dev/null" else raw
+            awaiting_value = False
             continue
         if line.startswith("@@"):
-            match = re.search(r"\+(\d+)(?:,\d+)?", line)
-            new_line = int(match.group(1)) if match else None
+            match = re.search(r"\+(\d+)", line)
+            new_line = int(match.group(1)) if match else 0
+            awaiting_value = False
             continue
-        if current_file is None or new_line is None:
+        if current_file is None:
             continue
-        if line.startswith("+") and not line.startswith("+++"):
-            if contains_sensitive_text(line[1:]):
-                return current_file, new_line
+
+        if line.startswith("-") and not line.startswith("---"):
+            # A deleted line neither survives nor breaks the continuation.
+            continue
+        if not (line.startswith("+") or line.startswith(" ")):
+            continue
+
+        body = line[1:]
+        is_added = line.startswith("+") and not line.startswith("+++")
+
+        if is_added and contains_sensitive_text(body):
+            return current_file, new_line
+        if is_added and awaiting_value and STANDALONE_VALUE.match(body):
+            return current_file, new_line
+
+        opener = OPEN_SECRET_ASSIGNMENT.search(body)
+        awaiting_value = bool(opener) and is_credential_name(opener.group("name"))
+        if is_added:
             new_line += 1
-        elif line.startswith(" "):
+        else:
             new_line += 1
     return None
 
@@ -666,12 +955,55 @@ def llm_response_error_finding(error: BaseException) -> Finding:
         rule_section="External LLM Review",
         file="",
         line=None,
-        summary="External LLM review did not produce usable JSON",
+        summary="External LLM review did not complete",
         detail=(
-            "The repository-rules review could not parse or validate the model "
-            f"response: {type(error).__name__}: {error}"
+            "The repository-rules review could not send the request or parse "
+            f"the model response: {type(error).__name__}: {error}"
         ),
     )
+
+
+def api_key_error_finding(reason: str) -> Finding:
+    return Finding(
+        id="llm-api-key-invalid",
+        severity="block",
+        rule_section="External LLM Review",
+        file="",
+        line=None,
+        summary="DEEPSEEK_API_KEY is unusable",
+        detail=(
+            f"{reason} Re-set the repository secret; the value itself is never "
+            "printed. Until then the LLM pass cannot run."
+        ),
+    )
+
+
+def api_key_problem(api_key: str) -> str | None:
+    """Describe why a key cannot be sent, without echoing the key.
+
+    HTTP header values are encoded as latin-1, so a key carrying non-ASCII
+    text -- a pasted ellipsis from a masked console display, or mojibake --
+    raises UnicodeEncodeError before any request leaves the machine. That is a
+    ValueError subclass, so it used to surface as "did not produce usable
+    JSON", pointing the reader at the model instead of at the secret.
+    """
+    if not api_key:
+        return "The secret is empty."
+    if not api_key.isascii():
+        offsets = [
+            str(index)
+            for index, char in enumerate(api_key)
+            if not char.isascii()
+        ]
+        return (
+            "The secret contains non-ASCII characters at offset(s) "
+            f"{', '.join(offsets[:10])}, which cannot be sent in an HTTP "
+            "Authorization header. A masked value copied from a console "
+            "display is the usual cause."
+        )
+    if any(char.isspace() for char in api_key):
+        return "The secret contains whitespace."
+    return None
 
 
 def filter_findings(
@@ -703,6 +1035,26 @@ def reconcile_verdict(findings: list[Finding]) -> str:
     return "fail" if any(item.severity == "block" for item in findings) else "pass"
 
 
+# Every way the request can fail below the JSON layer. OSError covers
+# socket.timeout, TimeoutError, ConnectionResetError, ssl.SSLError, and
+# urllib.error.URLError/HTTPError. http.client.HTTPException is a sibling of
+# OSError, not a subclass, so a truncated chunked response (IncompleteRead)
+# needs naming separately. socket.timeout only aliases TimeoutError from
+# Python 3.10 on, so listing TimeoutError alone is not enough on 3.9.
+TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    http.client.HTTPException,
+)
+NETWORK_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 5.0
+# Wall-clock ceiling for all LLM traffic in one run. The workflow allows 20
+# minutes; a run that blows past it is killed mid-request, so neither the
+# exception handler nor the report ever executes and the gate fails with no
+# diagnostic at all -- the exact failure this retry logic exists to prevent.
+# Finishing under our own budget guarantees a report is always posted.
+DEFAULT_BUDGET_SECONDS = 900.0
+
+
 def call_deepseek(
     *,
     api_key: str,
@@ -711,6 +1063,7 @@ def call_deepseek(
     system_prompt: str,
     user_content: str,
     timeout: float,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     payload = {
         "model": model,
@@ -730,8 +1083,34 @@ def call_deepseek(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    last_error: BaseException | None = None
+    for attempt in range(1, NETWORK_RETRIES + 1):
+        attempt_timeout = timeout
+        if deadline is not None:
+            attempt_timeout = min(timeout, max(1.0, deadline - time.monotonic()))
+        try:
+            with urllib.request.urlopen(request, timeout=attempt_timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except TRANSPORT_ERRORS as exc:
+            # Timeouts and connection resets are common enough on large diffs
+            # that one blocked PR per blip is not an acceptable failure mode.
+            last_error = exc
+            if attempt == NETWORK_RETRIES:
+                raise
+            if deadline is not None and time.monotonic() + RETRY_BACKOFF_SECONDS >= deadline:
+                # Retrying would run past the budget and get the job killed,
+                # which loses the report entirely. Fail now, with a diagnostic.
+                raise
+            print(
+                f"LLM request attempt {attempt}/{NETWORK_RETRIES} failed "
+                f"({type(exc).__name__}: {exc}); retrying in "
+                f"{RETRY_BACKOFF_SECONDS:.0f}s",
+                file=sys.stderr,
+            )
+            time.sleep(RETRY_BACKOFF_SECONDS)
+    else:  # pragma: no cover - the loop either breaks or raises
+        raise last_error if last_error else RuntimeError("no response")
     content = body["choices"][0]["message"]["content"]
     return extract_json_payload(content)
 
@@ -746,6 +1125,7 @@ def review_chunk(
     changed: list[str],
     diff_chunk: str,
     timeout: float,
+    deadline: float | None = None,
 ) -> tuple[str, list[Finding]]:
     user_content = "\n\n".join(
         [
@@ -769,6 +1149,7 @@ def review_chunk(
         system_prompt=system_prompt,
         user_content=user_content,
         timeout=timeout,
+        deadline=deadline,
     )
     return parse_findings(parsed)
 
@@ -783,6 +1164,23 @@ def merge_findings(all_findings: list[Finding]) -> list[Finding]:
         ):
             merged[key] = finding
     return list(merged.values())
+
+
+def budget_exhausted_finding(reviewed: int, total: int, budget: float) -> Finding:
+    return Finding(
+        id="llm-budget-exhausted",
+        severity="warn",
+        rule_section="External LLM Review",
+        file="",
+        line=None,
+        summary="External LLM review stopped at its time budget",
+        detail=(
+            f"Reviewed {reviewed} of {total} diff chunk(s) before the "
+            f"{budget:.0f}s budget ran out, so part of this "
+            "diff was not reviewed. Deterministic checks still covered all of "
+            "it. Split the PR or raise --budget-seconds to review the rest."
+        ),
+    )
 
 
 def llm_skipped_finding(reason: str) -> Finding:
@@ -1027,7 +1425,14 @@ def main(argv: list[str] | None = None) -> int:
         "--api-url",
         default=os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL),
     )
-    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument(
+        "--budget-seconds",
+        type=float,
+        default=DEFAULT_BUDGET_SECONDS,
+        help="Wall-clock ceiling for all LLM requests, so the job is never "
+        "killed before the report is written",
+    )
     args = parser.parse_args(argv)
 
     if args.llm_skipped_reason and not args.dry_run:
@@ -1056,7 +1461,8 @@ def main(argv: list[str] | None = None) -> int:
 
     diff_text = unified_diff(args.base, args.head, worktree=args.worktree)
     added_lines = added_lines_by_file(diff_text)
-    section_names = select_rule_sections(files)
+    added_text = added_lines_with_text(diff_text)
+    section_names = select_rule_sections(files, added_text)
     rules_text = build_rules_payload(section_names)
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -1095,18 +1501,24 @@ def main(argv: list[str] | None = None) -> int:
     llm_summary: str | None = None
     llm_stats: dict[str, Any] | None = None
     if not args.dry_run and not sensitive_finding:
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not api_key:
             print("DEEPSEEK_API_KEY is not set", file=sys.stderr)
             return 1
+        key_problem = api_key_problem(api_key)
 
-        file_diffs = per_file_diffs(
-            args.base,
-            args.head,
-            files,
-            worktree=args.worktree,
-        )
-        chunks = split_diff_chunks(redact_file_diffs(file_diffs))
+        if key_problem:
+            print(f"DEEPSEEK_API_KEY is unusable: {key_problem}", file=sys.stderr)
+            findings.append(api_key_error_finding(key_problem))
+            chunks = []
+        else:
+            file_diffs = per_file_diffs(
+                args.base,
+                args.head,
+                files,
+                worktree=args.worktree,
+            )
+            chunks = split_diff_chunks(redact_file_diffs(file_diffs))
         chunk_sizes = [len(chunk) for chunk in chunks]
         print(
             f"LLM review: model {args.model}, {len(chunks)} chunk(s), "
@@ -1115,8 +1527,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         llm_findings: list[Finding] = []
         llm_started = time.monotonic()
+        llm_deadline = llm_started + args.budget_seconds
+        reviewed = 0
         for index, chunk in enumerate(chunks, start=1):
             chunk_started = time.monotonic()
+            if chunk_started >= llm_deadline:
+                print(
+                    f"LLM review: budget exhausted after {reviewed}/{len(chunks)} "
+                    "chunk(s)",
+                    file=sys.stderr,
+                )
+                findings.append(
+                    budget_exhausted_finding(
+                        reviewed, len(chunks), args.budget_seconds
+                    )
+                )
+                break
             try:
                 _, chunk_findings = review_chunk(
                     api_key=api_key,
@@ -1127,8 +1553,9 @@ def main(argv: list[str] | None = None) -> int:
                     changed=files,
                     diff_chunk=chunk,
                     timeout=args.timeout,
+                    deadline=llm_deadline,
                 )
-            except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+            except (KeyError, ValueError, *TRANSPORT_ERRORS) as exc:
                 print(
                     f"LLM chunk {index}/{len(chunks)}: failed after "
                     f"{time.monotonic() - chunk_started:.1f}s: "
@@ -1144,6 +1571,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             llm_findings.extend(chunk_findings)
+            reviewed += 1
         merged_llm_findings = merge_findings(llm_findings)
         kept_llm_findings = filter_findings(
             merged_llm_findings,

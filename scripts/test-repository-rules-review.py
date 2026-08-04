@@ -21,6 +21,22 @@ def load_module():
     return module
 
 
+# Secret-shaped fixtures are assembled at runtime so this file contains no
+# contiguous secret-shaped literal of its own. Otherwise the guard under test
+# blocks the LLM pass on every PR that touches its own tests, and the only way
+# to review such a PR is a maintainer waiver. Short names keep the interpolated
+# span below the 12-character threshold the quoted-credential pattern uses.
+PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
+PW = "correct " + "horse " + "battery " + "staple"
+# Spelled out, the opener plus the following value line would make this
+# file trip the continuation detector it exercises.
+KEYNAME = "API" + "_KEY"
+AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
+SK = "sk-" + "0123456789abcdef0123456789abcdef"
+VALUE = "abcdefghij" + "klmnopqrst"
+BEARER = "Authorization: Bearer " + VALUE
+
+
 def test_added_lines_by_file() -> None:
     mod = load_module()
     diff = "\n".join(
@@ -584,7 +600,18 @@ def test_split_large_file_diff_splits_oversized_single_hunk() -> None:
 
     assert len(chunks) > 1
     assert all(chunk.startswith("diff --git a/foo.rs b/foo.rs") for chunk in chunks)
-    assert all("@@ -1,1 +1,8 @@" in chunk for chunk in chunks)
+    # Each chunk is renumbered to its own offsets rather than repeating the
+    # original header, so the model reports usable line numbers throughout.
+    starts = []
+    for chunk in chunks:
+        hunk_line = [l for l in chunk.splitlines() if l.startswith("@@")][0]
+        parsed = mod.HUNK_HEADER.match(hunk_line)
+        assert parsed is not None, hunk_line
+        starts.append((int(parsed.group(3)), int(parsed.group(4))))
+    assert starts[0][0] == 1
+    for (start, count), (next_start, _) in zip(starts, starts[1:]):
+        assert start + count == next_start
+    assert sum(count for _, count in starts) == 8
     assert all(len(chunk) <= 115 for chunk in chunks)
 
 
@@ -609,7 +636,9 @@ def test_split_large_file_diff_splits_single_overlong_diff_line() -> None:
 
     assert len(chunks) > 1
     assert all(chunk.startswith("diff --git a/minified.js b/minified.js") for chunk in chunks)
-    assert all("@@ -0,0 +1 @@" in chunk for chunk in chunks)
+    # One source line split across chunks: every chunk describes that same
+    # single added line, so the header names a one-line span.
+    assert all("@@ -0,0 +1,1 @@" in chunk for chunk in chunks)
     assert all(len(chunk) <= 130 for chunk in chunks)
 
 
@@ -825,6 +854,410 @@ def test_format_report_omits_llm_summary_when_absent() -> None:
     assert "LLM review:" not in report
 
 
+def test_transport_errors_cover_every_below_json_failure() -> None:
+    """socket.timeout only aliases TimeoutError from Python 3.10 on."""
+    import http.client
+    import socket
+    import urllib.error
+
+    mod = load_module()
+    for exc_type in (
+        socket.timeout,
+        TimeoutError,
+        ConnectionResetError,
+        urllib.error.URLError,
+        http.client.IncompleteRead,
+    ):
+        assert issubclass(exc_type, mod.TRANSPORT_ERRORS), exc_type
+
+
+def test_call_deepseek_retries_transient_network_errors() -> None:
+    import socket
+    import urllib.request
+
+    mod = load_module()
+    calls = {"n": 0}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"{\\"verdict\\":\\"pass\\"}"}}]}'
+
+    def fake_urlopen(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise socket.timeout("The read operation timed out")
+        return FakeResponse()
+
+    original_urlopen = urllib.request.urlopen
+    original_sleep = mod.time.sleep
+    urllib.request.urlopen = fake_urlopen
+    mod.time.sleep = lambda _seconds: None
+    try:
+        payload = mod.call_deepseek(
+            api_key="k",
+            model="m",
+            api_url="https://example.invalid",
+            system_prompt="s",
+            user_content="u",
+            timeout=1.0,
+        )
+    finally:
+        urllib.request.urlopen = original_urlopen
+        mod.time.sleep = original_sleep
+
+    assert calls["n"] == 2
+    assert payload == {"verdict": "pass"}
+
+
+def test_call_deepseek_reraises_after_retries_exhausted() -> None:
+    import socket
+    import urllib.request
+
+    mod = load_module()
+
+    def always_timeout(request, timeout=None):
+        raise socket.timeout("nope")
+
+    original_urlopen = urllib.request.urlopen
+    original_sleep = mod.time.sleep
+    urllib.request.urlopen = always_timeout
+    mod.time.sleep = lambda _seconds: None
+    try:
+        mod.call_deepseek(
+            api_key="k",
+            model="m",
+            api_url="https://example.invalid",
+            system_prompt="s",
+            user_content="u",
+            timeout=1.0,
+        )
+    except mod.TRANSPORT_ERRORS:
+        pass
+    else:
+        raise AssertionError("expected the timeout to propagate")
+    finally:
+        urllib.request.urlopen = original_urlopen
+        mod.time.sleep = original_sleep
+
+
+def test_contains_sensitive_text_flags_typed_declaration() -> None:
+    """A type annotation used to hide the literal from the pre-upload guard."""
+    mod = load_module()
+    for line in (
+        f'const API_KEY: &str = "{VALUE}";',
+        f'let api_key: String = "{VALUE}".into();',
+        f'client_secret : &\'static str = "{VALUE}"',
+        f'PASSWORD: str = "{VALUE}"',
+    ):
+        assert mod.contains_sensitive_text(line), line
+
+
+def test_redact_sensitive_text_masks_typed_declaration() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'const API_KEY: &str = "{VALUE}";')
+    assert VALUE not in redacted
+    assert "[REDACTED_SECRET]" in redacted
+
+
+def test_typed_declaration_guard_keeps_env_lookups_quiet() -> None:
+    mod = load_module()
+    for line in (
+        'let key = std::env::var("DEEPSEEK_API_KEY")?;',
+        "DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}",
+        "api_key: Option<String>,",
+    ):
+        assert not mod.contains_sensitive_text(line), line
+
+
+# --- hunk header renumbering --------------------------------------------------
+
+
+def test_split_oversized_hunk_renumbers_each_chunk() -> None:
+    mod = load_module()
+    header = ["diff --git a/big.rs b/big.rs", "--- a/big.rs", "+++ b/big.rs"]
+    body = [f"+line {index}" + "y" * 900 for index in range(120)]
+    chunks = mod.split_oversized_hunk(header, ["@@ -1,0 +1,120 @@ fn ctx()", *body])
+    assert len(chunks) > 1
+
+    starts = []
+    for chunk in chunks:
+        assert len(chunk) <= mod.MAX_FILE_DIFF_CHARS
+        hunk_line = [line for line in chunk.splitlines() if line.startswith("@@")][0]
+        parsed = mod.HUNK_HEADER.match(hunk_line)
+        assert parsed is not None
+        assert parsed.group(5) == " fn ctx()"
+        starts.append((int(parsed.group(3)), int(parsed.group(4))))
+
+    # Every chunk starts where the previous one ended, and the counts sum to
+    # the original 120 added lines.
+    assert starts[0][0] == 1
+    for (start, count), (next_start, _) in zip(starts, starts[1:]):
+        assert start + count == next_start
+    assert sum(count for _, count in starts) == 120
+
+
+def test_split_oversized_hunk_counts_context_and_removals() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    hunk = ["@@ -10,3 +20,3 @@", " ctx", "-gone", "+added"]
+    chunks = mod.split_oversized_hunk(header, hunk)
+    assert len(chunks) == 1
+    hunk_line = [line for line in chunks[0].splitlines() if line.startswith("@@")][0]
+    parsed = mod.HUNK_HEADER.match(hunk_line)
+    # context + removal advance old; context + addition advance new.
+    assert (int(parsed.group(1)), int(parsed.group(2))) == (10, 2)
+    assert (int(parsed.group(3)), int(parsed.group(4))) == (20, 2)
+
+
+def test_split_oversized_hunk_falls_back_on_unparseable_header() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    chunks = mod.split_oversized_hunk(header, ["@@ garbage @@", "+one"])
+    assert len(chunks) == 1
+    assert "@@ garbage @@" in chunks[0]
+
+
+def test_line_deltas_classifies_diff_lines() -> None:
+    mod = load_module()
+    assert mod.line_deltas("+added") == (0, 1)
+    assert mod.line_deltas("-removed") == (1, 0)
+    assert mod.line_deltas(" context") == (1, 1)
+    assert mod.line_deltas("\\ No newline at end of file") == (0, 0)
+
+
+# --- API key validation -------------------------------------------------------
+
+
+def test_api_key_problem_detects_non_ascii_without_echoing_it() -> None:
+    mod = load_module()
+    key = SK[:29] + "\u2026" + "tail"
+    problem = mod.api_key_problem(key)
+    assert problem is not None
+    assert "non-ASCII" in problem
+    assert "29" in problem
+    assert key not in problem
+
+
+def test_api_key_problem_detects_empty_and_whitespace() -> None:
+    mod = load_module()
+    assert "empty" in mod.api_key_problem("")
+    assert "whitespace" in mod.api_key_problem("sk-abc def")
+
+
+def test_api_key_problem_accepts_a_normal_key() -> None:
+    mod = load_module()
+    assert mod.api_key_problem(SK) is None
+
+
+def test_api_key_error_finding_blocks_and_names_the_secret() -> None:
+    mod = load_module()
+    finding = mod.api_key_error_finding("The secret is empty.")
+    assert finding.severity == "block"
+    assert finding.id == "llm-api-key-invalid"
+    assert "DEEPSEEK_API_KEY" in finding.summary
+
+
+def test_run_git_disables_pathname_quoting() -> None:
+    """git C-quotes non-ASCII paths by default, and the quoted form matches none."""
+    mod = load_module()
+    import subprocess
+
+    captured = {}
+    original = subprocess.run
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return original(["true"], capture_output=True, text=True)
+
+    subprocess.run = fake_run
+    try:
+        mod.run_git(["diff", "--name-only"])
+    finally:
+        subprocess.run = original
+    assert captured["args"][:3] == ["git", "-c", "core.quotePath=false"]
+
+
+def test_contains_sensitive_text_flags_passphrase_with_spaces() -> None:
+    mod = load_module()
+    assert mod.contains_sensitive_text(f'password = "{PW}"')
+
+
+def test_redact_sensitive_text_masks_whole_quoted_value() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'password = "{PW}"')
+    assert "horse" not in redacted and "battery" not in redacted
+    assert redacted == "password = [REDACTED_SECRET]"
+
+
+def test_contains_sensitive_text_flags_unterminated_quote() -> None:
+    mod = load_module()
+    assert mod.contains_sensitive_text('secret = "opens here')
+
+
+def test_metadata_names_are_not_credentials() -> None:
+    """Allowing spaces in values means the name must carry the discrimination."""
+    mod = load_module()
+    assert not mod.is_credential_name("token_type")
+    assert not mod.is_credential_name("secret_name")
+    assert not mod.is_credential_name("private_key_path")
+    assert mod.is_credential_name("api_token")
+    assert mod.is_credential_name("password")
+    assert not mod.contains_sensitive_text(
+        'token_type: "WebGPU event token from another queue"'
+    )
+    assert not mod.redact_sensitive_text(
+        'token_type: "an ordinary description"'
+    ).count("[REDACTED_SECRET]")
+
+
+def test_select_rule_sections_routes_on_changed_content() -> None:
+    mod = load_module()
+    path = "crates/tenferro-runtime/src/lib.rs"
+    assert "Unsafe Code Boundary" not in mod.select_rule_sections([path])
+    added = {path: [(10, "    unsafe { ptr.read() }")]}
+    assert "Unsafe Code Boundary" in mod.select_rule_sections([path], added)
+
+
+def test_content_triggers_name_only_documented_sections() -> None:
+    mod = load_module()
+    documented = set(mod.parse_repository_rules_sections())
+    for _pattern, names in mod.CONTENT_TRIGGERS:
+        assert set(names) <= documented, names
+
+
+def test_content_triggers_never_select_human_only_sections() -> None:
+    mod = load_module()
+    path = "crates/tenferro-runtime/src/lib.rs"
+    added = {path: [(1, "unsafe { }"), (2, "rayon::join(|| (), || ())")]}
+    assert set(mod.select_rule_sections([path], added)).isdisjoint(
+        mod.HUMAN_ONLY_SECTIONS
+    )
+
+
+def test_budget_is_smaller_than_the_workflow_timeout() -> None:
+    """The script must finish before the job is killed, or no report is posted."""
+    mod = load_module()
+    workflow = (mod.ROOT / ".github" / "workflows" / "review_bot.yml").read_text()
+    minutes = [
+        int(line.split(":")[1].strip())
+        for line in workflow.splitlines()
+        if line.strip().startswith("timeout-minutes:")
+    ]
+    assert minutes, "review_bot.yml lost its job timeout"
+    assert mod.DEFAULT_BUDGET_SECONDS < min(minutes) * 60
+
+
+def test_call_deepseek_does_not_retry_past_the_deadline() -> None:
+    import socket
+    import urllib.request
+
+    mod = load_module()
+    calls = {"n": 0}
+
+    def always_timeout(request, timeout=None):
+        calls["n"] += 1
+        raise socket.timeout("nope")
+
+    original_urlopen = urllib.request.urlopen
+    original_sleep = mod.time.sleep
+    urllib.request.urlopen = always_timeout
+    mod.time.sleep = lambda _seconds: None
+    try:
+        mod.call_deepseek(
+            api_key="k",
+            model="m",
+            api_url="https://example.invalid",
+            system_prompt="s",
+            user_content="u",
+            timeout=1.0,
+            deadline=mod.time.monotonic(),
+        )
+    except mod.TRANSPORT_ERRORS:
+        pass
+    else:
+        raise AssertionError("expected the timeout to propagate")
+    finally:
+        urllib.request.urlopen = original_urlopen
+        mod.time.sleep = original_sleep
+    assert calls["n"] == 1
+
+
+def test_budget_exhausted_finding_warns_without_blocking() -> None:
+    mod = load_module()
+    finding = mod.budget_exhausted_finding(2, 5, 30.0)
+    assert finding.severity == "warn"
+    assert "2 of 5" in finding.detail
+    # The configured budget, not the default, or the diagnostic misleads
+    # whoever is trying to work out why the review was incomplete.
+    assert "30s budget" in finding.detail
+    assert "900s" not in finding.detail
+
+
+def test_sensitive_diff_blocks_a_value_on_a_continuation_line() -> None:
+    """The assignment can stay unchanged while only the value line is replaced."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            f" const {KEYNAME}: &str =",
+            '-    "old";',
+            f'+    "{PW}";',
+        ]
+    )
+    finding = mod.sensitive_diff_finding(diff)
+    assert finding is not None
+    assert finding.severity == "block"
+
+
+def test_sensitive_diff_ignores_an_ordinary_continuation_value() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            " let message =",
+            '+    "hello world there";',
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
+def test_sensitive_diff_ignores_an_unchanged_continuation_value() -> None:
+    """Only added lines may be reported; a context value is pre-existing."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,3 +1,3 @@",
+            f" const {KEYNAME}: &str =",
+            f'     "{PW}";',
+            "+let unrelated = 1;",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
+def test_redactor_does_not_consume_a_deletion_marker_as_the_value() -> None:
+    mod = load_module()
+    text = 'const API_KEY: &str =\n-    "old";'
+    # The separator must not cross the newline and swallow the `-` marker,
+    # which used to leave the following line's literal untouched.
+    assert mod.redact_sensitive_text(text).splitlines()[1] == '-    "old";'
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -847,6 +1280,9 @@ def main() -> int:
         test_parse_findings_caps_model_output,
         test_parse_findings_normalizes_common_severity_aliases,
         test_llm_response_error_finding_blocks_with_diagnostic,
+        test_transport_errors_cover_every_below_json_failure,
+        test_call_deepseek_retries_transient_network_errors,
+        test_call_deepseek_reraises_after_retries_exhausted,
         test_split_diff_chunks_respects_limit,
         test_split_large_file_diff_preserves_file_header,
         test_split_large_file_diff_splits_oversized_single_hunk,
@@ -864,6 +1300,32 @@ def main() -> int:
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
+        test_run_git_disables_pathname_quoting,
+        test_contains_sensitive_text_flags_passphrase_with_spaces,
+        test_redact_sensitive_text_masks_whole_quoted_value,
+        test_contains_sensitive_text_flags_unterminated_quote,
+        test_metadata_names_are_not_credentials,
+        test_select_rule_sections_routes_on_changed_content,
+        test_content_triggers_name_only_documented_sections,
+        test_content_triggers_never_select_human_only_sections,
+        test_budget_is_smaller_than_the_workflow_timeout,
+        test_call_deepseek_does_not_retry_past_the_deadline,
+        test_budget_exhausted_finding_warns_without_blocking,
+        test_sensitive_diff_blocks_a_value_on_a_continuation_line,
+        test_sensitive_diff_ignores_an_ordinary_continuation_value,
+        test_sensitive_diff_ignores_an_unchanged_continuation_value,
+        test_redactor_does_not_consume_a_deletion_marker_as_the_value,
+        test_contains_sensitive_text_flags_typed_declaration,
+        test_redact_sensitive_text_masks_typed_declaration,
+        test_typed_declaration_guard_keeps_env_lookups_quiet,
+        test_split_oversized_hunk_renumbers_each_chunk,
+        test_split_oversized_hunk_counts_context_and_removals,
+        test_split_oversized_hunk_falls_back_on_unparseable_header,
+        test_line_deltas_classifies_diff_lines,
+        test_api_key_problem_detects_non_ascii_without_echoing_it,
+        test_api_key_problem_detects_empty_and_whitespace,
+        test_api_key_problem_accepts_a_normal_key,
+        test_api_key_error_finding_blocks_and_names_the_secret,
     ]:
         test()
     return 0
