@@ -1163,13 +1163,17 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     );
 
     let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn typed_device_ptr"),
+        "CUDA interop must not expose an unscoped typed pointer function"
+    );
     let interop_ptr = source_section(
         &interop_source,
-        "pub fn typed_device_ptr<T: 'static>(",
+        "pub fn with_typed_device_ptr<T: 'static, R>(",
         "/// Upload host data into a dense GPU tensor",
     );
     assert_ordered_needles(
-        "interop::typed_device_ptr",
+        "interop::with_typed_device_ptr",
         interop_ptr,
         &[
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",

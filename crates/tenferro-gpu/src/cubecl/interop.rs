@@ -161,25 +161,32 @@ pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
     dispatch::typed_tensor_array_arg(tensor, op)
 }
 
-/// Return a raw CUDA device pointer for a CubeCL-backed tensor.
+/// Borrow a raw CUDA device pointer for a CubeCL-backed tensor.
+///
+/// The pointer is passed only to `f`, while the residency-checked tensor and
+/// runtime remain borrowed by this call. Callers must not retain the pointer
+/// after `f` returns.
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
 /// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
 /// [`crate::Error::Validation`] when the pointer address overflows `usize`.
-pub fn typed_device_ptr<T: 'static>(
+pub fn with_typed_device_ptr<T: 'static, R>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<*mut c_void> {
+    f: impl FnOnce(*mut c_void) -> R,
+) -> crate::Result<R> {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    cuda_device_ptr_from_addr(resource.resource().ptr, op)
+    // The residency check above ties this raw FFI pointer to the caller's
+    // runtime/device for the duration of the callback.
+    let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, op)?;
+    Ok(f(ptr))
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
