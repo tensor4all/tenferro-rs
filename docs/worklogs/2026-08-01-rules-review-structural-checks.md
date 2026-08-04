@@ -160,3 +160,42 @@ Coverage: `test_dependency_diagram_findings_rejects_a_crate_without_a_manifest`,
 `test_inline_test_module_findings_ignores_a_shrinking_block`,
 `test_inline_test_module_findings_still_flags_real_growth`, and
 `test_prompt_does_not_promise_pr_text_disclosure`.
+
+## Review Follow-ups, Round 3 (Codex on PR #1582)
+
+Four findings, all verified by running the previous revision (`14e831ff`)
+before changing anything. Two could already misfire on the current tree; two
+were latent (the repo has no `[target.*]` dependency table and no public
+`union` today).
+
+- **Non-Rust fences classified as doctests** — the scanner treated every
+  ```` ``` ```` fence in a doc comment as a doctest, so a ```` ```text ````
+  grammar block containing `Widget;` produced `vacuous-doc-example` on
+  ordinary syntax documentation. `is_rust_doc_fence` now gates the classifier
+  on the fence info string: empty, or every token a Rust attribute
+  (`rust`, `no_run`, `ignore`, `should_panic`, `compile_fail`, `edition*`).
+  Deliberately NOT also restricting the check to the `# Examples` section: a
+  vacuous Rust doctest outside `# Examples` is equally vacuous, and gating on
+  the section would weaken the audit beyond what the false positive requires.
+- **A new inline test block hidden by a simultaneous shrink** — round 2's
+  net-size exemption is file-wide, so a PR that shrinks one block while adding
+  another can lower the total and skip the fresh violation. The exemption is
+  now applied per block: a block whose OPENER is itself an added line is judged
+  on its own, while an edit inside a surviving block of a non-growing file
+  stays exempt.
+- **Target-specific dependency tables ignored** — `[target.'cfg(unix)'.dependencies]`
+  is an ordinary production dependency table, but the section name was matched
+  exactly, so a real edge read as absent (matching diagram edge reported stale,
+  omitted edge passed). `TARGET_TABLE_PREFIX` strips the target spec, including
+  the quoted form, before the section is classified;
+  `[target.<spec>.dev-dependencies]` still falls through like `[dev-dependencies]`.
+- **`pub union` invisible to the doc audit** — `PUB_ITEM` listed
+  `fn|struct|enum|trait|type`, so a public union never reached the
+  `missing-doc-examples` check. Added `union`.
+
+Coverage: `test_vacuous_doc_example_findings_skips_non_rust_fences`,
+`test_is_rust_doc_fence_accepts_only_rust_attributes`,
+`test_inline_test_module_findings_flags_a_new_block_during_extraction`,
+`test_parse_cargo_tenferro_dependencies_reads_target_tables`, and
+`test_pub_item_matches_a_public_union`. The round-2 shrink-exemption test still
+passes, pinning that the per-block refinement did not undo it.

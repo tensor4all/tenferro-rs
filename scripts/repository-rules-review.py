@@ -1398,9 +1398,12 @@ def runtime_ad_boundary_violations(
 
 RUST_TEST_PATH = re.compile(r"(^|/)tests(/|\.rs$)|_tests\.rs$|(^|/)benches/|(^|/)examples/")
 INLINE_TEST_MOD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# `union` belongs here with the other public type forms: a public union is as
+# much a documented public type as a struct or enum, and omitting it let one
+# slip past the doc-example audit entirely.
 PUB_ITEM = re.compile(
     r"^\s*pub\s+(?:async\s+|unsafe\s+|const\s+|extern\s+\"[^\"]*\"\s+)*"
-    r"(fn|struct|enum|trait|type)\s+([A-Za-z_]\w*)"
+    r"(fn|struct|enum|union|trait|type)\s+([A-Za-z_]\w*)"
 )
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
@@ -1490,6 +1493,37 @@ VACUOUS_EXAMPLE_LINE = re.compile(
 # turn the binding into real API usage, and leaving comments in the classified
 # set let an assignment-only example escape the audit entirely.
 VACUOUS_IGNORE_LINE = re.compile(r"^(?:use\s|#|//)")
+# A rustdoc fence with no info string is Rust; an info string is a
+# comma/space-separated attribute list, and rustdoc only treats it as code when
+# every token is a Rust attribute. A ```text / ```bash / ```toml block is
+# prose or another language's syntax, not a doctest, so classifying its
+# contents as a vacuous EXAMPLE was a false positive on ordinary docs.
+RUST_FENCE_ATTRS = frozenset(
+    {
+        "rust",
+        "ignore",
+        "no_run",
+        "should_panic",
+        "compile_fail",
+        "edition2015",
+        "edition2018",
+        "edition2021",
+        "edition2024",
+        "standalone_crate",
+    }
+)
+
+
+def is_rust_doc_fence(info: str) -> bool:
+    """Whether a rustdoc fence info string opens a Rust doctest."""
+    tokens = [token for token in re.split(r"[,\s]+", info.strip()) if token]
+    if not tokens:
+        return True
+    return all(
+        token in RUST_FENCE_ATTRS or token.startswith("ignore-") for token in tokens
+    )
+
+
 CRATE_CARGO_TOML = re.compile(r"^crates/(tenferro-[\w-]+)/Cargo\.toml$")
 # TOML permits any spacing around `=`, so `{workspace=true,optional=true}` is
 # as valid as the expanded form. Matching the literal `optional = true` string
@@ -1603,16 +1637,24 @@ def inline_test_module_findings(
         text = changed_file_text(path, ref=ref, worktree=worktree)
         if text is None:
             continue
+        grew = True
         if base is not None:
             base_total = inline_test_block_line_total(
                 changed_file_text(path, ref=base, worktree=False)
             )
-            if inline_test_block_line_total(text) <= base_total:
-                continue
+            grew = inline_test_block_line_total(text) > base_total
         file_lines = len(text.splitlines())
         for start, end in rust_inline_test_blocks(text):
             block_lines = end - start + 1
             if not any(start <= line <= end for line in touched):
+                continue
+            # A file whose inline-test total did not grow is mid-extraction, so
+            # an edit inside a surviving block is progress, not a violation.
+            # A block whose OPENER is itself an added line is new, though, and
+            # a PR that shrinks one block while adding another can lower the
+            # total while still introducing a fresh violation — judge that
+            # block on its own rather than letting the file-level total hide it.
+            if not grew and start not in touched:
                 continue
             if (
                 file_lines < INLINE_TEST_EXEMPT_FILE_LINES
@@ -1909,6 +1951,7 @@ def vacuous_doc_example_findings(
             continue
         lines = text.splitlines()
         in_fence = False
+        fence_is_rust = True
         fence_start = 0
         fence_code: list[str] = []
         reported: list[int] = []
@@ -1928,7 +1971,8 @@ def vacuous_doc_example_findings(
                     ]
                     fenced_span = range(fence_start, line_no + 1)
                     if (
-                        code
+                        fence_is_rust
+                        and code
                         and all(VACUOUS_EXAMPLE_LINE.match(item) for item in code)
                         and any(line in touched for line in fenced_span)
                     ):
@@ -1937,6 +1981,7 @@ def vacuous_doc_example_findings(
                     fence_code = []
                 else:
                     in_fence = True
+                    fence_is_rust = is_rust_doc_fence(body[3:])
                     fence_start = line_no
             elif in_fence:
                 fence_code.append(body)
@@ -1994,6 +2039,16 @@ def ai_report_file_findings(
     return findings
 
 
+# `[target.'cfg(unix)'.dependencies]` is an ordinary production dependency
+# table for that target. Matching the section name exactly ignored it, so a
+# real production edge read as absent — a matching diagram edge was reported
+# stale, and a missing one passed. The target spec may be quoted (and then may
+# itself contain dots), so strip it before classifying the section.
+# `[target.<spec>.dev-dependencies]` keeps falling through, exactly like the
+# plain `[dev-dependencies]` table.
+TARGET_TABLE_PREFIX = re.compile(r"^target\.(?:'[^']*'|\"[^\"]*\"|[^.]+)\.")
+
+
 def parse_cargo_tenferro_dependencies(text: str) -> set[str]:
     deps: set[str] = set()
     section = ""
@@ -2007,7 +2062,7 @@ def parse_cargo_tenferro_dependencies(text: str) -> set[str]:
                 deps.add(table_name)
             table_name = None
             table_optional = False
-            section = header.group(1)
+            section = TARGET_TABLE_PREFIX.sub("", header.group(1))
             table = re.match(r"^dependencies\.(tenferro-[\w-]+)$", section)
             if table:
                 table_name = table.group(1)

@@ -969,6 +969,120 @@ def test_prompt_does_not_promise_pr_text_disclosure() -> None:
     assert "PR text" not in prompt
 
 
+def test_inline_test_module_findings_flags_a_new_block_during_extraction() -> None:
+    """A shrink elsewhere must not hide a newly added block.
+
+    The file-wide total can fall while a PR adds a fresh oversized inline
+    module, so the net-size exemption is applied per block: a block whose
+    OPENER is itself an added line is judged on its own.
+    """
+    mod = load_module()
+    base = "\n".join(
+        ["fn p() {}"]
+        + [f"fn h{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {"]
+        + [f"    // c{i}" for i in range(60)]
+        + ["}"]
+    )
+    head = "\n".join(
+        ["fn p() {}"]
+        + [f"fn h{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {", "    // c0", "}"]
+        + ["#[cfg(test)]", "mod more {"]
+        + [f"    // n{i}" for i in range(30)]
+        + ["}"]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/a.rs": head},
+        base_mapping={"crates/x/src/a.rs": base},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/a.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/a.rs": set(range(163, 200))},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+    assert findings[0].line == 166
+
+
+def test_is_rust_doc_fence_accepts_only_rust_attributes() -> None:
+    mod = load_module()
+    assert mod.is_rust_doc_fence("")
+    assert mod.is_rust_doc_fence("rust")
+    assert mod.is_rust_doc_fence("rust,no_run")
+    assert mod.is_rust_doc_fence("ignore")
+    assert not mod.is_rust_doc_fence("text")
+    assert not mod.is_rust_doc_fence("bash")
+    assert not mod.is_rust_doc_fence("toml")
+
+
+def test_vacuous_doc_example_findings_skips_non_rust_fences() -> None:
+    """A ```text grammar block is prose, not a doctest.
+
+    Treating every fence as a doctest reported `vacuous-doc-example` on
+    ordinary syntax documentation.
+    """
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "/// Grammar:",
+            "///",
+            "/// ```text",
+            "/// Widget;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": doc})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {4}},
+    )
+    assert findings == []
+
+
+def test_parse_cargo_tenferro_dependencies_reads_target_tables() -> None:
+    """`[target.'cfg(unix)'.dependencies]` is a real production dependency.
+
+    Matching the section name exactly ignored it, so a matching diagram edge
+    was reported stale and a missing one passed.
+    """
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "[target.'cfg(unix)'.dependencies]",
+            "tenferro-cpu.workspace = true",
+            "[target.'cfg(windows)'.dependencies.tenferro-gpu]",
+            "workspace = true",
+            "[target.'cfg(unix)'.dev-dependencies]",
+            "tenferro-fft.workspace = true",
+            "[target.'cfg(unix)'.dependencies.tenferro-ad]",
+            "workspace = true",
+            "optional = true",
+        ]
+    )
+    assert mod.parse_cargo_tenferro_dependencies(cargo) == {
+        "tenferro-runtime",
+        "tenferro-cpu",
+        "tenferro-gpu",
+    }
+
+
+def test_pub_item_matches_a_public_union() -> None:
+    """A public union is a documented public type like a struct or enum."""
+    mod = load_module()
+    match = mod.PUB_ITEM.match("pub union Slot { a: u32 }")
+    assert match is not None
+    assert match.group(2) == "Slot"
+
+
 def test_rust_inline_test_blocks_reports_span() -> None:
     mod = load_module()
     blocks = mod.rust_inline_test_blocks(INLINE_TEST_SOURCE)
@@ -2164,6 +2278,11 @@ def main() -> int:
         test_inline_test_module_findings_flags_grown_block,
         test_inline_test_module_findings_ignores_a_shrinking_block,
         test_inline_test_module_findings_still_flags_real_growth,
+        test_inline_test_module_findings_flags_a_new_block_during_extraction,
+        test_is_rust_doc_fence_accepts_only_rust_attributes,
+        test_vacuous_doc_example_findings_skips_non_rust_fences,
+        test_parse_cargo_tenferro_dependencies_reads_target_tables,
+        test_pub_item_matches_a_public_union,
         test_dependency_diagram_findings_rejects_a_crate_without_a_manifest,
         test_prompt_does_not_promise_pr_text_disclosure,
         test_inline_test_module_findings_exempts_tiny_leaf_module,
