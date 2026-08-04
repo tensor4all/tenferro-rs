@@ -1213,6 +1213,25 @@ fn cubecl_workspace_pointer_is_scoped_to_owner_borrow() {
 }
 
 #[test]
+fn cubecl_stream_pointer_is_scoped_to_runtime_borrow() {
+    let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn raw_cuda_stream("),
+        "CUDA interop must not expose an unscoped stream pointer function"
+    );
+    let stream_source = source_section(
+        &interop_source,
+        "pub fn with_raw_cuda_stream<R>(",
+        "/// Return the launch cube count",
+    );
+    assert_ordered_needles(
+        "interop::with_raw_cuda_stream",
+        stream_source,
+        &["raw_cuda_stream()", "map_err"],
+    );
+}
+
+#[test]
 fn cubecl_host_download_paths_synchronize_before_reading() {
     let memory_source = cubecl_source("memory.rs");
     let typed_download = source_section(
