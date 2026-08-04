@@ -1790,20 +1790,14 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let read_views_err = TensorDot::dot_general_read(
+    let read_views = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap_err();
-    assert!(matches!(
-        &read_views_err,
-        crate::Error::Unsupported {
-            op: "to_contiguous_read",
-            ..
-        }
-    ));
+    .unwrap();
+    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
     let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
         &mut backend,
@@ -1818,15 +1812,26 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     .unwrap();
     assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let uploaded = backend
+    let upload_error = backend
         .upload_host_tensor(TensorRead::from_tensor(&lhs))
-        .unwrap();
-    assert_eq!(uploaded.shape(), &[1, 1]);
-    let downloaded = backend
-        .download_to_host(TensorRead::from_tensor(&uploaded))
-        .unwrap();
-    assert_eq!(downloaded.as_slice::<f64>().unwrap(), &[2.0]);
-    backend.reclaim_buffer(downloaded);
+        .unwrap_err();
+    assert!(matches!(
+        upload_error,
+        crate::Error::Unsupported {
+            op: "DefaultOnlyBackend::upload_host_tensor",
+            ..
+        }
+    ));
+    let download_error = backend
+        .download_to_host(TensorRead::from_tensor(&lhs))
+        .unwrap_err();
+    assert!(matches!(
+        download_error,
+        crate::Error::Unsupported {
+            op: "DefaultOnlyBackend::download_to_host",
+            ..
+        }
+    ));
 
     let fusion_plan =
         tenferro_tensor::backend::ElementwiseFusionPlan::new(DType::F64, 0, vec![], vec![]);
@@ -1856,20 +1861,14 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views_err = TensorDot::dot_general_read(
+    let exec_read_views = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap_err();
-    assert!(matches!(
-        &exec_read_views_err,
-        crate::Error::Unsupported {
-            op: "to_contiguous_read",
-            ..
-        }
-    ));
+    .unwrap();
+    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
     let exec_no_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);

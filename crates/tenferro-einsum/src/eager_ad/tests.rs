@@ -357,7 +357,7 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
         })
         .collect();
     assert_eq!(
-        out.value().unwrap().as_slice::<f64>().unwrap(),
+        out.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         expected.as_slice()
     );
 }

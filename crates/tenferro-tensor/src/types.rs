@@ -5020,18 +5020,25 @@ impl<'a> TensorView<'a> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn duplicate(&self) -> crate::Result<Tensor> {
+        fn duplicate_typed<T: TensorScalar>(
+            view: &TypedTensorView<'_, T>,
+        ) -> crate::Result<TypedTensor<T>> {
+            let mut tensor = TypedTensor::<T>::from_vec_col_major(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            )?;
+            tensor.set_placement(view.placement().clone());
+            Ok(tensor)
+        }
+
         match self {
-            Self::F32(view) => f32::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec()),
-            Self::F64(view) => f64::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec()),
-            Self::I32(view) => i32::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec()),
-            Self::I64(view) => i64::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec()),
-            Self::Bool(view) => bool::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec()),
-            Self::C32(view) => {
-                Complex32::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
-            }
-            Self::C64(view) => {
-                Complex64::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
-            }
+            Self::F32(view) => duplicate_typed(view).map(Tensor::F32),
+            Self::F64(view) => duplicate_typed(view).map(Tensor::F64),
+            Self::I32(view) => duplicate_typed(view).map(Tensor::I32),
+            Self::I64(view) => duplicate_typed(view).map(Tensor::I64),
+            Self::Bool(view) => duplicate_typed(view).map(Tensor::Bool),
+            Self::C32(view) => duplicate_typed(view).map(Tensor::C32),
+            Self::C64(view) => duplicate_typed(view).map(Tensor::C64),
         }
     }
 }
