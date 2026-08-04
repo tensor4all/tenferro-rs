@@ -47,6 +47,10 @@ follow Rust borrowing.
 - `DeviceByteBuffer::ptr()` is no longer a public accessor; workspace callers
   borrow its pointer through `with_ptr`, while the owning linalg workspace
   retains the allocation for the complete operation.
+- The public CUDA interop functions `typed_device_ptr` and `raw_cuda_stream`
+  are replaced by `with_typed_device_ptr` and `with_raw_cuda_stream` callback
+  boundaries. Private provider/linalg helpers still keep raw values only for
+  the immediate FFI operation and remain a later prepared-binding migration.
 
 ## Files and durable contract
 
