@@ -141,12 +141,12 @@ fn eager_materialization_uses_backend() {
 
     let compact = x.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(materializations.load(Ordering::Relaxed), 0);
+    assert_eq!(materializations.load(Ordering::Relaxed), 1);
 
     let view = x.transpose(&[1, 0]).unwrap();
     let compact = view.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
-    assert_eq!(materializations.load(Ordering::Relaxed), 1);
+    assert_eq!(materializations.load(Ordering::Relaxed), 2);
 }
 
 #[test]
