@@ -1569,13 +1569,30 @@ def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
     return blocks
 
 
+def inline_test_block_line_total(text: str | None) -> int:
+    """Total number of lines this file spends on inline `#[cfg(test)]` blocks."""
+    if text is None:
+        return 0
+    return sum(end - start + 1 for start, end in rust_inline_test_blocks(text))
+
+
 def inline_test_module_findings(
     files: list[str],
     *,
     ref: str | None,
+    base: str | None = None,
     worktree: bool,
     added_lines: dict[str, set[int]],
 ) -> list[Finding]:
+    """Report inline `#[cfg(test)]` blocks this diff adds to or grows.
+
+    Growth is judged against the BASE revision, not from the presence of a
+    touched line: extraction work that shrinks an oversized block while still
+    editing a line inside what remains is progress toward the rule, and
+    warning about it would penalize exactly the cleanup the rule asks for.
+    Blocks cannot be matched one-to-one across revisions (they move, split and
+    merge), so the comparison is the file's net inline-test line count.
+    """
     findings: list[Finding] = []
     for path in sorted(files):
         if not path.endswith(".rs") or RUST_TEST_PATH.search(path):
@@ -1586,6 +1603,12 @@ def inline_test_module_findings(
         text = changed_file_text(path, ref=ref, worktree=worktree)
         if text is None:
             continue
+        if base is not None:
+            base_total = inline_test_block_line_total(
+                changed_file_text(path, ref=base, worktree=False)
+            )
+            if inline_test_block_line_total(text) <= base_total:
+                continue
         file_lines = len(text.splitlines())
         for start, end in rust_inline_test_blocks(text):
             block_lines = end - start + 1
@@ -2060,9 +2083,43 @@ def dependency_diagram_findings(
     # A diagram-only change must be validated against every crate manifest,
     # not only the manifests touched by the same PR.
     manifests = set(changed_manifests)
-    if doc_changed:
-        manifests.update(list_crate_manifests(ref=ref, worktree=worktree))
     findings: list[Finding] = []
+    if doc_changed:
+        all_manifests = list_crate_manifests(ref=ref, worktree=worktree)
+        manifests.update(all_manifests)
+        # Enumerating the manifests only covers `manifest_crates - diagram`.
+        # The opposite direction — a diagram node with no manifest at all —
+        # never enters the loop below, so an invented or long-stale crate
+        # entry passed the audit. Compare it only here, where the enumeration
+        # makes the crate set authoritative; with just the PR's own manifests
+        # every untouched crate would look invented.
+        manifest_crates = {
+            match.group(1)
+            for match in (CRATE_CARGO_TOML.match(path) for path in all_manifests)
+            if match
+        }
+        # Sources only. A node that appears solely as an edge TARGET may
+        # legitimately be a prose-documented crate or a non-crate box, so
+        # judging those needs its own rule; a source line asserts "this crate
+        # exists and depends on ...", which a missing manifest contradicts.
+        for crate in sorted(set(diagram) - manifest_crates - DIAGRAM_PROSE_TARGETS):
+            findings.append(
+                Finding(
+                    id="dependency-diagram-drift",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=DEPENDENCY_DIAGRAM_DOC,
+                    line=None,
+                    summary=f"Dependency diagram names {crate}, which has no manifest",
+                    detail=(
+                        f"The Dependency Direction diagram in "
+                        f"{DEPENDENCY_DIAGRAM_DOC} references {crate}, but no "
+                        f"crates/{crate}/Cargo.toml exists at this revision. "
+                        "Remove the invented or stale entry, or add the crate, "
+                        "in the same PR (Diagram Consistency)."
+                    ),
+                )
+            )
     for path in sorted(manifests):
         crate_match = CRATE_CARGO_TOML.match(path)
         if not crate_match:
@@ -2163,6 +2220,7 @@ def deterministic_checks(
     files: list[str],
     *,
     head: str | None = None,
+    base: str | None = None,
     worktree: bool = False,
     added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
@@ -2171,7 +2229,11 @@ def deterministic_checks(
     if added_lines is not None:
         findings.extend(
             inline_test_module_findings(
-                files, ref=head, worktree=worktree, added_lines=added_lines
+                files,
+                ref=head,
+                base=base,
+                worktree=worktree,
+                added_lines=added_lines,
             )
         )
         findings.extend(
@@ -2297,6 +2359,7 @@ def main(argv: list[str] | None = None) -> int:
     findings = deterministic_checks(
         files,
         head=args.head,
+        base=args.base,
         worktree=args.worktree,
         added_lines=added_lines,
     )

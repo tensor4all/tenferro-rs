@@ -869,6 +869,106 @@ INLINE_TEST_SOURCE = "\n".join(
 )
 
 
+def test_inline_test_module_findings_ignores_a_shrinking_block() -> None:
+    """Extraction work that shrinks an oversized block must not warn.
+
+    The check read only the head revision, so any edit inside what remained of
+    a block classified the change as "added or grown" — penalizing exactly the
+    cleanup the rule asks for.
+    """
+    mod = load_module()
+    bigger = "\n".join(
+        ["fn production() {}"]
+        + [f"fn helper_{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {"]
+        + [f"    // case {i}" for i in range(40)]
+        + ["}"]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/error.rs": INLINE_TEST_SOURCE},
+        base_mapping={"crates/x/src/error.rs": bigger},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert findings == []
+
+
+def test_inline_test_module_findings_still_flags_real_growth() -> None:
+    """A block that is larger than at base still warns."""
+    mod = load_module()
+    smaller = "\n".join(
+        ["fn production() {}"] + [f"fn helper_{i}() {{}}" for i in range(160)]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/error.rs": INLINE_TEST_SOURCE},
+        base_mapping={"crates/x/src/error.rs": smaller},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+
+
+def test_dependency_diagram_findings_rejects_a_crate_without_a_manifest() -> None:
+    """A diagram node with no manifest never entered the manifest loop.
+
+    Enumerating the manifests only covers `manifest_crates - diagram`; the
+    opposite direction let an invented or long-stale crate entry pass.
+    """
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "tenferro-phantom          -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(["[dependencies]", "tenferro-runtime.workspace = true"])
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    mod.list_crate_manifests = lambda *, ref, worktree: [
+        "crates/tenferro-fft/Cargo.toml"
+    ]
+    findings = mod.dependency_diagram_findings(
+        [mod.DEPENDENCY_DIAGRAM_DOC],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-phantom" in findings[0].summary
+
+
+def test_prompt_does_not_promise_pr_text_disclosure() -> None:
+    """The payload carries paths, routed rules and the diff — never the PR body.
+
+    Listing `PR text` as a disclosure source asked the model for a
+    classification it has no way to make.
+    """
+    mod = load_module()
+    prompt = mod.PROMPT_PATH.read_text(encoding="utf-8")
+    assert "disclosed-in-worklog:" in prompt
+    assert "PR text" not in prompt
+
+
 def test_rust_inline_test_blocks_reports_span() -> None:
     mod = load_module()
     blocks = mod.rust_inline_test_blocks(INLINE_TEST_SOURCE)
@@ -884,8 +984,12 @@ def test_rust_inline_test_blocks_ignores_mod_declaration() -> None:
     assert mod.rust_inline_test_blocks(text) == []
 
 
-def _with_fake_text(mod, mapping):
+def _with_fake_text(mod, mapping, base_mapping=None):
+    """Stub `changed_file_text`; `base_mapping` serves any ref other than HEAD."""
+
     def fake(path, *, ref, worktree):
+        if base_mapping is not None and ref != "HEAD":
+            return base_mapping.get(path)
         return mapping.get(path)
 
     mod.changed_file_text = fake
@@ -2058,6 +2162,10 @@ def main() -> int:
         test_rust_inline_test_blocks_reports_span,
         test_rust_inline_test_blocks_ignores_mod_declaration,
         test_inline_test_module_findings_flags_grown_block,
+        test_inline_test_module_findings_ignores_a_shrinking_block,
+        test_inline_test_module_findings_still_flags_real_growth,
+        test_dependency_diagram_findings_rejects_a_crate_without_a_manifest,
+        test_prompt_does_not_promise_pr_text_disclosure,
         test_inline_test_module_findings_exempts_tiny_leaf_module,
         test_inline_test_module_findings_skips_untouched_block,
         test_missing_doc_example_findings_flags_only_real_gaps,

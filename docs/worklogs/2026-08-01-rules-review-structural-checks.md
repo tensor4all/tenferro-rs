@@ -123,3 +123,40 @@ Coverage: `test_is_cfg_test_attr_tracks_nested_not_polarity`,
 `test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax`,
 `test_vacuous_doc_example_findings_ignores_comment_lines`, and
 `test_vacuous_doc_example_findings_accepts_comment_only_example`.
+
+## Review Follow-ups, Round 2 (Codex on PR #1582)
+
+Three more P2 findings, each reproduced against the previous revision
+(`f23b3c1f`) before changing anything.
+
+- **Diagram entries without manifests** — enumerating every crate manifest on
+  a doc-only change only covers `manifest_crates - diagram`. A diagram node
+  with no manifest never entered the loop, so an invented crate
+  (`tenferro-phantom`) or a long-stale entry passed the audit. The opposite
+  direction is now compared, but only where the enumeration makes the crate
+  set authoritative (`doc_changed`); with just the PR's own manifests every
+  untouched crate would look invented. Scoped to diagram *sources*: a node
+  appearing solely as an edge target may legitimately be a prose-documented
+  crate or a non-crate box, and judging those needs its own rule. The current
+  diagram has no orphan in either direction.
+- **Shrinking inline test blocks warned** — growth was inferred from "a line
+  inside the block was touched", never from a comparison, so extraction work
+  that shrinks an oversized block while editing what remains was reported as
+  "added or grown" — penalizing exactly the cleanup the rule asks for. The
+  check now reads the BASE revision and compares the file's net inline-test
+  line count; blocks cannot be matched one-to-one across revisions (they move,
+  split and merge), so net size is the comparison. `base` is threaded from
+  `main` through `deterministic_checks`; with no base supplied the previous
+  behavior is unchanged.
+- **`PR text` promised a classification the model cannot make** — the prompt
+  listed the pull-request description as a disclosure source, but
+  `review_chunk()` supplies only changed paths, routed rules and the unified
+  diff, and nothing passes the PR body to the script. Removed `PR text` from
+  the list and stated the payload's contents explicitly, rather than growing
+  the payload: the disclosure sources that remain (worklog, design doc, code
+  comment) are all in-diff and therefore actually visible.
+
+Coverage: `test_dependency_diagram_findings_rejects_a_crate_without_a_manifest`,
+`test_inline_test_module_findings_ignores_a_shrinking_block`,
+`test_inline_test_module_findings_still_flags_real_growth`, and
+`test_prompt_does_not_promise_pr_text_disclosure`.
