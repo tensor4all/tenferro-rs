@@ -909,7 +909,7 @@ where
 /// cuTENSOR operand: `ptr = base + offset * size_of::<T>()`, the view's own
 /// element strides, and the alignment actually guaranteed by the effective
 /// byte address.
-fn resolve_prepared_device_region<T: 'static>(
+fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
     rt: &CudaRuntime,
     prepared: CubeclPreparedAccess,
     strides: &[isize],
@@ -943,10 +943,14 @@ fn resolve_prepared_device_region<T: 'static>(
         .ptr
         .checked_add(offset_bytes as u64)
         .ok_or_else(|| Error::invalid_argument(OP, "layout", "view device address overflows"))?;
+    // INVARIANT: CubeCL root allocations are at least 256-byte aligned, and
+    // the checked element offset preserves alignment to the scalar size. A
+    // strided view therefore guarantees the scalar-sized cuTENSOR requirement,
+    // even when the view starts inside the root allocation.
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
         strides: strides_i64,
-        alignment: CUDA_ALLOCATION_ALIGNMENT,
+        alignment: view_descriptor_alignment_requirement::<T>(),
     })
 }
 

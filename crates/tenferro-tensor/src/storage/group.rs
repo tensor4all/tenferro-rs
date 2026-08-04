@@ -1,3 +1,4 @@
+use std::fmt;
 use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
 use std::ptr::NonNull;
@@ -29,14 +30,43 @@ impl AllocationSlot {
 }
 
 /// A group-local descriptor lookup key. It carries no ownership authority.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::DescriptorSlot;
+///
+/// let slot = DescriptorSlot::from_index(3).unwrap();
+/// assert_eq!(slot.index(), 3);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DescriptorSlot(u32);
 
 impl DescriptorSlot {
+    /// Return the zero-based descriptor index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DescriptorSlot;
+    ///
+    /// let slot = DescriptorSlot::from_index(2).unwrap();
+    /// assert_eq!(slot.index(), 2);
+    /// ```
     pub const fn index(self) -> usize {
         self.0 as usize
     }
 
+    /// Convert a host index into a descriptor slot.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DescriptorSlot;
+    ///
+    /// assert_eq!(DescriptorSlot::from_index(1).unwrap().index(), 1);
+    /// assert!(DescriptorSlot::from_index(usize::MAX).is_none());
+    /// ```
     pub fn from_index(index: usize) -> Option<Self> {
         match u32::try_from(index) {
             Ok(index) => Some(Self(index)),
@@ -133,6 +163,15 @@ impl DescriptorRecord {
 }
 
 /// Group construction and slot errors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::GroupError;
+///
+/// let error = GroupError::IndexOverflow;
+/// assert!(error.to_string().contains("overflows"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GroupError {
     #[error("group index overflows u32")]
@@ -180,6 +219,17 @@ pub(crate) enum ExtractError {
 }
 
 /// One group of move-only owners and append-only logical descriptors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::AllocationGroup;
+///
+/// let (group, bindings) = AllocationGroup::from_tensors(Vec::new())?;
+/// assert!(bindings.is_empty());
+/// assert!(format!("{group:?}").contains("AllocationGroup"));
+/// # Ok::<(), tenferro_tensor::GroupError>(())
+/// ```
 #[derive(Default)]
 pub struct AllocationGroup {
     // Most public tensors contain one root and one descriptor. Keep that
@@ -414,12 +464,34 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
     }
 }
 
+impl fmt::Debug for AllocationGroup {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AllocationGroup")
+            .field("allocation_count", &self.allocations.len())
+            .field("descriptor_count", &self.descriptors.len())
+            .field("tensor_owner_count", &self.tensor_owners.len())
+            .finish()
+    }
+}
+
 impl AllocationGroup {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Build one move-only group for detached runtime input ownership.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::AllocationGroup;
+    ///
+    /// let (group, bindings) = AllocationGroup::from_tensors(Vec::new())?;
+    /// assert!(bindings.is_empty());
+    /// assert!(format!("{group:?}").contains("AllocationGroup"));
+    /// # Ok::<(), tenferro_tensor::GroupError>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -439,6 +511,17 @@ impl AllocationGroup {
     }
 
     /// Borrow the tensors named by a detached input binding set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{AllocationGroup, DescriptorSlot};
+    ///
+    /// let (group, _) = AllocationGroup::from_tensors(Vec::new())?;
+    /// let refs = group.tensor_refs(&[] as &[DescriptorSlot])?;
+    /// assert!(refs.is_empty());
+    /// # Ok::<(), tenferro_tensor::GroupError>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -658,6 +741,8 @@ impl AllocationGroup {
     ///
     /// The group is returned unchanged with the typed error when validation
     /// fails, so consuming owner callers can recover the original tensor.
+    // INVARIANT: returning the unchanged move-only group with validation
+    // failure is required so consuming callers can recover its owner.
     #[allow(clippy::result_large_err)]
     pub(crate) fn reinterpret_descriptor<T: TensorScalar, U: TensorScalar>(
         mut self,
@@ -1049,6 +1134,8 @@ impl AllocationGroup {
             .map_err(ExtractError::from)
     }
 
+    // INVARIANT: extraction failure returns the unchanged group because the
+    // caller must retain ownership when a descriptor cannot be detached.
     #[allow(clippy::result_large_err)]
     pub(crate) fn into_owner(
         mut self,

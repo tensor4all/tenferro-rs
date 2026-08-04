@@ -106,6 +106,16 @@ pub enum Error {
 /// [`Self::into_owner`] to recover the unchanged input and [`Self::error`] to
 /// inspect the typed failure.
 ///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::TypedTensor;
+///
+/// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+/// let Err(failure) = tensor.into_complex() else { return Ok(()); };
+/// assert!(!failure.error().to_string().is_empty());
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct ReinterpretError<T> {
     owner: Box<T>,
@@ -121,11 +131,33 @@ impl<T> ReinterpretError<T> {
     }
 
     /// Recover the unchanged original owner.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// let Err(failure) = tensor.into_complex() else { return Ok(()); };
+    /// let _owner = failure.into_owner();
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn into_owner(self) -> T {
         *self.owner
     }
 
     /// Borrow the typed failure without consuming the owner.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// let Err(failure) = tensor.into_complex() else { return Ok(()); };
+    /// assert!(!failure.error().to_string().is_empty());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn error(&self) -> &Error {
         &self.error
     }

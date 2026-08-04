@@ -3764,8 +3764,8 @@ impl TensorValue {
     ///
     /// # Errors
     ///
-    /// Returns the backend or storage error reported while duplicating the
-    /// physical owner.
+    /// Returns [`crate::Error::RuntimeState`] or [`crate::Error::Unsupported`]
+    /// when the backend/storage owner cannot be duplicated.
     pub fn duplicate(&self) -> crate::Result<Self> {
         let tensor = self.owner.tensor.duplicate()?;
         Self::from_parts(
@@ -3786,8 +3786,9 @@ impl TensorValue {
 
     /// # Errors
     ///
-    /// Returns an error when the supplied layout is invalid for the tensor's
-    /// physical buffer.
+    /// Returns [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::IntegerOverflow`] when the supplied layout is
+    /// invalid for the tensor's physical buffer.
     pub fn from_parts(
         tensor: Tensor,
         shape: Vec<usize>,
@@ -3811,8 +3812,9 @@ impl TensorValue {
     ///
     /// # Errors
     ///
-    /// Returns an error when the value is a metadata-only view or another
-    /// value still retains the shared owner.
+    /// Returns [`crate::Error::Unsupported`] for a metadata-only view or
+    /// [`crate::Error::RuntimeState`] when another value retains the shared
+    /// owner.
     pub fn into_tensor(self) -> crate::Result<Tensor> {
         if self.layout != tensor_layout(&self.owner.tensor) {
             return Err(crate::Error::unsupported(
@@ -4418,8 +4420,9 @@ impl<'a> TensorView<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the view is not a supported sealed
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for the wrong dtype pair and
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] for invalid layout metadata.
     pub fn as_real_view(&self) -> crate::Result<Self> {
         match self {
             Self::C32(t) => t.as_real_view().map(Self::F32),
@@ -4435,8 +4438,9 @@ impl<'a> TensorView<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the view is not a supported sealed
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for the wrong dtype pair and
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] for invalid layout metadata.
     pub fn as_complex_view(&self) -> crate::Result<Self> {
         match self {
             Self::F32(t) => t.as_complex_view().map(Self::C32),
@@ -6379,7 +6383,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when host data cannot be borrowed or the new group
+    /// Returns [`crate::Error::RuntimeState`] when host data cannot be
+    /// borrowed, or [`ValidationError::InvalidArgument`] when the new group
     /// cannot be constructed.
     pub fn duplicate(&self) -> crate::Result<Self> {
         let data = self.host_data()?.to_vec();
@@ -6696,8 +6701,9 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not a valid sealed
-    /// representation or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, or [`ValidationError::ViewOutOfBounds`] for an
+    /// invalid tensor layout.
     pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'_, f32, DynRank>> {
         self.as_view().as_real_view()
     }
@@ -6706,8 +6712,10 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not injective, the sealed
-    /// representation is invalid, or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, [`ValidationError::OverlappingMutableLayout`]
+    /// for a non-injective layout, or [`ValidationError::ViewOutOfBounds`] for
+    /// invalid representation metadata.
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f32, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C32, DType::F32)?;
@@ -6747,8 +6755,10 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation or
-    /// target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_real(self) -> Result<TypedTensor<f32, DynRank>, ReinterpretError<Self>> {
         let op = "TypedTensor::into_real";
         if let Err(error) = validate_representation_pair(op, DType::C32, DType::F32) {
@@ -6802,8 +6812,9 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not a valid sealed
-    /// representation or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, or [`ValidationError::ViewOutOfBounds`] for an
+    /// invalid tensor layout.
     pub fn as_real_view(&self) -> crate::Result<TypedTensorView<'_, f64, DynRank>> {
         self.as_view().as_real_view()
     }
@@ -6812,8 +6823,10 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not injective, the sealed
-    /// representation is invalid, or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, [`ValidationError::OverlappingMutableLayout`]
+    /// for a non-injective layout, or [`ValidationError::ViewOutOfBounds`] for
+    /// invalid representation metadata.
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f64, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C64, DType::F64)?;
@@ -6853,8 +6866,10 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation or
-    /// target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_real(self) -> Result<TypedTensor<f64, DynRank>, ReinterpretError<Self>> {
         let op = "TypedTensor::into_real";
         if let Err(error) = validate_representation_pair(op, DType::C64, DType::F64) {
@@ -6908,8 +6923,9 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not a valid sealed
-    /// representation or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, or [`ValidationError::ViewOutOfBounds`] for an
+    /// invalid tensor layout.
     pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'_, Complex32, DynRank>> {
         self.as_view().as_complex_view()
     }
@@ -6918,8 +6934,10 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not injective, the sealed
-    /// representation is invalid, or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, [`ValidationError::OverlappingMutableLayout`]
+    /// for a non-injective layout, or [`ValidationError::ViewOutOfBounds`] for
+    /// invalid representation metadata.
     pub fn as_complex_view_mut(
         &mut self,
     ) -> crate::Result<TypedTensorViewMut<'_, Complex32, DynRank>> {
@@ -6962,8 +6980,10 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation,
-    /// element count, or target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_complex(self) -> Result<TypedTensor<Complex32, DynRank>, ReinterpretError<Self>> {
         let op = "TypedTensor::into_complex";
         if let Err(error) = validate_representation_pair(op, DType::F32, DType::C32) {
@@ -7027,8 +7047,9 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not a valid sealed
-    /// representation or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, or [`ValidationError::ViewOutOfBounds`] for an
+    /// invalid tensor layout.
     pub fn as_complex_view(&self) -> crate::Result<TypedTensorView<'_, Complex64, DynRank>> {
         self.as_view().as_complex_view()
     }
@@ -7037,8 +7058,10 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor layout is not injective, the sealed
-    /// representation is invalid, or backend reinterpretation is unsupported.
+    /// Returns [`crate::Error::Unsupported`] for backend reinterpretation
+    /// that is not supported, [`ValidationError::OverlappingMutableLayout`]
+    /// for a non-injective layout, or [`ValidationError::ViewOutOfBounds`] for
+    /// invalid representation metadata.
     pub fn as_complex_view_mut(
         &mut self,
     ) -> crate::Result<TypedTensorViewMut<'_, Complex64, DynRank>> {
@@ -7081,8 +7104,10 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation,
-    /// element count, or target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_complex(self) -> Result<TypedTensor<Complex64, DynRank>, ReinterpretError<Self>> {
         let op = "TypedTensor::into_complex";
         if let Err(error) = validate_representation_pair(op, DType::F64, DType::C64) {
@@ -7146,8 +7171,9 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor is not a supported complex
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for a non-complex dtype and
+    /// [`ValidationError::ViewOutOfBounds`] or
+    /// [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn as_real_view(&self) -> crate::Result<TensorView<'_>> {
         match self {
             Tensor::C32(tensor) => tensor.as_real_view().map(TensorView::F32),
@@ -7165,8 +7191,9 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor is not a supported complex
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for a non-complex dtype and
+    /// [`ValidationError::ViewOutOfBounds`] or
+    /// [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn as_real_view_mut(&mut self) -> crate::Result<TensorViewMut<'_>> {
         match self {
             Tensor::C32(tensor) => tensor.as_real_view_mut().map(TensorViewMut::F32),
@@ -7184,8 +7211,10 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation or
-    /// target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_real(self) -> Result<Self, ReinterpretError<Self>> {
         match self {
             Tensor::C32(tensor) => tensor.into_real().map(Tensor::F32).map_err(|error| {
@@ -7210,8 +7239,9 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor is not a supported real
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for a non-real dtype and
+    /// [`ValidationError::ViewOutOfBounds`] or
+    /// [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn as_complex_view(&self) -> crate::Result<TensorView<'_>> {
         match self {
             Tensor::F32(tensor) => tensor.as_complex_view().map(TensorView::C32),
@@ -7229,8 +7259,9 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tensor is not a supported real
-    /// representation or its layout is invalid.
+    /// Returns [`crate::Error::Unsupported`] for a non-real dtype and
+    /// [`ValidationError::ViewOutOfBounds`] or
+    /// [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn as_complex_view_mut(&mut self) -> crate::Result<TensorViewMut<'_>> {
         match self {
             Tensor::F32(tensor) => tensor.as_complex_view_mut().map(TensorViewMut::C32),
@@ -7248,8 +7279,10 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns the unchanged owner with an error when the representation,
-    /// element count, or target layout is invalid.
+    /// Returns [`ReinterpretError::error`] containing
+    /// [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
+    /// owner.
     pub fn into_complex(self) -> Result<Self, ReinterpretError<Self>> {
         match self {
             Tensor::F32(tensor) => tensor.into_complex().map(Tensor::C32).map_err(|error| {
@@ -7274,8 +7307,8 @@ impl Tensor {
     ///
     /// # Errors
     ///
-    /// Returns the backend or storage error reported while duplicating the
-    /// selected physical owner.
+    /// Returns [`crate::Error::RuntimeState`] or [`crate::Error::Unsupported`]
+    /// when the selected backend/storage owner cannot be duplicated.
     pub fn duplicate(&self) -> crate::Result<Self> {
         match self {
             Tensor::F32(t) => t.duplicate().map(Tensor::F32),

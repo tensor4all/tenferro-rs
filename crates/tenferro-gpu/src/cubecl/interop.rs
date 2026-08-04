@@ -90,6 +90,19 @@ pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<
 ///
 /// The stream is passed only to `f`; callers must not retain the raw handle
 /// after the callback returns.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::CudaRuntime;
+/// use tenferro_gpu::cuda_interop::with_raw_cuda_stream;
+///
+/// # fn example(rt: &CudaRuntime) -> tenferro_tensor::Result<()> {
+/// with_raw_cuda_stream(rt, "example", |_stream| {})?;
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
@@ -176,6 +189,20 @@ pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
 /// The pointer is passed only to `f`, while the residency-checked tensor and
 /// runtime remain borrowed by this call. Callers must not retain the pointer
 /// after `f` returns.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda_interop::with_typed_device_ptr;
+/// use tenferro_gpu::CudaRuntime;
+/// use tenferro_tensor::TypedTensor;
+///
+/// # fn example(rt: &CudaRuntime, tensor: &TypedTensor<f32>) -> tenferro_tensor::Result<()> {
+/// with_typed_device_ptr(rt, tensor, "example", |_ptr| {})?;
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,

@@ -64,6 +64,16 @@ pub struct ExecutionHandle {
 }
 
 /// Move-only input package for detached runtime submission.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::runtime::ExecutionInputs;
+///
+/// let inputs = ExecutionInputs::new(Vec::new())?;
+/// assert!(format!("{inputs:?}").contains("ExecutionInputs"));
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
 pub struct ExecutionInputs {
     group: AllocationGroup,
     bindings: Box<[DescriptorSlot]>,
@@ -109,6 +119,16 @@ impl fmt::Debug for ExecutionInputs {
 
 /// The result of a detached submission after the provider retirement point.
 ///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::runtime::ExecutionOutcome;
+/// use tenferro_tensor::Tensor;
+///
+/// let outcome = ExecutionOutcome::Completed(Vec::<Tensor>::new());
+/// assert!(format!("{outcome:?}").contains("Completed"));
+/// ```
+///
 /// An ordinary execution failure is reported with the input package restored
 /// only after the worker has returned and the provider has retired its work.
 /// A worker panic or equivalent loss of the retirement witness is returned as
@@ -127,6 +147,17 @@ pub enum ExecutionOutcome {
 
 /// A detached submission failed before ownership could be transferred to the
 /// in-flight worker, or the worker could not be created after admission.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{Error, runtime::SubmitError};
+///
+/// let error = SubmitError::WorkerSpawn {
+///     source: Box::new(Error::Internal("worker unavailable".into())),
+/// };
+/// assert!(error.to_string().contains("worker failed"));
+/// ```
 #[derive(Debug)]
 pub enum SubmitError {
     /// Preparation/admission rejected the request. The exact input package is
@@ -142,6 +173,17 @@ pub enum SubmitError {
 
 impl SubmitError {
     /// Recover the unchanged package from a pre-admission rejection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{Error, runtime::SubmitError};
+    ///
+    /// let error = SubmitError::WorkerSpawn {
+    ///     source: Box::new(Error::Internal("worker unavailable".into())),
+    /// };
+    /// assert!(error.into_pre_admission().is_none());
+    /// ```
     pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
         match self {
             Self::PreAdmission { source, inputs } => Some((*source, *inputs)),
