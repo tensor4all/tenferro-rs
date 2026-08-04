@@ -152,7 +152,7 @@ fn cuda_input_signature(
     expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
     cuda_input_placement(placement, device_ordinal)
-        && backend_family == Some("cubecl")
+        && backend_family == Some("cuda")
         && allocation_domain == Some(expected_domain)
 }
 
@@ -172,7 +172,7 @@ fn cuda_input_tensor(
     expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
     cuda_input_placement(input.placement(), device_ordinal)
-        && input.backend_family() == Some("cubecl")
+        && input.backend_family() == Some("cuda")
         && input.allocation_domain() == Some(expected_domain)
         && cuda_input_has_owned_buffer(input, device_ordinal, expected_domain)
 }

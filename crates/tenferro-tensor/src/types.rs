@@ -1690,8 +1690,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     #[doc(hidden)]
     pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>> {
         match &self.buffer {
-            TensorStorageRef::Host(_) | TensorStorageRef::Root(_) => None,
+            TensorStorageRef::Host(_) => None,
             TensorStorageRef::Backend(buffer) => Some(*buffer),
+            TensorStorageRef::Root(_) => {
+                self.root
+                    .as_ref()?
+                    .backend_buffer()
+                    .and_then(|buffer| match buffer {
+                        StorageBuffer::Host(_) => None,
+                        StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
+                    })
+            }
         }
     }
 

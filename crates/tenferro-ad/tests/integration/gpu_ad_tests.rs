@@ -92,9 +92,11 @@ fn test_gpu_eager_backward_smoke() {
 
     y.backward_with(&seed).unwrap();
     let grad = x.grad().unwrap().unwrap();
-    let grad_read = grad.tensor_read().unwrap();
+    let grad_tensor = grad.to_tensor().unwrap();
     let grad_host = ctx
-        .with_execution_session(|session| session.download_to_host(grad_read))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&grad_tensor))
+        })
         .unwrap()
         .unwrap();
 

@@ -13,7 +13,7 @@ use std::path::Path;
 use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
 };
-use tenferro_tensor::{AllocationDomainId, AllocationId, DType, Tensor, TensorStructural};
+use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
     let Tensor::F32(tensor) = tensor else {
@@ -37,11 +37,8 @@ fn cuda_tensor_view_keeps_the_single_root_identity() {
         panic!("provider test uses f32 tensors")
     };
     let view = tensor.as_view();
-    let view_buffer = view
-        .backend_buffer()
-        .expect("CUDA view must retain the backend root");
-    assert_eq!(view_buffer.allocation_domain(), domain);
-    assert_eq!(view_buffer.allocation_id(), allocation);
+    assert_eq!(view.allocation_domain(), domain);
+    assert_eq!(view.allocation_id(), allocation);
 }
 
 #[test]
@@ -83,7 +80,9 @@ fn cuda_duplicate_is_explicit_same_placement_allocation() {
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);
 
-    let duplicate = backend.cast(&input, DType::F32).unwrap();
+    let duplicate = backend
+        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .unwrap();
     let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
     assert_eq!(duplicate_domain, domain);
     assert_ne!(duplicate_allocation, allocation);

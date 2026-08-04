@@ -1537,7 +1537,7 @@ fn typed_tensor_storage_identity<T: crate::TensorScalar>(
     }
 }
 
-fn typed_view_storage_identity<T: 'static>(
+fn typed_view_storage_identity<T: crate::TensorScalar + 'static>(
     view: &TypedTensorView<'_, T>,
 ) -> crate::Result<StorageIdentity> {
     match view.backend_buffer() {

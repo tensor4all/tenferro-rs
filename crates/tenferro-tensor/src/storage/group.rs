@@ -331,15 +331,6 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
         }
     }
 
-    pub(crate) fn backend_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
-        // SAFETY: the owner pointer is bounded by the group borrow carried by
-        // this view, and the root buffer cannot be resized after import.
-        let buffer = unsafe { self.owner.as_ref().backend_buffer::<T>() }?;
-        Some(unsafe {
-            std::mem::transmute::<&crate::StorageBuffer<T>, &'a crate::StorageBuffer<T>>(buffer)
-        })
-    }
-
     pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
         let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
         Some(unsafe {
@@ -396,6 +387,17 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
     }
 }
 
+impl<'a, T: 'static, R: TensorRank> GroupReadView<'a, T, R> {
+    pub(crate) fn backend_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
+        // SAFETY: the owner pointer is bounded by the group borrow carried by
+        // this view, and the root buffer cannot be resized after import.
+        let buffer = unsafe { self.owner.as_ref().backend_buffer::<T>() }?;
+        Some(unsafe {
+            std::mem::transmute::<&crate::StorageBuffer<T>, &'a crate::StorageBuffer<T>>(buffer)
+        })
+    }
+}
+
 /// A non-cloneable mutable descriptor child bounded by the group's exclusive
 /// borrow. The raw owner pointer is never exposed and is dereferenced only for
 /// a provider mapping whose retained byte envelope was proven by the group.
@@ -433,12 +435,6 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
                 .as_mut()
                 .map_write(self.descriptor.span, self.descriptor.dtype)
         }
-    }
-
-    pub(crate) fn backend_buffer(&self) -> Option<&crate::StorageBuffer<T>> {
-        // SAFETY: the owner pointer is bounded by the group's exclusive borrow;
-        // this shared inspection does not expose a mutable projection.
-        unsafe { self.owner.as_ref().backend_buffer::<T>() }
     }
 
     pub(crate) fn backend_buffer_mut(&mut self) -> Option<&'a mut crate::StorageBuffer<T>> {
@@ -501,6 +497,14 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
                 .as_mut()
                 .host_slice_mut(self.descriptor.span, self.descriptor.dtype)
         }
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank> GroupWriteView<'a, T, R> {
+    pub(crate) fn backend_buffer(&self) -> Option<&crate::StorageBuffer<T>> {
+        // SAFETY: the owner pointer is bounded by the group's exclusive borrow;
+        // this shared inspection does not expose a mutable projection.
+        unsafe { self.owner.as_ref().backend_buffer::<T>() }
     }
 }
 

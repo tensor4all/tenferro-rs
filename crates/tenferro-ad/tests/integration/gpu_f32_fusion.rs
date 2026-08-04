@@ -6,7 +6,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
 };
-use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_runtime::{Tensor, TensorRead, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -35,7 +35,9 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let result = sum.mul(&c).unwrap().to_tensor().unwrap();
 
     let result = ctx
-        .with_execution_session(|session| session.download_to_host(result.as_ref()))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&result))
+        })
         .unwrap()
         .unwrap();
     let values = result

@@ -341,6 +341,9 @@ impl CutensorLibrary {
 }
 
 #[cfg(test)]
+// INVARIANT: the loader contract test is kept beside the private FFI loader;
+// the production handle types intentionally remain below this test module.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     #[test]
     fn cutensor_loader_missing_library_is_typed_io_error() {

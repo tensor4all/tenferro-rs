@@ -2220,10 +2220,14 @@ impl EagerRuntime {
                         .map_err(Error::from)?;
                     AdValueRecord::from_tensor(tensor, "EagerRuntime::store_grads")?
                 }
-                None => AdValueRecord::from_tensor(
-                    incoming.duplicate().map_err(Error::from)?,
-                    "EagerRuntime::store_grads",
-                )?,
+                None => {
+                    let duplicate = backend
+                        .with_backend_session(|session| {
+                            session.to_contiguous_read(TensorRead::from_tensor(incoming))
+                        })
+                        .map_err(Error::from)?;
+                    AdValueRecord::from_tensor(duplicate, "EagerRuntime::store_grads")?
+                }
             };
             *current = Some(next);
         }
@@ -2885,7 +2889,12 @@ impl EagerTensor {
         requires_grad: bool,
     ) -> Result<Self> {
         let key = eager_val_key();
-        let semantic_value = Arc::new(RetainedValue::from_tensor(tensor.duplicate()?));
+        let semantic_tensor = ctx
+            .with_execution_session(|session| {
+                session.to_contiguous_read(TensorRead::from_tensor(&tensor))
+            })?
+            .map_err(Error::from)?;
+        let semantic_value = Arc::new(RetainedValue::from_tensor(semantic_tensor));
         let semantic_trace = TracedTensor::from_shared_tensor_value_symbolic_shape(semantic_value)?;
         let metadata_scope =
             register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(

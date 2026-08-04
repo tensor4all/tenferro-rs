@@ -48,7 +48,7 @@ LANES = {
     "cuda-ad": {
         "argv": [
             "cargo", "test", "-p", "tenferro-ad", "--features", "cuda",
-            "--test", "gpu_ad_tests", "--", "--nocapture",
+            "--test", "integration", "--", "gpu_ad_tests", "--nocapture",
         ],
         "evidence": "crates/tenferro-ad/tests/integration/gpu_ad_tests.rs",
         "device": "NVIDIA CUDA device used by AD integration tests",
