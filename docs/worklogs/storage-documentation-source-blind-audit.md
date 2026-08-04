@@ -1,7 +1,7 @@
 # Source-blind ownership documentation audit
 
 The audit was performed against rendered artifacts, not Rust source links. The
-frozen product candidate was `402c962c61543f1477e3e3e0ade2c293b9d05ad4`.
+frozen product candidate was `653a6449c6f40aff2e6b2a6407b124cedcff76b5`.
 
 ## Rendered inputs
 

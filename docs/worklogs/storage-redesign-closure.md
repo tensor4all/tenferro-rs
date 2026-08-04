@@ -5,7 +5,7 @@ This is an independent evidence audit of the frozen product candidate.
 ```json
 {
   "schema": "tenferro.storage-redesign-closure.v1",
-  "candidate_commit": "402c962c61543f1477e3e3e0ade2c293b9d05ad4",
+  "candidate_commit": "653a6449c6f40aff2e6b2a6407b124cedcff76b5",
   "status": "pass",
   "findings": [],
   "obligations": {
