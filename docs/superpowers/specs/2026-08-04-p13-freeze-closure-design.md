@@ -44,12 +44,14 @@ The allowed post-C diff is closed and path-specific:
 - `docs/worklogs/storage-redesign-closure.md`;
 - tagged `state` promotions only in
   `scripts/storage-ownership-contracts.toml`;
-- corresponding exact active-ID expectations in the v2 contract test when
-  required by the existing promotion protocol.
+- the active-ID fixture in `scripts/test-storage-ownership-contracts-v2.py`,
+  limited to adding exactly the IDs promoted by the same evidence commit.
 
-Product docs, Rust/Python implementation, tests, benchmark/codegen reports, and
-checker scripts must already be in C and are not on this allowlist. An allowed
-path may contain evidence only; it cannot redefine a contract or API.
+Product docs, Rust/Python implementation, benchmark/codegen reports, checker
+logic, and all other tests must already be in C and are not on this allowlist.
+The active-ID fixture exception may change only its expected set literal; it
+cannot change executable validation logic. An allowed path may contain evidence
+only and cannot redefine a contract or API.
 
 Exact Git commit and tracked repository-relative paths are sufficient. No
 manifest digest, file checksum, nonce, challenge, or attestation is introduced.
@@ -129,10 +131,12 @@ The report contains exactly one fenced JSON record with schema
 3. the diff from C to HEAD is inside the evidence allowlist;
 4. worktree/index are clean;
 5. ledger graph/state is valid and all through-P10 obligations are active;
-6. compile/runtime/public-API artifacts prove the legacy ownership paths are
-   absent;
-7. a token-aware bounded inventory checks named owner/clone/raw/adapter
-   declarations and call paths; lexical scans are supplemental only;
+6. `storage_public_api`, storage compile contracts, and provider/runtime tests
+   prove the legacy ownership paths are absent;
+7. `storage_public_api.rs` uses the workspace `syn` dependency to parse the
+   fixed owner/group/runtime/provider source manifest and reject named
+   owner/clone/raw/adapter declarations and call paths; the Python checker
+   invokes that test, while lexical scans remain supplemental;
 8. obsolete handoff files/references are absent;
 9. every recorded command/evidence path is concrete and tracked;
 10. no performance result is inconclusive.

@@ -228,7 +228,6 @@ struct AdValueRecord {
 #[derive(Clone)]
 pub struct EagerTensor {
     record: Arc<AdValueRecord>,
-    /* graph metadata, no owner field */
 }
 ```
 
@@ -254,9 +253,12 @@ pub enum IntoValueError<H> {
 ```
 
 `ValueGuard` borrows a descriptor view and requests G1 host access only when
-host bytes are requested. `duplicate_value` records an explicit copy and fresh
-destination allocation. `into_value` first attempts structural `Arc`
-unwrapping. This decides only whether a zero-copy move is possible; it is not
+host bytes are requested. If an eager value still represents pending
+computation, `value()` is the documented evaluation/synchronization boundary
+and records any fresh kernel output allocation as `OperationOutput`; it never
+copies an already concrete retained value merely to expose the guard.
+`duplicate_value` records an explicit copy and fresh destination allocation.
+`into_value` first attempts structural `Arc` unwrapping. This decides only whether a zero-copy move is possible; it is not
 write authority. Non-unique failure returns the usable handle and does not call
 G2 extraction. A later G2 failure reconstructs and returns the same handle.
 

@@ -129,7 +129,12 @@ struct WebGpuPreparedAccess {
     shape: Box<[usize]>,
     strides: Box<[usize]>,
     access: WebGpuAccessMode,
-    reservation: Option<GpuAccessToken>,
+    lease: WebGpuPreparedLease,
+}
+
+enum WebGpuPreparedLease {
+    DeviceLocal,
+    AppleShared(GpuAccessToken),
 }
 ```
 
@@ -228,11 +233,26 @@ operation/event retirement record for every enqueue that uses them. They are
 not wrapped as public tensor owners unless they are actual tensor outputs.
 
 The flat `webgpu_interop` surface that returns/clones raw CubeCL handles is not
-a public API. Workspace extension crates use a hidden, session-scoped prepared
-binding boundary. Any unavoidable in-tree unsafe handle projection is bounded
-by the execution-session lifetime, documented with synchronization and
-post-retirement invalidity requirements, and cannot be returned from the
-callback. WebGPU/Metal does not gain a safe unleased raw-handle API.
+a public API. Workspace extension crates use one hidden, session-scoped entry:
+
+```rust
+#[doc(hidden)]
+pub unsafe fn with_webgpu_prepared_bindings<R>(
+    session: &mut WebGpuExecSession<'_>,
+    prepared: WebGpuPreparedBindings<'_>,
+    launch: impl for<'bind> FnOnce(WebGpuLaunchBindings<'bind>) -> Result<R>,
+) -> Result<(R, WgpuSubmission), WebGpuLaunchError>;
+```
+
+`WebGpuPreparedBindings` contains only consumed G1 device payloads.
+`WebGpuLaunchBindings` has private fields and no `Handle` accessor or `Clone`;
+it supplies provider launch arguments only during the higher-ranked callback.
+The unsafe caller contract is limited to kernel access mode and initialized
+output requirements. The function submits or returns a proven pre-admission
+failure before the prepared owners can be released. Any internal handle
+projection is bounded by `'bind`, documented with synchronization and
+post-retirement invalidity requirements, and cannot be returned as a binding
+or raw handle. WebGPU/Metal does not gain a safe unleased raw-handle API.
 
 ## Retirement
 

@@ -27,23 +27,40 @@ The canonical modules are:
 
 ```rust
 pub mod cuda {
-    pub use /* CudaBackend, CudaRuntime, CudaDeviceId, CudaDeviceInfo,
-               discovery, explicit transfer functions, scoped unsafe interop */;
+    pub use CudaBackend;
+    pub use CudaDeviceError;
+    pub use CudaDeviceId;
+    pub use CudaDeviceInfo;
+    pub use CudaExecSession;
+    pub use CudaRuntime;
+    pub use cuda_devices;
+    pub use download_tensor;
+    pub use upload_tensor;
+    pub mod interop;
 }
 
 pub mod webgpu {
-    pub use /* WebGpuBackend, WebGpuRuntime, runtime identity/discovery,
-               explicit transfer functions */;
+    pub use WebGpuBackend;
+    pub use WebGpuDeviceError;
+    pub use WebGpuDeviceId;
+    pub use WebGpuDeviceInfo;
+    pub use WebGpuRuntime;
+    pub use WebGpuRuntimeIdentity;
+    pub use download_tensor;
+    pub use upload_tensor;
+    pub use webgpu_devices;
 }
 
 pub mod apple {
-    pub use /* AppleContext, AppleTransferStats */;
+    pub use AppleContext;
+    pub use AppleTransferStats;
 }
 ```
 
 Provider types keep provider-specific selectors and capabilities. CUDA retains
-`CudaDeviceId`; WebGPU retains its native adapter/device selector; Apple keeps
-`AppleContext`. P10 does not force them into one lossy device-ID enum.
+`CudaDeviceId`. WebGPU exposes `WebGpuDeviceId` as its adapter-selection
+newtype, with `WebGpuDeviceInfo` carrying native adapter/backend facts. Apple
+keeps `AppleContext`. P10 does not force them into one lossy device-ID enum.
 
 Root-level exports are limited to genuinely provider-neutral traits/types.
 Provider-specific flat aliases, deprecated re-exports, ambiguous
@@ -93,9 +110,11 @@ The final vocabulary is:
 - numeric cast — a new computed output, not reinterpretation.
 
 Every successful duplicate/upload/download has a fresh allocation identity and
-reason-classified allocation/copy counters. No transfer method returns the
-source unchanged, uses hidden CPU staging, falls back to another provider, or
-materializes an unsupported layout without an explicit named operation.
+reason-classified allocation/copy counters. A provider that cannot directly
+transfer a noncompact layout returns a typed unsupported-layout error; callers
+may explicitly request compact duplication first. No transfer method returns
+the source unchanged, uses hidden CPU staging, falls back to another provider,
+or materializes an unsupported layout without an explicit named operation.
 
 ## Canonical tensor method distribution
 
@@ -105,7 +124,9 @@ materializes an unsupported layout without an explicit named operation.
 - Mutable operations live on `TypedTensorViewMut<T, R>` and require exclusive
   borrow.
 - Consuming conversion/reinterpretation/extraction lives on owners/groups.
-- Explicit duplication reads a view and returns a new owner.
+- Explicit duplication reads a view and returns a new owner:
+  `TypedTensorView<T, R>::duplicate() -> Result<TypedTensor<T, R>>`; owner and
+  mutable-view methods delegate to it.
 - The dtype-erased family mirrors these capability classes without exposing an
   owner projection.
 
