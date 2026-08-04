@@ -55,7 +55,7 @@ fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
     let source = include_str!("../../src/runtime/execution.rs");
 
     assert!(
-        source.contains("type RuntimeInputRefs<'a> = SmallVec"),
+        source.contains("type RuntimeInputReads<'a> = SmallVec"),
         "Runtime::run_prepared should keep short input reference lists inline"
     );
     assert!(

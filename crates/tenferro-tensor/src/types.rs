@@ -4426,6 +4426,7 @@ pub(crate) fn tensor_view_from_group<'a, T: TensorScalar>(
 pub(crate) fn tensor_from_group(
     group: AllocationGroup,
     slot: DescriptorSlot,
+    allocation_index: usize,
     dtype: DType,
     layout: TensorLayout<DynRank>,
     placement: Placement,
@@ -4433,12 +4434,10 @@ pub(crate) fn tensor_from_group(
     fn typed<T: TensorScalar>(
         group: AllocationGroup,
         slot: DescriptorSlot,
+        allocation_index: usize,
         layout: TensorLayout<DynRank>,
         placement: Placement,
     ) -> TypedTensor<T> {
-        let allocation_index = group
-            .allocation_index(slot)
-            .expect("group tensor descriptors must resolve before ownership transfer");
         let (host_ptr, host_byte_len) = host_metadata::<T>(&group, slot);
         TypedTensor {
             group: OwnedTensorGroup {
@@ -4456,13 +4455,13 @@ pub(crate) fn tensor_from_group(
     }
 
     match dtype {
-        DType::F32 => Tensor::F32(typed(group, slot, layout, placement)),
-        DType::F64 => Tensor::F64(typed(group, slot, layout, placement)),
-        DType::I32 => Tensor::I32(typed(group, slot, layout, placement)),
-        DType::I64 => Tensor::I64(typed(group, slot, layout, placement)),
-        DType::Bool => Tensor::Bool(typed(group, slot, layout, placement)),
-        DType::C32 => Tensor::C32(typed(group, slot, layout, placement)),
-        DType::C64 => Tensor::C64(typed(group, slot, layout, placement)),
+        DType::F32 => Tensor::F32(typed(group, slot, allocation_index, layout, placement)),
+        DType::F64 => Tensor::F64(typed(group, slot, allocation_index, layout, placement)),
+        DType::I32 => Tensor::I32(typed(group, slot, allocation_index, layout, placement)),
+        DType::I64 => Tensor::I64(typed(group, slot, allocation_index, layout, placement)),
+        DType::Bool => Tensor::Bool(typed(group, slot, allocation_index, layout, placement)),
+        DType::C32 => Tensor::C32(typed(group, slot, allocation_index, layout, placement)),
+        DType::C64 => Tensor::C64(typed(group, slot, allocation_index, layout, placement)),
     }
 }
 

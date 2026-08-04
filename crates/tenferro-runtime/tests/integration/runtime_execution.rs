@@ -34,7 +34,7 @@ use tenferro_runtime::{
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, HostAccessError,
     HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
-    StorageBuffer, Tensor, TensorRead, TypedTensor,
+    StorageBuffer, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -513,6 +513,31 @@ struct RecordedTransferRequest {
     destination_storage_class: StorageClass,
 }
 
+fn read_f64_values(input: TensorRead<'_>) -> tenferro_runtime::Result<Vec<f64>> {
+    match input.tensor_view() {
+        TensorView::F64(view) => match view.backend_buffer() {
+            Some(buffer) => buffer
+                .map_read()
+                .map_err(|source| tenferro_tensor::Error::host_access("test-transfer-read", source))
+                .map(|values| values.to_vec())
+                .map_err(Into::into),
+            None => view
+                .as_slice()
+                .map(|values| values.to_vec())
+                .map_err(Into::into),
+        },
+        _ => Err(Error::Internal(
+            "test transfer currently expects f64 tensors".into(),
+        )),
+    }
+}
+
+fn duplicate_f64_read(input: TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
+    let shape = input.shape().to_vec();
+    let values = read_f64_values(input)?;
+    Ok(Tensor::from_vec_col_major(shape, values)?)
+}
+
 impl RecordingTransferProvider {
     fn new(source: StorageClass, destination: StorageClass) -> Self {
         Self {
@@ -582,23 +607,13 @@ impl TransferProvider for RecordingTransferProvider {
                 })?;
                 let mut output =
                     domain.allocate(request.input().dtype(), request.input().shape())?;
-                let source = request.input().as_tensor().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?;
-                let (Tensor::F64(source), Tensor::F64(destination)) = (source, &mut output) else {
+                let source_values = read_f64_values(request.input().clone())?;
+                let Tensor::F64(destination) = &mut output else {
                     return Err(Error::Internal(
                         "materializing test transfer currently expects f64 tensors".into(),
                     ));
                 };
-                let values = match source.buffer() {
-                    StorageBuffer::Host(values) => values.clone(),
-                    StorageBuffer::Backend(buffer) => buffer
-                        .map_read()
-                        .map_err(|source| {
-                            tenferro_tensor::Error::host_access("test-transfer-read", source)
-                        })?
-                        .to_vec(),
-                };
+                let values = source_values;
                 match destination.buffer() {
                     StorageBuffer::Host(_) => {
                         return Err(Error::Internal(
@@ -625,11 +640,7 @@ impl TransferProvider for RecordingTransferProvider {
                 }
                 output
             }
-            None => request
-                .input()
-                .as_tensor()
-                .ok_or_else(|| Error::Internal("test transfer expected an owned tensor".into()))?
-                .duplicate()?,
+            None => duplicate_f64_read(request.input().clone())?,
         };
         self.materialized_domains
             .lock()
@@ -678,13 +689,7 @@ impl TransferProvider for FaultyTransferProvider {
             FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
             FaultyTransferOutput::Placement => {
-                let mut tensor = request
-                    .input()
-                    .as_tensor()
-                    .ok_or_else(|| {
-                        Error::Internal("test transfer expected an owned tensor".into())
-                    })?
-                    .duplicate()?;
+                let mut tensor = duplicate_f64_read(request.input().clone())?;
                 let Tensor::F64(tensor) = &mut tensor else {
                     return Err(Error::Internal(
                         "test transfer expected an f64 tensor".into(),
@@ -1026,28 +1031,35 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             )?
             .into()]);
         }
-        if inputs[0].allocation_domain() == backend.allocation_domain() {
-            let tensor = inputs[0].as_tensor().ok_or_else(|| {
-                Error::Internal("allocation-domain test executor expected an owned tensor".into())
-            })?;
-            let Tensor::F64(tensor) = tensor else {
-                return Err(Error::Internal(
-                    "allocation-domain test executor currently expects f64 tensors".into(),
-                ));
-            };
-            let source_values = match tensor.buffer() {
-                StorageBuffer::Host(_) => return Ok(vec![tensor.duplicate()?.into()]),
-                StorageBuffer::Backend(buffer) => buffer
-                    .map_read()
-                    .map_err(|source| {
-                        tenferro_tensor::Error::host_access("allocation-domain-test-read", source)
-                    })?
-                    .to_vec(),
+        let same_domain = match (inputs[0].allocation_domain(), backend.allocation_domain()) {
+            (Some(input_domain), Some(backend_domain)) => input_domain == backend_domain,
+            _ => false,
+        };
+        if same_domain {
+            let shape = inputs[0].shape().to_vec();
+            let source_values = match inputs[0].clone().tensor_view() {
+                TensorView::F64(view) => match view.backend_buffer() {
+                    Some(buffer) => buffer
+                        .map_read()
+                        .map_err(|source| {
+                            tenferro_tensor::Error::host_access(
+                                "allocation-domain-test-read",
+                                source,
+                            )
+                        })?
+                        .to_vec(),
+                    None => view.as_slice()?.to_vec(),
+                },
+                _ => {
+                    return Err(Error::Internal(
+                        "allocation-domain test executor currently expects f64 tensors".into(),
+                    ));
+                }
             };
             let domain = backend.shared_allocation_domain().ok_or_else(|| {
                 Error::Internal("allocation-domain test executor requires a shared domain".into())
             })?;
-            let mut output = domain.allocate(DType::F64, tensor.shape())?;
+            let mut output = domain.allocate(DType::F64, &shape)?;
             let Tensor::F64(destination) = &mut output else {
                 return Err(Error::Internal(
                     "allocation-domain test executor produced a non-f64 tensor".into(),

@@ -1395,6 +1395,7 @@ impl AllocationGroup {
         Ok(tensor_from_group(
             extracted,
             DescriptorSlot(0),
+            0,
             dtype,
             layout,
             placement,
@@ -1450,7 +1451,7 @@ impl AllocationGroup {
             Ok(value) => value,
             Err((group, error)) => return Err((group, error)),
         };
-        Ok(tensor_from_group(group, slot, dtype, layout, placement))
+        Ok(tensor_from_group(group, slot, 0, dtype, layout, placement))
     }
 
     // INVARIANT: structural extraction must return the unchanged group on

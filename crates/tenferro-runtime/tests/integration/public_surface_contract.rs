@@ -143,7 +143,7 @@ fn traced_tensor_graph_and_attached_data_are_accessor_based() {
         "TracedTensor should expose graph inspection through an accessor"
     );
     assert!(
-        source.contains("pub fn attached_data(&self)"),
+        source.contains("pub fn attached_value(&self)"),
         "TracedTensor should expose optional attached data through an accessor"
     );
 }

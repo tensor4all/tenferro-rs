@@ -2069,7 +2069,7 @@ fn backend_region_view_exposes_layout_and_shared_buffer() {
     assert_eq!(view.strides(), &[1, 4]);
     assert_eq!(view.offset(), 5);
     assert_eq!(view.placement(), tensor.placement());
-    assert!(view.backend_buffer().is_none());
+    assert_eq!(view.backend_buffer().map(|buffer| buffer.len()), Some(16));
     assert_eq!(view.backing_len(), 16);
 }
 
