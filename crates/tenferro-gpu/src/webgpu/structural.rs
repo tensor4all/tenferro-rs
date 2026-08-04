@@ -9,8 +9,7 @@ use crate::native_permutation::{
 
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d,
-    ensure_placement_resident_on_runtime, ensure_resident_on_runtime, unsupported_dtype,
-    WebGpuBackend, WebGpuBuffer,
+    ensure_placement_resident_on_runtime, unsupported_dtype, WebGpuBackend, WebGpuBuffer,
 };
 
 const TRANSPOSE_OP: &str = "webgpu_transpose";
@@ -264,7 +263,6 @@ where
     T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
 {
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
-    ensure_resident_on_runtime(backend.runtime(), input, TRANSPOSE_OP)?;
     let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
     let input_strides = dense_strides(input.shape(), TRANSPOSE_OP)?;
     let plan = NativePermutationPlan::for_transpose(
