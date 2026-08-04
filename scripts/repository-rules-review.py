@@ -34,6 +34,9 @@ DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
 MAX_DIFF_CHARS = 60_000
 MAX_FILE_DIFF_CHARS = 40_000
 MAX_FINDINGS_PER_CHUNK = 8
+HUNK_HEADER = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$"
+)
 MAX_ROUTED_SECTION_LINES = 100
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
@@ -47,12 +50,21 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bAuthorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
-SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b("
+SECRET_NAME = (
     r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
     r"private[_-]?key)[\w.-]*"
-    r"\s*[:=]\s*)"
-    r"([^\s#]+)"
+)
+# A typed declaration puts the type between the name and the value:
+#   const API_KEY: &str = "....";     let api_key: String = "...".into();
+# Matching only `name <sep> value` redacts the type and leaves the literal, so
+# allow a short annotation before the separator that precedes the value.
+SECRET_ANNOTATION = r"(?:\s*:[^=\n]{0,40})?"
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(" + SECRET_NAME + SECRET_ANNOTATION + r"\s*[:=]\s*)([^\s#]+)"
+)
+QUOTED_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b" + SECRET_NAME + SECRET_ANNOTATION + r"\s*[:=]\s*"
+    r'''(?:"[^\s"\r\n]{12,}"|\'[^\s\'\r\n]{12,}\')'''
 )
 SEVERITY_ALIASES = {
     "block": "block",
@@ -67,14 +79,6 @@ SEVERITY_ALIASES = {
     "info": "warn",
     "informational": "warn",
 }
-QUOTED_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b"
-    r"[\w.-]*(?:api[_-]?key|token|secret|password|passwd|pwd|client[_-]?secret|"
-    r"private[_-]?key)[\w.-]*"
-    r"\s*[:=]\s*"
-    r'''(?:"[^\s"\r\n]{12,}"|'[^\s'\r\n]{12,}')'''
-)
-
 ALWAYS_SECTIONS = frozenset(
     {
         "Public Surface Discipline",
@@ -253,28 +257,53 @@ class Finding:
         }
 
 
-def run_git(args: list[str], cwd: Path = ROOT) -> str:
+def run_git(args: list[str], cwd: Path = ROOT, *, check: bool = True) -> str:
     completed = subprocess.run(
         ["git", *args],
         cwd=cwd,
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
     )
     return completed.stdout
 
 
+def untracked_files() -> list[str]:
+    """Paths git does not track yet, honouring .gitignore."""
+    output = run_git(["ls-files", "--others", "--exclude-standard"])
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def untracked_file_diff(path: str) -> str:
+    """Synthesize an all-added diff for a file with no committed counterpart.
+
+    `git diff <base>` compares the working tree against a commit, so an
+    untracked path has no object to compare and is omitted entirely. In
+    worktree mode -- the documented local preview -- that means a brand new
+    file is reviewed by nothing at all and the preview reports a false pass.
+    `--no-index` against /dev/null gives a normal diff without touching the
+    index; it exits 1 because the inputs differ, which is not an error here.
+    """
+    return run_git(
+        ["diff", "--unified=3", "--no-index", "--", "/dev/null", path],
+        check=False,
+    )
+
+
 def changed_files(base: str, head: str, *, worktree: bool = False) -> list[str]:
     if worktree:
         output = run_git(["diff", "--name-only", base])
-    else:
-        output = run_git(["diff", "--name-only", f"{base}...{head}"])
+        tracked = [line.strip() for line in output.splitlines() if line.strip()]
+        return sorted({*tracked, *untracked_files()})
+    output = run_git(["diff", "--name-only", f"{base}...{head}"])
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def unified_diff(base: str, head: str, *, worktree: bool = False) -> str:
     if worktree:
-        return run_git(["diff", "--unified=3", base])
+        pieces = [run_git(["diff", "--unified=3", base])]
+        pieces.extend(untracked_file_diff(path) for path in untracked_files())
+        return "\n".join(piece for piece in pieces if piece.strip())
     return run_git(["diff", "--unified=3", f"{base}...{head}"])
 
 
@@ -286,8 +315,11 @@ def per_file_diffs(
     worktree: bool = False,
 ) -> dict[str, str]:
     diffs: dict[str, str] = {}
+    untracked = set(untracked_files()) if worktree else set()
     for path in files:
-        if worktree:
+        if path in untracked:
+            diff = untracked_file_diff(path)
+        elif worktree:
             diff = run_git(["diff", "--unified=3", base, "--", path])
         else:
             diff = run_git(["diff", "--unified=3", f"{base}...{head}", "--", path])
@@ -424,6 +456,23 @@ def joined_line_len(lines: list[str]) -> int:
     return len("\n".join(lines))
 
 
+def line_deltas(line: str) -> tuple[int, int]:
+    """How one diff body line advances the old and new file cursors."""
+    if line.startswith("+"):
+        return (0, 1)
+    if line.startswith("-"):
+        return (1, 0)
+    if line.startswith("\\"):
+        return (0, 0)
+    return (1, 1)
+
+
+def format_hunk_header(
+    old_start: int, old_count: int, new_start: int, new_count: int, suffix: str
+) -> str:
+    return f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{suffix}"
+
+
 def split_overlong_diff_line(prefix: list[str], line: str) -> list[str]:
     prefix_len = joined_line_len(prefix)
     line_budget = MAX_FILE_DIFF_CHARS - prefix_len - 1
@@ -441,17 +490,88 @@ def split_overlong_diff_line(prefix: list[str], line: str) -> list[str]:
 
 
 def split_oversized_hunk(header: list[str], hunk: list[str]) -> list[str]:
-    """Split one oversized hunk while repeating file and hunk headers."""
+    """Split one oversized hunk, rewriting the header for every emitted chunk.
+
+    Repeating the original header would tell the model that each chunk starts
+    at the hunk's first line, so findings in later chunks come back with line
+    numbers thousands of lines too small. `filter_findings` then drops them, or
+    worse keeps them against an unrelated added line that happens to collide.
+    """
     if not hunk:
         return []
 
+    parsed = HUNK_HEADER.match(hunk[0])
+    if parsed is None:
+        # Not a header we can renumber; fall back to repeating it verbatim
+        # rather than inventing offsets.
+        return split_oversized_hunk_verbatim(header, hunk)
+
+    old_start = int(parsed.group(1))
+    new_start = int(parsed.group(3))
+    suffix = parsed.group(5)
+
+    chunks: list[str] = []
+    body: list[str] = []
+    body_old = body_new = 0
+    cursor_old, cursor_new = old_start, new_start
+
+    def flush() -> None:
+        nonlocal body, body_old, body_new, cursor_old, cursor_new
+        if not body:
+            return
+        hunk_header = format_hunk_header(
+            cursor_old, body_old, cursor_new, body_new, suffix
+        )
+        chunks.append("\n".join([*header, hunk_header, *body]))
+        cursor_old += body_old
+        cursor_new += body_new
+        body = []
+        body_old = body_new = 0
+
+    for line in hunk[1:]:
+        delta_old, delta_new = line_deltas(line)
+        single_header = format_hunk_header(
+            cursor_old + body_old, delta_old, cursor_new + body_new, delta_new, suffix
+        )
+        if joined_line_len([*header, single_header, line]) > MAX_FILE_DIFF_CHARS:
+            flush()
+            single_header = format_hunk_header(
+                cursor_old, delta_old, cursor_new, delta_new, suffix
+            )
+            chunks.extend(
+                split_overlong_diff_line([*header, single_header], line)
+            )
+            cursor_old += delta_old
+            cursor_new += delta_new
+            continue
+
+        candidate_header = format_hunk_header(
+            cursor_old, body_old + delta_old, cursor_new, body_new + delta_new, suffix
+        )
+        if (
+            body
+            and joined_line_len([*header, candidate_header, *body, line])
+            > MAX_FILE_DIFF_CHARS
+        ):
+            flush()
+        body.append(line)
+        body_old += delta_old
+        body_new += delta_new
+
+    flush()
+    if not chunks:
+        chunks.append("\n".join([*header, hunk[0]]))
+    return chunks
+
+
+def split_oversized_hunk_verbatim(header: list[str], hunk: list[str]) -> list[str]:
+    """Fallback for a hunk header this script cannot parse."""
     hunk_header = hunk[0]
-    body = hunk[1:]
     prefix = [*header, hunk_header]
     chunks: list[str] = []
     current = list(prefix)
 
-    for line in body:
+    for line in hunk[1:]:
         if joined_line_len([*prefix, line]) > MAX_FILE_DIFF_CHARS:
             if current != prefix:
                 chunks.append("\n".join(current))
@@ -667,12 +787,55 @@ def llm_response_error_finding(error: BaseException) -> Finding:
         rule_section="External LLM Review",
         file="",
         line=None,
-        summary="External LLM review did not produce usable JSON",
+        summary="External LLM review did not complete",
         detail=(
-            "The repository-rules review could not parse or validate the model "
-            f"response: {type(error).__name__}: {error}"
+            "The repository-rules review could not send the request or parse "
+            f"the model response: {type(error).__name__}: {error}"
         ),
     )
+
+
+def api_key_error_finding(reason: str) -> Finding:
+    return Finding(
+        id="llm-api-key-invalid",
+        severity="block",
+        rule_section="External LLM Review",
+        file="",
+        line=None,
+        summary="DEEPSEEK_API_KEY is unusable",
+        detail=(
+            f"{reason} Re-set the repository secret; the value itself is never "
+            "printed. Until then the LLM pass cannot run."
+        ),
+    )
+
+
+def api_key_problem(api_key: str) -> str | None:
+    """Describe why a key cannot be sent, without echoing the key.
+
+    HTTP header values are encoded as latin-1, so a key carrying non-ASCII
+    text -- a pasted ellipsis from a masked console display, or mojibake --
+    raises UnicodeEncodeError before any request leaves the machine. That is a
+    ValueError subclass, so it used to surface as "did not produce usable
+    JSON", pointing the reader at the model instead of at the secret.
+    """
+    if not api_key:
+        return "The secret is empty."
+    if not api_key.isascii():
+        offsets = [
+            str(index)
+            for index, char in enumerate(api_key)
+            if not char.isascii()
+        ]
+        return (
+            "The secret contains non-ASCII characters at offset(s) "
+            f"{', '.join(offsets[:10])}, which cannot be sent in an HTTP "
+            "Authorization header. A masked value copied from a console "
+            "display is the usual cause."
+        )
+    if any(char.isspace() for char in api_key):
+        return "The secret contains whitespace."
+    return None
 
 
 def filter_findings(
@@ -1129,18 +1292,24 @@ def main(argv: list[str] | None = None) -> int:
     llm_summary: str | None = None
     llm_stats: dict[str, Any] | None = None
     if not args.dry_run and not sensitive_finding:
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not api_key:
             print("DEEPSEEK_API_KEY is not set", file=sys.stderr)
             return 1
+        key_problem = api_key_problem(api_key)
 
-        file_diffs = per_file_diffs(
-            args.base,
-            args.head,
-            files,
-            worktree=args.worktree,
-        )
-        chunks = split_diff_chunks(redact_file_diffs(file_diffs))
+        if key_problem:
+            print(f"DEEPSEEK_API_KEY is unusable: {key_problem}", file=sys.stderr)
+            findings.append(api_key_error_finding(key_problem))
+            chunks = []
+        else:
+            file_diffs = per_file_diffs(
+                args.base,
+                args.head,
+                files,
+                worktree=args.worktree,
+            )
+            chunks = split_diff_chunks(redact_file_diffs(file_diffs))
         chunk_sizes = [len(chunk) for chunk in chunks]
         print(
             f"LLM review: model {args.model}, {len(chunks)} chunk(s), "

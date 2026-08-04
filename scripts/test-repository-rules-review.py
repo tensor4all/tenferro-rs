@@ -21,6 +21,18 @@ def load_module():
     return module
 
 
+# Secret-shaped fixtures are assembled at runtime so this file contains no
+# contiguous secret-shaped literal of its own. Otherwise the guard under test
+# blocks the LLM pass on every PR that touches its own tests, and the only way
+# to review such a PR is a maintainer waiver. Short names keep the interpolated
+# span below the 12-character threshold the quoted-credential pattern uses.
+PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
+AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
+SK = "sk-" + "0123456789abcdef0123456789abcdef"
+VALUE = "abcdefghij" + "klmnopqrst"
+BEARER = "Authorization: Bearer " + VALUE
+
+
 def test_added_lines_by_file() -> None:
     mod = load_module()
     diff = "\n".join(
@@ -584,7 +596,18 @@ def test_split_large_file_diff_splits_oversized_single_hunk() -> None:
 
     assert len(chunks) > 1
     assert all(chunk.startswith("diff --git a/foo.rs b/foo.rs") for chunk in chunks)
-    assert all("@@ -1,1 +1,8 @@" in chunk for chunk in chunks)
+    # Each chunk is renumbered to its own offsets rather than repeating the
+    # original header, so the model reports usable line numbers throughout.
+    starts = []
+    for chunk in chunks:
+        hunk_line = [l for l in chunk.splitlines() if l.startswith("@@")][0]
+        parsed = mod.HUNK_HEADER.match(hunk_line)
+        assert parsed is not None, hunk_line
+        starts.append((int(parsed.group(3)), int(parsed.group(4))))
+    assert starts[0][0] == 1
+    for (start, count), (next_start, _) in zip(starts, starts[1:]):
+        assert start + count == next_start
+    assert sum(count for _, count in starts) == 8
     assert all(len(chunk) <= 115 for chunk in chunks)
 
 
@@ -609,7 +632,9 @@ def test_split_large_file_diff_splits_single_overlong_diff_line() -> None:
 
     assert len(chunks) > 1
     assert all(chunk.startswith("diff --git a/minified.js b/minified.js") for chunk in chunks)
-    assert all("@@ -0,0 +1 @@" in chunk for chunk in chunks)
+    # One source line split across chunks: every chunk describes that same
+    # single added line, so the header names a one-line span.
+    assert all("@@ -0,0 +1,1 @@" in chunk for chunk in chunks)
     assert all(len(chunk) <= 130 for chunk in chunks)
 
 
@@ -917,6 +942,123 @@ def test_call_deepseek_reraises_after_retries_exhausted() -> None:
         mod.time.sleep = original_sleep
 
 
+def test_contains_sensitive_text_flags_typed_declaration() -> None:
+    """A type annotation used to hide the literal from the pre-upload guard."""
+    mod = load_module()
+    for line in (
+        f'const API_KEY: &str = "{VALUE}";',
+        f'let api_key: String = "{VALUE}".into();',
+        f'client_secret : &\'static str = "{VALUE}"',
+        f'PASSWORD: str = "{VALUE}"',
+    ):
+        assert mod.contains_sensitive_text(line), line
+
+
+def test_redact_sensitive_text_masks_typed_declaration() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'const API_KEY: &str = "{VALUE}";')
+    assert VALUE not in redacted
+    assert "[REDACTED_SECRET]" in redacted
+
+
+def test_typed_declaration_guard_keeps_env_lookups_quiet() -> None:
+    mod = load_module()
+    for line in (
+        'let key = std::env::var("DEEPSEEK_API_KEY")?;',
+        "DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}",
+        "api_key: Option<String>,",
+    ):
+        assert not mod.contains_sensitive_text(line), line
+
+
+# --- hunk header renumbering --------------------------------------------------
+
+
+def test_split_oversized_hunk_renumbers_each_chunk() -> None:
+    mod = load_module()
+    header = ["diff --git a/big.rs b/big.rs", "--- a/big.rs", "+++ b/big.rs"]
+    body = [f"+line {index}" + "y" * 900 for index in range(120)]
+    chunks = mod.split_oversized_hunk(header, ["@@ -1,0 +1,120 @@ fn ctx()", *body])
+    assert len(chunks) > 1
+
+    starts = []
+    for chunk in chunks:
+        assert len(chunk) <= mod.MAX_FILE_DIFF_CHARS
+        hunk_line = [line for line in chunk.splitlines() if line.startswith("@@")][0]
+        parsed = mod.HUNK_HEADER.match(hunk_line)
+        assert parsed is not None
+        assert parsed.group(5) == " fn ctx()"
+        starts.append((int(parsed.group(3)), int(parsed.group(4))))
+
+    # Every chunk starts where the previous one ended, and the counts sum to
+    # the original 120 added lines.
+    assert starts[0][0] == 1
+    for (start, count), (next_start, _) in zip(starts, starts[1:]):
+        assert start + count == next_start
+    assert sum(count for _, count in starts) == 120
+
+
+def test_split_oversized_hunk_counts_context_and_removals() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    hunk = ["@@ -10,3 +20,3 @@", " ctx", "-gone", "+added"]
+    chunks = mod.split_oversized_hunk(header, hunk)
+    assert len(chunks) == 1
+    hunk_line = [line for line in chunks[0].splitlines() if line.startswith("@@")][0]
+    parsed = mod.HUNK_HEADER.match(hunk_line)
+    # context + removal advance old; context + addition advance new.
+    assert (int(parsed.group(1)), int(parsed.group(2))) == (10, 2)
+    assert (int(parsed.group(3)), int(parsed.group(4))) == (20, 2)
+
+
+def test_split_oversized_hunk_falls_back_on_unparseable_header() -> None:
+    mod = load_module()
+    header = ["diff --git a/a.rs b/a.rs", "--- a/a.rs", "+++ b/a.rs"]
+    chunks = mod.split_oversized_hunk(header, ["@@ garbage @@", "+one"])
+    assert len(chunks) == 1
+    assert "@@ garbage @@" in chunks[0]
+
+
+def test_line_deltas_classifies_diff_lines() -> None:
+    mod = load_module()
+    assert mod.line_deltas("+added") == (0, 1)
+    assert mod.line_deltas("-removed") == (1, 0)
+    assert mod.line_deltas(" context") == (1, 1)
+    assert mod.line_deltas("\\ No newline at end of file") == (0, 0)
+
+
+# --- API key validation -------------------------------------------------------
+
+
+def test_api_key_problem_detects_non_ascii_without_echoing_it() -> None:
+    mod = load_module()
+    key = SK[:29] + "\u2026" + "tail"
+    problem = mod.api_key_problem(key)
+    assert problem is not None
+    assert "non-ASCII" in problem
+    assert "29" in problem
+    assert key not in problem
+
+
+def test_api_key_problem_detects_empty_and_whitespace() -> None:
+    mod = load_module()
+    assert "empty" in mod.api_key_problem("")
+    assert "whitespace" in mod.api_key_problem("sk-abc def")
+
+
+def test_api_key_problem_accepts_a_normal_key() -> None:
+    mod = load_module()
+    assert mod.api_key_problem(SK) is None
+
+
+def test_api_key_error_finding_blocks_and_names_the_secret() -> None:
+    mod = load_module()
+    finding = mod.api_key_error_finding("The secret is empty.")
+    assert finding.severity == "block"
+    assert finding.id == "llm-api-key-invalid"
+    assert "DEEPSEEK_API_KEY" in finding.summary
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -959,6 +1101,17 @@ def main() -> int:
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
+        test_contains_sensitive_text_flags_typed_declaration,
+        test_redact_sensitive_text_masks_typed_declaration,
+        test_typed_declaration_guard_keeps_env_lookups_quiet,
+        test_split_oversized_hunk_renumbers_each_chunk,
+        test_split_oversized_hunk_counts_context_and_removals,
+        test_split_oversized_hunk_falls_back_on_unparseable_header,
+        test_line_deltas_classifies_diff_lines,
+        test_api_key_problem_detects_non_ascii_without_echoing_it,
+        test_api_key_problem_detects_empty_and_whitespace,
+        test_api_key_problem_accepts_a_normal_key,
+        test_api_key_error_finding_blocks_and_names_the_secret,
     ]:
         test()
     return 0
