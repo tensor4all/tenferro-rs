@@ -80,7 +80,7 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 35 passed.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
-- Full GPU integration reached 90/91; the sole failing test is the pre-existing
+- Full GPU integration reached 92/93; the sole failing test is the pre-existing
   `session_contract` trybuild check, with two fixture mismatches for removed CUDA
   symbols (the compiler now emits similar-name help lines), unrelated to
   allocation-domain changes and intentionally not blessed here.
