@@ -536,7 +536,8 @@ impl EagerTensor {
     /// let y = x.transpose(&[1, 0]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[3, 2]);
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    /// let materialized = y.to_tensor().unwrap();
+    /// assert_eq!(materialized.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///

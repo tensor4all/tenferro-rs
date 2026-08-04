@@ -254,7 +254,8 @@ pub trait TracedTensorAdExt {
     /// y.checkpoint(&mut compiler, &runtime).unwrap();
     ///
     /// let value = y.attached_value().unwrap();
-    /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
+    /// let materialized = value.tensor_read().unwrap().tensor_view().duplicate().unwrap();
+    /// assert_eq!(materialized.as_slice::<f64>().unwrap(), &[9.0]);
     /// ```
     ///
     /// # Errors

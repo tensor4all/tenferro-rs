@@ -222,13 +222,14 @@ fn downstream_gpu_features_are_explicit_and_additive() {
 #[test]
 fn public_backend_names_are_provider_specific() {
     let lib_rs = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
     assert!(
         lib_rs.contains("CudaBackend"),
         "CUDA backend should have an explicit public CudaBackend name"
     );
     assert!(
-        lib_rs.contains("WebGpuBackend"),
-        "WebGPU backend should have an explicit public WebGpuBackend name"
+        webgpu_mod.contains("pub struct WebGpuBackend"),
+        "WebGPU namespace should have an explicit public WebGpuBackend name"
     );
     assert!(
         !lib_rs.contains("CubeclBackend") && !lib_rs.contains("CubeclRuntime"),

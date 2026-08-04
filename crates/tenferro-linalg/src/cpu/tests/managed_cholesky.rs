@@ -351,8 +351,13 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
             }
         ));
 
-        let device_local =
-            domain.tensor_with_domain(&[2, 2], values.clone(), None, false, MemoryKind::Device);
+        let device_local = domain.tensor_with_domain(
+            &[2, 2],
+            values.clone(),
+            Some(domain.id),
+            false,
+            MemoryKind::Device,
+        );
         let error = backend.cholesky(&Tensor::F32(device_local)).unwrap_err();
         assert!(matches!(
             error,
