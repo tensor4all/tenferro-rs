@@ -2,7 +2,8 @@
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
-use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
+use crate::cubecl::interop::typed_device_ptr;
+use crate::cubecl::memory::{download_tensor, upload_tensor};
 use crate::cubecl::{gpu_available, CudaBackend, CudaDeviceId, CudaRuntime};
 use crate::{Error, Tensor};
 use tenferro_tensor::TensorElementwise;
@@ -158,9 +159,12 @@ gpu_test!(test_pointer_bridge, {
     let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
     let gpu = upload_tensor(&rt, &host).unwrap();
-    let ptr = device_ptr(&rt, &gpu).unwrap();
+    let Tensor::F64(gpu) = &gpu else {
+        unreachable!("f64 upload should preserve dtype");
+    };
+    let ptr = typed_device_ptr(&rt, gpu, "test_pointer_bridge").unwrap();
 
-    assert!(ptr != 0, "Device pointer should be non-null");
+    assert!(!ptr.is_null(), "Device pointer should be non-null");
 });
 
 gpu_test!(test_backend_add_matches_cpu_reference, {
@@ -284,8 +288,11 @@ gpu_test!(test_pointer_and_stream_bridge, {
     let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let gpu = upload_tensor(&rt, &t).unwrap();
 
-    let ptr = device_ptr(&rt, &gpu).unwrap();
-    assert!(ptr != 0);
+    let Tensor::F64(gpu_typed) = &gpu else {
+        unreachable!("f64 upload should preserve dtype");
+    };
+    let ptr = typed_device_ptr(&rt, gpu_typed, "test_pointer_and_stream_bridge").unwrap();
+    assert!(!ptr.is_null());
 
     let stream = rt.raw_cuda_stream().unwrap();
     assert!(stream != 0);

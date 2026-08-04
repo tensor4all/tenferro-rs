@@ -70,31 +70,6 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
     }
 }
 
-/// Extract the raw CUDA device pointer from a CubeCL-managed tensor allocation.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::{device_ptr, CudaRuntime};
-/// use tenferro_tensor::{Result, Tensor};
-///
-/// let _device_ptr: fn(&CudaRuntime, &Tensor) -> Result<u64> = device_ptr;
-/// ```
-///
-/// # Errors
-///
-/// Returns [`crate::Error::RuntimeState`] for a host-backed or foreign tensor,
-/// or [`crate::Error::BackendSource`] when CubeCL cannot inspect its resource.
-pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {
-    ensure_tensor_resident_on_runtime(rt, tensor, "device_ptr")?;
-    let handle = cubecl_handle(tensor)?;
-    let resource = rt
-        .client()
-        .get_resource(handle)
-        .map_err(|err| crate::Error::backend_source("device_ptr", err))?;
-    Ok(resource.resource().ptr)
-}
-
 fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     client: &ComputeClient<CubeclCudaRuntime>,
@@ -244,32 +219,6 @@ fn ensure_tensor_resident_on_runtime(
         Tensor::Bool(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
         Tensor::C64(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
         Tensor::C32(tensor) => dispatch::ensure_resident_on_runtime(rt, tensor, op),
-    }
-}
-
-fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl_runtime::server::Handle> {
-    match tensor {
-        Tensor::F64(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::F32(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::I32(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::I64(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::Bool(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::C64(t) => cubecl_handle_from_buffer(t.buffer()),
-        Tensor::C32(t) => cubecl_handle_from_buffer(t.buffer()),
-    }
-}
-
-fn cubecl_handle_from_buffer<T: 'static>(
-    buffer: &StorageBuffer<T>,
-) -> crate::Result<cubecl_runtime::server::Handle> {
-    match buffer {
-        StorageBuffer::Host(_) => Err(crate::Error::runtime_state(
-            "cubecl_handle",
-            "expected CubeCL buffer",
-        )),
-        StorageBuffer::Backend(buffer) => {
-            cubecl_handle_from_backend(buffer.as_ref(), "cubecl_handle")
-        }
     }
 }
 
