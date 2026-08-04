@@ -35,8 +35,10 @@ XLA compiled-graph public boundary.
 crate-private `ScheduledGraph`, synchronous `Runtime::run_compiled*` walks that
 schedule, and each semantic operation runs on its selected same-storage engine
 bridge. #1471 extends that production path with `Runtime::submit`,
-`ExecutionHandle`, runtime-allocated engine event domains, and a storage-class
-keyed transfer provider registry. Scheduled operations, transfers, and explicit
+`ExecutionHandle`, runtime-allocated engine event domains, and an endpoint-pair
+keyed transfer provider registry. A transfer endpoint is the immutable logical
+pair `(EngineId, StorageClass)`; event-domain identity is assigned only when a
+candidate is frozen. Scheduled operations, transfers, and explicit
 barriers now execute through per-run event-domain drivers. CUDA and WebGPU
 registrations provide native stream/event and queue/submission-completion
 adapters respectively. Collectives, cancellation, admission control, real
@@ -312,26 +314,35 @@ keeping the compiler artifact backend-neutral:
   engine.
 - Cross-storage per-operation placement is supported for linear production
   execution when a transfer provider is registered for the source and
-  destination storage classes. The scheduled loop tracks each slot's current
-  storage class and calls the provider before dispatching an operation on a
-  different storage class. Missing providers remain typed runtime errors.
+  destination endpoints. The scheduled loop tracks each slot's current
+  execution endpoint and calls the provider before dispatching an operation on
+  a different endpoint. Missing providers remain typed runtime errors.
 - The previous `GraphExecutor<B>` facade is retired. Public execution goes
   through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
   prepare from the backend-neutral `CompiledGraph` and execute through the
   runtime-owned schedule.
-- `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
-  an engine registration. `tenferro-cpu::runtime_engine_registration` provides
-  the CPU registration with direct core preparation capabilities, cache-owner
-  hooks, and the bridge. `tenferro-runtime` still has no production dependency
-  on `tenferro-cpu`.
+- `assemble_executable_engine_registration` is the sole assembly path for an
+  executable engine registration. Providers first construct shared
+  `EngineRegistrationMetadata` with the caller-selected engine and
+  provider/device identities, hardware/storage classes, default storage, and
+  core capabilities. They then wrap it in an
+  `ExecutableEngineRegistrationConfig` containing the backend witness,
+  ingress, event-domain driver, and optional cache owner. Preparation-only
+  providers use the same metadata with a
+  `PreparationOnlyEngineRegistrationConfig` containing only the execution
+  context identity. The runtime consumes these typed descriptors and remains
+  the sole owner of the executable/preparation state split. `tenferro-runtime`
+  still has no production dependency on `tenferro-cpu`.
 - Runtime-owned preparation is now the executable boundary for core operations
   and installed extension modules. Transfers, collectives, and barriers remain
   scheduler-owned node families for later multi-engine work; they are not
   exposed as a compatibility executor surface.
 
-Phase 5 does not migrate extension-family derived caches, native einsum engine
-planning, CUDA/WebGPU native engines, or XLA subgraph execution. Those remain
-Phase 6 through Phase 8 work.
+At the Phase 5 checkpoint, extension-family derived caches, native einsum
+engine planning, CUDA/WebGPU native adapters, and XLA subgraph execution were
+still deferred. The current CUDA and WebGPU adapters subsequently enter the
+same executable-witness assembly path; broader native einsum planning and XLA
+subgraph execution remain later work.
 
 ### Phase 6 extension resolution and CPU einsum checkpoint (2026-07-25)
 
@@ -633,8 +644,8 @@ The core engine capability bundle has typed optional slots for:
 
 Metadata-only reshape, transpose, broadcast, and view slicing do not call a
 provider. Allocation and scheduling are runtime resources, not capabilities.
-Transfers use a separate registry keyed by source and destination storage
-class, and collectives use a separate registry. Neither may hide a host
+Transfers use a separate registry keyed by source and destination execution
+endpoints, and collectives use a separate registry. Neither may hide a host
 transfer.
 
 Providers may be implemented by faer, general BLAS/LAPACK, TBLIS, CubeCL,
@@ -702,16 +713,18 @@ workspace. All providers obey the engine-selected `ParallelMode`.
 
 ## Prepared Graphs and Common Execution
 
-`PreparedGraph` contains a common `ScheduledGraph` plus runtime-binding
+`PreparedCompiledGraph` contains a common `ScheduledGraph` plus runtime-binding
 metadata. The production CPU/runtime path currently stores this state in the
 crate-private prepared-program root. Same-storage `Operation` nodes are already
-the synchronous `Runtime::run_compiled*` execution source. The post-U3
-substrate additionally tracks per-slot storage classes and invokes registered
-transfer providers on the production scheduled path when a downstream operation
-uses a different storage class. First-class `Transfer` nodes, `Collective`,
-cross-domain event scheduling, and full asynchronous admission remain reserved
-work. The schedule is shared by CPU, GPU, extension, transfer, and multi-device
-execution. Its nodes are conceptually:
+the synchronous `Runtime::run_compiled*` execution source. The production
+substrate also tracks per-slot execution endpoints, emits first-class
+`ScheduledTransfer` nodes for endpoint changes, and invokes the registered
+transfer provider from the scheduled path. Every operation, transfer, and
+explicit barrier carries event dependencies and executes through its event
+domain driver; cross-domain completion is bridged at the transfer node. The
+schedule is shared by CPU, GPU, extension, transfer, and multi-device
+execution. Collective nodes remain reserved until their provider and admission
+contracts are implemented. Its nodes are:
 
 ```rust
 pub enum ScheduledNode {
@@ -743,18 +756,19 @@ unless benchmarks prove the safe check material; increasing fusion is the
 preferred way to amortize dispatch.
 
 `Transfer` and `Collective` are scheduler-owned node families, not arbitrary
-extension operations. A transfer has explicit source and destination storage
-domains and bridges their event domains by producing a destination-domain
-completion dependency; the scheduler understands its buffer lifetime,
-ordering, failure, and resource requirements. A collective similarly has
-explicit participants, ordering, event-domain behavior, and communication
+extension operations. A transfer has explicit source and destination execution
+endpoints, including their storage domains, and bridges their event domains by
+producing a destination-domain completion dependency; the scheduler understands
+its buffer lifetime, ordering, failure, and resource requirements. A collective
+similarly has explicit participants, ordering, event-domain behavior, and communication
 resources. Provider registries may supply their implementations, but cannot
-hide them inside an opaque extension op. The current post-U3 substrate registers
-transfer providers by storage-class pair and calls them from the scheduled
-execution loop; promoting these calls to explicit `ScheduledTransfer` nodes is
-the next scheduler step. Reserving the core collective node prevents a later
-sharding design from bypassing common scheduling and
-lifetime rules.
+hide them inside an opaque extension op. The current substrate registers
+transfer providers by endpoint pair and embeds the resolved provider in each
+`ScheduledTransfer`. The scheduler therefore owns the transfer's buffer
+lifetime, ordering, event-domain bridge, and failure handling in the same
+execution loop as operations. The core collective node is reserved until a
+collective child defines its provider, participant, and admission contracts; it
+cannot bypass common scheduling and lifetime rules.
 
 The common execution bridge is owned by `Runtime`; it is not generic over one
 `TensorBackend`. This permits a single graph to contain CPU work, GPU work,
@@ -1235,9 +1249,9 @@ per-backend native engines.
    backend-specific resolved planning inputs, which remain explicit in the
    runtime snapshot and cache identity.
 2. **Native engines where eager einsum is supported.** The CPU native engine is
-   part of phase 6. The current Phase 7 slice wires WebGPU `dot_general` through
-   the common runtime scheduler and records GPU native einsum as deferred
-   native-engine work rather than guessing a broader provider split. XLA
+   part of phase 6. The current Phase 7 slice registers WebGPU `dot_general`
+   through the common executable-witness path and keeps broader GPU native
+   einsum planning deferred rather than guessing a broader provider split. XLA
    consumes core lowering and requires no native einsum engine.
 3. **One prepared operation.** A native engine represents a complete N-ary
    einsum as one `PreparedOperation`. Eager N-ary einsum through a native
@@ -1731,37 +1745,64 @@ The runtime owns a `DeviceRegistry`; each device has a `GpuDeviceRuntime` with:
 - dependency tracking;
 - admission-control state.
 
-The current CUDA runtime, cuTENSOR handle, and extension cache responsibilities
-would migrate into the per-device runtime. A GPU provider receives a resolved
-`GpuExecutionContext` containing the selected device, stream or queue, scratch
-access, and dependency events. It does not create or globally select a stream.
+The current CUDA and WebGPU adapters retain their runtime resources in their
+backend-owned values and pass the required typed registration descriptor:
+shared metadata plus the backend witness, ingress contracts, cache owner where
+applicable, and native event-domain driver to
+`assemble_executable_engine_registration`. A GPU provider receives a
+resolved `GpuExecutionContext` containing the selected device, stream or queue,
+scratch access, and dependency events. It does not create or globally select a
+stream.
 
-The first concrete Phase 7 step is narrower than the full model: WebGPU exposes
-`webgpu_runtime_engine_registration(&WebGpuBackend)` and registers only
-`DotGeneralPreparation` plus a `TensorBackendExecutor<WebGpuBackend>`. Its
-default storage class is the runtime-generic device projection
+The concrete Phase 7 adapters are `cuda_runtime_engine_registration` and
+`webgpu_runtime_engine_registration`. CUDA supplies its supported core
+capabilities and `CudaEventDomainDriver`; WebGPU currently supplies
+`DotGeneralPreparation` and `WebGpuEventDomainDriver`. Both produce complete
+executable registrations through the common runtime assembly path. WebGPU's
+default storage class remains the runtime-generic device projection
 `tenferro.storage.device.v1`, matching tensors whose placement uses
-`MemoryKind::Device`. CUDA is not registered through the common runtime helper
-in this slice because `EngineRegistration::with_tensor_backend_executor`
-requires a cloneable tensor backend, while `CudaBackend` ownership currently
-encapsulates runtime resources without that contract.
+`MemoryKind::Device`.
 
 ## Asynchronous Execution and Events
 
 Before input ingress or the first launch, the runtime scheduler preflights and
-starts one `EventDomainRun` for each event domain used by an execution. This
-prevents a missing driver or run-allocation failure from appearing after an
-earlier effect has executed. The scheduler resolves each dependency to the
-opaque `EventToken` returned by the dependency's run, then asks the completion
-domain's run to enqueue the node. The first scheduled use of an event domain
-fixes its position in the canonical per-execution drain order. A missing driver
-is a typed runtime execution error; there is no implicit synchronous fallback.
+starts one `EventDomainRun` for each event domain used by an execution, passing
+the exact provenance-qualified `EventDomainId` from the frozen snapshot. It
+validates that every returned run reports that same domain. This prevents a
+missing driver, run-allocation failure, or run-domain mismatch from appearing
+after an earlier effect has executed. Each completion token reports its origin
+domain; the scheduler validates that origin against the scheduled completion
+identity before retaining it. The first scheduled use of an event domain fixes
+its position in the canonical per-execution drain order. A missing driver is a
+typed runtime execution error; there is no implicit synchronous fallback.
 
-The CPU immediate driver waits every dependency before launching work. CUDA
-and WebGPU drivers preserve same-backend ordering with native stream/event or
-queue/submission primitives and use host waits only for foreign tokens. The
-scheduler holds no runtime, driver, backend, or provider lock while invoking
-`enqueue`, launching work, or draining runs.
+`ScheduledEventDomains` owns the host bridge. Operation, barrier, and collective
+nodes admit only dependency tokens whose origin is the destination completion
+domain. A transfer may have source-domain dependencies and waits on each such
+token repeatably on the host before enqueue, then passes only same-destination
+tokens to the destination run. Third-domain tokens, source or destination
+mismatches, and host-wait failures are typed rejections before the destination
+launch. A provider-returned completion is a distinct post-enqueue case:
+`enqueue` has already launched according to the run contract, so the scheduler
+validates its origin immediately after `enqueue` returns, before recording the
+completion or allowing any downstream node to launch. A malformed returned
+completion is never recorded and cannot undo the launch that produced it.
+Before dependency classification, the scheduler rechecks
+that the selected run still reports the expected domain; this prevents a
+changed run from host-waiting or forwarding a transfer dependency. After
+classification, it performs the same check immediately before every
+`EventDomainRun::enqueue`; this final check is required even for a stateful
+provider whose domain can change between observations. The source run retains
+ownership of its token through retirement. The CPU immediate driver, CUDA
+driver, and WebGPU driver each reject foreign origins directly as well; CUDA
+and WebGPU use native waits only for compatible same-origin tokens and report
+an incompatibility error for a token type or queue they cannot admit. Every
+typed event-domain error carries the closed public `EventDomainOperation`
+value (`BeginRun`, `Enqueue`, `Drain`, `TransferBridge`, or
+`ValidateCompletion`) rather than a provider function-name string. The scheduler
+holds no runtime, driver,
+backend, or provider lock while invoking `enqueue`, launching work, or
+draining runs.
 
 Native retirement has a wider exceptional fallback. If CUDA cannot recover the
 scheduled stream, it attempts a context-wide barrier; both stream and context
@@ -1776,13 +1817,35 @@ After the first enqueue or launch failure, the scheduler admits no later node
 and drains every run that was started. It also drains after successful output
 execution and collects outputs only after draining. Input, intermediate,
 transfer, and output storage remains retained until this drain completes.
-`EventDomainRun::drain` is a retirement boundary on both success and error; a
-driver may report completion failure only after work can no longer access
-retained resources. During panic unwinding, domain runs are dropped before
-value stores, so driver `Drop` cleanup drains outstanding work before tensor
-storage can be released. If execution and explicit cleanup both fail, the
-execution error remains the typed source and the cleanup failure is included in
-the diagnostic.
+Every run is attempted in deterministic first-use order, and every drain
+failure is retained in that order through the suppressed-error aggregate. If
+execution and cleanup both fail, the execution error remains primary and the
+cleanup aggregate is suppressed. Every provider run is held behind a private
+runtime-owned wrapper. The wrapper takes ownership of the returned
+`Box<dyn EventDomainRun>` immediately after `begin_run`; its Drop path takes and
+attempts that Box exactly once inside a panic boundary, discarding a provider
+Drop panic without retrying it. Explicit drain similarly catches each
+individual public-provider `drain` panic, converts it to a typed
+`EventDomainError::DrainPanicked` carrying the domain and a safe panic message,
+and continues retiring later runs.
+`EventDomainRun::drain` observes work that is already progressing: it does not
+depend on another event-domain run being drained before this run can start.
+It is a retirement boundary on both success and error; a driver may report
+completion failure only after work can no longer access retained resources.
+If explicit drain is skipped, `Drop` performs the equivalent best-effort
+retirement, and neither explicit drain nor implicit retirement may unwind.
+During panic unwinding, domain runs are dropped before value stores, so driver
+cleanup retires outstanding work before tensor storage can be released. CUDA
+and WebGPU explicit drain paths preserve provider-specific typed errors,
+including provider panics, while their implicit run, submission-guard, and
+native-handle retirement bodies—including cleanup and diagnostic formatting—
+are contained by the single crate-private non-unwinding helper in
+`tenferro-gpu`. That helper is intentionally provider-neutral so Metal can
+reuse the same Drop contract. CUDA and WebGPU event-domain runs use the
+private `Pending`/`Retired`/`Failed` lifecycle: retirement consumes `Pending`
+before provider code, and terminal states perform no second provider
+retirement. If execution and explicit cleanup both fail, the execution error
+remains the typed source and the cleanup aggregate is suppressed.
 
 Scheduled operation, transfer, and barrier nodes use this path in production.
 The current schedule builder does not yet emit explicit barriers, and
@@ -1880,6 +1943,16 @@ The engine owns:
 
 An ordinary physical `Tensor` remains single-device in the initial refactor.
 No initial public `DistributedTensor` is introduced.
+
+Phase 0 multi-CUDA evidence uses one runtime with distinct caller-selected
+engine registrations. When each input is already resident on its selected CUDA
+device, the registration's input-ingress contract constrains preparation to the
+matching engine; no cross-device transfer provider or event route is required.
+This proves independent same-process device, engine, and event-domain execution
+without adding a public engine-selector or a distributed-tensor abstraction.
+The evidence test uses a two-party barrier immediately before each
+`run_prepared` call, proving concurrent host submission attempts from separate
+scoped threads; it does not guarantee overlap during CUDA kernel execution.
 
 ### Future sharding model
 

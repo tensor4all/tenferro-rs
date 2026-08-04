@@ -72,15 +72,15 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
-use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if !tenferro_gpu::gpu_available() {
+    let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
-    }
+    };
 
-    let mut backend = CudaBackend::new(0)?;
+    let mut backend = CudaBackend::new(device.id())?;
     let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 

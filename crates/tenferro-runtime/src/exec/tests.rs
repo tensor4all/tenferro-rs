@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::hash::Hasher;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
@@ -20,6 +21,12 @@ use super::{
     tensor_value_for_lazy_view, validate_exec_program, ExecInstruction, ExecOp, ExecProgram,
     ExecSlot,
 };
+use crate::runtime::{
+    EngineId, ExecutionContextIdentity, HardwareClassId, InputSignature, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationPlan, RegistrationIdentity, RuntimeEpoch, RuntimeId,
+    SpecializationProjection, SpecializationRequirements,
+};
+use crate::ExtensionCacheStore;
 use tenferro_cpu::CpuBackend;
 
 #[test]
@@ -665,4 +672,98 @@ impl ExtensionOp for TestExtension {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
+}
+
+#[derive(Debug)]
+struct MetadataOnlyPreparedOperation {
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+}
+
+impl PreparedOperation for MetadataOnlyPreparedOperation {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+fn metadata_only_prepared_operation() -> Arc<dyn PreparedOperation> {
+    Arc::new(MetadataOnlyPreparedOperation {
+        binding: PreparedOperationBinding::new(
+            RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+            RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+            EngineId::new("tenferro-test.metadata-only-engine").expect("engine id"),
+            RegistrationIdentity::new(
+                NonZeroU64::new(1).expect("registration issuer"),
+                NonZeroU64::new(1).expect("registration ordinal"),
+            ),
+            ExecutionContextIdentity::of::<CpuBackend>(),
+            HardwareClassId::new("tenferro-test.metadata-only-hardware").expect("hardware class"),
+        ),
+        specialization: SpecializationRequirements::polymorphic(0)
+            .project(&InputSignature::new(Vec::new()))
+            .expect("empty specialization projection"),
+    })
+}
+
+fn assert_missing_extension_executor(error: crate::Error) {
+    let crate::Error::RuntimeStateSource { source, .. } = error else {
+        panic!("missing extension executor must retain a typed source");
+    };
+    let missing = source
+        .downcast_ref::<super::MissingPreparedOperationExecutorError>()
+        .expect("typed missing extension executor source");
+    assert_eq!(missing.family_id, TestExtension.family_id());
+    assert_eq!(missing.operation_index, 0);
+}
+
+#[test]
+fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
+    let instruction = ExecInstruction {
+        op: ExecOp::Extension(Arc::new(TestExtension)),
+        semantic_operation_index: Some(0),
+        input_slots: Vec::new(),
+        output_slots: Vec::new(),
+        dtype: DType::F64,
+        output_shapes: Vec::new().into(),
+        output_extents: Vec::new().into(),
+        last_use: Vec::new(),
+    };
+    let operations = vec![PreparedOperationPlan::metadata(
+        metadata_only_prepared_operation(),
+    )];
+    let mut caches = ExtensionCacheStore::new();
+    let mut backend = CpuBackend::new();
+
+    let error = super::execute_prepared_extension_instruction(
+        &mut backend,
+        &[],
+        &instruction,
+        &TestExtension,
+        &operations,
+        &mut caches,
+    )
+    .expect_err("metadata-only extension must not execute");
+    assert_missing_extension_executor(error);
+
+    let error = backend
+        .with_backend_session(|session| {
+            super::execute_prepared_extension_instruction_in_session(
+                session,
+                &[],
+                &instruction,
+                &TestExtension,
+                &operations,
+                &mut caches,
+            )
+        })
+        .expect_err("metadata-only extension must not execute in a session");
+    assert_missing_extension_executor(error);
 }

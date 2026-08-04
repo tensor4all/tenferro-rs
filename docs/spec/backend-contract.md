@@ -14,36 +14,37 @@ pipeline.
 ### Execution path
 
 ```text
-MaterializedGraph
+TraceContext -> TracedGraph -> GraphCompiler
   │
   │ compile
   ▼
-CompiledProgram<StdTensorOp>
+CompiledGraph
   │
-  │ compile_std_to_exec()
-  │   - lower StdTensorOp -> ExecOp
-  │   - infer dtype and output_shapes
-  │   - run DotDimensionSorter + TransposeFolding + DotDecomposer
-  │   - run DeadCodeElimination
+  │ Runtime::prepare_compiled() / Runtime::run_compiled()
+  │   - validate ordered input metadata
+  │   - select engines and resolve execution endpoints
+  │   - lower semantic operations to private ExecProgram staging
+  │   - build the private ScheduledGraph
   ▼
-ExecProgram
+private runtime preparation and staging
   │
-  │ Runtime::run_compiled()
-  │   - owns prepared-plan cache
-  │   - owns registered extension modules/cache owners
-  │   - routes through segmented dispatch
+  │ Runtime::run_prepared() / Runtime::submit()
+  │   - retain the prepared schedule for the runtime epoch
+  │   - enqueue operations, transfers, and barriers through event domains
+  │   - drain submitted work before returning execution failure
   ▼
-internal exec dispatch
+private ScheduledGraph
   │
-  ├── unsegmented core-only path
-  └── segmented path
-         │
-         ▼
-  TensorBackend / BackendSession dispatch
+  ├── ScheduledNode::Operation
+  ├── ScheduledNode::Transfer (endpoint-pair provider)
+  └── ScheduledNode::Barrier / reserved collective nodes
 ```
 
 There is no in-process `StableHloProgram` / `StableHloOp` layer. The current
-runtime contract is centered on `ExecProgram`.
+public runtime contract is centered on `CompiledGraph` and runtime preparation.
+`ExecProgram` and `ScheduledGraph` are private runtime artifacts: staging lowers
+the immutable semantic graph, and scheduling binds storage endpoints, transfer
+providers, and event-domain dependencies for one runtime snapshot.
 
 The optional XLA path is a peer executor over a compiled `CompiledGraph`
 lowering view, not a native backend. `tenferro-xla` may inspect immutable
@@ -55,11 +56,12 @@ dispatch.
 
 ## II. Execution IR
 
-`ExecProgram` is the single in-process execution IR for standard tensor
-programs and registered extension runtimes.
+`ExecProgram` is private runtime staging for standard tensor programs and
+registered extension runtimes. It is not the public graph artifact and callers
+must not construct or depend on it.
 
 ```rust
-pub struct ExecProgram {
+pub(crate) struct ExecProgram {
     pub instructions: Vec<ExecInstruction>,
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
@@ -77,6 +79,10 @@ pub struct ExecInstruction {
     pub last_use: Vec<bool>,
 }
 ```
+
+`ScheduledGraph` is the crate-private executable dependency DAG. It records
+prepared operation nodes, first-class endpoint transfer nodes, value-slot
+locations, event dependencies, and output bindings for one runtime snapshot.
 
 ### Core guarantees
 
@@ -112,10 +118,11 @@ retain their previous behavior. Compiler-cache hits reuse semantic plans while
 restoring the current compilation's guard provenance, so executor failures
 report the current extension family and final instruction index.
 
-### ExecOp vocabulary
+### Private staging vocabulary
 
-The execution IR keeps StableHLO-aligned naming where it remains useful, but
-the ops are the real runtime contract:
+The private staging operations keep StableHLO-aligned names where they remain
+useful. They are lowered into scheduled operation nodes before execution; the
+public contract is the semantic graph plus runtime preparation and scheduling:
 
 - Elementwise: `Add`, `Multiply`, `Negate`, `Conj`, `Divide`, `Abs`, `Sign`,
   `Maximum`, `Minimum`, `Compare`, `Select`, `Clamp`, `Exp`, `Log`, `Sin`,
@@ -138,21 +145,24 @@ variants.
 
 ## III. Lowering Contract
 
-### StdTensorOp lowering
+### Semantic operation staging
 
-`compile_std_to_exec()` consumes:
+Runtime preparation extracts the frozen `SemanticProgram` from a
+`CompiledGraph` and passes it to the private semantic-staging step, together
+with compiler options and concrete input metadata:
 
-- `CompiledProgram<StdTensorOp>`
+- `SemanticProgram`
 - input dtypes
 - input shapes as `Vec<DimExpr>`
 
-For each computegraph instruction it:
+For each semantic instruction it:
 
-1. infers output dtype, shape, and extent metadata; extension instructions use
+1. reads semantic operations and infers output dtype, shape, and extent
+   metadata; extension instructions use
    constraint-aware output-meta inference for one `(dtype, shape)` pair per
    output slot and collect local shape obligations
 2. resolves output extents
-3. lowers `StdTensorOp` to `ExecOp`
+3. lowers semantic operations to private `ExecOp` staging
 4. records output slot dtype/shape/extent metadata
 5. runs the compiler passes on the resulting `ExecProgram` and populates
    `last_use`
@@ -229,21 +239,24 @@ einsum, and FFT provide those modules from their owning crates.
 
 ## V. Segmented vs. Unsegmented Execution
 
-`Runtime::run_compiled` is the public execution entry point for a
-`CompiledGraph`. Runtime preparation owns backend selection, registered
-extension modules, and cache ownership required to preserve dispatch
-invariants. The synchronous runtime path executes the prepared root schedule
-one node at a time and dispatches each semantic operation through the selected
-engine bridge. When a downstream operation uses a different storage class, the
-scheduled loop requires a registered transfer provider for the source and
-destination storage classes and materializes that slot before dispatch. Missing
-providers are runtime errors, not implicit host fallbacks.
+`Runtime::run_compiled` and `Runtime::submit` are the public execution entry
+points for a `CompiledGraph`. Runtime preparation owns backend selection,
+registered extension modules, cache ownership, and the private
+`CompiledGraph -> ExecProgram staging -> ScheduledGraph` transition required to
+preserve dispatch invariants. The runtime executes the prepared schedule one
+node at a time and dispatches each operation through its selected engine bridge.
+When a downstream operation uses a different execution endpoint, preparation
+adds a `ScheduledNode::Transfer` with the registered endpoint-pair provider;
+execution bridges the source completion into the destination event domain
+before dispatch. Missing providers are runtime errors, not implicit host
+fallbacks.
 
 The segmented internal path groups fusible backend instructions:
 
 ```text
-ExecProgram
+private ExecProgram staging
   │
+  │ internal preparation/execution optimization
   ▼
 segment_exec_program()
   │
@@ -260,7 +273,8 @@ Segmented execution exists to:
 
 The unsegmented internal path evaluates one instruction at a time and is used
 by the current scheduled runtime loop, parity checks, and narrow owner-scoped
-extension-module composition. It is not a general public execution surface.
+extension-module composition. Neither this path nor the staging IR is a
+general public execution surface.
 Extension instructions must run through a registered `ExtensionModule`; missing
 module registration is an error, not a fallback to a host/reference path.
 
@@ -305,11 +319,13 @@ implementation.
 ### Layout
 
 All runtime tensors are dense contiguous column-major tensors. The backend
-contract does not expose arbitrary stride-aware dispatch in `ExecProgram`.
+contract does not expose arbitrary stride-aware dispatch in the private
+`ExecProgram` staging IR.
 
 This means:
 
-- `ExecProgram` does not encode layout transforms as a separate concern
+- private `ExecProgram` staging does not encode layout transforms as a separate
+  concern
 - backends receive dense tensors and can assume column-major layout
 - compile-time shape reasoning is symbolic, but runtime storage layout is not
 
@@ -329,8 +345,10 @@ falling back across devices.
 
 ### Placement
 
-`ExecProgram` is placement-agnostic. Device placement lives on runtime
-`Tensor` values, not in the compiled IR.
+`CompiledGraph` and private `ExecProgram` staging are placement-agnostic.
+Runtime preparation resolves placement on `Tensor` values, binds operation
+endpoints in `ScheduledGraph`, and records the event-domain dependencies needed
+for execution.
 
 ---
 
@@ -359,10 +377,15 @@ What is no longer true:
 The current implementation is split across:
 
 - `crates/tenferro-runtime/src/compiler/mod.rs`
+- `crates/tenferro-runtime/src/compiler/semantic_staging.rs`
 - `crates/tenferro-runtime/src/shape_infer.rs`
 - `crates/tenferro-runtime/src/exec.rs`
 - `crates/tenferro-runtime/src/segment.rs`
-- `crates/tenferro-runtime/src/graph/executor.rs`
+- `crates/tenferro-runtime/src/runtime/preparation.rs`
+- `crates/tenferro-runtime/src/runtime/schedule.rs`
+- `crates/tenferro-runtime/src/runtime/execution.rs`
+- `crates/tenferro-runtime/src/runtime/snapshot.rs`
+- `crates/tenferro-runtime/src/graph/program.rs`
 - `crates/tenferro-tensor/src/backend.rs`
 
 Those files are the source of truth for the live backend contract. This

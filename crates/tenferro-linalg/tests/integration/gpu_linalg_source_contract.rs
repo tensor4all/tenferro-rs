@@ -496,9 +496,9 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "T::copy_svd_v_to_vt(backend.runtime(), &v, &vt_shape, OP)",
-        "copy_svd_v_to_vt_real",
-        "copy_svd_v_to_vt_complex",
+        "T::copy_matrix_adjoint(backend.runtime(), &v, &vt_shape, OP)",
+        "copy_matrix_adjoint_real",
+        "copy_matrix_adjoint_complex",
     ] {
         assert!(
             source.contains(needle),
@@ -511,13 +511,42 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     );
 
     for needle in [
-        "pub fn svd_v_to_vt_real",
-        "pub fn svd_v_to_vt_complex",
+        "pub fn matrix_adjoint_real",
+        "pub fn matrix_adjoint_complex",
         ".conj()",
     ] {
         assert!(
             kernels.contains(needle),
             "GPU SVD kernels should expose real and complex V-to-VT copies: missing {needle}"
+        );
+    }
+
+    for needle in [
+        "let transpose_for_gesvd = m < n;",
+        "T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?",
+        "gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)",
+        "T::copy_matrix_adjoint(backend.runtime(), &gesvd_vt, &u_shape, OP)?",
+        "T::copy_matrix_adjoint(backend.runtime(), &gesvd_u, &vt_shape, OP)?",
+    ] {
+        assert!(
+            svd.contains(needle),
+            "wide factor gesvd should solve the device adjoint and map factors back: missing {needle}"
+        );
+    }
+    for needle in [
+        "let (work, gesvd_m, gesvd_n) = if m < n",
+        "T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?",
+        "gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)",
+    ] {
+        assert!(
+            svd_values.contains(needle),
+            "wide values-only gesvd should solve the device adjoint: missing {needle}"
+        );
+    }
+    for banned in ["download_tensor", "download_typed_tensor"] {
+        assert!(
+            !svd.contains(banned) && !svd_values.contains(banned),
+            "wide gesvd orientation must not download factor data: found {banned}"
         );
     }
 

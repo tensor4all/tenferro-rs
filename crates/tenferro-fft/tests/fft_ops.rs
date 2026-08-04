@@ -25,7 +25,7 @@ fn run(output: &TracedTensor) -> Tensor {
 
 #[cfg(feature = "autodiff")]
 fn eager(input: Tensor) -> EagerTensor {
-    EagerTensor::from_tensor_in(input, EagerRuntime::new()).unwrap()
+    EagerTensor::from_tensor_in(input, EagerRuntime::new().unwrap()).unwrap()
 }
 
 fn assert_c64_close(actual: &[Complex64], expected: &[Complex64]) {
@@ -590,7 +590,7 @@ fn eager_irfft_matches_traced_irfft() {
 #[cfg(feature = "autodiff")]
 fn eager_fft_reuses_c2c_vjp_rule() {
     let ad = fft_ad_context();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(
             vec![4],

@@ -142,7 +142,8 @@ slices/arrays:
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
 
-let ctx = EagerRuntime::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let ctx = EagerRuntime::new()?;
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let a = ctx.constant_from(a).unwrap();
@@ -150,6 +151,8 @@ let b = ctx.constant_from(b).unwrap();
 let c = [&a, &b].einsum("ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);
+Ok(())
+}
 ```
 
 Autodiff eager execution remains separate from concrete `Tensor` execution:

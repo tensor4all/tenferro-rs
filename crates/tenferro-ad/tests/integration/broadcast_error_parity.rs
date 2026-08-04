@@ -35,7 +35,7 @@ fn assert_rank_mismatch(source: &ValidationError, expected: usize, actual: usize
 
 #[test]
 fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let cases = [
         "incompatible_binary",
         "incompatible_input",

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use super::capability::{
     CoreCapabilityKind, PreparationKeySummary, PreparedOperationBinding, UnsupportedReason,
 };
-use super::identity::{EngineId, RuntimeEpoch, RuntimeId};
-use super::policy::{ProgramPlacementConstraint, StorageClass};
+use super::identity::{EngineId, ProviderDeviceIdentity, RuntimeEpoch, RuntimeId};
+use super::policy::{ProgramPlacementConstraint, StorageClass, TransferEndpoint};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_ops::ShapeGuardError;
@@ -61,6 +61,10 @@ impl IdentityError {
 pub enum IdentityKind {
     /// An execution engine identifier.
     Engine,
+    /// A provider identifier.
+    Provider,
+    /// A provider-canonical physical target identity.
+    ProviderTarget,
     /// A hardware-class identifier.
     HardwareClass,
     /// A storage-class identifier.
@@ -141,12 +145,12 @@ pub enum RegistrationKey {
         /// Local cache owner.
         owner: CacheOwnerId,
     },
-    /// A transfer provider keyed by source and destination storage classes.
+    /// A transfer provider keyed by source and destination endpoints.
     TransferProvider {
-        /// Source storage class.
-        source: StorageClass,
-        /// Destination storage class.
-        destination: StorageClass,
+        /// Source endpoint.
+        source: TransferEndpoint,
+        /// Destination endpoint.
+        destination: TransferEndpoint,
     },
 }
 
@@ -207,6 +211,33 @@ pub enum RuntimeConfigError {
         /// Duplicated engine identifier.
         engine_id: EngineId,
     },
+    /// Two direct engines selected the same provider/device target.
+    #[error(
+        "provider/device target {provider_device_identity:?} is already bound to engine \
+         {first_engine_id:?}; cannot bind engine {duplicate_engine_id:?}"
+    )]
+    DuplicateProviderDeviceTarget {
+        /// Physical provider/device binding that was selected twice.
+        provider_device_identity: ProviderDeviceIdentity,
+        /// First logical engine using the binding.
+        first_engine_id: EngineId,
+        /// Later logical engine that attempted to reuse the binding.
+        duplicate_engine_id: EngineId,
+    },
+    /// A replacement attempted to change the physical target of an engine ID.
+    #[error(
+        "engine {engine_id:?} cannot rebind from provider/device target {current:?} \
+         to {replacement:?}; remove affected transfer routes, remove the old engine, \
+         register the replacement under the engine ID, and re-register the routes"
+    )]
+    EngineTargetRebind {
+        /// Logical engine whose physical binding was changed.
+        engine_id: EngineId,
+        /// Binding currently attached to the engine.
+        current: ProviderDeviceIdentity,
+        /// Binding requested by the replacement.
+        replacement: ProviderDeviceIdentity,
+    },
     /// A direct capability slot was registered twice where replacement is not
     /// accepted.
     #[error("duplicate {capability:?} capability")]
@@ -255,6 +286,66 @@ pub enum RuntimeConfigError {
         engine_id: EngineId,
         /// Missing default storage class.
         default_storage_class: StorageClass,
+    },
+    /// A transfer endpoint references an engine that is absent from the
+    /// candidate configuration.
+    #[error("transfer endpoint {endpoint:?} references an unregistered engine")]
+    UnknownTransferEndpointEngine {
+        /// Endpoint that references the missing engine.
+        endpoint: TransferEndpoint,
+    },
+    /// A transfer endpoint names a storage class unsupported by its engine.
+    #[error("transfer endpoint {endpoint:?} uses storage unsupported by its engine")]
+    UnsupportedTransferEndpointStorage {
+        /// Endpoint whose storage class is unsupported by its engine.
+        endpoint: TransferEndpoint,
+    },
+    /// A transfer route removal named an endpoint pair that is not registered.
+    #[error(
+        "no transfer provider is registered from source endpoint {source_endpoint:?} to destination \
+         endpoint {destination:?}"
+    )]
+    MissingTransferProvider {
+        /// Source endpoint of the absent route.
+        source_endpoint: TransferEndpoint,
+        /// Destination endpoint of the absent route.
+        destination: TransferEndpoint,
+    },
+    /// A route retains a physical binding that no longer matches its engine.
+    #[error(
+        "stale transfer route from source endpoint {source_endpoint:?} to destination endpoint \
+         {destination:?}: endpoint {endpoint:?} was registered for {registered:?} but \
+         now resolves to {current:?}"
+    )]
+    StaleTransferRoute {
+        /// Source endpoint of the stale route.
+        source_endpoint: TransferEndpoint,
+        /// Destination endpoint of the stale route.
+        destination: TransferEndpoint,
+        /// Route endpoint whose physical binding changed.
+        endpoint: TransferEndpoint,
+        /// Binding captured when this route was registered/frozen.
+        registered: Box<ProviderDeviceIdentity>,
+        /// Binding currently attached to the endpoint's engine.
+        current: Box<ProviderDeviceIdentity>,
+    },
+    /// A route reached freezing without a physical binding after validation.
+    #[error(
+        "transfer route from source endpoint {source_endpoint:?} to destination endpoint {destination:?} \
+         has no resolved provider/device binding"
+    )]
+    UnboundTransferRoute {
+        /// Source endpoint of the unbound route.
+        source_endpoint: TransferEndpoint,
+        /// Destination endpoint of the unbound route.
+        destination: TransferEndpoint,
+    },
+    /// A bound candidate referenced an engine that disappeared before freeze;
+    /// this indicates runtime corruption rather than candidate validation.
+    #[error("bound candidate invariant failed for transfer endpoint {endpoint:?}")]
+    BoundCandidateInvariant {
+        /// Endpoint whose already-bound engine lookup failed.
+        endpoint: TransferEndpoint,
     },
     /// An execution bridge omitted the validators required for explicit input
     /// ingress and destination-buffer residency.
@@ -848,6 +939,15 @@ pub enum PrepareError {
         /// Placement constraint that could not be satisfied.
         constraint: ProgramPlacementConstraint,
     },
+    /// A preparation-only engine advertised the required capability but cannot
+    /// produce an executable prepared schedule.
+    #[error(
+        "engine {engine_id:?} has a matching preparation capability but no executable binding"
+    )]
+    NoExecutableEngine {
+        /// Engine whose preparation capability cannot be used for execution.
+        engine_id: EngineId,
+    },
     /// No eligible engine declared an ingress compatible with an input placement.
     #[error("no eligible input ingress for input {input_index} at placement {placement:?}")]
     NoInputIngress {
@@ -871,17 +971,17 @@ pub enum PrepareError {
     /// to the storage required by its consumer.
     #[error(
         "instruction {instruction_index} has no direct transfer provider for value slot \
-         {value_slot} from {available_storage_classes:?} to {destination_storage_class:?}"
+         {value_slot} from {available_source_endpoints:?} to {destination_endpoint:?}"
     )]
     MissingTransferProvider {
         /// Staged instruction whose input cannot be reached.
         instruction_index: usize,
         /// Value slot required by the instruction.
         value_slot: usize,
-        /// Storage class required by the instruction.
-        destination_storage_class: StorageClass,
-        /// Storage classes retaining an available copy.
-        available_storage_classes: Vec<StorageClass>,
+        /// Destination endpoint required by the instruction.
+        destination_endpoint: TransferEndpoint,
+        /// Endpoints retaining an available copy.
+        available_source_endpoints: Vec<TransferEndpoint>,
     },
     /// A resolved placement references an engine absent from its preparation snapshot.
     #[error("resolved engine {engine_id:?} is unavailable in the preparation snapshot")]

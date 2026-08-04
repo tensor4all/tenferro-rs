@@ -90,7 +90,8 @@ fn eager_tensor_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() 
     }
 
     let runtime = WebGpuRuntime::new_default().unwrap();
-    let ctx = EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone()));
+    let ctx =
+        EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone())).unwrap();
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
     let rhs =
@@ -119,7 +120,8 @@ fn eager_tensor_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available(
     }
 
     let runtime = WebGpuRuntime::new_default().unwrap();
-    let ctx = EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone()));
+    let ctx =
+        EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone())).unwrap();
     let lhs = Tensor::from_vec_col_major(
         vec![2, 3, 2],
         vec![
@@ -157,7 +159,8 @@ fn eager_tensor_einsum_runs_rank2_c32_matmul_on_webgpu_when_adapter_available() 
     }
 
     let runtime = WebGpuRuntime::new_default().unwrap();
-    let ctx = EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone()));
+    let ctx =
+        EagerRuntime::with_webgpu_backend(WebGpuBackend::from_runtime(runtime.clone())).unwrap();
     let lhs_data = vec![
         Complex32::new(1.0, 0.5),
         Complex32::new(2.0, -1.0),

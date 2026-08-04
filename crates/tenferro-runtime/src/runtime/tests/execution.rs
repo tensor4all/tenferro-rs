@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
@@ -19,10 +20,33 @@ use crate::runtime::execution::{
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutionContextIdentity, HardwareClassId, PreparedOperationPlan, Runtime, RuntimeConfigError,
-    StorageClass, SubmissionError,
+    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
+    ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
+    ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
+    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, StorageClass,
+    SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
+
+fn test_provider_device_identity(target: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.execution").expect("provider id"),
+        target,
+    )
+    .expect("provider target")
+}
+
+fn qualified_domain(ordinal: u64) -> EventDomainId {
+    EventDomainId::runtime_created_for_test(
+        RuntimeId::from_nonzero(NonZeroU64::new(1).expect("runtime id")),
+        RuntimeEpoch::from_nonzero(NonZeroU64::new(1).expect("runtime epoch")),
+        RegistrationIdentity::new(
+            NonZeroU64::new(1).expect("registration issuer"),
+            NonZeroU64::new(ordinal).expect("registration ordinal"),
+        ),
+    )
+}
 
 #[derive(Debug)]
 struct ForeignProbeBuffer {
@@ -188,32 +212,48 @@ fn admission_test_registration(
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let storage = StorageClass::new("tenferro-test.admission-storage.v1")?;
     let engine_id = EngineId::new("tenferro-test.admission-engine.v1")?;
-    let mut registration = EngineRegistration::new(
+    let registration = EngineRegistration::executable(ProviderExecutableBinding::new(
         engine_id,
-        ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
         HardwareClassId::new("tenferro-test.admission-hardware.v1")?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        CoreCapabilityBundle::builder().build(),
-    )?
-    .with_input_signature_validator({
-        let storage = storage.clone();
-        move |_, family, domain, candidate| {
-            candidate == &storage && family.is_none() && domain.is_none()
-        }
-    })
-    .with_input_ingress_validator(
-        {
-            let storage = storage.clone();
-            move |_, candidate| candidate == &storage
-        },
-        {
-            let storage = storage.clone();
-            move |input, candidate| candidate == &storage && input.backend_family().is_none()
-        },
-        move |input, candidate| candidate == &storage && input.backend_family().is_none(),
-    );
-    registration.execution_engine = Some(Arc::new(AdmissionTestExecutor { fail_materialize }));
+        ExecutableEngineContract::from_erased_for_test(
+            ProviderDeviceIdentity::new(
+                ProviderId::new("tenferro.test.admission").expect("provider id"),
+                "admission-engine",
+            )
+            .expect("provider target"),
+            ExecutionContextIdentity::of::<AdmissionTestExecutor>(),
+            CoreCapabilityBundle::builder().build(),
+            Arc::new(AdmissionTestExecutor { fail_materialize }),
+            Arc::new(ImmediateEventDomainDriver::new()),
+            InputIngressContract::new(
+                InputPlacementContract::new({
+                    let storage = storage.clone();
+                    move |_, candidate| candidate == &storage
+                }),
+                InputSignatureContract::new({
+                    let storage = storage.clone();
+                    move |_, family, domain, candidate| {
+                        candidate == &storage && family.is_none() && domain.is_none()
+                    }
+                }),
+                RuntimeInputContract::new({
+                    let storage = storage.clone();
+                    move |input, candidate| {
+                        candidate == &storage && input.backend_family().is_none()
+                    }
+                }),
+                ResidentOutputContract::new({
+                    let storage = storage.clone();
+                    move |input, candidate| {
+                        candidate == &storage && input.backend_family().is_none()
+                    }
+                }),
+            ),
+            None,
+        ),
+    )?);
     Ok(registration)
 }
 
@@ -319,12 +359,14 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
 {
     let root_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-root")?,
-        EventDomainId::runtime_created_for_test(1),
+        test_provider_device_identity("output-root"),
+        qualified_domain(1),
         StorageClass::new("tenferro-test.output-root-storage")?,
     );
     let output_location = ExecutionLocation::new(
         EngineId::new("tenferro-test.output-nonroot")?,
-        EventDomainId::runtime_created_for_test(2),
+        test_provider_device_identity("output-nonroot"),
+        qualified_domain(2),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
     let domain = AllocationDomainId::fresh();
@@ -368,7 +410,8 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
 fn result_retention_preserves_output_that_reuses_last_input_slot() {
     let location = ExecutionLocation::new(
         EngineId::new("tenferro-test.same-slot-engine").expect("engine id"),
-        EventDomainId::runtime_created_for_test(1),
+        test_provider_device_identity("same-slot"),
+        qualified_domain(1),
         StorageClass::new("tenferro-test.same-slot-storage").expect("storage class"),
     );
     let instruction = ExecInstruction {

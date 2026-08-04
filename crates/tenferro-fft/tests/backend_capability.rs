@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_fft::{
     FftBackend, FftExecutionCache, FftExecutor, FftNorm, FftOperation, FftPlanSpec, TensorFftExt,
     FFT_EXTENSION_FAMILY_ID,
@@ -140,16 +140,16 @@ impl TensorOnlyBackend {
 impl_minimal_tensor_backend!(TensorOnlyBackend);
 
 #[derive(Debug, Default)]
-struct MockNonCpuBackend {
+struct MockNonCpuSession {
     plan_builds: usize,
     plan_reuses: usize,
 }
 
-impl MockNonCpuBackend {
+impl MockNonCpuSession {
     fn record_transfer(&self) {}
 }
 
-impl_minimal_tensor_backend!(MockNonCpuBackend);
+impl_minimal_tensor_backend!(MockNonCpuSession);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct MockNonCpuPlanKey {
@@ -165,7 +165,7 @@ struct MockNonCpuPlan {
     key: MockNonCpuPlanKey,
 }
 
-impl FftBackend for MockNonCpuBackend {
+impl FftBackend for MockNonCpuSession {
     fn execute_fft(
         &mut self,
         input: &Tensor,
@@ -212,19 +212,19 @@ struct RecordedSpec {
 }
 
 #[derive(Debug)]
-struct RecordingFftBackend {
-    cpu: CpuBackend,
+struct RecordingFftSession {
+    cpu_owner: CpuBackend,
     specs: Arc<Mutex<Vec<RecordedSpec>>>,
     transfers: Arc<AtomicUsize>,
 }
 
-impl RecordingFftBackend {
+impl RecordingFftSession {
     fn new() -> (Self, Arc<Mutex<Vec<RecordedSpec>>>, Arc<AtomicUsize>) {
         let specs = Arc::new(Mutex::new(Vec::new()));
         let transfers = Arc::new(AtomicUsize::new(0));
         (
             Self {
-                cpu: CpuBackend::new(),
+                cpu_owner: CpuBackend::new(),
                 specs: Arc::clone(&specs),
                 transfers: Arc::clone(&transfers),
             },
@@ -238,9 +238,9 @@ impl RecordingFftBackend {
     }
 }
 
-impl_minimal_tensor_backend!(RecordingFftBackend);
+impl_minimal_tensor_backend!(RecordingFftSession);
 
-impl FftBackend for RecordingFftBackend {
+impl FftBackend for RecordingFftSession {
     fn execute_fft(
         &mut self,
         input: &Tensor,
@@ -256,22 +256,38 @@ impl FftBackend for RecordingFftBackend {
             input_shape: spec.input_shape().to_vec(),
             requires_compact_column_major: spec.requires_compact_column_major(),
         });
-        self.cpu.execute_fft(input, spec, cache)
+        self.cpu_owner
+            .with_backend_session(|session| {
+                with_cpu_exec_session(session, |session| session.execute_fft(input, spec, cache))
+            })
+            .expect("CpuBackend must expose a CPU execution session")
     }
 }
 
-fn assert_fft_backend<B: FftBackend>() {}
+fn assert_fft_capability<B: FftBackend>() {}
 fn assert_tensor_backend<B: TensorBackend>() {}
 
+fn with_cpu_session<R>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, f).expect("CpuBackend must expose a CPU execution session")
+    })
+}
+
 #[test]
-fn cpu_backend_is_fft_capable_and_runtime_registration_accepts_it() {
-    assert_fft_backend::<CpuBackend>();
+fn cpu_session_is_fft_capable_and_runtime_registration_accepts_it() {
+    assert_fft_capability::<CpuExecSession<'static>>();
     assert_tensor_backend::<TensorOnlyBackend>();
 
-    let backend = CpuBackend::new();
+    let owner = CpuBackend::new();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(&owner).unwrap())
         .unwrap();
     builder
         .install_extension_module(
@@ -287,24 +303,43 @@ fn cpu_backend_is_fft_capable_and_runtime_registration_accepts_it() {
 }
 
 #[test]
+fn cpu_fft_is_invoked_through_the_borrowed_provider_session() {
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let mut owner = CpuBackend::new();
+    let output = owner
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |session: &mut CpuExecSession<'_>| {
+                input.fft(None, -1, FftNorm::Backward, session)
+            })
+        })
+        .expect("CpuBackend must expose a CPU execution session")
+        .unwrap();
+
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap()[0],
+        Complex64::new(3.0, 0.0)
+    );
+}
+
+#[test]
 fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     let input = Tensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     )
     .unwrap();
-    let mut backend = MockNonCpuBackend::default();
+    let mut session = MockNonCpuSession::default();
     let mut executor = FftExecutor::default();
 
     executor
-        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .fft(&input, None, -1, FftNorm::Backward, &mut session)
         .unwrap();
     executor
-        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .fft(&input, None, -1, FftNorm::Backward, &mut session)
         .unwrap();
 
-    assert_eq!(backend.plan_builds, 1);
-    assert_eq!(backend.plan_reuses, 1);
+    assert_eq!(session.plan_builds, 1);
+    assert_eq!(session.plan_reuses, 1);
     assert_eq!(executor.cache_stats().entries, 1);
     assert_eq!(executor.cache_stats().retained_bytes, 96);
 
@@ -313,9 +348,9 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     assert_eq!(executor.cache_stats().retained_bytes, 0);
 
     executor
-        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .fft(&input, None, -1, FftNorm::Backward, &mut session)
         .unwrap();
-    assert_eq!(backend.plan_builds, 2);
+    assert_eq!(session.plan_builds, 2);
 }
 
 #[test]
@@ -325,71 +360,65 @@ fn direct_concrete_api_uses_call_local_one_shot_plan_cache() {
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     )
     .unwrap();
-    let mut backend = MockNonCpuBackend::default();
+    let mut session = MockNonCpuSession::default();
 
     input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
+        .fft(None, -1, FftNorm::Backward, &mut session)
         .unwrap();
     input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
+        .fft(None, -1, FftNorm::Backward, &mut session)
         .unwrap();
 
-    assert_eq!(backend.plan_builds, 2);
-    assert_eq!(backend.plan_reuses, 0);
+    assert_eq!(session.plan_builds, 2);
+    assert_eq!(session.plan_reuses, 0);
 }
 
 #[test]
 fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
     let mut backend = CpuBackend::new();
 
-    let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let f32_output = f32_input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_eq!(
-        f32_output.as_slice::<Complex32>().unwrap()[0],
-        Complex32::new(3.0, 0.0)
-    );
+    with_cpu_session(&mut backend, |backend| {
+        let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+        let f32_output = f32_input.fft(None, -1, FftNorm::Backward, backend).unwrap();
+        assert_eq!(
+            f32_output.as_slice::<Complex32>().unwrap()[0],
+            Complex32::new(3.0, 0.0)
+        );
 
-    let f64_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let f64_output = f64_input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_eq!(
-        f64_output.as_slice::<Complex64>().unwrap()[0],
-        Complex64::new(3.0, 0.0)
-    );
+        let f64_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let f64_output = f64_input.fft(None, -1, FftNorm::Backward, backend).unwrap();
+        assert_eq!(
+            f64_output.as_slice::<Complex64>().unwrap()[0],
+            Complex64::new(3.0, 0.0)
+        );
 
-    let c32_input = Tensor::from_vec_col_major(
-        vec![2],
-        vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
-    )
-    .unwrap();
-    let c32_output = c32_input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
+        let c32_input = Tensor::from_vec_col_major(
+            vec![2],
+            vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+        )
         .unwrap();
-    assert_eq!(
-        c32_output.as_slice::<Complex32>().unwrap()[0],
-        Complex32::new(3.0, 0.0)
-    );
+        let c32_output = c32_input.fft(None, -1, FftNorm::Backward, backend).unwrap();
+        assert_eq!(
+            c32_output.as_slice::<Complex32>().unwrap()[0],
+            Complex32::new(3.0, 0.0)
+        );
 
-    let c64_input = Tensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-    )
-    .unwrap();
-    let c64_output = c64_input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
+        let c64_input = Tensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        )
         .unwrap();
-    assert_eq!(
-        c64_output.as_slice::<Complex64>().unwrap()[0],
-        Complex64::new(3.0, 0.0)
-    );
+        let c64_output = c64_input.fft(None, -1, FftNorm::Backward, backend).unwrap();
+        assert_eq!(
+            c64_output.as_slice::<Complex64>().unwrap()[0],
+            Complex64::new(3.0, 0.0)
+        );
+    });
 }
 
 #[test]
 fn concrete_execution_delegates_the_validated_plan_spec() {
-    let (mut backend, specs, _) = RecordingFftBackend::new();
+    let (mut session, specs, _) = RecordingFftSession::new();
     let input = Tensor::from_vec_col_major(
         vec![2, 3],
         vec![
@@ -404,7 +433,7 @@ fn concrete_execution_delegates_the_validated_plan_spec() {
     .unwrap();
 
     let output = input
-        .fft(Some(4), -1, FftNorm::Ortho, &mut backend)
+        .fft(Some(4), -1, FftNorm::Ortho, &mut session)
         .unwrap();
     assert_eq!(output.shape(), &[2, 4]);
 
@@ -443,11 +472,11 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
 
 #[test]
 fn foreign_placement_is_unsupported_without_transfer() {
-    let (mut backend, _, transfers) = RecordingFftBackend::new();
+    let (mut session, _, transfers) = RecordingFftSession::new();
     let input = cuda_c64_tensor(vec![2]);
 
     let error = input
-        .fft(None, -1, FftNorm::Backward, &mut backend)
+        .fft(None, -1, FftNorm::Backward, &mut session)
         .unwrap_err();
 
     assert_eq!(error.kind(), ErrorKind::Unsupported);

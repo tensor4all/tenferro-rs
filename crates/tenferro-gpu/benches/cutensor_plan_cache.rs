@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorScalar};
 
 fn matmul_config() -> DotGeneralConfig {
@@ -31,7 +31,7 @@ fn bench_case<T>(
 ) where
     T: TensorScalar + From<f32> + 'static,
 {
-    let mut backend = CudaBackend::new(0).unwrap();
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let lhs = matrix::<T>(rows, inner);
     let rhs = matrix::<T>(inner, cols);
     let lhs = upload_tensor(backend.runtime(), &lhs).unwrap();

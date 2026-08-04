@@ -26,7 +26,9 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
-use tenferro_tensor::{DType, Error as TensorError, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{
+    BackendSession, DType, Error as TensorError, Tensor, TensorBackend, TensorRead,
+};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
@@ -982,6 +984,30 @@ pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
+#[cfg(feature = "autodiff")]
+pub(crate) fn execute_einsum_extension_session_reads(
+    op: &EinsumExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if inputs.is_empty() {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "einsum_extension",
+            "inputs",
+            "einsum requires at least one input tensor",
+        ));
+    }
+
+    let shapes: Vec<Vec<usize>> = inputs.iter().map(|input| input.shape().to_vec()).collect();
+    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+    let subs = Subscripts::from(op.subscripts());
+    let tree = cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
+        resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
+    })?;
+    let output = crate::eager::eager_einsum_exec_read(ctx.backend_mut(), inputs, &tree)?;
+    Ok(vec![output])
+}
+
 #[derive(Clone)]
 struct RuntimeTreeCacheKeyData {
     subscripts: EinsumSubscripts,
@@ -1027,7 +1053,7 @@ struct CachedRuntimeTree {
     tree: Arc<ContractionTree>,
 }
 
-fn cached_runtime_tree<B: TensorBackend>(
+fn cached_runtime_tree<B: BackendSession + ?Sized>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
     subscripts: &EinsumSubscripts,
     plan_spec: &EinsumPlanSpec,

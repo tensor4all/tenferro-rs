@@ -14,6 +14,20 @@ fn repo_file_if_exists(path: &str) -> Option<String> {
     std::fs::read_to_string(root).ok()
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
+    use tenferro_gpu::{
+        cuda_runtime_engine_registration, CudaBackend, CudaDeviceError, CudaDeviceId, CudaRuntime,
+    };
+    use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
+
+    let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
+    let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
+    let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+        cuda_runtime_engine_registration;
+}
+
 fn feature_block(manifest: &str, name: &str) -> String {
     let prefix = format!("{name} = [");
     let mut block = String::new();
@@ -262,8 +276,7 @@ fn webgpu_materialization_does_not_inherit_host_defaults() {
 fn cubecl_output_allocations_use_checked_shape_products() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
     assert!(
-        dispatch.contains("alloc_output_for_op(rt, shape, \"cubecl_alloc_output\")")
-            && dispatch.contains("let len = checked_shape_product(op, shape)?;"),
+        dispatch.contains("let len = checked_shape_product(\"cubecl_alloc_output\", shape)?;"),
         "CubeCL typed output allocation must reject shape-product overflow"
     );
     assert!(

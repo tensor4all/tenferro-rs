@@ -36,33 +36,17 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-//! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
+//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
 //!
-//! fn main() -> tenferro_tensor::Result<()> {
-//! if !gpu_available() {
-//!     return Ok(());
+//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//!     let devices = cuda_devices()?;
+//!     let Some(device) = devices.first() else {
+//!         return Ok(None);
+//!     };
+//!     Ok(Some(CudaBackend::new(device.id())?))
 //! }
 //!
-//! // 1. Create the GPU backend (device ordinal 0)
-//! let mut backend = CudaBackend::new(0)?;
-//!
-//! // 2. Create tensors on the CPU
-//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])?);
-//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])?);
-//!
-//! // 3. Upload to GPU
-//! let gpu_a = upload_tensor(backend.runtime(), &a)?;
-//! let gpu_b = upload_tensor(backend.runtime(), &b)?;
-//!
-//! // 4. Compute on GPU
-//! let gpu_c = backend.add(&gpu_a, &gpu_b)?;
-//!
-//! // 5. Download result back to CPU
-//! let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
-//! assert_eq!(cpu_c.shape(), &[2]);
-//! Ok(())
-//! }
+//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
 //! ```
 //!
 //! # Running GPU tests
@@ -98,8 +82,8 @@ use tenferro_tensor::CacheStats;
 use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendCachedDot, BackendRuntimeCache, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use crate::config::{
@@ -117,9 +101,11 @@ use crate::{
 };
 
 mod capability;
+mod device;
 mod dispatch;
 mod error;
 mod event_domain;
+mod exec_session;
 mod ffi;
 mod fusion;
 mod gemm;
@@ -131,9 +117,9 @@ mod runtime;
 mod runtime_adapter;
 
 use dispatch::{
-    alloc_bool_output, alloc_output, alloc_output_for_op, bool_tensor_array_arg, comptime_sequence,
-    cube_count_for_len, cube_count_for_len_for_op, cube_dim_1d, dtype_mismatch, ensure_axes_unique,
-    ensure_axis, ensure_rank, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
+    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
@@ -144,11 +130,12 @@ use dispatch::{
 use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
+pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
+#[doc(hidden)]
+pub use exec_session::{with_cuda_exec_session, CudaExecSession};
 pub use memory::{device_ptr, download_tensor, upload_tensor};
-pub use runtime::{gpu_available, CudaRuntime};
-pub use runtime_adapter::{
-    cuda_runtime_engine_id, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
-};
+pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
+pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
 
 fn op_name(
     kind: PrimitiveOpKind,
@@ -328,52 +315,14 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
     })
 }
 
-mod cuda_zero_scalar {
-    use cubecl::prelude::{CubeElement, CubePrimitive};
-
-    pub trait Sealed: CubeElement + CubePrimitive + Clone + Send + Sync + 'static {
-        // Marker trait; bounds are available to the CUDA implementation.
-    }
-
-    impl Sealed for f64 {}
-}
-
-/// Scalar types supported by [`CudaBackend::zeros`].
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::CudaZeroScalar;
-///
-/// fn accepts_cuda_zero<T: CudaZeroScalar>() {}
-///
-/// accepts_cuda_zero::<f64>();
-/// ```
-///
-/// This capability is sealed; the initial CUDA constructor supports only
-/// `f64`. In particular, `f32` is not admitted:
-///
-/// ```compile_fail
-/// use tenferro_gpu::CudaBackend;
-///
-/// fn rejected(backend: &CudaBackend) {
-///     let _ = backend.zeros::<f32>(1);
-/// }
-/// ```
-pub trait CudaZeroScalar: tenferro_tensor::TensorScalar + cuda_zero_scalar::Sealed {
-    // Marker trait; implementations are fixed by the private supertrait.
-}
-
-impl CudaZeroScalar for f64 {}
-
 /// CubeCL-based GPU backend.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaBackend;
+/// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
 ///
-/// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
+/// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
 /// ```
 #[derive(Clone)]
 pub struct CudaBackend {
@@ -759,25 +708,27 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
 }
 
 impl CudaBackend {
-    /// Create a new CubeCL backend for the given CUDA device ordinal.
+    /// Create a new CubeCL backend for the caller-selected CUDA device.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
     ///
-    /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
+    /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::BackendSource`] when CUDA initialization,
-    /// context creation, or CubeCL client creation fails.
-    pub fn new(device_ordinal: usize) -> crate::Result<Self> {
+    /// Returns [`CudaDeviceError::Discovery`] when device discovery fails,
+    /// [`CudaDeviceError::Unavailable`] when the selected device is not
+    /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
+    /// context, or CubeCL client initialization fails.
+    pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
         Ok(Self {
             inner: Arc::new(CudaBackendState {
                 cutensor: OnceLock::new(),
                 extension_cache: CudaExtensionCache::new(),
-                rt: CudaRuntime::new(device_ordinal)?,
+                rt: CudaRuntime::new(device_id)?,
             }),
         })
     }
@@ -795,50 +746,34 @@ impl CudaBackend {
         &self.inner.rt
     }
 
-    /// Allocate a one-dimensional CUDA tensor initialized to positive zero.
+    /// Return the caller-selected CUDA device identity used by this backend.
     ///
-    /// The initialization kernel is enqueued on this backend's current stream;
-    /// this method does not synchronize or transfer data to the host.
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::{CudaBackend, CudaDeviceId};
+    ///
+    /// let _device_id: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
+    /// ```
+    pub fn device_id(&self) -> CudaDeviceId {
+        self.inner.rt.device_id()
+    }
+
+    /// Return the opaque identity of this exact executable backend instance.
+    ///
+    /// Clones of a backend return the same identity. Independently constructed
+    /// backends return different identities even when they target the same
+    /// CUDA device ordinal.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_gpu::CudaBackend;
-    /// use tenferro_tensor::{Result, TypedTensor};
     ///
-    /// let _zeros: fn(&CudaBackend, usize) -> Result<TypedTensor<f64>> =
-    ///     CudaBackend::zeros::<f64>;
+    /// let _identity = CudaBackend::runtime_identity;
     /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the
-    /// requested length cannot be represented by the CUDA launch or allocation,
-    /// or [`crate::Error::RuntimeState`] when the allocated tensor cannot be
-    /// bound to this backend's runtime.
-    pub fn zeros<T: CudaZeroScalar>(&self, len: usize) -> crate::Result<TypedTensor<T>> {
-        const OP: &str = "zeros";
-        let count = cube_count_for_len_for_op(len, OP)?;
-        let output = alloc_output_for_op::<T>(self.runtime(), &[len], OP)?;
-        launch_nullary_into(
-            self.runtime(),
-            &output,
-            OP,
-            count,
-            cube_dim_1d(),
-            |client, count, dim, out| {
-                // SAFETY: `output` is a fresh, unaliased dense allocation of exactly
-                // `len` elements. `launch_nullary_into` validates its runtime and
-                // backing length before binding it; the launch covers the domain, and
-                // the kernel guards every write with `ABSOLUTE_POS < out.len()`.
-                unsafe {
-                    structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-                        client, count, dim, out,
-                    );
-                }
-            },
-        )?;
-        Ok(output)
+    pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
+        self.inner.rt.runtime_identity()
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
@@ -5668,8 +5603,6 @@ impl TensorFusion for CudaBackend {
 }
 
 impl BackendCachedDot for CudaBackend {}
-
-impl BackendSessionHost for CudaBackend {}
 
 impl TensorBuffer for CudaBackend {}
 

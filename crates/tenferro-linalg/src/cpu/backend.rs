@@ -4,7 +4,7 @@ use super::linalg;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuExecSession, CpuExecutionContext};
+use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, Buffer, DType, Error, HostAccessError,
     MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead,
@@ -49,7 +49,7 @@ trait CpuBackendLinalgAffinityExt {
     ) -> tenferro_tensor::Result<R>;
 }
 
-impl CpuBackendLinalgAffinityExt for CpuBackend {
+impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
     fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
@@ -62,9 +62,9 @@ impl CpuBackendLinalgAffinityExt for CpuBackend {
     }
 }
 
-impl LinalgBackend for CpuBackend {
+impl LinalgBackend for CpuExecSession<'_> {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        let domain = self.shared_allocation_domain().cloned();
+        let domain = self.shared_allocation_domain();
         let kind = self.kind();
         self.with_linalg_pool_fresh(move |context, buffers| {
             let provider = linalg_provider_kind(kind, "cholesky")?;
@@ -460,7 +460,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        let domain = self.shared_allocation_domain().cloned();
+        let domain = self.shared_allocation_domain();
         let kind = self.kind();
         self.with_linalg_pool_fresh(move |context, buffers| {
             let provider = linalg_provider_kind(kind, "cholesky")?;
@@ -665,7 +665,7 @@ impl LinalgBackend for CpuBackend {
             let y = self.triangular_solve(&lu_op, &pb, true, true, false, true)?;
             self.triangular_solve(&lu_op, &y, true, false, false, false)?
         };
-        result.tag_fresh(self.execution_info().domain_id());
+        result.tag_fresh(self.domain_id());
 
         if let Some(shape) = restore_shape {
             self.reshape(&result, &shape)
@@ -773,122 +773,6 @@ fn solve_read_into_direct_eligible(
 
 fn solve_shape_direct_eligible(a_shape: &[usize], b_shape: &[usize]) -> bool {
     a_shape.len() == 2 && matches!(b_shape.len(), 1 | 2)
-}
-
-/// Execute the prepared LU solve on an already-entered CPU session.
-///
-/// The ordinary [`LinalgBackend`] implementation owns admission itself. This
-/// sibling is deliberately session-shaped so the runtime scheduler can keep
-/// the identity-construction nodes and the prepared solve inside one CPU
-/// admission region.
-pub(crate) fn lu_solve_prepared_in_session(
-    session: &mut CpuExecSession<'_>,
-    a: &Tensor,
-    packed_lu: &Tensor,
-    pivots: &Tensor,
-    b: &Tensor,
-    transpose_a: bool,
-    conjugate_a: bool,
-) -> tenferro_tensor::Result<Tensor> {
-    const OP: &str = "lu_solve_prepared";
-
-    ensure_host_tensor(OP, a)?;
-    ensure_host_tensor(OP, packed_lu)?;
-    ensure_host_tensor(OP, pivots)?;
-    ensure_host_tensor(OP, b)?;
-    ensure_supported_linalg_pair(OP, a, b)?;
-    ensure_supported_linalg_pair(OP, a, packed_lu)?;
-    if !matches!(pivots, Tensor::I32(_)) {
-        return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
-    }
-    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return session.with_linalg_pool(|_, _| zeros_like_tensor(b));
-    }
-
-    let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-        (
-            session.reshape(b, &matrix_rhs_shape)?,
-            Some(b.shape().to_vec()),
-        )
-    } else {
-        (b.clone(), None)
-    };
-
-    validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), rhs.shape())?;
-    validate_nonsingular_u(packed_lu)?;
-    let lu_op = if conjugate_a {
-        session.conj(packed_lu)?
-    } else {
-        packed_lu.clone()
-    };
-    let provider = linalg_provider_kind(session.kind(), OP)?;
-    let solve = |session: &mut CpuExecSession<'_>,
-                 lhs: &Tensor,
-                 rhs: &Tensor,
-                 options: TriangularSolveOptions|
-     -> tenferro_tensor::Result<Tensor> {
-        let mut output = session.with_linalg_pool(|context, buffers| {
-            triangular_solve_entered(provider, context, buffers, lhs, rhs, options)
-        })?;
-        output.tag_fresh(session.domain_id());
-        Ok(output)
-    };
-    let mut result = if transpose_a {
-        let z = solve(
-            session,
-            &lu_op,
-            &rhs,
-            TriangularSolveOptions {
-                left_side: true,
-                lower: false,
-                transpose_a: true,
-                unit_diagonal: false,
-            },
-        )?;
-        let y = solve(
-            session,
-            &lu_op,
-            &z,
-            TriangularSolveOptions {
-                left_side: true,
-                lower: true,
-                transpose_a: true,
-                unit_diagonal: true,
-            },
-        )?;
-        apply_lu_pivots_cpu(&y, pivots, true)?
-    } else {
-        let pb = apply_lu_pivots_cpu(&rhs, pivots, false)?;
-        let y = solve(
-            session,
-            &lu_op,
-            &pb,
-            TriangularSolveOptions {
-                left_side: true,
-                lower: true,
-                transpose_a: false,
-                unit_diagonal: true,
-            },
-        )?;
-        solve(
-            session,
-            &lu_op,
-            &y,
-            TriangularSolveOptions {
-                left_side: true,
-                lower: false,
-                transpose_a: false,
-                unit_diagonal: false,
-            },
-        )?
-    };
-    result.tag_fresh(session.domain_id());
-
-    if let Some(shape) = restore_shape {
-        session.reshape(&result, &shape)
-    } else {
-        Ok(result)
-    }
 }
 
 fn tensor_uses_backend_storage(input: &Tensor) -> bool {

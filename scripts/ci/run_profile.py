@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TextIO
 
 # Hosted CI uses Cargo `[profile.ci]`: opt-level=0, debug=0, incremental=false,
@@ -18,6 +20,10 @@ _CARGO_TEST_PROFILE = f"--profile {_CARGO_PROFILE}"
 _CLIPPY_FLAGS = (
     "-D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc"
 )
+_STORAGE_OWNERSHIP_CHECKER = (
+    "python3 scripts/check-storage-ownership-contracts.py"
+)
+_TRYBUILD_CARGO_WRAPPER = str(Path(__file__).with_name("trybuild-cargo.py").resolve())
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "fmt": (
@@ -40,7 +46,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
     ),
     "workspace-blas": (
-        f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
+        # Direct invocation preserves our CARGO wrapper in nextest test processes.
+        f"cargo-nextest nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
         "--features cpu-blas --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
         "--features cpu-blas",
@@ -73,8 +80,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/check-coverage.py coverage.json",
     ),
     "ci-config": (
-        "python3 scripts/test-check-storage-ownership-contracts.py",
-        "python3 scripts/check-storage-ownership-contracts.py",
+        "python3 scripts/test-storage-ownership-contracts-v2.py",
+        _STORAGE_OWNERSHIP_CHECKER,
         "python3 -m unittest discover -s scripts/ci/tests -v",
         "actionlint",
     ),
@@ -116,18 +123,39 @@ def expand_profiles(profiles: Sequence[str]) -> tuple[str, ...]:
 
 
 def run_profiles(
-    profiles: Sequence[str], *, dry_run: bool, output: TextIO = sys.stdout
+    profiles: Sequence[str],
+    *,
+    dry_run: bool,
+    output: TextIO = sys.stdout,
+    storage_ownership_base: str | None = None,
 ) -> None:
     """Run selected profiles in order, or print their commands in dry-run mode."""
 
-    for profile in expand_profiles(profiles):
+    expanded_profiles = expand_profiles(profiles)
+    if storage_ownership_base is not None and "ci-config" not in expanded_profiles:
+        raise ValueError(
+            "storage ownership base requires the ci-config profile"
+        )
+
+    for profile in expanded_profiles:
         for command in commands_for(profile):
+            if (
+                storage_ownership_base is not None
+                and profile == "ci-config"
+                and command == _STORAGE_OWNERSHIP_CHECKER
+            ):
+                command += (
+                    " --base-commit " + shlex.quote(storage_ownership_base)
+                )
             print(f"+ {command}", file=output, flush=True)
             if dry_run:
                 continue
             environment = os.environ.copy()
             if profile == "workspace-blas":
-                environment["RUSTFLAGS"] = "-l dylib=openblas -l dylib=lapack"
+                rustflags = "-l dylib=openblas -l dylib=lapack"
+                environment["RUSTFLAGS"] = rustflags
+                environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = rustflags
+                environment["CARGO"] = _TRYBUILD_CARGO_WRAPPER
             try:
                 # Commands are repository constants, not caller-provided shell text.
                 subprocess.run(
@@ -144,6 +172,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("profiles", nargs="*")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--storage-ownership-base")
     args = parser.parse_args()
     if not args.list and not args.profiles:
         parser.error("provide at least one profile or --list")
@@ -159,7 +188,11 @@ def main() -> int:
         if not args.profiles:
             return 0
     try:
-        run_profiles(args.profiles, dry_run=args.dry_run)
+        run_profiles(
+            args.profiles,
+            dry_run=args.dry_run,
+            storage_ownership_base=args.storage_ownership_base,
+        )
     except (RuntimeError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1

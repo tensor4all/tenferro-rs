@@ -66,6 +66,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+trybuild.workspace = true
 
 [[example]]
 name = "cuda_quickstart"

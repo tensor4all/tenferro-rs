@@ -6,13 +6,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache,
-    BackendSessionHost, Buffer, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error,
-    GatherConfig, GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind,
-    PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
+    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache, Buffer,
+    CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig, GpuBackendKind,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, PadConfig, Placement,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -21,6 +21,7 @@ mod apple;
 mod error;
 #[cfg(not(target_family = "wasm"))]
 mod event_domain;
+mod exec_session;
 mod gemm;
 pub(crate) mod interop;
 mod kernels;
@@ -31,10 +32,13 @@ mod structural;
 
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
+#[doc(hidden)]
+pub use exec_session::{with_webgpu_exec_session, WebGpuExecSession};
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
-pub use runtime::{webgpu_available, WebGpuRuntime};
+pub use runtime::{webgpu_available, WebGpuRuntime, WebGpuRuntimeIdentity};
 pub use runtime_adapter::{
-    webgpu_runtime_engine_id, webgpu_runtime_engine_registration, webgpu_runtime_hardware_class,
+    webgpu_runtime_engine_id, webgpu_runtime_engine_registration,
+    webgpu_runtime_engine_registration_with_id, webgpu_runtime_hardware_class,
 };
 
 /// CubeCL-managed WebGPU buffer stored behind tensor backend-buffer trait objects.
@@ -628,6 +632,23 @@ impl WebGpuBackend {
         &self.runtime
     }
 
+    /// Return the opaque identity of this exact executable backend instance.
+    ///
+    /// Clones of a backend return the same identity. Independently initialized
+    /// backends return different identities even when they target the same
+    /// WebGPU device ordinal. This also covers Apple-backed WebGPU runtimes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::WebGpuBackend;
+    ///
+    /// let _identity = WebGpuBackend::runtime_identity;
+    /// ```
+    pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
+        self.runtime.runtime_identity()
+    }
+
     /// Block until queued WebGPU work completes.
     ///
     /// # Examples
@@ -960,7 +981,5 @@ impl BackendRuntimeCache for WebGpuBackend {
 }
 
 impl BackendCachedDot for WebGpuBackend {}
-
-impl BackendSessionHost for WebGpuBackend {}
 
 impl TensorBackend for WebGpuBackend {}

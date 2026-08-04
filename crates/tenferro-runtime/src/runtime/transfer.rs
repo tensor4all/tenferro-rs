@@ -1,15 +1,134 @@
+use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use tenferro_tensor::{AllocationDomainId, DType, Placement, Tensor, TensorRead};
 
 use super::schedule::{EventDomainId, ExecutionLocation};
-use super::{EngineId, StorageClass};
+use super::{EngineId, ProviderDeviceIdentity, StorageClass, TransferEndpoint};
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct TransferRoute {
+    source: TransferEndpoint,
+    destination: TransferEndpoint,
+}
+
+impl TransferRoute {
+    pub(crate) fn new(source: TransferEndpoint, destination: TransferEndpoint) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+
+    pub(crate) fn source(&self) -> &TransferEndpoint {
+        &self.source
+    }
+
+    pub(crate) fn destination(&self) -> &TransferEndpoint {
+        &self.destination
+    }
+}
+
+/// A frozen transfer endpoint with its immutable physical binding and event
+/// domain.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ResolvedTransferEndpoint {
+    logical: TransferEndpoint,
+    provider_device_identity: ProviderDeviceIdentity,
+    event_domain_id: EventDomainId,
+}
+
+impl ResolvedTransferEndpoint {
+    pub(crate) fn new(
+        logical: TransferEndpoint,
+        provider_device_identity: ProviderDeviceIdentity,
+        event_domain_id: EventDomainId,
+    ) -> Self {
+        Self {
+            logical,
+            provider_device_identity,
+            event_domain_id,
+        }
+    }
+
+    pub(crate) fn logical(&self) -> &TransferEndpoint {
+        &self.logical
+    }
+
+    pub(crate) fn provider_device_identity(&self) -> &ProviderDeviceIdentity {
+        &self.provider_device_identity
+    }
+
+    pub(crate) fn event_domain_id(&self) -> EventDomainId {
+        self.event_domain_id
+    }
+}
+
+/// A frozen transfer route keyed by the exact resolved source and destination
+/// endpoints used during preparation and execution.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ResolvedTransferRoute {
+    source: ResolvedTransferEndpoint,
+    destination: ResolvedTransferEndpoint,
+}
+
+impl ResolvedTransferRoute {
+    pub(crate) fn new(
+        source: ResolvedTransferEndpoint,
+        destination: ResolvedTransferEndpoint,
+    ) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+
+    pub(crate) fn source(&self) -> &ResolvedTransferEndpoint {
+        &self.source
+    }
+
+    pub(crate) fn destination(&self) -> &ResolvedTransferEndpoint {
+        &self.destination
+    }
+}
+
+/// Shared immutable registry of frozen transfer providers.
+#[derive(Clone, Debug)]
+pub(crate) struct FrozenTransferRegistry {
+    routes: Arc<BTreeMap<ResolvedTransferRoute, Arc<dyn TransferProvider>>>,
+}
+
+impl FrozenTransferRegistry {
+    pub(crate) fn new(routes: BTreeMap<ResolvedTransferRoute, Arc<dyn TransferProvider>>) -> Self {
+        Self {
+            routes: Arc::new(routes),
+        }
+    }
+
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedTransferRoute, &Arc<dyn TransferProvider>)> {
+        self.routes.iter()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.routes.len()
+    }
+
+    pub(crate) fn contains(&self, route: &ResolvedTransferRoute) -> bool {
+        self.routes.contains_key(route)
+    }
+
+    pub(crate) fn get(&self, route: &ResolvedTransferRoute) -> Option<&Arc<dyn TransferProvider>> {
+        self.routes.get(route)
+    }
+}
 
 /// Runtime-owned transfer provider between two execution locations.
 ///
-/// Providers remain registered by source and destination storage class. Each
-/// request also identifies the concrete engines and event domains at its
-/// endpoints.
+/// Providers are registered by source and destination endpoint. Each request
+/// also identifies the event domains assigned to those endpoints at freeze.
 pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
     /// Complete one blocking transfer into the destination execution location.
     ///
@@ -64,6 +183,12 @@ impl<'a> TransferRequest<'a> {
         self.source_location.engine_id()
     }
 
+    /// Return the immutable source provider/device binding used for this
+    /// transfer request.
+    pub fn source_provider_device_identity(&self) -> &'a ProviderDeviceIdentity {
+        self.source_location.provider_device_identity()
+    }
+
     /// Return the source event domain for this transfer.
     ///
     /// # Examples
@@ -109,6 +234,12 @@ impl<'a> TransferRequest<'a> {
     /// ```
     pub fn destination_engine_id(&self) -> &'a EngineId {
         self.destination_location.engine_id()
+    }
+
+    /// Return the immutable destination provider/device binding used for this
+    /// transfer request.
+    pub fn destination_provider_device_identity(&self) -> &'a ProviderDeviceIdentity {
+        self.destination_location.provider_device_identity()
     }
 
     /// Return the destination event domain for this transfer.
@@ -162,27 +293,22 @@ impl<'a> TransferRequest<'a> {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TransferError {
-    /// No provider was registered for the storage-class pair required by two
+    /// No provider was registered for the endpoint pair required by two
     /// concrete execution locations.
     #[error(
-        "no transfer provider registered from {source_storage_class:?} on \
-         {source_engine_id:?}/{source_event_domain_id:?} to \
-         {destination_storage_class:?} on \
-         {destination_engine_id:?}/{destination_event_domain_id:?}"
+        "no transfer provider registered from source endpoint {source_endpoint:?} \
+         (event domain {source_event_domain_id:?}) to destination endpoint {destination_endpoint:?} \
+         (event domain {destination_event_domain_id:?})"
     )]
     MissingProvider {
-        /// Source engine.
-        source_engine_id: EngineId,
+        /// Source transfer endpoint.
+        source_endpoint: TransferEndpoint,
         /// Source event domain.
         source_event_domain_id: EventDomainId,
-        /// Source storage class.
-        source_storage_class: StorageClass,
-        /// Destination engine.
-        destination_engine_id: EngineId,
+        /// Destination transfer endpoint.
+        destination_endpoint: TransferEndpoint,
         /// Destination event domain.
         destination_event_domain_id: EventDomainId,
-        /// Destination storage class.
-        destination_storage_class: StorageClass,
     },
     /// A provider returned a tensor that violates the transfer request contract.
     #[error("transfer provider returned an invalid tensor")]

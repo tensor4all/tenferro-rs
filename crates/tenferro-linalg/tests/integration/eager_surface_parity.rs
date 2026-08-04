@@ -8,7 +8,7 @@ use tenferro_linalg::EagerTensorLinalgExt;
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::with_cpu_backend(CpuBackend::new()),
+        EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
     )
     .unwrap()
 }
@@ -16,7 +16,7 @@ fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
 fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::with_cpu_backend(CpuBackend::new()),
+        EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
     )
     .unwrap()
 }
@@ -137,7 +137,7 @@ fn eager_composite_records_existing_primitives_for_backward() {
         .unwrap()
         .build()
         .unwrap();
-    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
         runtime,

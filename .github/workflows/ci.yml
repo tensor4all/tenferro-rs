@@ -246,6 +246,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         with:
@@ -255,7 +257,21 @@ jobs:
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
       - name: Validate CI configuration
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
-        run: python3 scripts/ci/run_profile.py ci-config
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            BASE_SHA="${PR_BASE_SHA}"
+          elif [ "${EVENT_NAME}" = push ]; then
+            BASE_SHA="${PUSH_BASE_SHA}"
+          else
+            echo "Unsupported CI event: ${EVENT_NAME}" >&2
+            exit 1
+          fi
+          python3 scripts/ci/run_profile.py ci-config --storage-ownership-base "${BASE_SHA}"
       - name: Report CI configuration disposition
         if: always()
         env:

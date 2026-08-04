@@ -13,7 +13,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let data = (0..LEN)
         .map(|index| (index as f64 + 1.0) / LEN as f64)
         .collect::<Vec<_>>();

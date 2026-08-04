@@ -3,9 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, LayoutRuntime, ReductionRuntime,
-    RuntimeCacheOwner, StorageClass,
+    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
+    HardwareClassId, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, PreparationOnlyEngineRegistrationConfig,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, ResidentOutputContract,
+    RuntimeCacheOwner, RuntimeInputContract, StorageClass,
 };
 use tenferro_tensor::{BackendSession, ErrorKind};
 
@@ -61,16 +65,43 @@ fn cpu_registration_with(
     capabilities: CoreCapabilityBundle,
 ) -> EngineRegistration {
     let storage = cpu_storage_class();
-    EngineRegistration::new(
+    let execution_info = backend.execution_info();
+    let provider_id = match execution_info.backend_kind() {
+        tenferro_cpu::CpuBackendKind::Faer => "tenferro.cpu.faer",
+        tenferro_cpu::CpuBackendKind::Blas => "tenferro.cpu.blas",
+    };
+    let provider_device_identity = ProviderDeviceIdentity::new(
+        ProviderId::new(provider_id).unwrap(),
+        format!("domain:{}", execution_info.domain_id().as_u64()),
+    )
+    .unwrap();
+    let metadata = EngineRegistrationMetadata::new(
         cpu_engine_id(),
-        context_identity,
+        provider_device_identity,
         cpu_hardware_class(),
         Arc::from([storage.clone()]),
         storage,
         capabilities,
-    )
-    .unwrap()
-    .with_cache_owner(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>)
+    );
+    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
+        return assemble_preparation_only_engine_registration(
+            PreparationOnlyEngineRegistrationConfig::new(metadata, context_identity),
+        )
+        .expect("preparation binding");
+    }
+    assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+        metadata,
+        backend.clone(),
+        Arc::new(tenferro_runtime::ImmediateEventDomainDriver::new()),
+        InputIngressContract::new(
+            InputPlacementContract::new(|_, _| true),
+            InputSignatureContract::new(|_, _, _, _| true),
+            RuntimeInputContract::new(|_, _| true),
+            ResidentOutputContract::new(|_, _| true),
+        ),
+        Some(Arc::new(backend.clone()) as Arc<dyn RuntimeCacheOwner>),
+    ))
+    .expect("executable binding")
 }
 
 fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {
@@ -96,7 +127,7 @@ fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {
 fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
     reset_refreshes();
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
     assert_bound_matches_current_runtime(&cpu);
     let original_epoch = cpu.epoch;
@@ -128,6 +159,93 @@ fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     assert_eq!(refreshes(), 1);
     assert_bound_matches_current_runtime(&cpu);
     assert_eq!(cpu.epoch, reconfigured_epoch);
+}
+
+#[test]
+fn backend_sync_does_not_advance_epoch_for_the_same_backend() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_epoch = before.epoch();
+    let before_identity = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered")
+        .registration_identity();
+
+    runtime.with_execution_session(|_| ()).unwrap();
+
+    let after = runtime.runtime.snapshot().unwrap();
+    assert_eq!(after.epoch(), before_epoch);
+    assert_eq!(
+        after
+            .engine(&cpu_engine_id())
+            .expect("CPU engine registered")
+            .registration_identity(),
+        before_identity
+    );
+}
+
+#[test]
+fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
+    let _guard = REFRESH_PROBE_TEST_LOCK.lock().unwrap();
+    reset_refreshes();
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
+    let before_registration = cpu.registration_identity;
+    let before_epoch = runtime.runtime.snapshot().unwrap().epoch();
+
+    runtime
+        .install_extension_module(super::ReadPathFallbackModule::module())
+        .unwrap();
+    let after_extension_epoch = runtime.runtime.snapshot().unwrap().epoch();
+    assert_ne!(after_extension_epoch, before_epoch);
+
+    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok(()))
+        .unwrap();
+
+    assert_eq!(refreshes(), 1);
+    assert_eq!(cpu.registration_identity, before_registration);
+    assert_eq!(
+        cpu.snapshot
+            .engine(&cpu_engine_id())
+            .expect("CPU engine registered")
+            .registration_identity(),
+        before_registration
+    );
+    assert_eq!(cpu.epoch, after_extension_epoch);
+}
+
+#[test]
+fn extension_execution_context_error_preserves_cpu_registration() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let before = runtime.runtime.snapshot().unwrap();
+    let before_engine = before
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered");
+    let before_provider_device = before_engine.provider_device_identity().clone();
+    let before_registration = before_engine.registration_identity();
+    let before_epoch = before.epoch();
+
+    let error = runtime
+        .with_extension_execution_context(|_| {
+            tenferro_tensor::Result::<()>::Err(tenferro_tensor::Error::BackendFailure {
+                op: "test_execution_session_cache_closure",
+                message: "session callback failure".to_owned(),
+            })
+        })
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("session callback failure"));
+
+    let after = runtime.runtime.snapshot().unwrap();
+    let after_engine = after
+        .engine(&cpu_engine_id())
+        .expect("CPU engine registered");
+    assert_eq!(
+        after_engine.provider_device_identity(),
+        &before_provider_device
+    );
+    assert_eq!(after_engine.registration_identity(), before_registration);
+    assert_eq!(after.epoch(), before_epoch);
 }
 
 #[test]
@@ -189,7 +307,7 @@ fn runtime_snapshot_refresh_reports_typed_configuration_failures() {
     ];
 
     for (label, break_runtime, expected_kind, expected_message) in rows {
-        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
         let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
         break_runtime(&runtime, &mut cpu);
 

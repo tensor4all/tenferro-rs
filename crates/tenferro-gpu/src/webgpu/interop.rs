@@ -8,22 +8,22 @@ use tenferro_tensor::{Error, TypedTensor};
 
 use super::{
     checked_shape_product, ensure_resident_on_runtime, typed_from_webgpu, webgpu_buffer,
-    WebGpuBackend, WebGpuBuffer,
+    WebGpuBuffer, WebGpuExecSession,
 };
 
 /// Return the exact client owned by `backend` for an extension launch.
-pub fn client(backend: &WebGpuBackend) -> &ComputeClient<WgpuRuntime> {
-    backend.runtime().client()
+pub fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a ComputeClient<WgpuRuntime> {
+    session.runtime().client()
 }
 
 /// Return the active client's hardware-reported shared-memory budget.
-pub fn max_shared_memory_size(backend: &WebGpuBackend) -> usize {
-    client(backend).properties().hardware.max_shared_memory_size
+pub fn max_shared_memory_size(session: &WebGpuExecSession<'_>) -> usize {
+    client(session).properties().hardware.max_shared_memory_size
 }
 
 /// Return the active client's maximum number of units per cube.
-pub fn max_units_per_cube(backend: &WebGpuBackend) -> u32 {
-    client(backend).properties().hardware.max_units_per_cube
+pub fn max_units_per_cube(session: &WebGpuExecSession<'_>) -> u32 {
+    client(session).properties().hardware.max_units_per_cube
 }
 
 /// Validate and clone an F32 tensor into CubeCL launch metadata.
@@ -35,11 +35,11 @@ pub fn max_units_per_cube(backend: &WebGpuBackend) -> u32 {
 /// and validation or runtime-state errors for incompatible placement, shape,
 /// buffer, or stride metadata.
 pub fn f32_input(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<f32>,
     op: &'static str,
 ) -> tenferro_tensor::Result<TensorHandle<WgpuRuntime>> {
-    let (handle, shape, strides) = input_parts(backend, tensor, op)?;
+    let (handle, shape, strides) = input_parts(session, tensor, op)?;
     Ok(TensorHandle::new(
         handle,
         shape,
@@ -57,19 +57,19 @@ pub fn f32_input(
 /// and validation or runtime-state errors for incompatible placement, shape,
 /// buffer, or stride metadata.
 pub fn c32_input_parts(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<Complex32>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
-    input_parts(backend, tensor, op)
+    input_parts(session, tensor, op)
 }
 
 /// Allocate one unaliased output range on the backend's exact client.
 ///
 /// CubeCL's pool may represent the returned range with start or end offsets;
 /// completion validates the used range rather than assuming a whole page.
-pub fn allocate_raw(backend: &WebGpuBackend, bytes: usize) -> Handle {
-    client(backend).empty(bytes)
+pub fn allocate_raw(session: &WebGpuExecSession<'_>, bytes: usize) -> Handle {
+    client(session).empty(bytes)
 }
 
 /// Consume an initialized, exactly sized F32 handle range into a tenferro tensor.
@@ -81,12 +81,12 @@ pub fn allocate_raw(backend: &WebGpuBackend, bytes: usize) -> Handle {
 /// still has another live raw owner. Backend resource-resolution errors retain
 /// their typed source.
 pub fn finish_f32(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     shape: Vec<usize>,
     handle: Handle,
     op: &'static str,
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
-    finish(backend, shape, handle, op)
+    finish(session, shape, handle, op)
 }
 
 /// Consume an initialized, exactly sized C32 handle range into a tenferro tensor.
@@ -98,20 +98,20 @@ pub fn finish_f32(
 /// still has another live raw owner. Backend resource-resolution errors retain
 /// their typed source.
 pub fn finish_c32(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     shape: Vec<usize>,
     handle: Handle,
     op: &'static str,
 ) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
-    finish(backend, shape, handle, op)
+    finish(session, shape, handle, op)
 }
 
 fn input_parts<T: Send + Sync + 'static>(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
-    ensure_resident_on_runtime(backend.runtime(), tensor, op)?;
+    ensure_resident_on_runtime(session.runtime(), tensor, op)?;
     validate_compact_column_major(tensor, op)?;
     let buffer = webgpu_buffer(tensor, op)?;
     let expected = checked_shape_product(op, tensor.shape())?;
@@ -181,7 +181,7 @@ fn column_major_strides(shape: &[usize], op: &'static str) -> tenferro_tensor::R
 }
 
 fn finish<T: Send + Sync + 'static>(
-    backend: &WebGpuBackend,
+    session: &WebGpuExecSession<'_>,
     shape: Vec<usize>,
     handle: Handle,
     op: &'static str,
@@ -244,6 +244,6 @@ fn finish<T: Send + Sync + 'static>(
             "WebGPU output completion requires unique raw-handle ownership",
         ));
     }
-    let buffer = WebGpuBuffer::new_for_runtime(backend.runtime(), handle, len, op)?;
-    typed_from_webgpu(shape, buffer, backend.runtime())
+    let buffer = WebGpuBuffer::new_for_runtime(session.runtime(), handle, len, op)?;
+    typed_from_webgpu(shape, buffer, session.runtime())
 }

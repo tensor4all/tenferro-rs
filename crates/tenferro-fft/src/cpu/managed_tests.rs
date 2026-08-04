@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, Tensor, TypedTensor,
+    AllocationDomainId, AllocationId, BackendBuffer, BackendSessionHost, Buffer, DType,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    SharedTensorAllocationDomain, Tensor, TypedTensor,
 };
 
 use crate::{FftNorm, TensorFftExt};
@@ -164,6 +165,18 @@ fn backend(domain: &Arc<FakeDomain>) -> CpuBackend {
     CpuBackend::new().with_allocation_domain(erased)
 }
 
+fn with_cpu_session<R>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, f).expect("CpuBackend must expose a CPU execution session")
+    })
+}
+
 fn assert_managed_output(output: &Tensor, domain: &FakeDomain, input_id: Option<AllocationId>) {
     let (output_domain, output_id) = match output {
         Tensor::F32(output) => (output.allocation_domain(), output.allocation_id()),
@@ -182,55 +195,57 @@ fn managed_cpu_fft_covers_all_supported_scalar_and_operation_paths() {
     let domain = FakeDomain::new();
     let mut backend = backend(&domain);
 
-    let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
-    let real32_id = real32.allocation_id();
-    let full32 = Tensor::F32(real32)
-        .fft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&full32, &domain, real32_id);
-    let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
-    let one_sided32 = Tensor::F32(real32)
-        .rfft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    let Tensor::C32(one_sided32) = one_sided32 else {
-        unreachable!()
-    };
-    let recovered32 = Tensor::C32(one_sided32)
-        .irfft(Some(4), 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&recovered32, &domain, None);
+    with_cpu_session(&mut backend, |backend| {
+        let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
+        let real32_id = real32.allocation_id();
+        let full32 = Tensor::F32(real32)
+            .fft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&full32, &domain, real32_id);
+        let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
+        let one_sided32 = Tensor::F32(real32)
+            .rfft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        let Tensor::C32(one_sided32) = one_sided32 else {
+            unreachable!()
+        };
+        let recovered32 = Tensor::C32(one_sided32)
+            .irfft(Some(4), 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&recovered32, &domain, None);
 
-    let real64 = domain.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    let real64_id = real64.allocation_id();
-    let one_sided64 = Tensor::F64(real64)
-        .rfft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&one_sided64, &domain, real64_id);
-    let Tensor::C64(one_sided64) = one_sided64 else {
-        unreachable!()
-    };
-    let recovered64 = Tensor::C64(one_sided64)
-        .irfft(Some(4), 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&recovered64, &domain, None);
+        let real64 = domain.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+        let real64_id = real64.allocation_id();
+        let one_sided64 = Tensor::F64(real64)
+            .rfft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&one_sided64, &domain, real64_id);
+        let Tensor::C64(one_sided64) = one_sided64 else {
+            unreachable!()
+        };
+        let recovered64 = Tensor::C64(one_sided64)
+            .irfft(Some(4), 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&recovered64, &domain, None);
 
-    let complex32 = domain.tensor(&[4], vec![Complex32::new(1.0, 0.0); 4]);
-    let transformed32 = Tensor::C32(complex32)
-        .fft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    let inverted32 = transformed32
-        .ifft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&inverted32, &domain, None);
+        let complex32 = domain.tensor(&[4], vec![Complex32::new(1.0, 0.0); 4]);
+        let transformed32 = Tensor::C32(complex32)
+            .fft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        let inverted32 = transformed32
+            .ifft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&inverted32, &domain, None);
 
-    let complex64 = domain.tensor(&[4], vec![Complex64::new(1.0, 0.0); 4]);
-    let transformed64 = Tensor::C64(complex64)
-        .fft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    let inverted64 = transformed64
-        .ifft(None, 0, FftNorm::Backward, &mut backend)
-        .unwrap();
-    assert_managed_output(&inverted64, &domain, None);
+        let complex64 = domain.tensor(&[4], vec![Complex64::new(1.0, 0.0); 4]);
+        let transformed64 = Tensor::C64(complex64)
+            .fft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        let inverted64 = transformed64
+            .ifft(None, 0, FftNorm::Backward, backend)
+            .unwrap();
+        assert_managed_output(&inverted64, &domain, None);
+    });
 
     assert_eq!(domain.counts.reads.load(Ordering::Relaxed), 9);
     assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 9);

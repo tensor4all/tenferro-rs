@@ -26,7 +26,7 @@ fn bench_threads() -> usize {
 }
 
 fn cpu_ctx(threads: usize) -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap())
+    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap()).unwrap()
 }
 
 fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {

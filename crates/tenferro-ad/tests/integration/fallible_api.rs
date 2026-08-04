@@ -179,7 +179,7 @@ fn traced_jvp_vjp_return_errors_for_symbolic_seed_tensors() {
 
 #[test]
 fn eager_binary_methods_return_shape_errors() {
-    let ctx = EagerRuntime::new();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),

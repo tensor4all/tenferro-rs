@@ -1,4 +1,10 @@
 import io
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -58,7 +64,8 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             commands_for("workspace-blas"),
             (
-                "cargo nextest run --workspace --cargo-profile ci --no-default-features "
+                "cargo-nextest nextest run --workspace --cargo-profile ci "
+                "--no-default-features "
                 "--features cpu-blas --no-fail-fast",
                 "cargo test --doc --workspace --profile ci --no-default-features "
                 "--features cpu-blas",
@@ -121,11 +128,11 @@ class RunProfileTests(unittest.TestCase):
     def test_ci_config_checks_storage_ownership_contract_ledger(self) -> None:
         commands = commands_for("ci-config")
         self.assertIn(
-            "python3 scripts/test-check-storage-ownership-contracts.py", commands
+            "python3 scripts/test-storage-ownership-contracts-v2.py", commands
         )
         self.assertIn("python3 scripts/check-storage-ownership-contracts.py", commands)
         self.assertLess(
-            commands.index("python3 scripts/test-check-storage-ownership-contracts.py"),
+            commands.index("python3 scripts/test-storage-ownership-contracts-v2.py"),
             commands.index("python3 scripts/check-storage-ownership-contracts.py"),
         )
 
@@ -136,16 +143,73 @@ class RunProfileTests(unittest.TestCase):
         run.assert_not_called()
         lines = output.getvalue().splitlines()
         self.assertIn(
-            "+ python3 scripts/test-check-storage-ownership-contracts.py", lines
+            "+ python3 scripts/test-storage-ownership-contracts-v2.py", lines
         )
         self.assertIn(
             "+ python3 scripts/check-storage-ownership-contracts.py",
             lines,
         )
         self.assertLess(
-            lines.index("+ python3 scripts/test-check-storage-ownership-contracts.py"),
+            lines.index("+ python3 scripts/test-storage-ownership-contracts-v2.py"),
             lines.index("+ python3 scripts/check-storage-ownership-contracts.py"),
         )
+
+    def test_ci_config_base_is_appended_once_and_shell_quoted(self) -> None:
+        output = io.StringIO()
+        base = "refs/heads/base branch;not-a-command"
+        try:
+            run_profiles(
+                ["ci-config"],
+                dry_run=True,
+                output=output,
+                storage_ownership_base=base,
+            )
+        except TypeError as error:
+            self.fail(f"run_profiles does not accept a storage ownership base: {error}")
+
+        checker_lines = [
+            line
+            for line in output.getvalue().splitlines()
+            if "scripts/check-storage-ownership-contracts.py" in line
+        ]
+        self.assertEqual(
+            checker_lines,
+            [
+                "+ python3 scripts/check-storage-ownership-contracts.py "
+                f"--base-commit {shlex.quote(base)}"
+            ],
+        )
+
+    def test_storage_ownership_base_requires_ci_config(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "storage ownership base requires the ci-config profile"
+        ):
+            run_profiles(
+                ["fmt"],
+                dry_run=True,
+                output=io.StringIO(),
+                storage_ownership_base="base-commit",
+            )
+
+    def test_hosted_ci_config_supplies_event_base_with_full_history(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        ci_config_job = workflow.split("\n  ci-config:\n", maxsplit=1)[1]
+
+        self.assertIn("fetch-depth: 0", ci_config_job)
+        self.assertIn("EVENT_NAME: ${{ github.event_name }}", ci_config_job)
+        self.assertIn(
+            "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", ci_config_job
+        )
+        self.assertIn("PUSH_BASE_SHA: ${{ github.event.before }}", ci_config_job)
+        self.assertIn('if [ "${EVENT_NAME}" = pull_request ]; then', ci_config_job)
+        self.assertIn('elif [ "${EVENT_NAME}" = push ]; then', ci_config_job)
+        self.assertIn('BASE_SHA="${PR_BASE_SHA}"', ci_config_job)
+        self.assertIn('BASE_SHA="${PUSH_BASE_SHA}"', ci_config_job)
+        invocation = (
+            "python3 scripts/ci/run_profile.py ci-config "
+            '--storage-ownership-base "${BASE_SHA}"'
+        )
+        self.assertEqual(ci_config_job.count(invocation), 1)
 
     def test_full_profile_expands_named_profiles_once(self) -> None:
         expanded = expand_profiles(["full"])
@@ -195,10 +259,128 @@ class RunProfileTests(unittest.TestCase):
                 dry_run=False,
                 output=io.StringIO(),
             )
-        self.assertNotIn("RUSTFLAGS", calls[0])
-        self.assertEqual(
-            calls[2]["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
+        for call in calls[:2]:
+            self.assertNotIn("RUSTFLAGS", call)
+            self.assertNotIn("TENFERRO_TRYBUILD_RUSTFLAGS", call)
+            self.assertNotIn("CARGO", call)
+        for call in calls[2:]:
+            self.assertEqual(
+                call["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
+            )
+            self.assertEqual(
+                call["TENFERRO_TRYBUILD_RUSTFLAGS"],
+                "-l dylib=openblas -l dylib=lapack",
+            )
+            self.assertEqual(
+                call["CARGO"],
+                str((ROOT / "scripts" / "ci" / "trybuild-cargo.py").resolve()),
+            )
+
+    def test_trybuild_cargo_preserves_and_augments_complete_rustflags(self) -> None:
+        build_flags = [
+            "--cfg",
+            "trybuild",
+            "--verbose",
+            "--diagnostic-width=140",
+            "-A",
+            "dead_code",
+            "-C",
+            "instrument-coverage",
+        ]
+        target_flags = [
+            "--cfg",
+            "target-specific",
+            "-C",
+            "target-cpu=native",
+        ]
+        blas_flags = ["-l", "dylib=openblas", "-l", "dylib=lapack"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            capture = temp / "capture.json"
+            fake_cargo = temp / "cargo"
+            fake_cargo.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+Path(os.environ["TRYBUILD_CARGO_CAPTURE"]).write_text(
+    json.dumps({"args": sys.argv[1:], "cargo": os.environ.get("CARGO")})
+)
+"""
+            )
+            fake_cargo.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
+            environment["CARGO"] = "must-not-recurse"
+            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = " ".join(blas_flags)
+            environment["TRYBUILD_CARGO_CAPTURE"] = str(capture)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
+                    "check",
+                    "--config=build.rustflags=" + json.dumps(build_flags),
+                    "--config=target.x86_64-unknown-linux-gnu.rustflags="
+                    + json.dumps(target_flags),
+                    "--offline",
+                ],
+                check=True,
+                env=environment,
+            )
+
+            result = json.loads(capture.read_text())
+
+        build_argument = next(
+            argument
+            for argument in result["args"]
+            if argument.startswith("--config=build.rustflags=")
         )
+        target_argument = next(
+            argument
+            for argument in result["args"]
+            if argument.startswith(
+                "--config=target.x86_64-unknown-linux-gnu.rustflags="
+            )
+        )
+        self.assertEqual(
+            json.loads(build_argument.split("=", 2)[2]),
+            build_flags + blas_flags,
+        )
+        self.assertEqual(
+            json.loads(target_argument.split("=", 2)[2]),
+            target_flags + blas_flags,
+        )
+        self.assertIn("--offline", result["args"])
+        self.assertIsNone(result["cargo"])
+
+    def test_trybuild_cargo_runs_without_tomllib(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            (temp / "tomllib.py").write_text(
+                'raise ModuleNotFoundError("No module named tomllib")\n'
+            )
+            fake_cargo = temp / "cargo"
+            fake_cargo.write_text("#!/bin/sh\nexit 0\n")
+            fake_cargo.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
+            environment["PYTHONPATH"] = str(temp)
+            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = "-l dylib=openblas"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
+                    "check",
+                    '--config=build.rustflags=["--cfg","trybuild"]',
+                ],
+                check=True,
+                env=environment,
+            )
 
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()

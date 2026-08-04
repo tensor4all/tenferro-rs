@@ -5,6 +5,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+CUDA_ARCHIVE_TEST_FILTER = (
+    "-E 'not (test(eager_backend_capability_boundary) | "
+    "test(execution_session_capability_cannot_project_or_escape_owner_borrow) | "
+    "test(cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark))'"
+)
 
 
 def read(path: str) -> str:
@@ -361,6 +366,59 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertNotIn("nextest archive \\\n              --release", text)
                 for match in re.finditer(r"cargo nextest archive[\s\S]{0,280}", text):
                     self.assertNotIn("--release", match.group(0))
+
+    def test_gpu_archive_run_excludes_compile_only_trybuild_tests(self) -> None:
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            text = read(path)
+            cuda_tests = text[
+                text.index("      - name: Run CUDA tests from archive") :
+                text.index("      - name: Run OpenXLA PJRT E2E tests from archive")
+            ]
+            filter_lines = [
+                line.strip()
+                for line in cuda_tests.splitlines()
+                if line.strip().startswith("-E ")
+            ]
+            with self.subTest(path=path):
+                self.assertEqual(filter_lines, [f"{CUDA_ARCHIVE_TEST_FILTER} \\"])
+
+        for path in (
+            "crates/tenferro-ad/tests/integration/eager_backend_capability_contract.rs",
+            "crates/tenferro-gpu/tests/integration/session_contract.rs",
+        ):
+            source = read(path)
+            with self.subTest(nextest_archive_guard=path):
+                self.assertIn('var_os("NEXTEST")', source)
+                self.assertNotIn('var("CARGO_NET_OFFLINE")', source)
+
+    def test_cuda_correctness_gate_excludes_a100_performance_benchmark(self) -> None:
+        benchmark = "cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark"
+        structural_tests = read(
+            "crates/tenferro-gpu/src/cubecl/tests/structural_tests.rs"
+        )
+        self.assertRegex(
+            structural_tests,
+            rf"#\[ignore[^\]]*\]\s*fn {benchmark}\(\)",
+        )
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            text = read(path)
+            cuda_tests = text[
+                text.index("      - name: Run CUDA tests from archive") :
+                text.index("      - name: Run OpenXLA PJRT E2E tests from archive")
+            ]
+            filter_lines = [
+                line.strip()
+                for line in cuda_tests.splitlines()
+                if line.strip().startswith("-E ")
+            ]
+            with self.subTest(path=path):
+                self.assertEqual(filter_lines, [f"{CUDA_ARCHIVE_TEST_FILTER} \\"])
 
     def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
         for path in (

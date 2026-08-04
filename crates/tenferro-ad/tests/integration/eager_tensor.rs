@@ -50,7 +50,7 @@ fn assert_send_sync<T: Send + Sync>() {}
 
 #[test]
 fn placement_bound_session_reuses_runtime_identity_and_requested_placement() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
     let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
 
     assert_eq!(cpu.runtime_id(), runtime.id());
@@ -131,7 +131,7 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
-    CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()))
+    CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap())
         .clone()
 }
 
@@ -851,7 +851,7 @@ fn eager_fan_out_accumulates_gradient() {
 
 #[test]
 fn eager_clear_grad_resets_only_one_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -892,7 +892,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
 
 #[test]
 fn eager_context_clear_grads_resets_all_live_leaves() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -929,7 +929,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
 
 #[test]
 fn eager_unrelated_backward_keeps_existing_leaf_grad() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -966,7 +966,7 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
 
 #[test]
 fn eager_tracks_grad_reports_leaf_state() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let plain = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -995,7 +995,7 @@ fn eager_context_and_tensor_are_backend_erased_public_types() {
     assert_send_sync::<EagerRuntime>();
 
     let ctx: Arc<EagerRuntime> =
-        EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
+        EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
     let x = ctx
         .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();

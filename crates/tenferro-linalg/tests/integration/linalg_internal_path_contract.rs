@@ -18,21 +18,6 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 }
 
 #[test]
-fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
-    let source = crate_source("src/eager_ext.rs");
-    let registration = source_section(
-        &source,
-        "fn apply_linalg_eager",
-        "/// Singular value decomposition",
-    );
-
-    assert!(registration.contains("apply_eager_with_extension_context("));
-    assert!(registration.contains("execute_linalg_extension_reads("));
-    assert!(!registration.contains(".register_extension("));
-    assert!(!registration.contains("to_string()"));
-}
-
-#[test]
 fn traced_solve_builds_factor_then_prepared_solve() {
     let source = crate_source("src/traced.rs");
     let solve_source = source_section(
@@ -123,8 +108,8 @@ fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
         "fn count_nonzero<B: LinalgBackend>",
     );
     assert!(
-        concrete_frobenius.contains("exec.reduce_sum_squares_read")
-            && !concrete_frobenius.contains("exec.pow_read"),
+        concrete_frobenius.contains("backend.reduce_sum_squares_read")
+            && !concrete_frobenius.contains("backend.pow_read"),
         "concrete Frobenius norm should use the fused backend hook, not generic pow_read"
     );
     assert!(

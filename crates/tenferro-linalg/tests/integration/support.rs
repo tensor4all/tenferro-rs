@@ -1,6 +1,19 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_runtime::{CompiledGraph, Runtime, RuntimeConfigError};
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{BackendSessionHost, Tensor};
+
+/// Run a test operation through the provider-owned CPU execution session.
+pub fn with_cpu_linalg<R>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R
+where
+    R: Send,
+{
+    backend.with_backend_session(|session| {
+        with_cpu_exec_session(session, f).expect("CPU backend session should expose CpuExecSession")
+    })
+}
 
 /// Build a CPU runtime with the linalg extension module installed.
 ///

@@ -15,18 +15,17 @@ in [`2026-07-24-phase-4-runtime-preparation.md`](2026-07-24-phase-4-runtime-prep
   prepare through the runtime cache, validate specialization projection and
   shape guards, build a crate-private `ScheduledGraph`, and execute through a
   registered tensor backend bridge.
-- `EngineRegistration::with_tensor_backend_executor` lets an engine attach an
-  erased backend execution bridge without adding a runtime-to-backend
-  dependency. `tenferro-cpu::runtime_engine_registration` is the public CPU
-  helper that assembles direct core preparation capabilities, CPU cache-owner
-  hooks, and that bridge.
+- `tenferro-cpu::runtime_engine_registration` is the public CPU helper that
+  assembles direct core preparation capabilities, CPU cache-owner hooks, the
+  executable witness, and the event-domain driver through the common runtime
+  assembly path.
 - `ScheduledGraph` is a crate-private executable boundary that can represent
   core operations, transfers, collectives, and barriers. Transfers use distinct
   source and destination event domains. Collectives are representable but remain
   unsupported by current runtime execution validation.
-- `GraphExecutor<B>` remains as a legacy compatibility path. It restages from
-  `CompiledGraph` using the stored compiler options, but it is not the final
-  runtime-owned execution path.
+- The former executor-shaped compatibility path was retired at this
+  checkpoint. `Runtime::prepare_compiled` and `Runtime::run_prepared` are the
+  current steady-state execution path over `CompiledGraph`.
 
 ## Commit sequence
 

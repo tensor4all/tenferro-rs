@@ -5,12 +5,12 @@ use cubek_fft::{
     cfft_interleaved_launch, irfft_interleaved_launch_padded, rfft_interleaved_launch_padded,
     ComplexTensorHandle, FftMode, FftNormalization,
 };
-use tenferro_gpu::{webgpu_interop, WebGpuBackend};
+use tenferro_gpu::{webgpu_interop, WebGpuExecSession};
 use tenferro_tensor::{Error, Tensor};
 
 use crate::{FftBackend, FftExecutionCache, FftNorm, FftOperation, FftPlanSpec};
 
-impl FftBackend for WebGpuBackend {
+impl FftBackend for WebGpuExecSession<'_> {
     fn execute_fft(
         &mut self,
         input: &Tensor,
@@ -47,7 +47,7 @@ struct MetalFftPlan {
 }
 
 impl MetalFftPlan {
-    fn new(backend: &WebGpuBackend, spec: &FftPlanSpec) -> tenferro_tensor::Result<Self> {
+    fn new(backend: &WebGpuExecSession<'_>, spec: &FftPlanSpec) -> tenferro_tensor::Result<Self> {
         let op = op_name(spec.operation());
         let axis = spec.normalized_axis();
         let input_len = spec.input_shape()[axis];
@@ -162,7 +162,7 @@ impl MetalFftPlan {
 }
 
 fn execute_cfft(
-    backend: &WebGpuBackend,
+    backend: &WebGpuExecSession<'_>,
     input: &tenferro_tensor::TypedTensor<num_complex::Complex32>,
     spec: &FftPlanSpec,
     plan: &MetalFftPlan,
@@ -202,7 +202,7 @@ fn execute_cfft(
 }
 
 fn execute_rfft(
-    backend: &WebGpuBackend,
+    backend: &WebGpuExecSession<'_>,
     input: &tenferro_tensor::TypedTensor<f32>,
     spec: &FftPlanSpec,
     plan: &MetalFftPlan,
@@ -235,7 +235,7 @@ fn execute_rfft(
 }
 
 fn execute_irfft(
-    backend: &WebGpuBackend,
+    backend: &WebGpuExecSession<'_>,
     input: &tenferro_tensor::TypedTensor<num_complex::Complex32>,
     spec: &FftPlanSpec,
     plan: &MetalFftPlan,

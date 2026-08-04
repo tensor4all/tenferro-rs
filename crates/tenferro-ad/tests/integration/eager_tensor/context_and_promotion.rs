@@ -2,14 +2,14 @@ use super::*;
 
 #[test]
 fn context_id_is_unique() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     assert_ne!(ctx_a.id(), ctx_b.id());
 }
 
 #[test]
 fn same_context_true_for_shared_ctx() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx.clone(),
@@ -26,8 +26,8 @@ fn same_context_true_for_shared_ctx() {
 
 #[test]
 fn same_context_false_for_different_ctx() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx_a,
@@ -44,7 +44,7 @@ fn same_context_false_for_different_ctx() {
 
 #[test]
 fn constant_from_creates_untracked_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let c = ctx
         .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
@@ -55,7 +55,7 @@ fn constant_from_creates_untracked_leaf() {
 
 #[test]
 fn variable_from_creates_tracked_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let p = ctx
         .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
@@ -69,8 +69,8 @@ fn variable_from_creates_tracked_leaf() {
 
 #[test]
 fn cross_context_add_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -90,8 +90,8 @@ fn cross_context_add_rejected() {
 
 #[test]
 fn cross_context_mul_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -111,8 +111,8 @@ fn cross_context_mul_rejected() {
 
 #[test]
 fn cross_context_tracked_tensors_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -132,7 +132,7 @@ fn cross_context_tracked_tensors_rejected() {
 
 #[test]
 fn constant_from_can_cross_context() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -148,8 +148,8 @@ fn constant_from_can_cross_context() {
 
 #[test]
 fn detach_into_different_context() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -171,8 +171,8 @@ fn detach_into_different_context() {
 
 #[test]
 fn detach_into_still_accessible_in_original_context() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a.clone(),

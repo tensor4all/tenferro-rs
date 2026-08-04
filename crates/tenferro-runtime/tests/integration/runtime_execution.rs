@@ -1,6 +1,7 @@
 use std::any::Any;
+use std::collections::{BTreeSet, HashSet};
 use std::error::Error as StdError;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,16 +15,20 @@ use tenferro_runtime::runtime::{
     EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver,
 };
 use tenferro_runtime::{
+    assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
-    EngineExecutionContractError, EngineId, EngineRegistration, ErasedExecutionContext, Error,
-    ErrorPhase, EventDomainId, ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine,
-    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
-    IndexingRuntime, InputIngressContractError, LayoutRuntime, PrepareCapability, PrepareError,
-    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ReductionRuntime, RegistrationKey, Runtime, RuntimeCacheOwner, RuntimeConfigError,
-    SpecializationProjection, StorageClass, TracedTensor, TransferError, TransferProvider,
-    TransferProviderContractError, TransferRequest,
+    EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    ErasedExecutionContext, Error, ErrorPhase, EventDomainId, ExecutableEngineRegistrationConfig,
+    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, GraphCompiler, HardwareClassId, IndexingRuntime, InputIngressContract,
+    InputIngressContractError, InputPlacementContract, InputSignatureContract, LayoutRuntime,
+    PreparationOnlyEngineRegistrationConfig, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
+    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, ResidentOutputContract,
+    Runtime, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError,
+    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
+    TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
@@ -36,16 +41,34 @@ const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.counting-extension.v1";
 const DOWNSTREAM_COUNTING_EXTENSION_FAMILY: &str = "tenferro-test.downstream-counting-extension.v1";
+const ROUTE_HOST_CUDA0_FAMILY: &str = "tenferro-test.route-host-cuda0.v1";
+const ROUTE_HOST_CUDA1_FAMILY: &str = "tenferro-test.route-host-cuda1.v1";
+const ROUTE_CUDA0_HOST_FAMILY: &str = "tenferro-test.route-cuda0-host.v1";
+const ROUTE_CUDA1_HOST_FAMILY: &str = "tenferro-test.route-cuda1-host.v1";
+
+fn test_provider_device_identity(
+    engine_id: &str,
+) -> Result<ProviderDeviceIdentity, RuntimeConfigError> {
+    Ok(ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
+        format!("test-engine:{engine_id}"),
+    )?)
+}
 
 #[derive(Debug)]
 struct RecordingEventToken {
     label: &'static str,
+    origin: EventDomainId,
     events: Arc<Mutex<Vec<String>>>,
 }
 
 impl EventToken for RecordingEventToken {
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn origin(&self) -> EventDomainId {
+        self.origin
     }
 
     fn wait(&self) -> tenferro_runtime::Result<()> {
@@ -57,14 +80,26 @@ impl EventToken for RecordingEventToken {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DrainBehavior {
+    Success,
+    ReturnError,
+    Panic,
+}
+
 #[derive(Debug)]
 struct RecordingEventDomainRun {
     label: &'static str,
+    domain: EventDomainId,
     events: Arc<Mutex<Vec<String>>>,
-    fail_drain: bool,
+    drain_behavior: DrainBehavior,
 }
 
 impl EventDomainRun for RecordingEventDomainRun {
+    fn domain(&self) -> EventDomainId {
+        self.domain
+    }
+
     fn enqueue(
         &mut self,
         dependencies: &[Arc<dyn EventToken>],
@@ -81,6 +116,7 @@ impl EventDomainRun for RecordingEventDomainRun {
         launch()?;
         Ok(Arc::new(RecordingEventToken {
             label: self.label,
+            origin: self.domain,
             events: Arc::clone(&self.events),
         }))
     }
@@ -90,13 +126,13 @@ impl EventDomainRun for RecordingEventDomainRun {
             .lock()
             .expect("event log lock")
             .push(format!("{}:drain", self.label));
-        if self.fail_drain {
-            Err(Error::Internal(format!(
+        match self.drain_behavior {
+            DrainBehavior::Success => Ok(()),
+            DrainBehavior::ReturnError => Err(Error::Internal(format!(
                 "{} event-domain drain failure",
                 self.label
-            )))
-        } else {
-            Ok(())
+            ))),
+            DrainBehavior::Panic => panic!("{} event-domain drain panic", self.label),
         }
     }
 }
@@ -114,57 +150,124 @@ impl Drop for RecordingEventDomainRun {
 struct RecordingEventDomainDriver {
     label: &'static str,
     events: Arc<Mutex<Vec<String>>>,
-    fail_drain: bool,
+    drain_behavior: DrainBehavior,
 }
 
 impl EventDomainDriver for RecordingEventDomainDriver {
-    fn begin_run(&self) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
+    fn begin_run(
+        &self,
+        domain: EventDomainId,
+    ) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
         self.events
             .lock()
             .expect("event log lock")
             .push(format!("{}:begin", self.label));
         Ok(Box::new(RecordingEventDomainRun {
             label: self.label,
+            domain,
             events: Arc::clone(&self.events),
-            fail_drain: self.fail_drain,
+            drain_behavior: self.drain_behavior,
         }))
     }
+}
+
+fn event_domain_with_drain_behavior(
+    label: &'static str,
+    events: &Arc<Mutex<Vec<String>>>,
+    drain_behavior: DrainBehavior,
+) -> Arc<dyn EventDomainDriver> {
+    Arc::new(RecordingEventDomainDriver {
+        label,
+        events: Arc::clone(events),
+        drain_behavior,
+    })
 }
 
 fn recording_event_domain(
     label: &'static str,
     events: &Arc<Mutex<Vec<String>>>,
 ) -> Arc<dyn EventDomainDriver> {
-    Arc::new(RecordingEventDomainDriver {
-        label,
-        events: Arc::clone(events),
-        fail_drain: false,
-    })
+    event_domain_with_drain_behavior(label, events, DrainBehavior::Success)
 }
 
 fn failing_drain_event_domain(
     label: &'static str,
     events: &Arc<Mutex<Vec<String>>>,
 ) -> Arc<dyn EventDomainDriver> {
-    Arc::new(RecordingEventDomainDriver {
-        label,
-        events: Arc::clone(events),
-        fail_drain: true,
-    })
+    event_domain_with_drain_behavior(label, events, DrainBehavior::ReturnError)
 }
 
-fn cpu_registration(
-    backend: &CpuBackend,
-    include_execution_bridge: bool,
-) -> Result<EngineRegistration, RuntimeConfigError> {
+fn cpu_ingress_contract(backend: &Arc<CpuBackend>, storage: &StorageClass) -> InputIngressContract {
+    let allocation_domain = backend.allocation_domain();
+    InputIngressContract::new(
+        InputPlacementContract::new({
+            let storage = storage.clone();
+            move |placement, candidate| test_cpu_placement(placement) && candidate == &storage
+        }),
+        InputSignatureContract::new({
+            let storage = storage.clone();
+            move |placement, family, domain, candidate| {
+                candidate == &storage
+                    && test_cpu_input_signature(placement, family, domain, allocation_domain)
+            }
+        }),
+        RuntimeInputContract::new({
+            let storage = storage.clone();
+            move |input: &TensorRead<'_>, candidate| {
+                candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+            }
+        }),
+        ResidentOutputContract::new({
+            let storage = storage.clone();
+            move |input: &TensorRead<'_>, candidate| {
+                candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
+            }
+        }),
+    )
+}
+
+#[derive(Debug)]
+enum CpuRegistrationState {
+    PreparationOnly,
+    Executable {
+        driver: Arc<dyn EventDomainDriver>,
+        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+    },
+}
+
+impl CpuRegistrationState {
+    fn executable() -> Self {
+        Self::Executable {
+            driver: Arc::new(ImmediateEventDomainDriver::new()),
+            cache_owner: None,
+        }
+    }
+
+    fn executable_with_driver(driver: Arc<dyn EventDomainDriver>) -> Self {
+        Self::Executable {
+            driver,
+            cache_owner: None,
+        }
+    }
+
+    fn executable_with_cache_owner(
+        driver: Arc<dyn EventDomainDriver>,
+        cache_owner: Arc<dyn RuntimeCacheOwner>,
+    ) -> Self {
+        Self::Executable {
+            driver,
+            cache_owner: Some(cache_owner),
+        }
+    }
+}
+
+fn cpu_core_capabilities(backend: &CpuBackend) -> CoreCapabilityBundle {
     let backend = Arc::new(backend.clone());
     let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
     let reduction: Arc<dyn ReductionRuntime> = backend.clone();
     let indexing: Arc<dyn IndexingRuntime> = backend.clone();
     let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
     let layout: Arc<dyn LayoutRuntime> = backend.clone();
-    let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
-
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
         .elementwise(elementwise)
@@ -172,61 +275,63 @@ fn cpu_registration(
         .indexing(indexing)
         .dot_general(dot_general)
         .layout(layout);
+    capabilities.build()
+}
 
+fn assemble_cpu_registration(
+    backend: Arc<CpuBackend>,
+    metadata: EngineRegistrationMetadata,
+    ingress_storage: StorageClass,
+    state: CpuRegistrationState,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    match state {
+        CpuRegistrationState::PreparationOnly => assemble_preparation_only_engine_registration(
+            PreparationOnlyEngineRegistrationConfig::new(
+                metadata,
+                ExecutionContextIdentity::of::<CpuBackend>(),
+            ),
+        ),
+        CpuRegistrationState::Executable {
+            driver,
+            cache_owner,
+        } => assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+            metadata,
+            backend.as_ref().clone(),
+            driver,
+            cpu_ingress_contract(&backend, &ingress_storage),
+            cache_owner,
+        )),
+    }
+}
+
+fn cpu_registration(
+    backend: &CpuBackend,
+    capabilities: CoreCapabilityBundle,
+    state: CpuRegistrationState,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let backend = Arc::new(backend.clone());
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
+        test_provider_device_identity(CPU_ENGINE_ID)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        capabilities.build(),
-    )
-    .map(|registration| {
-        let registration = registration
-            .with_cache_owner(cache_owner)
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
+        capabilities,
+    );
+    assemble_cpu_registration(backend, metadata, storage, state)
 }
 
 fn runtime_with_cpu(backend: &CpuBackend) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration(backend, true)?)?;
+    builder.register_engine(cpu_registration(
+        backend,
+        cpu_core_capabilities(backend),
+        CpuRegistrationState::executable_with_cache_owner(
+            Arc::new(ImmediateEventDomainDriver::new()),
+            Arc::new(backend.clone()),
+        ),
+    )?)?;
     builder.build()
 }
 
@@ -386,9 +491,11 @@ struct RecordingTransferProvider {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RecordedTransferRequest {
     source_engine_id: EngineId,
+    source_provider_device_identity: ProviderDeviceIdentity,
     source_event_domain_id: EventDomainId,
     source_storage_class: StorageClass,
     destination_engine_id: EngineId,
+    destination_provider_device_identity: ProviderDeviceIdentity,
     destination_event_domain_id: EventDomainId,
     destination_storage_class: StorageClass,
 }
@@ -443,9 +550,13 @@ impl TransferProvider for RecordingTransferProvider {
             .expect("request lock")
             .push(RecordedTransferRequest {
                 source_engine_id: request.source_engine_id().clone(),
+                source_provider_device_identity: request.source_provider_device_identity().clone(),
                 source_event_domain_id: request.source_event_domain_id(),
                 source_storage_class: request.source_storage_class().clone(),
                 destination_engine_id: request.destination_engine_id().clone(),
+                destination_provider_device_identity: request
+                    .destination_provider_device_identity()
+                    .clone(),
                 destination_event_domain_id: request.destination_event_domain_id(),
                 destination_storage_class: request.destination_storage_class().clone(),
             });
@@ -925,7 +1036,11 @@ fn runtime_with_counting_extension(
     counters: Arc<ExtensionCounters>,
 ) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration(backend, true)?)?;
+    builder.register_engine(cpu_registration(
+        backend,
+        cpu_core_capabilities(backend),
+        CpuRegistrationState::executable(),
+    )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.module")
             .map_err(RuntimeConfigError::from)?,
@@ -939,166 +1054,62 @@ fn runtime_with_counting_extension(
 fn cpu_registration_with_id(
     backend: &CpuBackend,
     engine_id: &str,
-    include_core_capabilities: bool,
-    include_execution_bridge: bool,
-) -> Result<EngineRegistration, RuntimeConfigError> {
-    cpu_registration_with_id_and_driver(
-        backend,
-        engine_id,
-        include_core_capabilities,
-        include_execution_bridge,
-        true,
-    )
-}
-
-fn cpu_registration_with_id_and_driver(
-    backend: &CpuBackend,
-    engine_id: &str,
-    include_core_capabilities: bool,
-    include_execution_bridge: bool,
-    include_event_domain_driver: bool,
+    capabilities: CoreCapabilityBundle,
+    state: CpuRegistrationState,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
-    let mut capabilities = CoreCapabilityBundle::builder();
-    if include_core_capabilities {
-        let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-        let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-        let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-        let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-        let layout: Arc<dyn LayoutRuntime> = backend.clone();
-        capabilities
-            .elementwise(elementwise)
-            .reduction(reduction)
-            .indexing(indexing)
-            .dot_general(dot_general)
-            .layout(layout);
-    }
-
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
+        test_provider_device_identity(engine_id)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        capabilities.build(),
-    )
-    .map(|registration| {
-        let registration = registration
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        let registration = if include_event_domain_driver {
-            registration.with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-        } else {
-            registration
-        };
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
+        capabilities,
+    );
+    assemble_cpu_registration(backend, metadata, storage, state)
 }
 
 fn cpu_registration_with_storage_id(
     backend: &CpuBackend,
     engine_id: &str,
     storage_id: &str,
-    include_core_capabilities: bool,
-    include_execution_bridge: bool,
+    capabilities: CoreCapabilityBundle,
+    state: CpuRegistrationState,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let target = format!("test-engine:{engine_id}");
+    cpu_registration_with_storage_id_for_target(
+        backend,
+        engine_id,
+        storage_id,
+        capabilities,
+        state,
+        &target,
+    )
+}
+
+fn cpu_registration_with_storage_id_for_target(
+    backend: &CpuBackend,
+    engine_id: &str,
+    storage_id: &str,
+    capabilities: CoreCapabilityBundle,
+    state: CpuRegistrationState,
+    target: &str,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
-    let mut capabilities = CoreCapabilityBundle::builder();
-    if include_core_capabilities {
-        let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-        let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-        let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-        let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-        let layout: Arc<dyn LayoutRuntime> = backend.clone();
-        capabilities
-            .elementwise(elementwise)
-            .reduction(reduction)
-            .indexing(indexing)
-            .dot_general(dot_general)
-            .layout(layout);
-    }
-
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cpu").map_err(RuntimeConfigError::from)?,
+            target,
+        )?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(vec![storage.clone()]),
         storage.clone(),
-        capabilities.build(),
-    )
-    .map(|registration| {
-        let registration = registration
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_input_signature_validator({
-                let storage = storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let storage = storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &storage
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let storage = storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &storage && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            );
-        if include_execution_bridge {
-            registration.with_tensor_backend_executor(backend.as_ref().clone())
-        } else {
-            registration
-        }
-    })
+        capabilities,
+    );
+    assemble_cpu_registration(backend, metadata, storage, state)
 }
 
 fn cpu_registration_with_storage_classes(
@@ -1109,50 +1120,173 @@ fn cpu_registration_with_storage_classes(
     ingress_storage: StorageClass,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let backend = Arc::new(backend.clone());
-    EngineRegistration::new(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
+        test_provider_device_identity(engine_id)?,
         HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)?,
         Arc::from(storage_classes),
         default_storage,
         CoreCapabilityBundle::builder().build(),
+    );
+    assemble_cpu_registration(
+        backend,
+        metadata,
+        ingress_storage,
+        CpuRegistrationState::executable(),
     )
-    .map(|registration| {
-        registration
-            .with_input_signature_validator({
-                let ingress_storage = ingress_storage.clone();
-                let allocation_domain = backend.allocation_domain();
-                move |placement, family, domain, candidate| {
-                    candidate == &ingress_storage
-                        && test_cpu_input_signature(placement, family, domain, allocation_domain)
-                }
-            })
-            .with_input_ingress_validator(
-                {
-                    let ingress_storage = ingress_storage.clone();
-                    move |placement, candidate| {
-                        test_cpu_placement(placement) && candidate == &ingress_storage
-                    }
-                },
-                {
-                    let ingress_storage = ingress_storage.clone();
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &ingress_storage
-                            && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-                {
-                    let allocation_domain = backend.allocation_domain();
-                    move |input: &TensorRead<'_>, candidate| {
-                        candidate == &ingress_storage
-                            && test_cpu_runtime_input(input, allocation_domain)
-                    }
-                },
-            )
-            .with_event_domain_driver(Arc::new(ImmediateEventDomainDriver::new()))
-            .with_tensor_backend_executor(backend.as_ref().clone())
+}
+
+fn transfer_endpoint(
+    engine_id: &str,
+    storage_class: StorageClass,
+) -> Result<TransferEndpoint, RuntimeConfigError> {
+    Ok(TransferEndpoint::new(
+        EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
+        storage_class,
+    ))
+}
+
+struct PublishedRouteFixture {
+    runtime: Runtime,
+    source_domain: AllocationDomainId,
+    destination_backend: CpuBackend,
+    source_endpoint: TransferEndpoint,
+    destination_endpoint: TransferEndpoint,
+    provider: Arc<RecordingTransferProvider>,
+    counters: Arc<ExtensionCounters>,
+}
+
+fn published_route_fixture(
+    affected_engine_id: EngineId,
+    route_storage: StorageClass,
+) -> Result<PublishedRouteFixture, RuntimeConfigError> {
+    let source_engine_id = EngineId::new("tenferro-test.engine.reconfigure-source.v1")
+        .map_err(RuntimeConfigError::from)?;
+    let source_endpoint = TransferEndpoint::new(source_engine_id.clone(), route_storage.clone());
+    let destination_endpoint =
+        TransferEndpoint::new(affected_engine_id.clone(), route_storage.clone());
+    let source_domain = AllocationDomainId::fresh();
+    let destination_domain = AllocationDomainId::fresh();
+    let source_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
+    let destination_backend = CpuBackend::new()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(destination_domain)));
+    let provider = Arc::new(RecordingTransferProvider::materializing(
+        route_storage.clone(),
+        route_storage.clone(),
+        destination_backend.clone(),
+    ));
+    let counters = Arc::new(ExtensionCounters::default());
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &source_backend,
+        source_engine_id.as_str(),
+        route_storage.as_str(),
+        cpu_core_capabilities(&source_backend),
+        CpuRegistrationState::executable(),
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id(
+        &destination_backend,
+        affected_engine_id.as_str(),
+        route_storage.as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+    )?)?;
+    builder.register_transfer_provider(
+        source_endpoint.clone(),
+        destination_endpoint.clone(),
+        Arc::clone(&provider) as Arc<dyn TransferProvider>,
+    )?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.reconfigure-published-route-module.v1")
+            .map_err(RuntimeConfigError::from)?,
+        family_id: COUNTING_EXTENSION_FAMILY,
+        engine_id: affected_engine_id,
+        counters: Arc::clone(&counters),
+    }))?;
+
+    Ok(PublishedRouteFixture {
+        runtime: builder.build()?,
+        source_domain,
+        destination_backend,
+        source_endpoint,
+        destination_endpoint,
+        provider,
+        counters,
     })
+}
+
+fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dyn StdError>> {
+    let source_identity =
+        test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
+    let destination_identity =
+        test_provider_device_identity(fixture.destination_endpoint.engine_id().as_str())?;
+    execute_published_route_with_targets(fixture, &source_identity, &destination_identity)
+}
+
+fn execute_published_route_with_targets(
+    fixture: &PublishedRouteFixture,
+    expected_source_identity: &ProviderDeviceIdentity,
+    expected_destination_identity: &ProviderDeviceIdentity,
+) -> Result<(), Box<dyn StdError>> {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let y = tenferro_runtime::extension::apply(
+        Arc::new(CountingExtensionOp {
+            family_id: COUNTING_EXTENSION_FAMILY,
+        }),
+        &[&x],
+    )?
+    .pop()
+    .expect("published route extension has one output");
+    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+    let input = TestAllocationDomain(fixture.source_domain).allocate(DType::F64, &[2])?;
+    if let Tensor::F64(input) = &input {
+        if let Buffer::Backend(buffer) = input.buffer() {
+            buffer
+                .map_write()
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("published-route-input", source)
+                })?
+                .copy_from_slice(&[3.0, 5.0])
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("published-route-input", source)
+                })?;
+        }
+    }
+    let output = fixture.runtime.run_compiled(&program, &[&input])?;
+
+    assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
+    assert_eq!(fixture.counters.prepare.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.counters.execute.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.calls(), 1);
+    let requests = fixture.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        &requests[0].source_engine_id,
+        fixture.source_endpoint.engine_id()
+    );
+    assert_eq!(
+        &requests[0].source_provider_device_identity,
+        expected_source_identity
+    );
+    assert_eq!(
+        &requests[0].destination_engine_id,
+        fixture.destination_endpoint.engine_id()
+    );
+    assert_eq!(
+        &requests[0].destination_provider_device_identity,
+        expected_destination_identity
+    );
+    assert_eq!(
+        &requests[0].source_storage_class,
+        fixture.source_endpoint.storage_class()
+    );
+    assert_eq!(
+        &requests[0].destination_storage_class,
+        fixture.destination_endpoint.storage_class()
+    );
+    Ok(())
 }
 
 #[test]
@@ -1160,6 +1294,14 @@ fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
 ) -> Result<(), Box<dyn StdError>> {
     let source = StorageClass::new("tenferro-test.storage.registry-source")?;
     let destination = StorageClass::new("tenferro-test.storage.registry-destination")?;
+    let source_endpoint = TransferEndpoint::new(
+        EngineId::new("tenferro-test.engine.registry-source.v1")?,
+        source.clone(),
+    );
+    let destination_endpoint = TransferEndpoint::new(
+        EngineId::new("tenferro-test.engine.registry-destination.v1")?,
+        destination.clone(),
+    );
     let provider: Arc<dyn TransferProvider> = Arc::new(RecordingTransferProvider::new(
         source.clone(),
         destination.clone(),
@@ -1171,17 +1313,21 @@ fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
     let mut builder = Runtime::builder();
 
     builder.register_transfer_provider(
-        source.clone(),
-        destination.clone(),
+        source_endpoint.clone(),
+        destination_endpoint.clone(),
         Arc::clone(&provider),
     )?;
     builder.register_transfer_provider(
-        source.clone(),
-        destination.clone(),
+        source_endpoint.clone(),
+        destination_endpoint.clone(),
         Arc::clone(&provider),
     )?;
     let error = builder
-        .register_transfer_provider(source.clone(), destination.clone(), conflicting)
+        .register_transfer_provider(
+            source_endpoint.clone(),
+            destination_endpoint.clone(),
+            conflicting,
+        )
         .unwrap_err();
 
     assert!(matches!(
@@ -1191,33 +1337,527 @@ fn transfer_provider_registration_is_idempotent_and_rejects_conflicts(
                 source: actual_source,
                 destination: actual_destination,
             },
-        } if actual_source == source && actual_destination == destination
+        } if actual_source == source_endpoint && actual_destination == destination_endpoint
     ));
     Ok(())
 }
 
 #[test]
-fn execution_bridge_registration_requires_explicit_ingress_contract(
+fn transfer_endpoint_is_immutable_ordered_and_hashable() -> Result<(), Box<dyn StdError>> {
+    fn assert_endpoint_traits<T: Clone + std::fmt::Debug + Eq + Hash + Ord>() {}
+
+    assert_endpoint_traits::<TransferEndpoint>();
+
+    let storage = StorageClass::new("tenferro-test.storage.endpoint.v1")?;
+    let first = TransferEndpoint::new(
+        EngineId::new("tenferro-test.engine.endpoint-alpha.v1")?,
+        storage.clone(),
+    );
+    let second = TransferEndpoint::new(
+        EngineId::new("tenferro-test.engine.endpoint-beta.v1")?,
+        storage,
+    );
+
+    assert_eq!(
+        first.engine_id().as_str(),
+        "tenferro-test.engine.endpoint-alpha.v1"
+    );
+    assert_eq!(
+        first.storage_class().as_str(),
+        "tenferro-test.storage.endpoint.v1"
+    );
+
+    let mut ordered = BTreeSet::new();
+    ordered.insert(second.clone());
+    ordered.insert(first.clone());
+    assert_eq!(
+        ordered.into_iter().collect::<Vec<_>>(),
+        vec![first.clone(), second.clone()]
+    );
+
+    let mut hashed = HashSet::new();
+    assert!(hashed.insert(first.clone()));
+    assert!(!hashed.insert(first));
+    assert!(hashed.insert(second.clone()));
+    assert!(hashed.contains(&second));
+
+    Ok(())
+}
+
+#[test]
+fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
 ) -> Result<(), Box<dyn StdError>> {
+    let host_engine_id = "tenferro-test.engine.host-route.v1";
+    let cuda0_engine_id = "tenferro-test.engine.cuda0-route.v1";
+    let cuda1_engine_id = "tenferro-test.engine.cuda1-route.v1";
+    let host_domain = AllocationDomainId::fresh();
+    let cuda0_domain = AllocationDomainId::fresh();
+    let cuda1_domain = AllocationDomainId::fresh();
+    let host_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(host_domain)));
+    let cuda0_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(cuda0_domain)));
+    let cuda1_backend =
+        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(cuda1_domain)));
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let host_endpoint = transfer_endpoint(host_engine_id, storage.clone())?;
+    let cuda0_endpoint = transfer_endpoint(cuda0_engine_id, storage.clone())?;
+    let cuda1_endpoint = transfer_endpoint(cuda1_engine_id, storage.clone())?;
+    let host_to_cuda0 = Arc::new(RecordingTransferProvider::materializing(
+        storage.clone(),
+        storage.clone(),
+        cuda0_backend.clone(),
+    ));
+    let host_to_cuda1 = Arc::new(RecordingTransferProvider::materializing(
+        storage.clone(),
+        storage.clone(),
+        cuda1_backend.clone(),
+    ));
+    let cuda0_to_host = Arc::new(RecordingTransferProvider::materializing(
+        storage.clone(),
+        storage.clone(),
+        host_backend.clone(),
+    ));
+    let cuda1_to_host = Arc::new(RecordingTransferProvider::materializing(
+        storage.clone(),
+        storage.clone(),
+        host_backend.clone(),
+    ));
+    let host_to_cuda0_counters = Arc::new(ExtensionCounters::default());
+    let host_to_cuda1_counters = Arc::new(ExtensionCounters::default());
+    let cuda0_to_host_counters = Arc::new(ExtensionCounters::default());
+    let cuda1_to_host_counters = Arc::new(ExtensionCounters::default());
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_id(
+        &host_backend,
+        host_engine_id,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+    )?)?;
+    builder.register_engine(cpu_registration_with_id(
+        &cuda0_backend,
+        cuda0_engine_id,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+    )?)?;
+    builder.register_engine(cpu_registration_with_id(
+        &cuda1_backend,
+        cuda1_engine_id,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+    )?)?;
+
+    let routes = [
+        (
+            host_endpoint.clone(),
+            cuda0_endpoint.clone(),
+            host_to_cuda0.clone(),
+        ),
+        (
+            host_endpoint.clone(),
+            cuda1_endpoint.clone(),
+            host_to_cuda1.clone(),
+        ),
+        (
+            cuda0_endpoint.clone(),
+            host_endpoint.clone(),
+            cuda0_to_host.clone(),
+        ),
+        (
+            cuda1_endpoint.clone(),
+            host_endpoint.clone(),
+            cuda1_to_host.clone(),
+        ),
+    ];
+
+    for (source, destination, provider) in routes {
+        builder.register_transfer_provider(source, destination, provider)?;
+    }
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.route-host-cuda0-module.v1")?,
+        family_id: ROUTE_HOST_CUDA0_FAMILY,
+        engine_id: EngineId::new(cuda0_engine_id)?,
+        counters: Arc::clone(&host_to_cuda0_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.route-host-cuda1-module.v1")?,
+        family_id: ROUTE_HOST_CUDA1_FAMILY,
+        engine_id: EngineId::new(cuda1_engine_id)?,
+        counters: Arc::clone(&host_to_cuda1_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.route-cuda0-host-module.v1")?,
+        family_id: ROUTE_CUDA0_HOST_FAMILY,
+        engine_id: EngineId::new(host_engine_id)?,
+        counters: Arc::clone(&cuda0_to_host_counters),
+    }))?;
+    builder.install_extension_module(Arc::new(CountingExtensionModule {
+        module_id: ExtensionModuleId::new("tenferro-test.route-cuda1-host-module.v1")?,
+        family_id: ROUTE_CUDA1_HOST_FAMILY,
+        engine_id: EngineId::new(host_engine_id)?,
+        counters: Arc::clone(&cuda1_to_host_counters),
+    }))?;
+
+    let runtime = builder.build()?;
+    assert_eq!(runtime.snapshot()?.transfer_provider_count(), 4);
+
+    let execution_routes = [
+        (
+            &host_endpoint,
+            &cuda0_endpoint,
+            ROUTE_HOST_CUDA0_FAMILY,
+            host_domain,
+            &host_to_cuda0,
+            &host_to_cuda0_counters,
+        ),
+        (
+            &host_endpoint,
+            &cuda1_endpoint,
+            ROUTE_HOST_CUDA1_FAMILY,
+            host_domain,
+            &host_to_cuda1,
+            &host_to_cuda1_counters,
+        ),
+        (
+            &cuda0_endpoint,
+            &host_endpoint,
+            ROUTE_CUDA0_HOST_FAMILY,
+            cuda0_domain,
+            &cuda0_to_host,
+            &cuda0_to_host_counters,
+        ),
+        (
+            &cuda1_endpoint,
+            &host_endpoint,
+            ROUTE_CUDA1_HOST_FAMILY,
+            cuda1_domain,
+            &cuda1_to_host,
+            &cuda1_to_host_counters,
+        ),
+    ];
+    for (source_endpoint, destination_endpoint, family_id, source_domain, provider, counters) in
+        execution_routes
+    {
+        let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+        let y =
+            tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp { family_id }), &[&x])?
+                .pop()
+                .expect("route extension has one output");
+        let program =
+            GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
+        let input = TestAllocationDomain(source_domain).allocate(DType::F64, &[2])?;
+        let output = runtime.run_compiled(&program, &[&input])?;
+
+        assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
+        assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.calls(), 1);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(&request.source_engine_id, source_endpoint.engine_id());
+        assert_eq!(
+            &request.destination_engine_id,
+            destination_endpoint.engine_id()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn unknown_engine_transfer_endpoint_fails_build_without_publishing_a_runtime(
+) -> Result<(), Box<dyn StdError>> {
+    let backend = CpuBackend::new();
+    let known_engine = EngineId::new("tenferro-test.engine.known-route.v1")?;
+    let unknown_engine = EngineId::new("tenferro-test.engine.unknown-route.v1")?;
+    let storage = StorageClass::new("tenferro-test.storage.unknown-route.v1")?;
+    let known_endpoint = TransferEndpoint::new(known_engine.clone(), storage.clone());
+    let unknown_endpoint = TransferEndpoint::new(unknown_engine.clone(), storage.clone());
+    let provider: Arc<dyn TransferProvider> = Arc::new(RecordingTransferProvider::new(
+        storage.clone(),
+        storage.clone(),
+    ));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &backend,
+        known_engine.as_str(),
+        storage.as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::PreparationOnly,
+    )?)?;
+    builder.register_transfer_provider(known_endpoint, unknown_endpoint.clone(), provider)?;
+
+    let error = builder
+        .build()
+        .expect_err("an endpoint for an unknown engine must prevent publication");
+    assert!(matches!(
+        &error,
+        RuntimeConfigError::UnknownTransferEndpointEngine { endpoint }
+            if endpoint == &unknown_endpoint
+    ));
+    let rendered = error.to_string();
+    assert!(rendered.contains(unknown_engine.as_str()), "{rendered}");
+    assert!(rendered.contains(storage.as_str()), "{rendered}");
+    Ok(())
+}
+
+#[test]
+fn unsupported_transfer_endpoint_storage_fails_build() -> Result<(), Box<dyn StdError>> {
+    let backend = CpuBackend::new();
+    let engine = EngineId::new("tenferro-test.engine.unsupported-route.v1")?;
+    let supported_storage = StorageClass::new("tenferro-test.storage.supported-route.v1")?;
+    let unsupported_storage = StorageClass::new("tenferro-test.storage.unsupported-route.v1")?;
+    let source = TransferEndpoint::new(engine.clone(), supported_storage.clone());
+    let destination = TransferEndpoint::new(engine.clone(), unsupported_storage.clone());
+    let provider: Arc<dyn TransferProvider> = Arc::new(RecordingTransferProvider::new(
+        supported_storage,
+        unsupported_storage.clone(),
+    ));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_storage_id(
+        &backend,
+        engine.as_str(),
+        source.storage_class().as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::PreparationOnly,
+    )?)?;
+    builder.register_transfer_provider(source.clone(), destination, provider)?;
+
+    let error = builder
+        .build()
+        .expect_err("an endpoint with unsupported storage must fail validation");
+    assert!(matches!(
+        &error,
+        RuntimeConfigError::UnsupportedTransferEndpointStorage { endpoint }
+            if endpoint.engine_id() == source.engine_id()
+                && endpoint.storage_class() == &unsupported_storage
+    ));
+    let rendered = error.to_string();
+    assert!(rendered.contains(engine.as_str()), "{rendered}");
+    assert!(
+        rendered.contains(unsupported_storage.as_str()),
+        "{rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn reconfiguration_rejects_invalid_transfer_endpoint_without_publishing(
+) -> Result<(), Box<dyn StdError>> {
+    let backend = CpuBackend::new();
+    let known_engine_id = "tenferro-test.engine.reconfigure-known.v1";
+    let unknown_engine_id = EngineId::new("tenferro-test.engine.reconfigure-unknown.v1")?;
+    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let source_endpoint = transfer_endpoint(known_engine_id, storage.clone())?;
+    let destination_endpoint = TransferEndpoint::new(unknown_engine_id.clone(), storage.clone());
+    let provider: Arc<dyn TransferProvider> =
+        Arc::new(RecordingTransferProvider::new(storage.clone(), storage));
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(cpu_registration_with_id(
+        &backend,
+        known_engine_id,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::PreparationOnly,
+    )?)?;
+    let runtime = builder.build()?;
+    let before = runtime.snapshot()?;
+
+    let error = runtime
+        .reconfigure(|edit| {
+            edit.register_transfer_provider(
+                source_endpoint.clone(),
+                destination_endpoint.clone(),
+                provider,
+            )?;
+            Ok(())
+        })
+        .expect_err("invalid endpoint must reject the candidate");
+
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::UnknownTransferEndpointEngine { endpoint },
+        } if endpoint == destination_endpoint
+    ));
+    let after = runtime.snapshot()?;
+    assert_eq!(after.epoch(), before.epoch());
+    assert_eq!(after.transfer_provider_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn reconfiguration_remove_engine_rejects_dangling_route_atomically_and_keeps_same_route_executable(
+) -> Result<(), Box<dyn StdError>> {
+    let removed_engine_id = EngineId::new("tenferro-test.engine.reconfigure-removed.v1")?;
+    let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let fixture = published_route_fixture(removed_engine_id.clone(), route_storage)?;
+    let before = fixture.runtime.snapshot()?;
+    let before_epoch = before.epoch();
+    let before_removed_registration = before
+        .engine(&removed_engine_id)
+        .expect("removed engine is initially published")
+        .registration_identity();
+    let before_route_count = before.transfer_provider_count();
+    assert_eq!(before_route_count, 1);
+
+    let error = fixture
+        .runtime
+        .reconfigure(|edit| {
+            edit.remove_engine(&removed_engine_id)?;
+            Ok(())
+        })
+        .expect_err("removing an engine referenced by a route must be rejected");
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::UnknownTransferEndpointEngine { endpoint },
+        } if endpoint == fixture.destination_endpoint
+    ));
+
+    let after = fixture.runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(fixture.runtime.epoch()?, before_epoch);
+    assert_eq!(after.engine_count(), before.engine_count());
+    assert_eq!(after.transfer_provider_count(), before_route_count);
+    assert_eq!(
+        after
+            .engine(&removed_engine_id)
+            .expect("pre-edit snapshot remains readable")
+            .registration_identity(),
+        before_removed_registration
+    );
+    execute_published_route(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_keeps_same_route_executable(
+) -> Result<(), Box<dyn StdError>> {
+    let dropped_storage = StorageClass::new("tenferro-test.storage.reconfigure-dropped.v1")?;
+    let replaced_engine_id = EngineId::new("tenferro-test.engine.reconfigure-replaced.v1")?;
+    let fixture = published_route_fixture(replaced_engine_id.clone(), dropped_storage)?;
+    let before = fixture.runtime.snapshot()?;
+    let before_epoch = before.epoch();
+    let before_replaced_registration = before
+        .engine(&replaced_engine_id)
+        .expect("replaced engine is initially published")
+        .registration_identity();
+    let before_route_count = before.transfer_provider_count();
+    assert_eq!(before_route_count, 1);
+    let replacement = cpu_registration_with_storage_id(
+        &CpuBackend::new(),
+        replaced_engine_id.as_str(),
+        CPU_STORAGE_CLASS_ID,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+    )?;
+
+    let error = fixture
+        .runtime
+        .reconfigure(|edit| {
+            edit.replace_engine(replacement)?;
+            Ok(())
+        })
+        .expect_err("dropping a route storage class must be rejected");
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::UnsupportedTransferEndpointStorage { endpoint },
+        } if endpoint == fixture.destination_endpoint
+    ));
+
+    let after = fixture.runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(fixture.runtime.epoch()?, before_epoch);
+    assert_eq!(after.engine_count(), before.engine_count());
+    assert_eq!(after.transfer_provider_count(), before_route_count);
+    assert_eq!(
+        after
+            .engine(&replaced_engine_id)
+            .expect("pre-edit snapshot remains readable")
+            .registration_identity(),
+        before_replaced_registration
+    );
+    execute_published_route(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
+) -> Result<(), Box<dyn StdError>> {
+    let affected_engine_id = EngineId::new("tenferro-test.engine.rebind-execution.v1")?;
+    let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
+    let fixture = published_route_fixture(affected_engine_id.clone(), route_storage)?;
+    let source_identity =
+        test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
+    let replacement_identity =
+        ProviderDeviceIdentity::new(ProviderId::new("tenferro.test.cpu")?, "test-rebound-target")?;
+    let replacement = cpu_registration_with_storage_id_for_target(
+        &fixture.destination_backend,
+        affected_engine_id.as_str(),
+        fixture.destination_endpoint.storage_class().as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
+        replacement_identity.target_identity(),
+    )?;
+
+    fixture.runtime.reconfigure(|edit| {
+        edit.remove_transfer_provider(
+            fixture.source_endpoint.clone(),
+            fixture.destination_endpoint.clone(),
+        )?;
+        edit.remove_engine(&affected_engine_id)?;
+        edit.register_engine(replacement)?;
+        edit.register_transfer_provider(
+            fixture.source_endpoint.clone(),
+            fixture.destination_endpoint.clone(),
+            Arc::clone(&fixture.provider) as Arc<dyn TransferProvider>,
+        )?;
+        Ok(())
+    })?;
+
+    execute_published_route_with_targets(&fixture, &source_identity, &replacement_identity)?;
+    let requests = fixture.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].destination_provider_device_identity,
+        replacement_identity
+    );
+    Ok(())
+}
+
+#[test]
+fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), Box<dyn StdError>> {
     let storage = StorageClass::new("tenferro-test.storage.missing-ingress.v1")?;
-    let registration = EngineRegistration::new(
+    let metadata = EngineRegistrationMetadata::new(
         EngineId::new("tenferro-test.engine.missing-ingress.v1")?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
+        ProviderDeviceIdentity::new(
+            ProviderId::new("tenferro.test.cpu")?,
+            "test-engine:tenferro-test.engine.missing-ingress.v1",
+        )?,
         HardwareClassId::new("tenferro-test.hardware.missing-ingress.v1")?,
         Arc::from(vec![storage.clone()]),
         storage,
         CoreCapabilityBundle::default(),
-    )?
-    .with_tensor_backend_executor(CpuBackend::new());
+    );
+    let registration = assemble_preparation_only_engine_registration(
+        PreparationOnlyEngineRegistrationConfig::new(
+            metadata,
+            ExecutionContextIdentity::of::<CpuBackend>(),
+        ),
+    )?;
     let mut builder = Runtime::builder();
 
-    let error = builder.register_engine(registration).unwrap_err();
-
-    assert!(matches!(
-        error,
-        RuntimeConfigError::MissingInputIngressValidator { engine_id }
-            if engine_id.as_str() == "tenferro-test.engine.missing-ingress.v1"
-    ));
+    builder.register_engine(registration)?;
+    let runtime = builder.build()?;
+    assert!(runtime
+        .snapshot()?
+        .engine(&EngineId::new("tenferro-test.engine.missing-ingress.v1")?)
+        .is_some());
     Ok(())
 }
 
@@ -1355,18 +1995,18 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
     builder.register_engine(cpu_registration_with_id(
         &first_backend,
         first_engine,
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_id(
         &second_backend,
         second_engine,
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_transfer_provider(
-        storage,
-        StorageClass::new(CPU_STORAGE_CLASS_ID)?,
+        transfer_endpoint(second_engine, storage.clone())?,
+        transfer_endpoint(first_engine, storage.clone())?,
         transfer.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -1428,26 +2068,26 @@ fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
         &dead_backend,
         "tenferro-test.a-dead-ingress.v1",
         dead_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &routed_backend,
         "tenferro-test.b-routed-ingress.v1",
         routed_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &consumer_backend,
         "tenferro-test.z-routed-consumer.v1",
         consumer_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_transfer_provider(
-        routed_storage.clone(),
-        consumer_storage,
+        transfer_endpoint("tenferro-test.b-routed-ingress.v1", routed_storage.clone())?,
+        transfer_endpoint("tenferro-test.z-routed-consumer.v1", consumer_storage)?,
         transfer.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -1496,15 +2136,15 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
         &first_backend,
         "tenferro-test.a-first-capable.v1",
         shared_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &second_backend,
         "tenferro-test.b-second-reachable.v1",
         shared_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-retry.first-module")?,
@@ -1560,15 +2200,15 @@ fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), B
         &first_backend,
         "tenferro-test.a-first-storage-capable.v1",
         "tenferro-test.storage.first-unreachable.v1",
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &second_backend,
         "tenferro-test.b-second-storage-reachable.v1",
         CPU_STORAGE_CLASS_ID,
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.storage-retry.first-module")?,
@@ -1641,11 +2281,15 @@ fn runtime_operation_placement_explores_complete_multi_op_combinations(
             backend,
             engine_id,
             storage.as_str(),
-            false,
-            true,
+            CoreCapabilityBundle::default(),
+            CpuRegistrationState::executable(),
         )?)?;
     }
-    builder.register_transfer_provider(b_storage.clone(), d_storage.clone(), transfer.clone())?;
+    builder.register_transfer_provider(
+        transfer_endpoint("tenferro-test.complete-b.v1", b_storage.clone())?,
+        transfer_endpoint("tenferro-test.complete-d.v1", d_storage.clone())?,
+        transfer.clone(),
+    )?;
     for (module_id, family_id, engine_id, counters) in [
         (
             "tenferro-test.complete.first-a",
@@ -1777,14 +2421,14 @@ fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail
     builder.register_engine(cpu_registration_with_id(
         &first_backend,
         "tenferro-test.a-unreachable-capable.v1",
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_id(
         &second_backend,
         "tenferro-test.b-unreachable-capable.v1",
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-failure.first-module")?,
@@ -1858,43 +2502,43 @@ fn runtime_input_ingress_covers_all_split_consumers() -> Result<(), Box<dyn StdE
         &dead_backend,
         "tenferro-test.a-split-dead.v1",
         dead_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &routed_backend,
         "tenferro-test.b-split-routed.v1",
         routed_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &first_consumer_backend,
         "tenferro-test.y-split-first.v1",
         first_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &second_consumer_backend,
         "tenferro-test.z-split-second.v1",
         second_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_transfer_provider(
-        dead_storage,
-        first_storage.clone(),
+        transfer_endpoint("tenferro-test.a-split-dead.v1", dead_storage)?,
+        transfer_endpoint("tenferro-test.y-split-first.v1", first_storage.clone())?,
         dead_to_first.clone(),
     )?;
     builder.register_transfer_provider(
-        routed_storage.clone(),
-        first_storage,
+        transfer_endpoint("tenferro-test.b-split-routed.v1", routed_storage.clone())?,
+        transfer_endpoint("tenferro-test.y-split-first.v1", first_storage)?,
         routed_to_first.clone(),
     )?;
     builder.register_transfer_provider(
-        routed_storage.clone(),
-        second_storage,
+        transfer_endpoint("tenferro-test.b-split-routed.v1", routed_storage.clone())?,
+        transfer_endpoint("tenferro-test.z-split-second.v1", second_storage)?,
         routed_to_second.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -1987,42 +2631,50 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
         &root_backend,
         "tenferro-test.a-synth-root.v1",
         root_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &dead_backend,
         "tenferro-test.b-synth-dead.v1",
         dead_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &routed_backend,
         "tenferro-test.c-synth-routed.v1",
         routed_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &core_backend,
         "tenferro-test.z-synth-core.v1",
         core_storage.as_str(),
-        true,
-        true,
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable(),
     )?)?;
-    builder.register_transfer_provider(dead_storage, core_storage.clone(), dead_to_core.clone())?;
     builder.register_transfer_provider(
-        routed_storage.clone(),
-        root_storage.clone(),
+        transfer_endpoint("tenferro-test.b-synth-dead.v1", dead_storage)?,
+        transfer_endpoint("tenferro-test.z-synth-core.v1", core_storage.clone())?,
+        dead_to_core.clone(),
+    )?;
+    builder.register_transfer_provider(
+        transfer_endpoint("tenferro-test.c-synth-routed.v1", routed_storage.clone())?,
+        transfer_endpoint("tenferro-test.a-synth-root.v1", root_storage.clone())?,
         routed_to_root.clone(),
     )?;
     builder.register_transfer_provider(
-        routed_storage.clone(),
-        core_storage.clone(),
+        transfer_endpoint("tenferro-test.c-synth-routed.v1", routed_storage.clone())?,
+        transfer_endpoint("tenferro-test.z-synth-core.v1", core_storage.clone())?,
         routed_to_core.clone(),
     )?;
-    builder.register_transfer_provider(root_storage, core_storage, root_to_core)?;
+    builder.register_transfer_provider(
+        transfer_endpoint("tenferro-test.a-synth-root.v1", root_storage)?,
+        transfer_endpoint("tenferro-test.z-synth-core.v1", core_storage)?,
+        root_to_core,
+    )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.synth-root")?,
         family_id: COUNTING_EXTENSION_FAMILY,
@@ -2079,16 +2731,20 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     builder.register_engine(cpu_registration_with_id(
         &core_backend,
         core_engine_id,
-        true,
-        true,
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_id(
         &extension_backend,
         extension_engine_id,
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
-    builder.register_transfer_provider(storage.clone(), storage.clone(), transfer.clone())?;
+    builder.register_transfer_provider(
+        transfer_endpoint(core_engine_id, storage.clone())?,
+        transfer_endpoint(extension_engine_id, storage.clone())?,
+        transfer.clone(),
+    )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.per-op-module")
             .map_err(RuntimeConfigError::from)?,
@@ -2135,9 +2791,13 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(core_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: storage.clone(),
             destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                extension_engine_id
+            )?,
             destination_event_domain_id: destination_event_domain,
             destination_storage_class: storage,
         }]
@@ -2152,78 +2812,16 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 }
 
 #[test]
-fn runtime_run_compiled_preflights_all_event_domain_drivers_before_launch(
-) -> Result<(), Box<dyn StdError>> {
-    let core_backend = CpuBackend::new();
-    let extension_backend = CpuBackend::new();
-    let counters = Arc::new(ExtensionCounters::default());
-    let core_engine_id = "tenferro-test.driver-preflight-core.v1";
-    let extension_engine_id = "tenferro-test.driver-preflight-extension.v1";
-    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let transfer = Arc::new(RecordingTransferProvider::new(
-        storage.clone(),
-        storage.clone(),
-    ));
-    let event_log = Arc::new(Mutex::new(Vec::new()));
-
-    let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_id(&core_backend, core_engine_id, true, true)?
-            .with_event_domain_driver(recording_event_domain("source", &event_log)),
-    )?;
-    builder.register_engine(cpu_registration_with_id_and_driver(
-        &extension_backend,
-        extension_engine_id,
-        false,
-        true,
-        false,
-    )?)?;
-    builder.register_transfer_provider(storage.clone(), storage, transfer.clone())?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new("tenferro-test.driver-preflight-module")?,
-        family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id)?,
-        counters: Arc::clone(&counters),
-    }))?;
-    let runtime = builder.build()?;
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let sum = (&x + &x)?;
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&sum],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-
-    let error = runtime
-        .run_compiled(&program, &[&input])
-        .expect_err("missing event-domain driver must fail preflight");
-
-    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
-    assert!(error.to_string().contains("has no registered driver"));
-    assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
-    assert_eq!(transfer.calls(), 0);
-    assert!(
-        event_log.lock().expect("event log lock").is_empty(),
-        "preflight failure must occur before any domain begins"
-    );
-    Ok(())
-}
-
-#[test]
 fn runtime_run_compiled_returns_drain_failure_without_outputs() -> Result<(), Box<dyn StdError>> {
     let backend = CpuBackend::new();
     let event_log = Arc::new(Mutex::new(Vec::new()));
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration(&backend, true)?
-            .with_event_domain_driver(failing_drain_event_domain("cpu", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_id(
+        &backend,
+        CPU_ENGINE_ID,
+        cpu_core_capabilities(&backend),
+        CpuRegistrationState::executable_with_driver(failing_drain_event_domain("cpu", &event_log)),
+    )?)?;
     let runtime = builder.build()?;
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
@@ -2263,10 +2861,12 @@ fn runtime_run_compiled_unwind_drops_event_run_before_tensor_storage(
     panic_counters.panic_execute.store(true, Ordering::SeqCst);
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration(&backend, true)?
-            .with_event_domain_driver(recording_event_domain("cpu", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_id(
+        &backend,
+        CPU_ENGINE_ID,
+        cpu_core_capabilities(&backend),
+        CpuRegistrationState::executable_with_driver(recording_event_domain("cpu", &event_log)),
+    )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.panic-producer-module")?,
         family_id: COUNTING_EXTENSION_FAMILY,
@@ -2346,29 +2946,31 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &core_backend,
-            core_engine_id,
-            source_storage.as_str(),
-            true,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("source", &event_log)),
-    )?;
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &extension_backend,
-            extension_engine_id,
-            destination_storage.as_str(),
-            false,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &core_backend,
+        core_engine_id,
+        source_storage.as_str(),
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable_with_driver(recording_event_domain("source", &event_log)),
+        &format!("test-engine:{core_engine_id}"),
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &extension_backend,
+        extension_engine_id,
+        destination_storage.as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable_with_driver(recording_event_domain(
+            "destination",
+            &event_log,
+        )),
+        &format!("test-engine:{extension_engine_id}"),
+    )?)?;
     builder.register_transfer_provider(
-        source_storage.clone(),
-        destination_storage.clone(),
+        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone()),
+        TransferEndpoint::new(
+            EngineId::new(extension_engine_id)?,
+            destination_storage.clone(),
+        ),
         transfer.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -2416,9 +3018,13 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(core_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: source_storage,
             destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                extension_engine_id
+            )?,
             destination_event_domain_id: destination_event_domain,
             destination_storage_class: destination_storage,
         }]
@@ -2443,8 +3049,16 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
             .iter()
             .filter(|event| event.as_str() == "destination:enqueue:1")
             .count(),
-        2,
-        "transfer and destination operation must both consume dependencies: {events:?}"
+        1,
+        "only the same-destination operation dependency reaches the destination run: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "destination:enqueue:0")
+            .count(),
+        1,
+        "the transfer source dependency is host-bridged before destination enqueue: {events:?}"
     );
     assert!(events.contains(&"source:wait".to_owned()), "{events:?}");
     assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
@@ -2481,19 +3095,19 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
         &ingress_backend,
         ingress_engine_id,
         ingress_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &consumer_backend,
         consumer_engine_id,
         consumer_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_transfer_provider(
-        ingress_storage.clone(),
-        consumer_storage.clone(),
+        transfer_endpoint(ingress_engine_id, ingress_storage.clone())?,
+        transfer_endpoint(consumer_engine_id, consumer_storage.clone())?,
         transfer.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -2545,9 +3159,13 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
         transfer.requests(),
         vec![RecordedTransferRequest {
             source_engine_id: EngineId::new(ingress_engine_id)?,
+            source_provider_device_identity: test_provider_device_identity(ingress_engine_id)?,
             source_event_domain_id: ingress_event_domain,
             source_storage_class: ingress_storage,
             destination_engine_id: EngineId::new(consumer_engine_id)?,
+            destination_provider_device_identity: test_provider_device_identity(
+                consumer_engine_id
+            )?,
             destination_event_domain_id: consumer_event_domain,
             destination_storage_class: consumer_storage,
         }]
@@ -2590,19 +3208,19 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
             &ingress_backend,
             "tenferro-test.a-faulty-ingress.v1",
             ingress_storage.as_str(),
-            false,
-            true,
+            CoreCapabilityBundle::default(),
+            CpuRegistrationState::executable(),
         )?)?;
         builder.register_engine(cpu_registration_with_storage_id(
             &consumer_backend,
             "tenferro-test.z-faulty-consumer.v1",
             consumer_storage.as_str(),
-            false,
-            true,
+            CoreCapabilityBundle::default(),
+            CpuRegistrationState::executable(),
         )?)?;
         builder.register_transfer_provider(
-            ingress_storage,
-            consumer_storage,
+            transfer_endpoint("tenferro-test.a-faulty-ingress.v1", ingress_storage)?,
+            transfer_endpoint("tenferro-test.z-faulty-consumer.v1", consumer_storage)?,
             Arc::new(FaultyTransferProvider { fault }),
         )?;
         builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -2686,24 +3304,24 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
         &core_backend,
         core_engine_id,
         source_storage.as_str(),
-        true,
-        true,
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &extension_backend,
         extension_engine_id,
         destination_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_transfer_provider(
-        source_storage.clone(),
-        destination_storage.clone(),
+        transfer_endpoint(core_engine_id, source_storage.clone())?,
+        transfer_endpoint(extension_engine_id, destination_storage.clone())?,
         forward.clone(),
     )?;
     builder.register_transfer_provider(
-        destination_storage.clone(),
-        source_storage,
+        transfer_endpoint(extension_engine_id, destination_storage.clone())?,
+        transfer_endpoint(core_engine_id, source_storage)?,
         reverse.clone(),
     )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -2743,9 +3361,19 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     Ok(())
 }
 
-#[test]
-fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
-) -> Result<(), Box<dyn StdError>> {
+struct TransferDrainFailureObservation {
+    error: Error,
+    events: Vec<String>,
+    forward_calls: usize,
+    failing_calls: usize,
+    upstream_execute: usize,
+    downstream_execute: usize,
+    drops: usize,
+}
+
+fn run_transfer_and_drain_failure(
+    drain_behavior: DrainBehavior,
+) -> Result<TransferDrainFailureObservation, Box<dyn StdError>> {
     let core_backend = CpuBackend::new();
     let extension_domain = AllocationDomainId::fresh();
     let extension_backend =
@@ -2772,32 +3400,39 @@ fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
     let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &core_backend,
-            core_engine_id,
-            source_storage.as_str(),
-            true,
-            true,
-        )?
-        .with_event_domain_driver(failing_drain_event_domain("source", &event_log)),
-    )?;
-    builder.register_engine(
-        cpu_registration_with_storage_id(
-            &extension_backend,
-            extension_engine_id,
-            destination_storage.as_str(),
-            false,
-            true,
-        )?
-        .with_event_domain_driver(recording_event_domain("destination", &event_log)),
-    )?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &core_backend,
+        core_engine_id,
+        source_storage.as_str(),
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable_with_driver(event_domain_with_drain_behavior(
+            "source",
+            &event_log,
+            drain_behavior,
+        )),
+        &format!("test-engine:{core_engine_id}"),
+    )?)?;
+    builder.register_engine(cpu_registration_with_storage_id_for_target(
+        &extension_backend,
+        extension_engine_id,
+        destination_storage.as_str(),
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable_with_driver(recording_event_domain(
+            "destination",
+            &event_log,
+        )),
+        &format!("test-engine:{extension_engine_id}"),
+    )?)?;
     builder.register_transfer_provider(
-        source_storage.clone(),
-        destination_storage.clone(),
+        transfer_endpoint(core_engine_id, source_storage.clone())?,
+        transfer_endpoint(extension_engine_id, destination_storage.clone())?,
         forward.clone(),
     )?;
-    builder.register_transfer_provider(destination_storage, source_storage, failing.clone())?;
+    builder.register_transfer_provider(
+        transfer_endpoint(extension_engine_id, destination_storage)?,
+        transfer_endpoint(core_engine_id, source_storage)?,
+        failing.clone(),
+    )?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new(
             "tenferro-test.counting-extension.transfer-failure-module",
@@ -2841,41 +3476,104 @@ fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    eprintln!("missing bridge error: {error:?}");
 
-    assert!(error.to_string().contains("intentional transfer failure"));
+    let events = event_log.lock().expect("event log lock").clone();
+    Ok(TransferDrainFailureObservation {
+        error,
+        events,
+        forward_calls: forward.calls(),
+        failing_calls: failing.calls.load(Ordering::SeqCst),
+        upstream_execute: upstream_counters.execute.load(Ordering::SeqCst),
+        downstream_execute: downstream_counters.execute.load(Ordering::SeqCst),
+        drops: drops.load(Ordering::SeqCst),
+    })
+}
+
+fn assert_transfer_and_drain_failure(
+    observation: &TransferDrainFailureObservation,
+    cleanup_message: &str,
+) {
+    assert!(observation
+        .error
+        .to_string()
+        .contains("intentional transfer failure"));
     assert!(
-        error
-            .to_string()
-            .contains("source event-domain drain failure"),
-        "combined execution and cleanup diagnostics must preserve both failures: {error}"
+        observation.error.to_string().contains(cleanup_message),
+        "combined execution and cleanup diagnostics must preserve both failures: {}",
+        observation.error
     );
-    assert_eq!(forward.calls(), 1);
-    assert_eq!(failing.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(upstream_counters.execute.load(Ordering::SeqCst), 1);
+    let cleanup = observation
+        .error
+        .source()
+        .expect("combined error must retain cleanup wrapper");
+    let primary = cleanup
+        .source()
+        .expect("cleanup wrapper must retain the primary execution error");
+    assert!(primary.to_string().contains("intentional transfer failure"));
+    assert_eq!(observation.forward_calls, 1);
+    assert_eq!(observation.failing_calls, 1);
+    assert_eq!(observation.upstream_execute, 1);
     assert_eq!(
-        downstream_counters.execute.load(Ordering::SeqCst),
-        0,
+        observation.downstream_execute, 0,
         "the downstream operation must not execute after its input transfer fails"
     );
     assert_eq!(
-        drops.load(Ordering::SeqCst),
-        1,
+        observation.drops, 1,
         "the extension output retained at its source location must be released on failure"
     );
-    let events = event_log.lock().expect("event log lock").clone();
     assert_eq!(
-        events
+        observation
+            .events
             .iter()
-            .filter(|event| event.as_str() == "source:enqueue:1")
+            .filter(|event| event.as_str() == "source:enqueue:0")
             .count(),
-        1,
-        "the failing reverse transfer is admitted, but the downstream operation is not: {events:?}"
+        2,
+        "the reverse transfer reaches the source run without its foreign token: {:?}",
+        observation.events
     );
-    assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
     assert!(
-        events.contains(&"destination:drain".to_owned()),
-        "{events:?}"
+        !observation
+            .events
+            .iter()
+            .any(|event| event == "source:enqueue:1"),
+        "the source run must not receive the foreign destination token: {:?}",
+        observation.events
     );
+    assert_eq!(
+        observation
+            .events
+            .iter()
+            .filter(|event| event.as_str() == "destination:wait")
+            .count(),
+        2,
+        "the scheduler host bridge and downstream operation each wait on destination work: {:?}",
+        observation.events
+    );
+    assert!(
+        observation.events.contains(&"source:drain".to_owned()),
+        "{:?}",
+        observation.events
+    );
+    assert!(
+        observation.events.contains(&"destination:drain".to_owned()),
+        "{:?}",
+        observation.events
+    );
+}
+
+#[test]
+fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
+) -> Result<(), Box<dyn StdError>> {
+    let observation = run_transfer_and_drain_failure(DrainBehavior::ReturnError)?;
+    assert_transfer_and_drain_failure(&observation, "source event-domain drain failure");
+    Ok(())
+}
+
+#[test]
+fn transfer_and_drain_panic_preserve_primary_and_cleanup_errors() -> Result<(), Box<dyn StdError>> {
+    let observation = run_transfer_and_drain_failure(DrainBehavior::Panic)?;
+    assert_transfer_and_drain_failure(&observation, "source event-domain drain panic");
     Ok(())
 }
 
@@ -2889,21 +3587,27 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     let extension_engine_id = "tenferro-test.extension-missing-transfer-destination.v1";
     let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let destination_storage = StorageClass::new("tenferro-test.storage.missing-destination.v1")?;
+    let source_endpoint =
+        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone());
+    let expected_destination_endpoint = TransferEndpoint::new(
+        EngineId::new(extension_engine_id)?,
+        destination_storage.clone(),
+    );
 
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration_with_storage_id(
         &core_backend,
         core_engine_id,
         CPU_STORAGE_CLASS_ID,
-        true,
-        true,
+        cpu_core_capabilities(&core_backend),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id(
         &extension_backend,
         extension_engine_id,
         destination_storage.as_str(),
-        false,
-        true,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.no-transfer-module")
@@ -2931,6 +3635,14 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
     assert!(error.to_string().contains("no direct transfer provider"));
+    assert!(
+        error.to_string().contains(core_engine_id),
+        "missing-route diagnostics must name the source endpoint: {error}"
+    );
+    assert!(
+        error.to_string().contains(extension_engine_id),
+        "missing-route diagnostics must name the destination endpoint: {error}"
+    );
     let prepare_error = error
         .source()
         .and_then(StdError::source)
@@ -2939,11 +3651,11 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     assert!(matches!(
         prepare_error,
         PrepareError::MissingTransferProvider {
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint: actual_destination_endpoint,
+            available_source_endpoints,
             ..
-        } if available_storage_classes == std::slice::from_ref(&source_storage)
-            && destination_storage_class == &destination_storage
+        } if available_source_endpoints == std::slice::from_ref(&source_endpoint)
+            && actual_destination_endpoint == &expected_destination_endpoint
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
@@ -2956,11 +3668,11 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     assert!(matches!(
         submit_prepare_error,
         PrepareError::MissingTransferProvider {
-            destination_storage_class,
-            available_storage_classes,
+            destination_endpoint: actual_destination_endpoint,
+            available_source_endpoints,
             ..
-        } if available_storage_classes == std::slice::from_ref(&source_storage)
-            && destination_storage_class == &destination_storage
+        } if available_source_endpoints == std::slice::from_ref(&source_endpoint)
+            && actual_destination_endpoint == &expected_destination_endpoint
     ));
 
     Ok(())
@@ -3041,10 +3753,14 @@ fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<d
 }
 
 #[test]
-fn runtime_run_compiled_reports_missing_execution_bridge() -> Result<(), Box<dyn StdError>> {
+fn runtime_run_compiled_rejects_preparation_only_registration() -> Result<(), Box<dyn StdError>> {
     let backend = CpuBackend::new();
     let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration(&backend, false)?)?;
+    builder.register_engine(cpu_registration(
+        &backend,
+        CoreCapabilityBundle::default(),
+        CpuRegistrationState::PreparationOnly,
+    )?)?;
     let runtime = builder.build()?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = x.neg()?;
@@ -3054,7 +3770,8 @@ fn runtime_run_compiled_reports_missing_execution_bridge() -> Result<(), Box<dyn
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
-    assert!(error.to_string().contains("execution bridge"));
+    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
+    assert!(StdError::source(&error).is_some());
     Ok(())
 }
 
@@ -3073,7 +3790,15 @@ fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), 
     let after_first = runtime.cache_stats()?.prepared_plans;
 
     runtime.reconfigure(|edit| {
-        edit.replace_engine(cpu_registration(&CpuBackend::new(), true)?)?;
+        let backend = CpuBackend::new();
+        edit.replace_engine(cpu_registration(
+            &backend,
+            cpu_core_capabilities(&backend),
+            CpuRegistrationState::executable_with_cache_owner(
+                Arc::new(ImmediateEventDomainDriver::new()),
+                Arc::new(backend.clone()),
+            ),
+        )?)?;
         Ok(())
     })?;
 

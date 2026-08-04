@@ -684,6 +684,17 @@ fn semantic_transform_validation_error(
     transform: &'static str,
     source: &SemanticAdTransformError,
 ) -> Option<Error> {
+    if let SemanticAdTransformError::Extension(
+        SemanticAdError::Unsupported { family_id, .. }
+        | SemanticAdError::MissingRule { family_id, .. },
+    ) = source
+    {
+        return Some(Error::UnsupportedAdRule {
+            transform,
+            op: (*family_id).to_owned(),
+        });
+    }
+
     let SemanticAdTransformError::Extension(SemanticAdError::Rule { source, .. }) = source else {
         return None;
     };
@@ -1022,4 +1033,45 @@ fn validate_seed_tensor(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod semantic_transform_error_tests {
+    use super::*;
+    use crate::semantic_extension::SemanticAdRuleRole;
+
+    #[test]
+    fn unsupported_semantic_rule_maps_to_public_transform_error() {
+        let source = SemanticAdTransformError::Extension(SemanticAdError::Unsupported {
+            family_id: "tenferro-tests.unsupported.v1",
+            role: SemanticAdRuleRole::LinearTranspose,
+            message: "unsupported test payload".into(),
+        });
+
+        let error = semantic_transform_validation_error("vjp", &source)
+            .expect("semantic rejection must map to a public unsupported-rule error");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedAdRule { transform: "vjp", ref op }
+                if op == "tenferro-tests.unsupported.v1"
+        ));
+    }
+
+    #[test]
+    fn missing_semantic_rule_maps_to_public_transform_error() {
+        let source = SemanticAdTransformError::Extension(SemanticAdError::MissingRule {
+            family_id: "tenferro-tests.missing.v1",
+            role: SemanticAdRuleRole::Linearize,
+        });
+
+        let error = semantic_transform_validation_error("jvp", &source)
+            .expect("missing semantic rule must map to a public unsupported-rule error");
+
+        assert!(matches!(
+            error,
+            Error::UnsupportedAdRule { transform: "jvp", ref op }
+                if op == "tenferro-tests.missing.v1"
+        ));
+    }
 }

@@ -6,6 +6,8 @@ mod cubecl_launch_contract;
 mod kernel_metadata_contract;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
+#[path = "integration/session_contract.rs"]
+mod session_contract;
 #[path = "integration/webgpu_backend_contract.rs"]
 mod webgpu_backend_contract;
 #[path = "integration/webgpu_matmul_runtime.rs"]

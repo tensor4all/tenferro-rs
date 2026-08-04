@@ -1,0 +1,11 @@
+error[E0308]: mismatched types
+ --> tests/ui/eager_session_no_owner_projection.rs:5:5
+  |
+4 | fn recover_cpu_owner(session: &mut dyn BackendSession) -> &mut CpuBackend {
+  |                                                           --------------- expected `&mut CpuBackend` because of return type
+5 |     session
+  |     ^^^^^^^ expected `&mut CpuBackend`, found `&mut dyn BackendSession`
+  |
+  = note: expected mutable reference `&mut CpuBackend`
+             found mutable reference `&mut dyn BackendSession`
+  = help: `CpuBackend` implements `BackendSession` so you could change the expected type to `Box<dyn BackendSession>`

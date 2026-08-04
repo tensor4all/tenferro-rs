@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_tensor::{DType, MemoryKind, Placement, ShapeVec, StrideVec, Tensor};
@@ -11,14 +12,17 @@ use tenferro_tensor::{DType, MemoryKind, Placement, ShapeVec, StrideVec, Tensor}
 use crate::program::{CoreSemanticOp, FrozenProgram, ProgramInputSpec, SemanticProgramBuilder};
 use crate::runtime::{
     CacheInFlightBehavior, CoreCapabilityBundle, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, HardwareClassId, InputSignature, InputSignatureEntry,
-    InputSpecializationRequirements, LayoutClass, PrepareCapability, PrepareError, PrepareOptions,
-    PreparedOperation, PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
-    ProviderContractError, ResolvedProgramPlacement, Runtime, RuntimeConfigBuilder,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TransferProvider,
-    TransferRequest,
+    EngineId, EngineRegistration, ExecutableEngineContract, ExecutionContextIdentity,
+    ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, HardwareClassId,
+    ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract, InputSignature,
+    InputSignatureContract, InputSignatureEntry, InputSpecializationRequirements, LayoutClass,
+    LayoutRuntime, PrepareCapability, PrepareError, PrepareOptions, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
+    ProviderContractError, ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId,
+    ProviderPreparationBinding, ResidentOutputContract, ResolvedProgramPlacement, Runtime,
+    RuntimeConfigBuilder, RuntimeInputContract, SpecializationProjection,
+    SpecializationRequirements, StorageClass, TransferEndpoint, TransferProvider, TransferRequest,
 };
 
 const TEST_EXTENSION_FAMILY: &str = "tenferro.test.identity-extension.v1";
@@ -45,7 +49,8 @@ fn missing_resolved_engine_returns_typed_prepare_error() {
         StorageClass::new("tenferro-test.missing-resolved-storage").expect("test storage class"),
     );
 
-    let error = crate::runtime::preparation::execution_location(&snapshot, &placement)
+    let candidates = snapshot.engine_views_for_preparation().collect::<Vec<_>>();
+    let error = crate::runtime::preparation::execution_location(&candidates, &placement)
         .expect_err("missing engine must fail");
 
     assert!(matches!(
@@ -138,6 +143,24 @@ struct RecordingPreparedOperation {
     binding: PreparedOperationBinding,
     specialization: SpecializationProjection,
     retained_bytes: usize,
+}
+
+#[derive(Debug)]
+struct PreparationOnlyLayout;
+
+impl LayoutRuntime for PreparationOnlyLayout {
+    fn prepare(
+        &self,
+        request: crate::runtime::LayoutPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::metadata(Arc::new(RecordingPreparedOperation {
+                binding: request.context().binding().clone(),
+                specialization: request.context().specialization().clone(),
+                retained_bytes: 0,
+            })),
+        ))
+    }
 }
 
 impl PreparedOperation for RecordingPreparedOperation {
@@ -318,6 +341,14 @@ fn storage_class(value: &str) -> StorageClass {
     StorageClass::new(value).expect("valid storage id")
 }
 
+fn provider_device_identity(value: &str) -> ProviderDeviceIdentity {
+    ProviderDeviceIdentity::new(
+        ProviderId::new("tenferro.test.preparation").expect("valid provider id"),
+        format!("engine:{value}"),
+    )
+    .expect("valid provider target")
+}
+
 fn layout_class(value: &str) -> LayoutClass {
     LayoutClass::new(value).expect("valid layout id")
 }
@@ -393,29 +424,72 @@ fn engine_registration(
     capabilities.elementwise(provider);
     let ingress_storage = storage.clone();
     let signature_storage = storage.clone();
-    EngineRegistration::new(
-        engine_id(id),
-        ExecutionContextIdentity::of::<RecordingElementwise>(),
-        hardware_id("tenferro.cpu.host"),
-        Arc::from(vec![storage.clone()]),
-        storage,
-        capabilities.build(),
+    let ingress = InputIngressContract::new(
+        InputPlacementContract::new(move |placement, candidate| {
+            matches!(
+                placement.memory_kind,
+                MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+            ) && candidate == &ingress_storage
+        }),
+        InputSignatureContract::new(move |placement, family, domain, candidate| {
+            matches!(
+                placement.memory_kind,
+                MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+            ) && family.is_none()
+                && domain.is_none()
+                && candidate == &signature_storage
+        }),
+        RuntimeInputContract::new(|_, _| true),
+        ResidentOutputContract::new(|_, _| true),
+    );
+    EngineRegistration::executable(
+        ProviderExecutableBinding::new(
+            engine_id(id),
+            hardware_id("tenferro.cpu.host"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            ExecutableEngineContract::new(
+                provider_device_identity(id),
+                capabilities.build(),
+                CpuBackend::new(),
+                Arc::new(ImmediateEventDomainDriver::new()),
+                ingress,
+                None,
+            ),
+        )
+        .expect("engine registration"),
     )
-    .expect("engine registration")
-    .with_input_placement_validator(move |placement, candidate| {
-        matches!(
-            placement.memory_kind,
-            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-        ) && candidate == &ingress_storage
-    })
-    .with_input_signature_validator(move |placement, family, domain, candidate| {
-        matches!(
-            placement.memory_kind,
-            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-        ) && family.is_none()
-            && domain.is_none()
-            && candidate == &signature_storage
-    })
+}
+
+fn preparation_only_constant_registration(id: &str, storage: StorageClass) -> EngineRegistration {
+    let mut capabilities = CoreCapabilityBundle::builder();
+    capabilities.layout(Arc::new(PreparationOnlyLayout));
+    EngineRegistration::preparation_only(
+        ProviderPreparationBinding::new(
+            engine_id(id),
+            provider_device_identity(id),
+            ExecutionContextIdentity::of::<CpuBackend>(),
+            hardware_id("tenferro.cpu.host"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            capabilities.build(),
+        )
+        .expect("preparation-only engine registration"),
+    )
+}
+
+fn no_input_constant_program() -> FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let output = builder
+        .add_op(
+            CoreSemanticOp::Constant {
+                dtype: DType::Bool,
+                bytes: vec![1],
+            },
+            &[],
+        )
+        .expect("constant operation")[0];
+    builder.finish(&[output]).expect("constant program")
 }
 
 fn runtime_with_engines(registrations: Vec<EngineRegistration>) -> Runtime {
@@ -440,6 +514,61 @@ fn runtime_with_engines_and_module(
     }
     builder.install_extension_module(module).expect("module");
     builder.build().expect("runtime")
+}
+
+#[test]
+fn preparation_only_capabilities_are_rejected_before_schedule_creation() {
+    let engine_id = engine_id("tenferro.engine.preparation-only");
+    let storage = storage_class("tenferro.storage.preparation-only");
+    let runtime = runtime_with_engines(vec![preparation_only_constant_registration(
+        engine_id.as_str(),
+        storage,
+    )]);
+
+    let error = runtime
+        .prepare_for(
+            &no_input_constant_program(),
+            &InputSignature::new(Vec::new()),
+            &PrepareOptions::new(),
+        )
+        .expect_err("preparation-only capabilities must not create an executable schedule");
+
+    assert!(matches!(
+        error.as_ref(),
+        PrepareError::NoExecutableEngine { engine_id: actual } if actual == &engine_id
+    ));
+}
+
+#[test]
+fn genuinely_ineligible_engine_keeps_the_ordinary_no_match_error() {
+    let storage = storage_class("tenferro.storage.ineligible");
+    let engine_id = engine_id("tenferro.engine.ineligible");
+    let registration = EngineRegistration::preparation_only(
+        ProviderPreparationBinding::new(
+            engine_id.clone(),
+            provider_device_identity(engine_id.as_str()),
+            ExecutionContextIdentity::of::<CpuBackend>(),
+            hardware_id("tenferro.cpu.host"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            CoreCapabilityBundle::default(),
+        )
+        .expect("ineligible engine registration"),
+    );
+    let runtime = runtime_with_engines(vec![registration]);
+
+    let error = runtime
+        .prepare_for(
+            &no_input_constant_program(),
+            &InputSignature::new(Vec::new()),
+            &PrepareOptions::new(),
+        )
+        .expect_err("an engine without the required capability must not prepare");
+
+    assert!(matches!(
+        error.as_ref(),
+        PrepareError::NoEligibleEngine { .. }
+    ));
 }
 
 #[test]
@@ -517,6 +646,59 @@ fn prepared_program_is_binding_free_and_shares_staged_root() {
 }
 
 #[test]
+fn prepared_schedule_keeps_direct_witness_across_reconfigure(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frozen = two_input_add_program();
+    let signature = two_input_signature(DType::F64);
+    let engine = engine_id("tenferro.engine.witness-survival");
+    let storage = storage_class("tenferro.storage.witness-survival");
+    let runtime = runtime_with_engines(vec![engine_registration(
+        engine.as_str(),
+        storage.clone(),
+        Arc::new(RecordingElementwise::default()),
+    )]);
+    let prepared = runtime.prepare_for(&frozen, &signature, &PrepareOptions::new())?;
+    let old_witness = match &prepared
+        .root_for_test()
+        .schedule_for_test()
+        .nodes_for_test()[0]
+    {
+        crate::runtime::schedule::ScheduledNode::Operation(operation) => {
+            Arc::clone(operation.location().witness())
+        }
+        node => panic!("expected operation node, got {node:?}"),
+    };
+
+    runtime.reconfigure(|edit| {
+        edit.replace_engine(engine_registration(
+            engine.as_str(),
+            storage,
+            Arc::new(RecordingElementwise::default()),
+        ))?;
+        Ok(())
+    })?;
+    let current_snapshot = runtime.snapshot()?;
+    let current_witness = current_snapshot
+        .engine(&engine)
+        .expect("replacement engine")
+        .executable_witness()
+        .expect("replacement witness");
+
+    assert!(!Arc::ptr_eq(&old_witness, current_witness));
+    match &prepared
+        .root_for_test()
+        .schedule_for_test()
+        .nodes_for_test()[0]
+    {
+        crate::runtime::schedule::ScheduledNode::Operation(operation) => {
+            assert!(Arc::ptr_eq(operation.location().witness(), &old_witness));
+        }
+        node => panic!("expected operation node, got {node:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn placement_selection_uses_explicit_order_snapshot_order_and_default_storage() {
     let frozen = two_input_add_program();
     let provider_a = Arc::new(RecordingElementwise::default());
@@ -577,15 +759,28 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
                 storage.clone(),
                 core_provider.clone(),
             ),
-            EngineRegistration::new(
-                extension_engine_id.clone(),
-                ExecutionContextIdentity::of::<RecordingExtensionEngine>(),
-                hardware_id("tenferro.cpu.host"),
-                Arc::from(vec![storage.clone()]),
-                storage.clone(),
-                CoreCapabilityBundle::builder().build(),
-            )
-            .expect("extension engine registration"),
+            EngineRegistration::executable(
+                ProviderExecutableBinding::new(
+                    extension_engine_id.clone(),
+                    hardware_id("tenferro.cpu.host"),
+                    Arc::from(vec![storage.clone()]),
+                    storage.clone(),
+                    ExecutableEngineContract::new(
+                        provider_device_identity(extension_engine_id.as_str()),
+                        CoreCapabilityBundle::builder().build(),
+                        CpuBackend::new(),
+                        Arc::new(ImmediateEventDomainDriver::new()),
+                        InputIngressContract::new(
+                            InputPlacementContract::new(|_, _| true),
+                            InputSignatureContract::new(|_, _, _, _| true),
+                            RuntimeInputContract::new(|_, _| true),
+                            ResidentOutputContract::new(|_, _| true),
+                        ),
+                        None,
+                    ),
+                )
+                .expect("extension engine registration"),
+            ),
         ],
         Arc::new(IdentityExtensionModule {
             id: ExtensionModuleId::new("tenferro.module.identity-extension").unwrap(),
@@ -595,8 +790,8 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
     runtime
         .reconfigure(|edit| {
             edit.register_transfer_provider(
-                storage.clone(),
-                storage.clone(),
+                TransferEndpoint::new(engine_id("tenferro.engine.core"), storage.clone()),
+                TransferEndpoint::new(extension_engine_id.clone(), storage.clone()),
                 Arc::new(PreparationOnlyTransfer),
             )?;
             Ok(())
@@ -640,15 +835,19 @@ impl TransferProvider for PreparationOnlyTransfer {
 #[test]
 fn ineligible_engine_returns_before_prepared_cache_miss() {
     let frozen = two_input_add_program();
-    let runtime = runtime_with_engines(vec![EngineRegistration::new(
-        engine_id("tenferro.engine.empty"),
-        ExecutionContextIdentity::of::<()>(),
-        hardware_id("tenferro.cpu.host"),
-        Arc::from(vec![storage_class("tenferro.storage.host")]),
-        storage_class("tenferro.storage.host"),
-        CoreCapabilityBundle::builder().build(),
-    )
-    .expect("empty engine")]);
+    let storage = storage_class("tenferro.storage.host");
+    let runtime = runtime_with_engines(vec![EngineRegistration::preparation_only(
+        ProviderPreparationBinding::new(
+            engine_id("tenferro.engine.empty"),
+            provider_device_identity("tenferro.engine.empty"),
+            ExecutionContextIdentity::of::<()>(),
+            hardware_id("tenferro.cpu.host"),
+            Arc::from(vec![storage.clone()]),
+            storage,
+            CoreCapabilityBundle::builder().build(),
+        )
+        .expect("empty engine"),
+    )]);
 
     let error = runtime
         .prepare_for(

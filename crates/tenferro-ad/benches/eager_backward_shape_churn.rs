@@ -76,7 +76,7 @@ fn run_backward(fixture: &Fixture) {
 
 fn bench_eager_backward_shape_churn(c: &mut Criterion) {
     let threads = bench_threads();
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap());
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap()).unwrap();
     let fixtures = BOND_DIMS
         .iter()
         .enumerate()

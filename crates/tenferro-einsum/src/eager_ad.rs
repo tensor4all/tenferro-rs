@@ -11,13 +11,13 @@ use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
-use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager_with_extension_context};
+use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager_with_extension_session};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{ErrorPhase, ExtensionCacheKey};
-use tenferro_tensor::{ErrorKind, ShapeMismatch, TensorFusion, ValidationError, ValidationKind};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
@@ -25,7 +25,7 @@ use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
     EINSUM_EXTENSION_FAMILY_ID,
 };
-use crate::extension::{execute_einsum_extension_reads, EinsumExtensionOp};
+use crate::extension::{execute_einsum_extension_session_reads, EinsumExtensionOp};
 use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
     EinsumPlanSpec,
@@ -124,7 +124,7 @@ impl EagerTensorEinsumExt for EagerTensor {
 /// use tenferro_einsum::EagerEinsumExt;
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -159,7 +159,7 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// use tenferro_einsum::{EagerEinsumExt, parse_einsum_subscripts};
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -204,8 +204,8 @@ pub fn einsum_subscripts(
     let execute_op = Arc::clone(&op);
     let module = eager_cpu_extension_module()?;
     let mut outputs =
-        apply_eager_with_extension_context(op, inputs, module, move |_op, input_reads, ctx| {
-            execute_einsum_extension_reads(&execute_op, input_reads, ctx)
+        apply_eager_with_extension_session(op, inputs, module, move |_op, input_reads, ctx| {
+            execute_einsum_extension_session_reads(&execute_op, input_reads, ctx)
         })?;
     outputs.pop().ok_or_else(|| {
         Error::Runtime(tenferro_runtime::Error::MissingInput(
@@ -286,8 +286,8 @@ fn try_whole_program_untracked(
         .map(|tensor| tensor.materialized().map_err(Error::Runtime))
         .collect::<Result<Vec<_>>>()?;
     let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
-    let result = runtime.with_backend_mut(|backend| {
-        crate::eager::eager_einsum_subscripts(backend, &tensors, &subs)
+    let result = runtime.with_execution_session(|backend| {
+        crate::eager::eager_einsum_subscripts_with_session(backend, &tensors, &subs)
     })??;
     Ok(Some(EagerTensor::from_tensor_in(result, runtime.clone())?))
 }
@@ -309,7 +309,7 @@ fn try_whole_program_untracked(
 /// use tenferro_einsum::{ContractionTree, Subscripts};
 /// use tenferro_tensor::Tensor;
 ///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let a = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     runtime.clone(),
@@ -359,7 +359,7 @@ fn einsum_whole_program_untracked(
         .map(|tensor| tensor.materialized().map_err(Error::Runtime))
         .collect::<Result<Vec<_>>>()?;
     let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
-    let result = runtime.with_backend_mut(|backend| {
+    let result = runtime.with_execution_session(|backend| {
         crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
     })??;
     EagerTensor::from_tensor_in(result, runtime.clone()).map_err(Error::Runtime)
@@ -450,7 +450,8 @@ fn cached_expanded_eager_program(
     shape_refs: &[&[usize]],
     shapes: &[Vec<usize>],
 ) -> Result<Arc<ExpandedEagerProgram>> {
-    runtime.with_extension_caches_mut(|caches| {
+    runtime.with_extension_execution_context(|extension_ctx| {
+        let caches = extension_ctx.caches_mut();
         let plan_hash = plan_spec_hash(plan_spec);
         let key = expanded_eager_program_cache_key(subscripts, shapes, plan_hash);
         if let Some(cached) = caches.get::<CachedExpandedEagerProgram>(&key) {
@@ -766,7 +767,7 @@ fn backend_broadcast_multiply_untracked(
     }
 
     let runtime = lhs.runtime();
-    let value = runtime.with_backend_mut(|backend| {
+    let value = runtime.with_execution_session(|backend| {
         backend.execute_broadcast_multiply_value(
             lhs.tensor_read(),
             lhs_shape,
@@ -914,7 +915,7 @@ fn runtime_missing(message: impl Into<String>) -> Error {
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_einsum::{EagerTensorEinsumExt, TensorDotAxes};
 ///
-/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let lhs = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
 ///     ctx.clone(),
@@ -926,6 +927,7 @@ fn runtime_missing(message: impl Into<String>) -> Error {
 /// let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 ///
 /// assert_eq!(out.shape(), &[2, 4]);
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 ///
 /// # Errors

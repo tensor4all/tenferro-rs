@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/ui/cuda_session_borrow_escape.rs:4:5
+  |
+3 | fn escape<'a>(session: CudaExecSession<'a>) -> CudaExecSession<'static> {
+  |           -- lifetime `'a` defined here
+4 |     session
+  |     ^^^^^^^ returning this value requires that `'a` must outlive `'static`
