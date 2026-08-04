@@ -94,19 +94,28 @@ pub fn cuda_runtime_engine_registration(
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
     let device_ordinal = backend.device_id().ordinal() as usize;
+    let allocation_domain = backend.runtime().allocation_domain_id();
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {
             candidate == &placement_storage && cuda_input_placement(placement, device_ordinal)
         }),
         InputSignatureContract::new(move |placement, family, domain, candidate| {
             candidate == &signature_storage
-                && cuda_input_signature(placement, family, domain, device_ordinal)
+                && cuda_input_signature(
+                    placement,
+                    family,
+                    domain,
+                    device_ordinal,
+                    allocation_domain,
+                )
         }),
         RuntimeInputContract::new(move |input: &TensorRead<'_>, candidate| {
-            candidate == &runtime_storage && cuda_input_tensor(input, device_ordinal)
+            candidate == &runtime_storage
+                && cuda_input_tensor(input, device_ordinal, allocation_domain)
         }),
         ResidentOutputContract::new(move |input: &TensorRead<'_>, candidate| {
-            candidate == &resident_storage && cuda_input_tensor(input, device_ordinal)
+            candidate == &resident_storage
+                && cuda_input_tensor(input, device_ordinal, allocation_domain)
         }),
     );
     let metadata = EngineRegistrationMetadata::new(
@@ -140,10 +149,11 @@ fn cuda_input_signature(
     backend_family: Option<&'static str>,
     allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
     device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
     cuda_input_placement(placement, device_ordinal)
         && backend_family == Some("cubecl")
-        && allocation_domain.is_none()
+        && allocation_domain == Some(expected_domain)
 }
 
 fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
@@ -156,31 +166,55 @@ fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
         )
 }
 
-fn cuda_input_tensor(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+fn cuda_input_tensor(
+    input: &TensorRead<'_>,
+    device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
+) -> bool {
     cuda_input_placement(input.placement(), device_ordinal)
         && input.backend_family() == Some("cubecl")
-        && input.allocation_domain().is_none()
-        && cuda_input_has_owned_buffer(input, device_ordinal)
+        && input.allocation_domain() == Some(expected_domain)
+        && cuda_input_has_owned_buffer(input, device_ordinal, expected_domain)
 }
 
-fn cuda_input_has_owned_buffer(input: &TensorRead<'_>, device_ordinal: usize) -> bool {
+fn cuda_input_has_owned_buffer(
+    input: &TensorRead<'_>,
+    device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
+) -> bool {
     match input.clone().tensor_view() {
-        TensorView::F32(view) => cubecl_view_has_owner::<f32>(&view, device_ordinal),
-        TensorView::F64(view) => cubecl_view_has_owner::<f64>(&view, device_ordinal),
-        TensorView::I32(view) => cubecl_view_has_owner::<i32>(&view, device_ordinal),
-        TensorView::I64(view) => cubecl_view_has_owner::<i64>(&view, device_ordinal),
-        TensorView::Bool(view) => cubecl_view_has_owner::<bool>(&view, device_ordinal),
+        TensorView::F32(view) => {
+            cubecl_view_has_owner::<f32>(&view, device_ordinal, expected_domain)
+        }
+        TensorView::F64(view) => {
+            cubecl_view_has_owner::<f64>(&view, device_ordinal, expected_domain)
+        }
+        TensorView::I32(view) => {
+            cubecl_view_has_owner::<i32>(&view, device_ordinal, expected_domain)
+        }
+        TensorView::I64(view) => {
+            cubecl_view_has_owner::<i64>(&view, device_ordinal, expected_domain)
+        }
+        TensorView::Bool(view) => {
+            cubecl_view_has_owner::<bool>(&view, device_ordinal, expected_domain)
+        }
         TensorView::C32(view) => view.backend_buffer().is_some_and(|buffer| {
             buffer
                 .as_any()
                 .downcast_ref::<crate::CubeclBuffer<num_complex::Complex32>>()
-                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+                .is_some_and(|buffer| {
+                    buffer.device_ordinal() == device_ordinal
+                        && buffer.allocation_domain() == Some(expected_domain)
+                })
         }),
         TensorView::C64(view) => view.backend_buffer().is_some_and(|buffer| {
             buffer
                 .as_any()
                 .downcast_ref::<crate::CubeclBuffer<num_complex::Complex64>>()
-                .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+                .is_some_and(|buffer| {
+                    buffer.device_ordinal() == device_ordinal
+                        && buffer.allocation_domain() == Some(expected_domain)
+                })
         }),
     }
 }
@@ -188,12 +222,16 @@ fn cuda_input_has_owned_buffer(input: &TensorRead<'_>, device_ordinal: usize) ->
 fn cubecl_view_has_owner<T: 'static>(
     view: &tenferro_tensor::TypedTensorView<'_, T>,
     device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
     view.backend_buffer().is_some_and(|buffer| {
         buffer
             .as_any()
             .downcast_ref::<crate::CubeclBuffer<T>>()
-            .is_some_and(|buffer| buffer.device_ordinal() == device_ordinal)
+            .is_some_and(|buffer| {
+                buffer.device_ordinal() == device_ordinal
+                    && buffer.allocation_domain() == Some(expected_domain)
+            })
     })
 }
 

@@ -127,7 +127,7 @@ use dispatch::{
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
-use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_operation};
+use error::{unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
 pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
@@ -708,6 +708,28 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
 }
 
 impl CudaBackend {
+    fn duplicate_bool(
+        &self,
+        input: &TypedTensor<bool>,
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<bool>> {
+        launch_unary_bool_tensor(
+            self.runtime(),
+            input,
+            input.shape(),
+            op,
+            |client, count, dim, out, input_arg| unsafe {
+                structural::copy_bool_kernel::launch_unchecked::<CubeclCudaRuntime>(
+                    client,
+                    count,
+                    dim,
+                    out.into_array_arg(),
+                    input_arg.into_array_arg(),
+                );
+            },
+        )
+    }
+
     /// Create a new CubeCL backend for the caller-selected CUDA device.
     ///
     /// # Examples
@@ -1114,12 +1136,13 @@ impl CudaBackend {
         let handle = self.runtime().client().empty(bytes);
         let shape = R::shape_from_vec(shape.to_vec().into())
             .map_err(|err| crate::Error::validation(op, err))?;
-        Ok(TypedTensor::from_buffer_col_major(
+        TypedTensor::from_buffer_col_major(
             shape,
             StorageBuffer::Backend(Arc::new(crate::CubeclBuffer::new(
                 handle,
                 len,
                 self.runtime().device_ordinal(),
+                Some(self.runtime().allocation_domain_id()),
             ))),
             Placement {
                 memory_kind: MemoryKind::Device,
@@ -1129,7 +1152,7 @@ impl CudaBackend {
                 }),
                 cpu_affinity: None,
             },
-        )?)
+        )
     }
 
     fn to_contiguous_view_typed<T, R>(
@@ -2073,18 +2096,24 @@ impl CudaBackend {
         mut launch_axis: impl FnMut(&Self, &TypedTensor<T>, usize) -> crate::Result<TypedTensor<T>>,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + Clone,
+        T: CubeElement
+            + CubePrimitive
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         ensure_axes_unique(op, "axes", axes, input.shape().len())?;
         if axes.is_empty() {
-            return Ok(input.clone());
+            return self.to_contiguous_view_typed(&input.as_view(), op);
         }
 
         let final_shape = reduction_output_shape(input.shape(), axes);
         let mut sorted_axes = axes.to_vec();
         sorted_axes.sort_unstable();
 
-        let mut current = input.clone();
+        let mut current = self.to_contiguous_view_typed(&input.as_view(), op)?;
         for axis in sorted_axes {
             current = launch_axis(self, &current, axis)?;
         }
@@ -2092,7 +2121,16 @@ impl CudaBackend {
         cubecl_reshape_metadata(current, final_shape, op)
     }
 
-    fn reduce_sum_float_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_sum_float_typed<
+        F: CubeElement
+            + CubePrimitive
+            + CubeFloat
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -2114,7 +2152,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_sum_squares_float_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_sum_squares_float_typed<
+        F: CubeElement
+            + CubePrimitive
+            + CubeFloat
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -2157,7 +2204,16 @@ impl CudaBackend {
         cubecl_reshape_metadata(current, final_shape, op)
     }
 
-    fn reduce_sum_complex_typed<C: CubeElement + CubeComplex + Clone>(
+    fn reduce_sum_complex_typed<
+        C: CubeElement
+            + CubePrimitive
+            + CubeComplex
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<C>,
         axes: &[usize],
@@ -2179,7 +2235,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_sum_int_typed<I: CubeElement + CubeInt + Clone>(
+    fn reduce_sum_int_typed<
+        I: CubeElement
+            + CubePrimitive
+            + CubeInt
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<I>,
         axes: &[usize],
@@ -2201,7 +2266,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_prod_float_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_prod_float_typed<
+        F: CubeElement
+            + CubePrimitive
+            + CubeFloat
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -2223,7 +2297,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_prod_complex_typed<C: CubeElement + CubeComplex + Clone>(
+    fn reduce_prod_complex_typed<
+        C: CubeElement
+            + CubePrimitive
+            + CubeComplex
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<C>,
         axes: &[usize],
@@ -2245,7 +2328,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_prod_int_typed<I: CubeElement + CubeInt + Clone>(
+    fn reduce_prod_int_typed<
+        I: CubeElement
+            + CubePrimitive
+            + CubeInt
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<I>,
         axes: &[usize],
@@ -2267,7 +2359,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_max_float_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_max_float_typed<
+        F: CubeElement
+            + CubePrimitive
+            + CubeFloat
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -2289,7 +2390,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_max_int_typed<I: CubeElement + CubeInt + Clone>(
+    fn reduce_max_int_typed<
+        I: CubeElement
+            + CubePrimitive
+            + CubeInt
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<I>,
         axes: &[usize],
@@ -2311,7 +2421,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_min_float_typed<F: CubeElement + CubeFloat + Clone>(
+    fn reduce_min_float_typed<
+        F: CubeElement
+            + CubePrimitive
+            + CubeFloat
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<F>,
         axes: &[usize],
@@ -2333,7 +2452,16 @@ impl CudaBackend {
         })
     }
 
-    fn reduce_min_int_typed<I: CubeElement + CubeInt + Clone>(
+    fn reduce_min_int_typed<
+        I: CubeElement
+            + CubePrimitive
+            + CubeInt
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    >(
         &self,
         input: &TypedTensor<I>,
         axes: &[usize],
@@ -3022,21 +3150,14 @@ macro_rules! impl_cuda_cast_float {
                 }
             }
             fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
-                let expected = Tensor::$variant(flag.clone()).dtype();
-                match download_tensor(backend.runtime(), &Tensor::$variant(flag.clone()))? {
-                    Tensor::$variant(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                        crate::Error::invalid_argument(
-                            "cast",
-                            "validation_flag",
-                            "validation flag was malformed",
-                        )
-                    }),
-                    other => Err(unexpected_validation_flag_dtype(
+                let host = interop::download_typed_tensor(backend.runtime(), flag, "cast")?;
+                host.as_slice()?.get(1).copied().ok_or_else(|| {
+                    crate::Error::invalid_argument(
                         "cast",
-                        expected,
-                        other.dtype(),
-                    )),
-                }
+                        "validation_flag",
+                        "validation flag was malformed",
+                    )
+                })
             }
             fn invalid_error(self, target: CastIntegerTarget) -> crate::Error {
                 let name = match target {
@@ -3167,15 +3288,8 @@ fn read_checked_integer_flag(
     flag: &TypedTensor<i32>,
     op: &'static str,
 ) -> crate::Result<i32> {
-    let host = download_tensor(backend.runtime(), &Tensor::I32(flag.clone()))?;
-    match host {
-        Tensor::I32(flag) => Ok(flag.as_slice()?.first().copied().unwrap_or_default()),
-        other => Err(unexpected_validation_flag_dtype(
-            op,
-            crate::DType::I32,
-            other.dtype(),
-        )),
-    }
+    let host = interop::download_typed_tensor(backend.runtime(), flag, op)?;
+    Ok(host.as_slice()?.first().copied().unwrap_or_default())
 }
 
 trait CudaFloatIndex:
@@ -3230,21 +3344,14 @@ impl CudaFloatIndex for f32 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
-        let expected = Tensor::F32(flag.clone()).dtype();
-        match download_tensor(backend.runtime(), &Tensor::F32(flag.clone()))? {
-            Tensor::F32(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                crate::Error::invalid_argument(
-                    "index_tensor",
-                    "validation_flag",
-                    "validation flag was malformed",
-                )
-            }),
-            other => Err(unexpected_validation_flag_dtype(
+        let host = interop::download_typed_tensor(backend.runtime(), flag, "index_tensor")?;
+        host.as_slice()?.get(1).copied().ok_or_else(|| {
+            crate::Error::invalid_argument(
                 "index_tensor",
-                expected,
-                other.dtype(),
-            )),
-        }
+                "validation_flag",
+                "validation flag was malformed",
+            )
+        })
     }
 }
 
@@ -3256,21 +3363,14 @@ impl CudaFloatIndex for f64 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
-        let expected = Tensor::F64(flag.clone()).dtype();
-        match download_tensor(backend.runtime(), &Tensor::F64(flag.clone()))? {
-            Tensor::F64(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                crate::Error::invalid_argument(
-                    "index_tensor",
-                    "validation_flag",
-                    "validation flag was malformed",
-                )
-            }),
-            other => Err(unexpected_validation_flag_dtype(
+        let host = interop::download_typed_tensor(backend.runtime(), flag, "index_tensor")?;
+        host.as_slice()?.get(1).copied().ok_or_else(|| {
+            crate::Error::invalid_argument(
                 "index_tensor",
-                expected,
-                other.dtype(),
-            )),
-        }
+                "validation_flag",
+                "validation flag was malformed",
+            )
+        })
     }
 }
 
@@ -3694,11 +3794,13 @@ impl TensorElementwise for CudaBackend {
         match input {
             Tensor::F32(tensor) => {
                 ensure_resident_on_runtime(self.runtime(), tensor, op)?;
-                Ok(Tensor::F32(tensor.clone()))
+                self.to_contiguous_view_typed(&tensor.as_view(), op)
+                    .map(Tensor::F32)
             }
             Tensor::F64(tensor) => {
                 ensure_resident_on_runtime(self.runtime(), tensor, op)?;
-                Ok(Tensor::F64(tensor.clone()))
+                self.to_contiguous_view_typed(&tensor.as_view(), op)
+                    .map(Tensor::F64)
             }
             Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
                 Err(unsupported_dtype(op, input.dtype()))
@@ -4650,42 +4752,35 @@ impl TensorStructural for CudaBackend {
                 .into(),
             ));
         }
-        match input {
-            Tensor::F32(t) => Ok(Tensor::F32(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::F64(t) => Ok(Tensor::F64(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::I32(t) => Ok(Tensor::I32(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::I64(t) => Ok(Tensor::I64(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::Bool(t) => Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::C32(t) => Ok(Tensor::C32(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
-            Tensor::C64(t) => Ok(Tensor::C64(TypedTensor::from_buffer_col_major(
-                shape.to_vec(),
-                t.buffer().clone(),
-                t.placement().clone(),
-            )?)),
+        // An owned tensor cannot be returned by shallowly reusing a backend
+        // buffer. Materialize one explicit same-placement copy first, then
+        // change only its compact metadata.
+        let contiguous = match input {
+            Tensor::Bool(tensor) => self.duplicate_bool(tensor, "reshape").map(Tensor::Bool)?,
+            _ => self.to_contiguous_read(TensorRead::from_tensor(input))?,
+        };
+        match contiguous {
+            Tensor::F32(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::F32)
+            }
+            Tensor::F64(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::F64)
+            }
+            Tensor::I32(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::I32)
+            }
+            Tensor::I64(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::I64)
+            }
+            Tensor::Bool(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::Bool)
+            }
+            Tensor::C32(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::C32)
+            }
+            Tensor::C64(t) => {
+                cubecl_reshape_metadata(t, shape.to_vec(), "reshape").map(Tensor::C64)
+            }
         }
     }
 
@@ -4708,7 +4803,17 @@ impl TensorStructural for CudaBackend {
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
         match (input, to) {
-            (Tensor::F32(t), crate::DType::F32) => Ok(Tensor::F32(t.clone())),
+            (Tensor::F32(_), crate::DType::F32)
+            | (Tensor::F64(_), crate::DType::F64)
+            | (Tensor::I32(_), crate::DType::I32)
+            | (Tensor::I64(_), crate::DType::I64)
+            | (Tensor::C32(_), crate::DType::C32)
+            | (Tensor::C64(_), crate::DType::C64) => {
+                self.to_contiguous_read(TensorRead::from_tensor(input))
+            }
+            (Tensor::Bool(t), crate::DType::Bool) => {
+                self.duplicate_bool(t, "cast").map(Tensor::Bool)
+            }
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
@@ -4728,7 +4833,6 @@ impl TensorStructural for CudaBackend {
             (Tensor::F64(t), crate::DType::F32) => {
                 self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
             }
-            (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
             (Tensor::F64(t), crate::DType::I32) => {
                 validate_cuda_real_cast::<f64, f64>(self, t, 1, CastIntegerTarget::I32)?;
                 self.convert_numeric::<f64, i32>(t).map(Tensor::I32)
@@ -4742,7 +4846,6 @@ impl TensorStructural for CudaBackend {
             }
             (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
             (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
-            (Tensor::I32(t), crate::DType::I32) => Ok(Tensor::I32(t.clone())),
             (Tensor::I32(t), crate::DType::F32) => {
                 self.convert_numeric::<i32, f32>(t).map(Tensor::F32)
             }
@@ -4770,7 +4873,6 @@ impl TensorStructural for CudaBackend {
             (Tensor::I64(t), crate::DType::I32) => {
                 self.convert_numeric::<i64, i32>(t).map(Tensor::I32)
             }
-            (Tensor::I64(t), crate::DType::I64) => Ok(Tensor::I64(t.clone())),
             (Tensor::I64(t), crate::DType::Bool) => {
                 self.convert_numeric_to_bool(t).map(Tensor::Bool)
             }
@@ -4780,7 +4882,6 @@ impl TensorStructural for CudaBackend {
             (Tensor::I64(t), crate::DType::C64) => self
                 .convert_numeric_to_complex::<i64, Complex64, f64>(t)
                 .map(Tensor::C64),
-            (Tensor::Bool(t), crate::DType::Bool) => Ok(Tensor::Bool(t.clone())),
             (Tensor::Bool(t), crate::DType::F32) => {
                 self.convert_bool_to_numeric::<f32>(t).map(Tensor::F32)
             }
@@ -4814,7 +4915,6 @@ impl TensorStructural for CudaBackend {
             (Tensor::C32(t), crate::DType::Bool) => self
                 .convert_complex_to_bool::<Complex32, f32>(t)
                 .map(Tensor::Bool),
-            (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
             (Tensor::C32(t), crate::DType::C64) => self
                 .convert_complex_to_complex::<Complex32, Complex64, f32, f64>(t)
                 .map(Tensor::C64),
@@ -4836,7 +4936,6 @@ impl TensorStructural for CudaBackend {
             (Tensor::C64(t), crate::DType::C32) => self
                 .convert_complex_to_complex::<Complex64, Complex32, f64, f32>(t)
                 .map(Tensor::C32),
-            (Tensor::C64(t), crate::DType::C64) => Ok(Tensor::C64(t.clone())),
         }
     }
 
@@ -5822,7 +5921,7 @@ fn reduction_keepdims_shape(input_shape: &[usize], axis: usize) -> Vec<usize> {
     output_shape
 }
 
-fn cubecl_reshape_metadata<T: CubeElement + Clone>(
+fn cubecl_reshape_metadata<T: crate::TensorScalar + Clone>(
     tensor: TypedTensor<T>,
     shape: Vec<usize>,
     op: &'static str,
@@ -5850,9 +5949,7 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
     }
 
     let (buffer, _, placement) = tensor.into_parts();
-    Ok(TypedTensor::from_buffer_col_major(
-        shape, buffer, placement,
-    )?)
+    TypedTensor::from_buffer_col_major(shape, buffer, placement)
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {

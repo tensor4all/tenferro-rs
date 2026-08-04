@@ -810,12 +810,18 @@ fn cuda_runtime_copy_into_cutensor_rejects_aliased_destination() {
     let Tensor::F64(src) = &gpu_tensor else {
         panic!("expected f64 source");
     };
-    let mut dst = src.clone();
+    let mut dst = TypedTensor::from_buffer_col_major(
+        src.shape().to_vec(),
+        src.buffer().clone(),
+        src.placement().clone(),
+    )
+    .unwrap();
+    let source_view = src.as_view();
     let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
 
     let err = gpu
         .copy_read_into(
-            TensorRead::from_tensor(&gpu_tensor),
+            TensorRead::from_view(TensorView::F64(source_view)),
             TensorWrite::from_view(TensorViewMut::F64(dst_view)),
         )
         .unwrap_err();
@@ -1197,16 +1203,22 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_copy_into_rejects_cloned_aliased_allocation() {
+fn cuda_copy_into_rejects_shared_aliased_allocation() {
     let mut gpu = gpu_backend();
     let gpu_tensor = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
     let Tensor::I32(src) = &gpu_tensor else {
         panic!("expected i32 tensor");
     };
-    let mut dst = src.clone();
+    let mut dst = TypedTensor::from_buffer_col_major(
+        src.shape().to_vec(),
+        src.buffer().clone(),
+        src.placement().clone(),
+    )
+    .unwrap();
+    let source_view = src.as_view();
     let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
 
-    let err = gpu.copy_into(&src.as_view(), &mut dst_view).unwrap_err();
+    let err = gpu.copy_into(&source_view, &mut dst_view).unwrap_err();
 
     assert_validation_kind(
         &err,

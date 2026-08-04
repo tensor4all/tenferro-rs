@@ -90,13 +90,17 @@ pub(crate) mod types {
 
 /// CubeCL-managed GPU buffer stored behind tensor backend-buffer trait objects.
 #[cfg(feature = "cuda")]
-#[derive(Clone)]
 pub(crate) struct CubeclBuffer<T> {
     handle: cubecl_runtime::server::Handle,
     len: usize,
     device_ordinal: usize,
+    allocation_domain: Option<AllocationDomainId>,
+    allocation_id: AllocationId,
     pub(crate) _marker: std::marker::PhantomData<T>,
 }
+
+#[cfg(feature = "cuda")]
+static NEXT_CUDA_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(feature = "cuda")]
 impl<T> std::fmt::Debug for CubeclBuffer<T> {
@@ -104,6 +108,8 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
         f.debug_struct("CubeclBuffer")
             .field("len", &self.len)
             .field("device_ordinal", &self.device_ordinal)
+            .field("allocation_domain", &self.allocation_domain)
+            .field("allocation_id", &self.allocation_id)
             .finish()
     }
 }
@@ -114,11 +120,16 @@ impl<T> CubeclBuffer<T> {
         handle: cubecl_runtime::server::Handle,
         len: usize,
         device_ordinal: usize,
+        allocation_domain: Option<AllocationDomainId>,
     ) -> Self {
         Self {
             handle,
             len,
             device_ordinal,
+            allocation_domain,
+            allocation_id: AllocationId::from_backend_id(
+                NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ),
             _marker: std::marker::PhantomData,
         }
     }
@@ -134,6 +145,10 @@ impl<T> CubeclBuffer<T> {
     pub(crate) fn device_ordinal(&self) -> usize {
         self.device_ordinal
     }
+
+    pub(crate) fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.allocation_domain
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -144,6 +159,14 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer<T> {
 
     fn len(&self) -> usize {
         self.len
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.allocation_domain
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation_id)
     }
 
     fn as_any(&self) -> &dyn Any {

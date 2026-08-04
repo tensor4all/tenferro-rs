@@ -32,17 +32,13 @@ use crate::types::{
 pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     let client = rt.client();
     match tensor {
-        Tensor::F64(t) => upload_typed::<f64>(client, rt.device_ordinal(), t).map(Tensor::F64),
-        Tensor::F32(t) => upload_typed::<f32>(client, rt.device_ordinal(), t).map(Tensor::F32),
-        Tensor::I32(t) => upload_typed::<i32>(client, rt.device_ordinal(), t).map(Tensor::I32),
-        Tensor::I64(t) => upload_typed::<i64>(client, rt.device_ordinal(), t).map(Tensor::I64),
-        Tensor::Bool(t) => upload_bool(client, rt.device_ordinal(), t).map(Tensor::Bool),
-        Tensor::C64(t) => {
-            upload_typed::<Complex64>(client, rt.device_ordinal(), t).map(Tensor::C64)
-        }
-        Tensor::C32(t) => {
-            upload_typed::<Complex32>(client, rt.device_ordinal(), t).map(Tensor::C32)
-        }
+        Tensor::F64(t) => upload_typed::<f64>(rt, client, t).map(Tensor::F64),
+        Tensor::F32(t) => upload_typed::<f32>(rt, client, t).map(Tensor::F32),
+        Tensor::I32(t) => upload_typed::<i32>(rt, client, t).map(Tensor::I32),
+        Tensor::I64(t) => upload_typed::<i64>(rt, client, t).map(Tensor::I64),
+        Tensor::Bool(t) => upload_bool(rt, client, t).map(Tensor::Bool),
+        Tensor::C64(t) => upload_typed::<Complex64>(rt, client, t).map(Tensor::C64),
+        Tensor::C32(t) => upload_typed::<Complex32>(rt, client, t).map(Tensor::C32),
     }
 }
 
@@ -101,8 +97,8 @@ pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {
 }
 
 fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
+    rt: &CudaRuntime,
     client: &ComputeClient<CubeclCudaRuntime>,
-    device_ordinal: usize,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
@@ -124,13 +120,14 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
         StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
             handle,
             host_data.len(),
-            device_ordinal,
+            rt.device_ordinal(),
+            Some(rt.allocation_domain_id()),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: device_ordinal,
+                ordinal: rt.device_ordinal(),
             }),
             cpu_affinity: None,
         },
@@ -152,7 +149,11 @@ fn download_typed<T: CubeElement + Clone + 'static>(
     };
 
     if typed.n_elements() == 0 {
-        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
+        return TypedTensor::from_buffer_col_major(
+            typed.shape().to_vec(),
+            StorageBuffer::Host(Vec::new()),
+            Placement::default(),
+        );
     }
 
     rt.synchronize()?;
@@ -161,12 +162,16 @@ fn download_typed<T: CubeElement + Clone + 'static>(
         .read_one(handle)
         .map_err(|err| crate::Error::backend_source("download", err))?;
     let data = T::from_bytes(&bytes).to_vec();
-    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
+    TypedTensor::from_buffer_col_major(
+        typed.shape().to_vec(),
+        StorageBuffer::Host(data),
+        Placement::default(),
+    )
 }
 
 fn upload_bool(
+    rt: &CudaRuntime,
     client: &ComputeClient<CubeclCudaRuntime>,
-    device_ordinal: usize,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {
@@ -189,13 +194,14 @@ fn upload_bool(
         StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
             handle,
             host_data.len(),
-            device_ordinal,
+            rt.device_ordinal(),
+            Some(rt.allocation_domain_id()),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: device_ordinal,
+                ordinal: rt.device_ordinal(),
             }),
             cpu_affinity: None,
         },

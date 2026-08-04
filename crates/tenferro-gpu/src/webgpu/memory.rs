@@ -112,7 +112,11 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
     };
 
     if typed.n_elements() == 0 {
-        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
+        return TypedTensor::from_buffer_col_major(
+            typed.shape().to_vec(),
+            StorageBuffer::Host(Vec::new()),
+            crate::Placement::default(),
+        );
     }
 
     let bytes = client
@@ -120,7 +124,11 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
         .map_err(|err| crate::Error::backend_source("webgpu_download", err))?;
     let data = T::from_bytes(&bytes).to_vec();
     rt.record_download(bytes.len());
-    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
+    TypedTensor::from_buffer_col_major(
+        typed.shape().to_vec(),
+        StorageBuffer::Host(data),
+        crate::Placement::default(),
+    )
 }
 
 fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {

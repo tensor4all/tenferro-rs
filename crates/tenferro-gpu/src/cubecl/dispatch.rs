@@ -346,7 +346,8 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
-    cubecl_buffer(tensor, op)?;
+    let buffer = cubecl_buffer(tensor, op)?;
+    ensure_allocation_domain(buffer, rt, op)?;
     ensure_placement_resident_on_runtime(rt, tensor.placement(), op)
 }
 
@@ -355,7 +356,8 @@ pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
-    cubecl_view_buffer(view, op)?;
+    let buffer = cubecl_view_buffer(view, op)?;
+    ensure_allocation_domain(buffer, rt, op)?;
     ensure_placement_resident_on_runtime(rt, view.placement(), op)
 }
 
@@ -364,8 +366,23 @@ pub(crate) fn ensure_view_mut_resident_on_runtime<T: 'static>(
     view: &TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
-    cubecl_view_mut_buffer(view, op)?;
+    let buffer = cubecl_view_mut_buffer(view, op)?;
+    ensure_allocation_domain(buffer, rt, op)?;
     ensure_placement_resident_on_runtime(rt, view.placement(), op)
+}
+
+fn ensure_allocation_domain<T>(
+    buffer: &CubeclBuffer<T>,
+    rt: &CudaRuntime,
+    op: &'static str,
+) -> crate::Result<()> {
+    if buffer.allocation_domain() != Some(rt.allocation_domain_id()) {
+        return Err(crate::Error::runtime_state(
+            op,
+            "CubeCL allocation belongs to a different runtime domain",
+        ));
+    }
+    Ok(())
 }
 
 fn ensure_placement_resident_on_runtime(
@@ -442,7 +459,12 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = rt.client().empty(byte_len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(handle, len, rt.device_ordinal()),
+        CubeclBuffer::new(
+            handle,
+            len,
+            rt.device_ordinal(),
+            Some(rt.allocation_domain_id()),
+        ),
         rt.device_ordinal(),
     )
 }
@@ -455,7 +477,12 @@ pub(crate) fn alloc_bool_output(
     let handle = rt.client().empty(len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(handle, len, rt.device_ordinal()),
+        CubeclBuffer::new(
+            handle,
+            len,
+            rt.device_ordinal(),
+            Some(rt.allocation_domain_id()),
+        ),
         rt.device_ordinal(),
     )
 }

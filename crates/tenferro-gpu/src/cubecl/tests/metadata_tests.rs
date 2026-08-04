@@ -10,7 +10,31 @@ use crate::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     TypedTensor,
 };
-use tenferro_tensor::{CacheStats, Error, ErrorKind, ValidationError, ValidationKind};
+use tenferro_tensor::{
+    AllocationDomainId, BackendStorage, CacheStats, Error, ErrorKind, ValidationError,
+    ValidationKind,
+};
+
+#[test]
+fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
+    let domain = AllocationDomainId::fresh();
+    let first = CubeclBuffer::<f32>::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        1,
+        0,
+        Some(domain),
+    );
+    let second = CubeclBuffer::<f32>::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        1,
+        0,
+        Some(domain),
+    );
+
+    assert_eq!(first.allocation_domain(), Some(domain));
+    assert_eq!(second.allocation_domain(), Some(domain));
+    assert_ne!(first.allocation_id(), second.allocation_id());
+}
 
 #[test]
 fn scalar_reduction_shape_stays_separate_from_cubecl_launch_metadata() {
@@ -257,7 +281,7 @@ fn cubecl_tensor_with_len(
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0))),
+        StorageBuffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0, None))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

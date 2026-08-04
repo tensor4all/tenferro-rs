@@ -290,8 +290,14 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let starts_f32 = tensor_f32(vec![1], vec![0.5]);
     let valid_starts = tensor_i32(vec![1], vec![0]);
     for (operand, invalid_starts) in [
-        (operand_f64.clone(), starts_f64),
-        (operand_f32.clone(), starts_f32),
+        (
+            operand_f64.duplicate().expect("host operand duplication"),
+            starts_f64,
+        ),
+        (
+            operand_f32.duplicate().expect("host operand duplication"),
+            starts_f32,
+        ),
     ] {
         assert!(cpu.dynamic_slice(&operand, &valid_starts, &[3]).is_err());
         let err = gpu
@@ -330,12 +336,12 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let gather_indices = tensor_f64(vec![1, 1], vec![f64::NAN]);
     let valid_gather_indices = tensor_i32(vec![1, 1], vec![0]);
     for operand in [
-        operand_f64.clone(),
+        operand_f64.duplicate().expect("host operand duplication"),
         tensor_c64(
             vec![2],
             vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
         ),
-        operand_bool.clone(),
+        operand_bool.duplicate().expect("host operand duplication"),
     ] {
         let expected = cpu
             .gather(&operand, &valid_gather_indices, &bad_gather)
