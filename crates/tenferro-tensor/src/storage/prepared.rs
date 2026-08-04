@@ -4,7 +4,10 @@ use std::mem::{align_of, size_of};
 use std::ops::{Deref, DerefMut, Range};
 use std::ptr::NonNull;
 
-use crate::{DType, TensorLayout, TensorRank, TensorScalar};
+use crate::{
+    DType, DeviceAccessError, DeviceAccessRequest, PreparedDeviceAccess, TensorLayout, TensorRank,
+    TensorScalar,
+};
 
 use super::identity::RootResourceIdentity;
 use super::root::{StorageMut, StorageRef};
@@ -722,18 +725,15 @@ pub(crate) enum PreparedHostWrite<'a, T: TensorScalar, R: TensorRank> {
 
 pub(crate) struct PreparedDeviceRead<'a, T: TensorScalar, R: TensorRank> {
     checked: CheckedRead<'a, R>,
-    _token: PreparedDeviceToken,
+    provider_state: Box<dyn PreparedDeviceAccess>,
     _scalar: PhantomData<T>,
 }
 
 pub(crate) struct PreparedDeviceWrite<'a, T: TensorScalar, R: TensorRank> {
     checked: CheckedWrite<'a, R>,
-    _token: PreparedDeviceToken,
+    provider_state: Box<dyn PreparedDeviceAccess>,
     _scalar: PhantomData<T>,
 }
-
-#[derive(Debug)]
-struct PreparedDeviceToken;
 
 pub(crate) enum PreparedRead<'a, T: TensorScalar, R: TensorRank> {
     Host(PreparedHostRead<'a, T, R>),
@@ -791,6 +791,37 @@ fn typed_mapping_error<T: TensorScalar>(
 type PreparedReadFailure<'a, R> = Box<(CheckedRead<'a, R>, AccessError)>;
 type PreparedWriteFailure<'a, R> = Box<(CheckedWrite<'a, R>, AccessError)>;
 
+fn device_access_error(error: DeviceAccessError) -> AccessError {
+    match error {
+        DeviceAccessError::Unsupported { backend } => AccessError::Unsupported { backend },
+        DeviceAccessError::InvalidRequest { message }
+        | DeviceAccessError::ProviderFailure { message } => AccessError::Provider { message },
+    }
+}
+
+fn device_request<R: TensorRank>(
+    owner: RootResourceIdentity,
+    descriptor: &CheckedDescriptor<R>,
+    writable: bool,
+) -> DeviceAccessRequest<'static> {
+    let key = owner.extent().key();
+    // The storage transition only admits the root identity and exact byte
+    // envelope. CUDA tensor/view bindings provide their checked layout through
+    // the typed preparation path; this private transition does not invent a
+    // second layout representation.
+    DeviceAccessRequest::new(
+        key.domain(),
+        key.local(),
+        descriptor.span.byte_len(),
+        descriptor.element_size(),
+        Some(descriptor.dtype()),
+        &[],
+        &[],
+        0,
+        writable,
+    )
+}
+
 pub(crate) fn prepare_read<'a, T: TensorScalar, R: TensorRank>(
     checked: CheckedRead<'a, R>,
     target: AccessTarget,
@@ -799,9 +830,20 @@ pub(crate) fn prepare_read<'a, T: TensorScalar, R: TensorRank>(
         return Err(Box::new((checked, error)));
     }
     if target == AccessTarget::Device {
+        let CheckedRead { owner, descriptor } = checked;
+        let request = device_request(owner.root_identity(), &descriptor, false);
+        let provider_state = match owner.prepare_device_access(request) {
+            Ok(state) => state,
+            Err(error) => {
+                return Err(Box::new((
+                    CheckedRead { owner, descriptor },
+                    device_access_error(error),
+                )))
+            }
+        };
         return Ok(PreparedRead::Device(PreparedDeviceRead {
-            checked,
-            _token: PreparedDeviceToken,
+            checked: CheckedRead { owner, descriptor },
+            provider_state,
             _scalar: PhantomData,
         }));
     }
@@ -839,9 +881,21 @@ pub(crate) fn prepare_write<'a, T: TensorScalar, R: TensorRank>(
         return Err(Box::new((checked, error)));
     }
     if target == AccessTarget::Device {
+        let CheckedWrite { owner, descriptor } = checked;
+        let descriptor_value = descriptor.descriptor.clone();
+        let request = device_request(owner.root_identity(), &descriptor_value, true);
+        let provider_state = match owner.prepare_device_access(request) {
+            Ok(state) => state,
+            Err(error) => {
+                return Err(Box::new((
+                    CheckedWrite { owner, descriptor },
+                    device_access_error(error),
+                )))
+            }
+        };
         return Ok(PreparedWrite::Device(PreparedDeviceWrite {
-            checked,
-            _token: PreparedDeviceToken,
+            checked: CheckedWrite { owner, descriptor },
+            provider_state,
             _scalar: PhantomData,
         }));
     }

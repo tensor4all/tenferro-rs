@@ -9,8 +9,9 @@ use num_traits::One;
 use tenferro_tensor::{CacheStats, DType, TensorRank, TypedTensorView, TypedTensorViewMut};
 
 use super::dispatch::{
-    cubecl_buffer, cubecl_view_buffer, cubecl_view_mut_buffer, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime,
+    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    ensure_view_resident_on_runtime, prepared_tensor_access, prepared_view_access,
+    prepared_view_mut_access, CubeclPreparedAccess,
 };
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
@@ -18,7 +19,7 @@ use super::ffi::cutensor::{
 };
 use super::interop::cuda_device_ptr_from_addr;
 use super::{CudaBackend, CudaRuntime};
-use crate::{col_major_strides, CubeclBuffer, Error, TypedTensor};
+use crate::{col_major_strides, Error, TypedTensor};
 
 const OP_TRANSPOSE: &str = "transpose";
 const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
@@ -435,12 +436,7 @@ where
             "CUDA copy_into source and destination allocations must not alias",
         ));
     }
-    let source_buffer = cubecl_view_buffer(src, op)?;
-    let destination_buffer = cubecl_view_mut_buffer(dst, op)?;
-    if !src.is_col_major_contiguous()?
-        || src.offset() != 0
-        || source_buffer.element_len::<T>() != src.n_elements()
-    {
+    if !src.is_col_major_contiguous()? || src.offset() != 0 {
         return Err(crate::Error::invalid_argument(
             op,
             "source",
@@ -463,19 +459,15 @@ where
     // with swapped strides that may select a slower plan.
     let (output_extents, output_strides, output_modes) =
         physical_output_descriptor(op, dst.shape(), dst.strides())?;
-    let input_res = resolve_device_region::<T>(
+    let input_res = resolve_prepared_device_region::<T>(
         backend.runtime(),
-        source_buffer,
-        src.shape(),
-        src.strides(),
+        prepared_view_access(src, op)?,
         src.offset(),
         op,
     )?;
-    let output_res = resolve_device_region::<T>(
+    let output_res = resolve_prepared_device_region::<T>(
         backend.runtime(),
-        destination_buffer,
-        dst.shape(),
-        dst.strides(),
+        prepared_view_mut_access(dst, op)?,
         dst.offset(),
         op,
     )?;
@@ -705,8 +697,7 @@ where
     R: TensorRank,
 {
     ensure_view_resident_on_runtime(rt, view, op)?;
-    let buffer = cubecl_view_buffer(view, op)?;
-    resolve_device_region::<T>(rt, buffer, view.shape(), view.strides(), view.offset(), op)
+    resolve_prepared_device_region::<T>(rt, prepared_view_access(view, op)?, view.offset(), op)
 }
 
 fn typed_device_ptr<T, R>(
@@ -718,23 +709,20 @@ where
     T: 'static,
     R: TensorRank,
 {
-    let buffer = cubecl_buffer(tensor, op)?;
+    let prepared = prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(prepared.into_handle())
         .map_err(|err| Error::backend_source(op, err))?;
     cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }
 
-fn resolve_device_region<T: 'static>(
+fn resolve_prepared_device_region<T: 'static>(
     rt: &CudaRuntime,
-    buffer: &CubeclBuffer,
-    shape: &[usize],
-    strides: &[isize],
+    prepared: CubeclPreparedAccess,
     offset: isize,
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand> {
-    validate_view_region::<T>(buffer, shape, strides, offset, op)?;
     let offset = usize::try_from(offset).map_err(|_| {
         Error::invalid_argument(
             op,
@@ -744,7 +732,7 @@ fn resolve_device_region<T: 'static>(
     })?;
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(prepared.into_handle())
         .map_err(|err| Error::backend_source(op, err))?;
     let offset_bytes = (offset as u64)
         .checked_mul(std::mem::size_of::<T>() as u64)
@@ -758,55 +746,8 @@ fn resolve_device_region<T: 'static>(
         })?;
     Ok(ResolvedPermutationOperand {
         ptr: cuda_device_ptr_from_addr(addr, op)?,
-        alignment: address_alignment(addr),
+        alignment: CUDA_ALLOCATION_ALIGNMENT,
     })
-}
-
-fn validate_view_region<T: 'static>(
-    buffer: &CubeclBuffer,
-    shape: &[usize],
-    strides: &[isize],
-    offset: isize,
-    op: &'static str,
-) -> crate::Result<()> {
-    if shape.contains(&0) {
-        return Ok(());
-    }
-    let mut min_offset = offset as i128;
-    let mut max_offset = offset as i128;
-    for (&dim, &stride) in shape.iter().zip(strides) {
-        let span = ((dim - 1) as i128)
-            .checked_mul(stride as i128)
-            .ok_or_else(|| Error::invalid_argument(op, "layout", "view element span overflows"))?;
-        if span < 0 {
-            min_offset = min_offset.checked_add(span).ok_or_else(|| {
-                Error::invalid_argument(op, "layout", "view minimum offset overflows")
-            })?;
-        } else {
-            max_offset = max_offset.checked_add(span).ok_or_else(|| {
-                Error::invalid_argument(op, "layout", "view maximum offset overflows")
-            })?;
-        }
-    }
-    if min_offset < 0 {
-        return Err(Error::invalid_argument(
-            op,
-            "layout",
-            format!("view region reaches negative element offset {min_offset}"),
-        ));
-    }
-    let len = buffer.element_len::<T>() as i128;
-    if max_offset >= len {
-        return Err(Error::invalid_argument(
-            op,
-            "layout",
-            format!(
-                "view region reaches element offset {max_offset} but the device buffer holds only {} elements",
-                buffer.element_len::<T>()
-            ),
-        ));
-    }
-    Ok(())
 }
 
 fn view_descriptor_alignment_requirement<T>() -> u32 {
@@ -896,15 +837,6 @@ fn modes_from_perm(op: &'static str, perm: &[usize]) -> crate::Result<Vec<i32>> 
             })
         })
         .collect()
-}
-
-/// Largest power of two dividing the byte address, capped at the CUDA
-/// allocation alignment cuTENSOR descriptors assume for whole allocations.
-fn address_alignment(addr: u64) -> u32 {
-    if addr == 0 {
-        return CUDA_ALLOCATION_ALIGNMENT;
-    }
-    1u32 << addr.trailing_zeros().min(8)
 }
 
 #[cfg(test)]

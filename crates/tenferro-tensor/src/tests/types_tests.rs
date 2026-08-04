@@ -82,8 +82,11 @@ fn backend_host_access_guards_preserve_domain_identity_and_writeback() {
 fn opaque_backend_buffers_reject_host_mapping_with_a_typed_error() {
     let buffer = BackendStorageHandle::<f32>::new_with_len(1, 2);
 
-    assert_eq!(buffer.allocation_domain(), None);
-    assert_eq!(buffer.allocation_id(), None);
+    assert!(buffer.allocation_domain().is_some());
+    assert_eq!(
+        buffer.allocation_id(),
+        Some(crate::AllocationId::from_backend_id(1))
+    );
     assert!(matches!(
         buffer.map_read(),
         Err(HostAccessError::Unsupported { backend: "opaque" })
@@ -223,9 +226,6 @@ fn unsupported_operation_has_a_distinct_coarse_classification() {
         }
     ));
 }
-
-#[derive(Debug)]
-struct NonCloneElement;
 
 fn tensor_scalar_roundtrip<T>(shape: Vec<usize>, data: Vec<T>)
 where
@@ -1182,17 +1182,15 @@ fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
 }
 
 #[test]
-fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
+fn typed_tensor_metadata_accessors_keep_owned_scalar_storage_rooted() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
         device: None,
         cpu_affinity: None,
     };
-    let tensor = TypedTensor::<NonCloneElement>::from_buffer_col_major(
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 3],
-        StorageBuffer::Backend(Box::new(
-            BackendStorageHandle::<NonCloneElement>::new_with_len(9, 6),
-        )),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 6))),
         placement,
     )
     .unwrap();

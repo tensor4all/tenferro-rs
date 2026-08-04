@@ -188,10 +188,10 @@ pub fn with_typed_device_ptr<T: 'static>(
     f: impl FnOnce(*mut c_void),
 ) -> crate::Result<()> {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     // The residency check above ties this raw FFI pointer to the caller's
     // runtime/device for the duration of the callback.
@@ -243,14 +243,14 @@ where
     T: CubeElement + TensorScalar + Clone + 'static,
 {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
     if tensor.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
     }
     rt.synchronize()?;
     let bytes = rt
         .client()
-        .read_one(buffer.handle().clone())
+        .read_one(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
 }

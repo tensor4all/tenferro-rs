@@ -375,6 +375,54 @@ impl AllocationGroup {
         Ok((group, slot))
     }
 
+    pub(crate) fn from_backend_buffer<T: TensorScalar, R: TensorRank>(
+        shape: R::Shape,
+        buffer: crate::StorageBuffer<T>,
+    ) -> Result<(Self, DescriptorSlot), GroupError> {
+        let owner = super::root::import_backend_buffer(buffer).map_err(|error| {
+            GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            }
+        })?;
+        let span = owner.root_span();
+        let mut group = Self::new();
+        let allocation = group.insert_owner(owner)?;
+        let layout =
+            TensorLayout::<R>::compact(shape).map_err(|error| GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            })?;
+        let input = DescriptorInput::new(
+            ByteRange::new(0, span.byte_len()),
+            R::shape_from_vec(layout.shape().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            R::strides_from_vec(layout.strides().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            layout.offset(),
+            true,
+        );
+        let slot = group.insert_descriptor::<T, R>(allocation, input)?;
+        Ok((group, slot))
+    }
+
+    pub(crate) fn from_backend_root<T: Send + Sync + 'static>(
+        buffer: crate::StorageBuffer<T>,
+    ) -> Result<Self, GroupError> {
+        let owner = super::root::import_backend_buffer(buffer).map_err(|error| {
+            GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            }
+        })?;
+        let mut group = Self::new();
+        group.insert_owner(owner)?;
+        Ok(group)
+    }
+
     pub(crate) fn insert_owner(
         &mut self,
         owner: OwnedStorage,
@@ -635,6 +683,44 @@ impl AllocationGroup {
             .get(descriptor.allocation.index())?
             .as_ref()?
             .host_buffer::<T>()
+    }
+
+    pub(crate) fn backend_buffer<T: 'static>(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<&crate::StorageBuffer<T>> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        self.allocations
+            .get(descriptor.allocation.index())?
+            .as_ref()?
+            .backend_buffer::<T>()
+    }
+
+    pub(crate) fn backend_root_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
+        self.allocations
+            .first()
+            .and_then(|owner| owner.as_ref())
+            .and_then(|owner| owner.backend_buffer::<T>())
+    }
+
+    pub(crate) fn backend_buffer_mut<T: 'static>(
+        &mut self,
+        slot: DescriptorSlot,
+    ) -> Option<&mut crate::StorageBuffer<T>> {
+        let allocation = self.resolve_descriptor(slot).ok()?.1.allocation;
+        self.allocations
+            .get_mut(allocation.index())?
+            .as_mut()?
+            .backend_buffer_mut::<T>()
+    }
+
+    pub(crate) fn backend_root_buffer_mut<T: 'static>(
+        &mut self,
+    ) -> Option<&mut crate::StorageBuffer<T>> {
+        self.allocations
+            .first_mut()
+            .and_then(|owner| owner.as_mut())
+            .and_then(|owner| owner.backend_buffer_mut::<T>())
     }
 
     pub(crate) fn view_mut<T: TensorScalar, R: TensorRank>(
