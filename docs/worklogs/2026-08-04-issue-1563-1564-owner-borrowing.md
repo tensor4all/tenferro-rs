@@ -86,6 +86,8 @@ not an alternate tensor ownership path.
 - `python3 scripts/run-storage-ownership-contracts.py --receipt-out /tmp/tenferro-storage-ownership-receipt.json --diagnostics-json` — all 19 currently active P0/P1/P2/P3/P4/P5/P6/P9 obligations passed; P7/P8 remain deferred.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 37 passed, including the scoped workspace and stream-pointer contracts.
+- `cargo test -p tenferro-ad --features cuda --quiet` — 333 passed, 1 ignored; the two CUDA eager AD tests now pass after routing backend-owned copies through the runtime session.
+- `cargo test -p tenferro-ad --features cuda --test integration -- --ignored` — the CUDA f32 fusion chain passed on the available NVIDIA A100.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
 - Full GPU integration reached 92/93; the sole failing test is the pre-existing
   `session_contract` trybuild check, with two fixture mismatches for removed CUDA
