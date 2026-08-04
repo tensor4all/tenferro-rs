@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/lib/python.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
+
 BASE_BRANCH="main"
 TITLE=""
 BODY_FILE=""
@@ -57,7 +60,7 @@ ensure_body_file() {
         printf -- '  - `%s`\n' "$command"
       done
     fi
-    printf -- '- `python3 scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
+    printf -- '- `py scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
     printf '\n## Documentation\n\n'
     printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api/index.md`, and public rustdoc for consistency.\n'
   } >"$BODY_FILE"
@@ -84,7 +87,7 @@ run_required_checks() {
     fast_gate_args+=(--test "$command")
   done
   bash scripts/check-pr-fast.sh "${fast_gate_args[@]}"
-  python3 scripts/repository-rules-review.py \
+  py scripts/repository-rules-review.py \
     --base "origin/${BASE_BRANCH}" \
     --head HEAD \
     --output-json /tmp/repository-rules-review.json

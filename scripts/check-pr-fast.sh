@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/lib/python.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
+
 BASE_REF="origin/main"
 FETCH=1
 DOC_SNIPPETS="auto"
@@ -163,7 +166,7 @@ else
   printf '  %s\n' "${changed_files[@]}"
 fi
 
-policy_args=(python3 scripts/ci/change_policy.py)
+policy_args=(py scripts/ci/change_policy.py)
 if [[ "$changed_file_count" -gt 0 ]]; then
   for path in "${changed_files[@]}"; do
     policy_args+=(--path "$path")
@@ -174,7 +177,7 @@ policy_fields=()
 while IFS= read -r field; do
   policy_fields+=("$field")
 done < <(
-  python3 -c \
+  py -c \
     'import json, sys; data = json.load(sys.stdin); print(data["classification"]); print(data["reason"])' \
     <<<"${policy_json}"
 )
@@ -200,7 +203,7 @@ if [[ "$untracked_file_count" -gt 0 ]]; then
   fi
 fi
 if [[ "${change_class}" == "code" ]]; then
-  run python3 scripts/ci/run_profile.py fmt
+  run py scripts/ci/run_profile.py fmt
 else
   log "cargo fmt: skipped for ${change_class} changes"
 fi
@@ -226,7 +229,7 @@ case "$DOC_SNIPPETS" in
 esac
 
 if [[ "$run_doc_snippets" -eq 1 ]]; then
-  run python3 scripts/check-doc-snippets.py --root-dir . --check
+  run py scripts/check-doc-snippets.py --root-dir . --check
 else
   log "docs snippets: skipped"
 fi
@@ -239,9 +242,9 @@ if [[ "${change_class}" == "code" ]]; then
   if has_ci_profile clippy || has_ci_profile full; then
     log "ci clippy: covered by selected profile"
   elif [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
-    python3 scripts/ci/run_profile.py --dry-run clippy
+    py scripts/ci/run_profile.py --dry-run clippy
   else
-    python3 scripts/ci/run_profile.py clippy
+    py scripts/ci/run_profile.py clippy
   fi
 fi
 
@@ -257,7 +260,7 @@ if [[ "$ci_profile_count" -gt 0 ]]; then
   if [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
     profile_args=(--dry-run "${profile_args[@]}")
   fi
-  python3 scripts/ci/run_profile.py "${profile_args[@]}"
+  py scripts/ci/run_profile.py "${profile_args[@]}"
 elif [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
   die "--ci-profile-dry-run requires at least one --ci-profile"
 fi
