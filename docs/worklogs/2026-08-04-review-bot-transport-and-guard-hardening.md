@@ -167,3 +167,32 @@ invocations now pass `-c core.quotePath=false`.
 - `CONTENT_TRIGGERS` is a heuristic keyed on source text. It will miss a rule
   signal expressed differently and will occasionally supply a section that
   turns out to be irrelevant, costing tokens rather than correctness.
+
+## Review Follow-ups (Codex on PR #1604)
+
+Three findings, each reproduced against the pre-fix script first.
+
+- **P1 — expression continuations blocked the gate.** The new bare
+  continuation alternative `[^\s"'#][^\s#]{7,}` matched a whole EXPRESSION,
+  so `let api_key =` continued by `std::env::var("API_KEY")?;` was reported as
+  a leaked credential and a valid credential-LOADING change could not pass the
+  required review-bot gate. The alternative is now `BARE_SECRET_VALUE`,
+  restricted to the characters a credential literal is made of
+  (`[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,}` — base64/hex/JWT alphabets plus URL-safe
+  punctuation). Call, path and index syntax falls outside the class. The
+  motivating unquoted-secret case and JWT-shaped values still match.
+- **P2 — a fully deleted file was omitted.** `+++ /dev/null` cleared
+  `current_file`, so a whole-file deletion never entered the set that exists to
+  retain unanchored blocks about deletions. The parser now falls back to the
+  old-side path from the preceding `--- a/...` header — the path a finding
+  about the removal names.
+- **P2 — the exception was too wide.** Any patch removing even one line put
+  the file in the set, which disabled the anti-generalization filter for most
+  modified files. The rule is now "removes lines and adds none": a replacement
+  edit supplies the lines that took the deleted ones' place, so a real finding
+  about it can and should name one of them. The helper is renamed
+  `files_with_unanchorable_deletions` to state that condition.
+
+Coverage: `test_sensitive_diff_ignores_an_expression_continuation`,
+`test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file`, and
+`test_files_with_unanchorable_deletions_skips_replacement_edits`.

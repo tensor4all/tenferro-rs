@@ -1267,7 +1267,7 @@ def test_filter_findings_keeps_file_level_block_for_deletions() -> None:
     assert kept == [block]
 
 
-def test_files_with_deleted_lines_reads_the_new_side_path() -> None:
+def test_files_with_unanchorable_deletions_reads_the_new_side_path() -> None:
     mod = load_module()
     diff = "\n".join(
         [
@@ -1285,7 +1285,80 @@ def test_files_with_deleted_lines_reads_the_new_side_path() -> None:
             "+added",
         ]
     )
-    assert mod.files_with_deleted_lines(diff) == {"a.rs"}
+    assert mod.files_with_unanchorable_deletions(diff) == {"a.rs"}
+
+
+def test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file() -> None:
+    """A whole-file deletion has `+++ /dev/null`; keep its old-side path.
+
+    Clearing `current_file` on the `/dev/null` header omitted the deleted file
+    from the very set that exists to retain unanchored blocks about deletions.
+    """
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/crates/x/src/old.rs b/crates/x/src/old.rs",
+            "deleted file mode 100644",
+            "--- a/crates/x/src/old.rs",
+            "+++ /dev/null",
+            "@@ -1,2 +0,0 @@",
+            "-fn validate() {}",
+            "-// SAFETY: checked above",
+        ]
+    )
+    assert mod.files_with_unanchorable_deletions(diff) == {"crates/x/src/old.rs"}
+
+
+def test_files_with_unanchorable_deletions_skips_replacement_edits() -> None:
+    """A replacement edit adds lines, so a finding about it can be anchored.
+
+    Treating every patch that removes a line as unanchorable disabled the
+    anti-generalization filter for most modified files.
+    """
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1,1 +1,1 @@",
+            "-let a = 1;",
+            "+let a = 2;",
+            "diff --git a/b.rs b/b.rs",
+            "--- a/b.rs",
+            "+++ b/b.rs",
+            "@@ -1,2 +1,1 @@",
+            " keep",
+            "-// SAFETY: checked above",
+        ]
+    )
+    assert mod.files_with_unanchorable_deletions(diff) == {"b.rs"}
+
+
+def test_sensitive_diff_ignores_an_expression_continuation() -> None:
+    """A credential-LOADING expression is not a credential value.
+
+    The bare continuation alternative matched the whole expression, so
+    `let api_key =` followed by `std::env::var("API_KEY")?;` blocked the
+    required gate even though no credential appears in the diff.
+    """
+    mod = load_module()
+    for continuation in (
+        '+    std::env::var("API_KEY")?;',
+        "+    env::var(name).unwrap();",
+        "+    settings.api_key();",
+    ):
+        diff = "\n".join(
+            [
+                "diff --git a/src/x.rs b/src/x.rs",
+                "--- a/src/x.rs",
+                "+++ b/src/x.rs",
+                "@@ -1,2 +1,2 @@",
+                f" {KEYNAME} =",
+                continuation,
+            ]
+        )
+        assert mod.sensitive_diff_finding(diff) is None, continuation
 
 
 def test_sensitive_diff_blocks_a_bare_continuation_value() -> None:
@@ -1374,7 +1447,10 @@ def main() -> int:
         test_call_deepseek_does_not_retry_past_the_deadline,
         test_budget_exhausted_finding_warns_without_blocking,
         test_filter_findings_keeps_file_level_block_for_deletions,
-        test_files_with_deleted_lines_reads_the_new_side_path,
+        test_files_with_unanchorable_deletions_reads_the_new_side_path,
+        test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file,
+        test_files_with_unanchorable_deletions_skips_replacement_edits,
+        test_sensitive_diff_ignores_an_expression_continuation,
         test_sensitive_diff_blocks_a_bare_continuation_value,
         test_sensitive_diff_ignores_an_ordinary_bare_continuation,
         test_sensitive_diff_blocks_a_value_on_a_continuation_line,

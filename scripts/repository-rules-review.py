@@ -83,8 +83,19 @@ OPEN_SECRET_ASSIGNMENT = re.compile(
 # The value may be a bare token: `API_KEY =` followed by an unquoted secret.
 # `awaiting_value` is only set for credential-named assignments, so accepting
 # bare tokens here cannot fire on ordinary continuations.
+#
+# The bare alternative is restricted to the characters a credential literal is
+# actually made of (base64/hex/JWT alphabets plus the URL-safe punctuation).
+# An unrestricted `[^\s#]+` also matched an EXPRESSION, so
+# `let api_key =` continued by `std::env::var("API_KEY")?;` was reported as a
+# leaked credential and a valid credential-LOADING change could not pass the
+# required gate. Call, path, and index syntax (`(`, `)`, `::`, `?`, `[`, `"`)
+# is outside the class, so such continuations no longer match.
+BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,}"
 STANDALONE_VALUE = re.compile(
-    r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|[^\s"'#][^\s#]{7,})[ \t]*[,;]?[ \t]*$"""
+    r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|"""
+    + BARE_SECRET_VALUE
+    + r""")[ \t]*[,;]?[ \t]*$"""
 )
 # A quote opened on this line and closed on a later one hides the value from
 # any single-line pattern, so treat the opening alone as disqualifying.
@@ -530,20 +541,43 @@ def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
-def files_with_deleted_lines(diff_text: str) -> set[str]:
-    """Files this diff removes lines from, keyed by their new-side path."""
-    result: set[str] = set()
+def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
+    """Files this diff removes lines from without adding any.
+
+    A finding about a deletion has no new-file line to point at, so the model
+    is obliged to return ``line: null`` and `filter_findings` must keep the
+    block. That obligation only holds when the diff gives it nothing to anchor
+    to: a replacement edit adds the lines that took the deleted ones' place, so
+    a real finding about that edit can and should name one of them. Requiring
+    "no added lines" keeps the anti-generalization filter in force for ordinary
+    modified files instead of disabling it for any patch that happens to remove
+    a line.
+
+    Keyed by the new-side path, falling back to the old-side path when the file
+    is deleted outright (``+++ /dev/null``) — that is the path a finding about
+    the removal names, and without the fallback a whole-file deletion was
+    omitted from the very set that exists to retain it.
+    """
+    deleted: set[str] = set()
+    added: set[str] = set()
     current_file: str | None = None
+    old_file: str | None = None
     for line in diff_text.splitlines():
+        if line.startswith("--- "):
+            raw = line.removeprefix("--- a/").removeprefix("--- ")
+            old_file = None if raw == "/dev/null" else raw
+            continue
         if line.startswith("+++ "):
             raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = None if raw == "/dev/null" else raw
+            current_file = old_file if raw == "/dev/null" else raw
             continue
-        if line.startswith("--- ") or line.startswith("@@"):
+        if current_file is None or line.startswith("@@"):
             continue
-        if current_file and line.startswith("-") and not line.startswith("---"):
-            result.add(current_file)
-    return result
+        if line.startswith("-") and not line.startswith("---"):
+            deleted.add(current_file)
+        elif line.startswith("+") and not line.startswith("+++"):
+            added.add(current_file)
+    return deleted - added
 
 
 def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
@@ -1498,7 +1532,7 @@ def main(argv: list[str] | None = None) -> int:
     diff_text = unified_diff(args.base, args.head, worktree=args.worktree)
     added_lines = added_lines_by_file(diff_text)
     added_text = added_lines_with_text(diff_text)
-    deleted_from = files_with_deleted_lines(diff_text)
+    deleted_from = files_with_unanchorable_deletions(diff_text)
     section_names = select_rule_sections(files, added_text)
     rules_text = build_rules_payload(section_names)
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
