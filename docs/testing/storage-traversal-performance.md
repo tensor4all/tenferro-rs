@@ -3,7 +3,7 @@
 ```json
 {
   "schema": "tenferro.storage-traversal-performance.v1",
-  "candidate_commit": "927c392cf4dd259b0908e81232cfa769fa5c2219",
+  "candidate_commit": "e114555b25848bf51682c69b091461884f9d301b",
   "benchmark_path": "crates/tenferro-tensor/benches/element_access.rs",
   "baseline_obligation": "p1-element-access-baseline",
   "baseline_report": "docs/testing/storage-element-access-baseline.json",
@@ -96,70 +96,70 @@
   "medians_ns": {
     "contiguous_read": {
       "id": "linear_iteration/col_major/as_slice_iter",
-      "estimate_ns": 56309.931433812395,
-      "lower_bound_ns": 55837.88141225904,
-      "upper_bound_ns": 56823.592395321786,
-      "standard_error_ns": 252.27319945690937
+      "estimate_ns": 55467.01687497823,
+      "lower_bound_ns": 55067.084501278594,
+      "upper_bound_ns": 55903.020189855044,
+      "standard_error_ns": 213.02580897737533
     },
     "contiguous_write": {
       "id": "linear_iteration/col_major/tensor_iter_mut",
-      "estimate_ns": 58591.74228383734,
-      "lower_bound_ns": 57705.20169836054,
-      "upper_bound_ns": 59503.20635632853,
-      "standard_error_ns": 457.31884676644967
+      "estimate_ns": 60768.031335896114,
+      "lower_bound_ns": 58574.99645490483,
+      "upper_bound_ns": 63135.14629902444,
+      "standard_error_ns": 1163.38757502498
     },
     "dynamic_contiguous": {
       "id": "linear_iteration/col_major/dynamic_tensor_iter",
-      "estimate_ns": 57246.06914268643,
-      "lower_bound_ns": 56650.050973121455,
-      "upper_bound_ns": 57876.503831423375,
-      "standard_error_ns": 315.1876321572481
+      "estimate_ns": 56177.65611349444,
+      "lower_bound_ns": 55634.23566022885,
+      "upper_bound_ns": 56769.57315223189,
+      "standard_error_ns": 290.52394545964324
     },
     "fixed_rank": {
       "id": "rank_fixed/2d/col_major/get2/4096",
-      "estimate_ns": 28522.36451349452,
-      "lower_bound_ns": 28257.504029908247,
-      "upper_bound_ns": 28799.60130699438,
-      "standard_error_ns": 138.70761851169468
+      "estimate_ns": 27588.91499810061,
+      "lower_bound_ns": 27393.25831799197,
+      "upper_bound_ns": 27808.78142978274,
+      "standard_error_ns": 106.18954036091591
     },
     "strided": {
       "id": "strided_traversal/rectangular_transpose/logical_order_get/3840",
-      "estimate_ns": 15383.488688963826,
-      "lower_bound_ns": 15230.533785817657,
-      "upper_bound_ns": 15547.483109618,
-      "standard_error_ns": 80.88291189824042
+      "estimate_ns": 15067.492379690788,
+      "lower_bound_ns": 14944.520205075183,
+      "upper_bound_ns": 15202.046032311406,
+      "standard_error_ns": 65.75022483308767
     },
     "empty": {
       "id": "linear_iteration/col_major/empty",
-      "estimate_ns": 0.5643989861136747,
-      "lower_bound_ns": 0.5603025042061576,
-      "upper_bound_ns": 0.568875983794626,
-      "standard_error_ns": 0.0021876802775395083
+      "estimate_ns": 0.5624760478870988,
+      "lower_bound_ns": 0.5574585004258443,
+      "upper_bound_ns": 0.5679121266762683,
+      "standard_error_ns": 0.0026764343434505077
     }
   },
   "comparisons": {
     "contiguous_read": {
       "baseline_ns": 54986.53687097039,
-      "current_ns": 56309.931433812395,
-      "ratio": 1.0240676106943676,
+      "current_ns": 55467.01687497823,
+      "ratio": 1.008738139030929,
       "limit": 1.1
     },
     "dynamic_contiguous": {
       "baseline_ns": 54426.40404333462,
-      "current_ns": 57246.06914268643,
-      "ratio": 1.0518069335814795,
+      "current_ns": 56177.65611349444,
+      "ratio": 1.0321765161770649,
       "limit": 1.15
     },
     "fixed_rank": {
       "baseline_ns": 28555.716496630084,
-      "current_ns": 28522.36451349452,
-      "ratio": 0.9988320383017005,
+      "current_ns": 27588.91499810061,
+      "ratio": 0.9661433290023184,
       "limit": 1.15
     },
     "strided": {
       "baseline_ns": 14849.827750481152,
-      "current_ns": 15383.488688963826,
-      "ratio": 1.0359371803801147,
+      "current_ns": 15067.492379690788,
+      "ratio": 1.0146577208077436,
       "limit": 1.15
     }
   },
