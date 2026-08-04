@@ -708,6 +708,16 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
 }
 
 impl CudaBackend {
+    fn duplicate_typed<T>(&self, input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
+    {
+        // Same-dtype casts are explicit copies. Use the native materialization
+        // path so an identity copy preserves NaN payloads instead of routing
+        // through cuTENSOR's alpha-scaled permutation operation.
+        self.to_contiguous_view_typed(&input.as_view(), "cast")
+    }
+
     fn duplicate_bool(
         &self,
         input: &TypedTensor<bool>,
@@ -1224,6 +1234,13 @@ impl CudaBackend {
                 op,
                 src.shape().to_vec(),
                 dst.shape().to_vec(),
+            ));
+        }
+        if src.offset() != 0 || !src.is_col_major_contiguous()? {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "source",
+                "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
             ));
         }
         let source_buffer = src.backend_buffer().ok_or_else(|| {
@@ -4795,17 +4812,15 @@ impl TensorStructural for CudaBackend {
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
         match (input, to) {
-            (Tensor::F32(_), crate::DType::F32)
-            | (Tensor::F64(_), crate::DType::F64)
-            | (Tensor::I32(_), crate::DType::I32)
-            | (Tensor::I64(_), crate::DType::I64)
-            | (Tensor::C32(_), crate::DType::C32)
-            | (Tensor::C64(_), crate::DType::C64) => {
-                self.to_contiguous_read(TensorRead::from_tensor(input))
-            }
+            (Tensor::F32(t), crate::DType::F32) => self.duplicate_typed(t).map(Tensor::F32),
+            (Tensor::F64(t), crate::DType::F64) => self.duplicate_typed(t).map(Tensor::F64),
+            (Tensor::I32(t), crate::DType::I32) => self.duplicate_typed(t).map(Tensor::I32),
+            (Tensor::I64(t), crate::DType::I64) => self.duplicate_typed(t).map(Tensor::I64),
             (Tensor::Bool(t), crate::DType::Bool) => {
                 self.duplicate_bool(t, "cast").map(Tensor::Bool)
             }
+            (Tensor::C32(t), crate::DType::C32) => self.duplicate_typed(t).map(Tensor::C32),
+            (Tensor::C64(t), crate::DType::C64) => self.duplicate_typed(t).map(Tensor::C64),
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
@@ -5952,8 +5967,27 @@ fn cubecl_reshape_metadata<T: crate::TensorScalar + Clone>(
         ));
     }
 
-    let (buffer, _, placement) = tensor.into_parts();
-    TypedTensor::from_buffer_col_major(shape, buffer, placement)
+    // `TypedTensor::into_parts` intentionally materializes host storage and
+    // therefore cannot preserve a backend-owned root. Move the owner through
+    // `TensorValue`/`AllocationGroup` instead so this metadata-only reshape
+    // keeps the exact CubeCL allocation and performs no implicit download.
+    let value = crate::TensorValue::from_tensor(
+        <T as crate::TensorScalar>::typed_tensor_into_tensor(tensor),
+    )
+    .reshape_view(shape)?;
+    let (group, slot, _, _) = value.try_into_group_parts().map_err(|_| {
+        crate::Error::runtime_state(
+            op,
+            "failed to publish the reshaped tensor descriptor without copying",
+        )
+    })?;
+    let tensor = group.into_tensor(slot).map_err(|(_, error)| {
+        crate::Error::runtime_state(
+            op,
+            format!("failed to detach the reshaped tensor owner: {error}"),
+        )
+    })?;
+    <T as crate::TensorScalar>::into_typed(tensor)
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {

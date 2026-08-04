@@ -442,16 +442,19 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let empty_operand = upload(&gpu, &tensor_f64(vec![0], vec![]));
     let indices = upload(&gpu, &tensor_i32(vec![0, 1], vec![]));
     let other_indices = upload(&other_gpu, &tensor_i32(vec![0, 1], vec![]));
-    // INVARIANT: CUDA runtime residency is identified by device ordinal, not
-    // by the `CudaBackend` wrapper. Same-device CubeCL clients share the
-    // primary context, so a second cuda:0 backend remains compatible.
-    gpu.scatter(
-        &empty_operand,
-        &other_indices,
-        &upload(&gpu, &tensor_f64(vec![0], vec![])),
-        &config,
-    )
-    .unwrap();
+    let foreign_domain_error = gpu
+        .scatter(
+            &empty_operand,
+            &other_indices,
+            &upload(&gpu, &tensor_f64(vec![0], vec![])),
+            &config,
+        )
+        .unwrap_err();
+    assert_runtime_state(
+        &foreign_domain_error,
+        "scatter",
+        "CubeCL allocation belongs to a different runtime domain",
+    );
 
     let wrong_device_message =
         "expected GPU tensor resident on cuda:0, got Gpu(Cuda):1".to_string();
@@ -509,7 +512,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     );
 
     let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(
-        match upload(&gpu, &tensor_i32(vec![0, 1], vec![0, 0])) {
+        match upload(&gpu, &tensor_i32(vec![0, 1], vec![])) {
             crate::Tensor::I32(tensor) => tensor,
             _ => unreachable!(),
         },
