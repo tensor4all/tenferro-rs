@@ -36,7 +36,12 @@ class BuildArtifactContracts(unittest.TestCase):
                 top_level_sources = sorted(
                     path.name for path in (crate_root / "tests").glob("*.rs")
                 )
-                self.assertEqual(top_level_sources, ["integration.rs"])
+                explicit_test_sources = sorted(
+                    Path(target["path"]).name
+                    for target in manifest.get("test", [])
+                    if target.get("path", "").count("/") == 1
+                )
+                self.assertEqual(top_level_sources, explicit_test_sources)
 
                 harness = (crate_root / "tests" / "integration.rs").read_text()
                 included_paths = set(re.findall(r'#\[path = "([^"]+)"\]', harness))

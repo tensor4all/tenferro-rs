@@ -10,7 +10,7 @@ use super::helpers::{
 };
 
 pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
-    type Real: Clone + Copy + Default;
+    type Real: Clone + Copy + Default + tenferro_tensor::TensorScalar;
 
     fn svd_2d(
         buffers: &mut BufferPool,
@@ -19,7 +19,7 @@ pub(crate) trait LapackSvd: Clone + Copy + Default + PoolScalar {
     fn svd_values_2d(
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>>;
 }
 
 #[cfg(not(feature = "provider-inject"))]
@@ -113,7 +113,7 @@ macro_rules! impl_real_svd {
             fn svd_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
                 let (m, n) = matrix_dims(input, "svd_values")?;
                 let k = m.min(n);
                 let m_i32 = dim_i32(m, "svd_values")?;
@@ -230,7 +230,7 @@ macro_rules! impl_real_svd {
             fn svd_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
                 let (m, n) = matrix_dims(input, "svd_values")?;
                 let k = m.min(n);
                 let m_i32 = dim_i32(m, "svd_values")?;
@@ -355,7 +355,7 @@ macro_rules! impl_complex_svd {
             fn svd_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
                 let (m, n) = matrix_dims(input, "svd_values")?;
                 let k = m.min(n);
                 let m_i32 = dim_i32(m, "svd_values")?;
@@ -483,7 +483,7 @@ macro_rules! impl_complex_svd {
             fn svd_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackSvd>::Real>> {
                 let (m, n) = matrix_dims(input, "svd_values")?;
                 let k = m.min(n);
                 let m_i32 = dim_i32(m, "svd_values")?;
@@ -606,14 +606,14 @@ pub(crate) fn svd<T: LapackSvd>(
 fn svd_values_2d<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as LapackSvd>::Real>> {
     T::svd_values_2d(buffers, input)
 }
 
 pub(crate) fn svd_values<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as LapackSvd>::Real>> {
     if has_zero_dim(input.shape()) {
         let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
         let k = matrix_shape[0].min(matrix_shape[1]);

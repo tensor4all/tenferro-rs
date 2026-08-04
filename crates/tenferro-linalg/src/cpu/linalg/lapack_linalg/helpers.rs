@@ -36,7 +36,7 @@ pub(crate) fn square_matrix_dim<T>(
     Ok(rows)
 }
 
-pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
+pub(crate) fn tensor_from_vec_with_template<T: Clone + tenferro_tensor::TensorScalar, U>(
     shape: Vec<usize>,
     data: Vec<T>,
     template: &TypedTensor<U>,
@@ -57,7 +57,7 @@ pub(crate) fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
     tensor_from_vec_with_template(shape, owned, template)
 }
 
-pub(crate) fn refill_tensor_from_slice<T: Copy>(
+pub(crate) fn refill_tensor_from_slice<T: Copy + tenferro_tensor::TensorScalar>(
     tensor: &mut TypedTensor<T>,
     data: &[T],
 ) -> tenferro_tensor::Result<()> {
@@ -450,7 +450,11 @@ where
         .collect()
 }
 
-pub(crate) fn batched_multi_convert<InT: PoolScalar, OutT: Clone, F>(
+pub(crate) fn batched_multi_convert<
+    InT: PoolScalar,
+    OutT: Clone + tenferro_tensor::TensorScalar,
+    F,
+>(
     op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<InT>,

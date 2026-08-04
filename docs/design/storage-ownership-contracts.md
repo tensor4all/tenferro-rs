@@ -381,11 +381,15 @@ alias. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
-Hosted `ci-config` checks fetch full Git history and pass exactly one canonical
-event base to the existing production checker: `pull_request.base.sha` for a
-pull request and `github.event.before` for a push. The local `ci-config`
-profile omits the base by default and remains a structural developer check.
-Supplying a storage-ownership base without selecting `ci-config` is invalid.
+Hosted `ci-config` checks fetch full Git history and pass one canonical
+promotion base to the existing production checker. Ordinary changes use
+`pull_request.base.sha` for a pull request and `github.event.before` for a
+push. An aggregate, sequential P8–P13 promotion stream may use its recorded
+latest promotion-base commit instead when the event base predates an earlier
+validated manifest revision; the workflow must verify that this pinned base is
+an ancestor of the checked-out commit. The local `ci-config` profile omits the
+base by default and remains a structural developer check. Supplying a
+storage-ownership base without selecting `ci-config` is invalid.
 
 Availability is an explicit CLI contract, not source inspection or path
 existence. Both tools accept `--contract-schema`, exit successfully

@@ -443,7 +443,7 @@ pub fn extension_modules<B: TensorBackend + 'static>(
 /// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
 /// let a = SparseCooTracedTensor::from_parts(
 ///     vec![1, 1],
-///     coords.clone(),
+///     coords.duplicate()?,
 ///     TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
 /// )?;
 /// let b = SparseCooTracedTensor::from_parts(
