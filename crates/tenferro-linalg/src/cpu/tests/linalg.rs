@@ -247,7 +247,7 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 
                 let backend_vector = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
-                    StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(
+                    StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
                         120, 2,
                     ))),
                     Placement {
@@ -274,7 +274,7 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 
                 let backend_matrix = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2, 2],
-                    StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(
+                    StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
                         121, 4,
                     ))),
                     Placement {

@@ -14,23 +14,16 @@ use super::{
 };
 use tenferro_tensor::{ValidationError, ValidationKind};
 
-fn with_cuda_ordinal<T: Clone + 'static>(
-    tensor: &TypedTensor<T>,
-    ordinal: usize,
-) -> TypedTensor<T> {
-    TypedTensor::from_buffer_col_major(
-        tensor.shape().to_vec(),
-        tensor.buffer().clone(),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal,
-            }),
-            cpu_affinity: None,
-        },
-    )
-    .unwrap()
+fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
+    tensor.set_placement(Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal,
+        }),
+        cpu_affinity: None,
+    });
+    tensor
 }
 
 #[test]
@@ -463,7 +456,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let wrong_device_message =
         "expected GPU tensor resident on cuda:0, got Gpu(Cuda):1".to_string();
     let wrong_starts = crate::Tensor::I32(with_cuda_ordinal(
-        match &upload(&gpu, &tensor_i32(vec![1], vec![0])) {
+        match upload(&gpu, &tensor_i32(vec![1], vec![0])) {
             crate::Tensor::I32(tensor) => tensor,
             _ => unreachable!(),
         },
@@ -476,7 +469,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
 
     let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
     let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
-        match &upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
+        match upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
             crate::Tensor::F32(tensor) => tensor,
             _ => unreachable!(),
         },
@@ -516,7 +509,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     );
 
     let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(
-        match &indices {
+        match upload(&gpu, &tensor_i32(vec![0, 1], vec![0, 0])) {
             crate::Tensor::I32(tensor) => tensor,
             _ => unreachable!(),
         },

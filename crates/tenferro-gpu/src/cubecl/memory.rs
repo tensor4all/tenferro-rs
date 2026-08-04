@@ -4,7 +4,6 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
 
 use super::dispatch;
 use crate::cubecl::runtime::CudaRuntime;
@@ -117,7 +116,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = client.create_from_slice(T::as_bytes(host_data));
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(
             handle,
             host_data.len(),
             rt.device_ordinal(),
@@ -191,7 +190,7 @@ fn upload_bool(
     let handle = client.create_from_slice(&bytes);
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        StorageBuffer::Backend(Arc::new(CubeclBuffer::new(
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(
             handle,
             host_data.len(),
             rt.device_ordinal(),

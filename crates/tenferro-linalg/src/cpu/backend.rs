@@ -908,8 +908,8 @@ where
             .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))?;
         T::factor(context, buffers, &read, n, provider)?
     };
-    let typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
-    write_managed_cholesky_output(&typed, domain.id(), &values)?;
+    let mut typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
+    write_managed_cholesky_output(&mut typed, domain.id(), &values)?;
     Ok(T::wrap(typed))
 }
 
@@ -985,7 +985,7 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + TensorScalar + 'stati
 }
 
 fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
-    output: &TypedTensor<T>,
+    output: &mut TypedTensor<T>,
     expected_domain: AllocationDomainId,
     values: &[T],
 ) -> tenferro_tensor::Result<()> {
@@ -997,7 +997,7 @@ fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
             "shared allocation owner returned an output outside its managed domain",
         ));
     }
-    let StorageBuffer::Backend(buffer) = output.buffer() else {
+    let Some(buffer) = output.backend_buffer_mut() else {
         return Err(tenferro_tensor::Error::runtime_state(
             "cholesky",
             "shared allocation owner returned a host output",

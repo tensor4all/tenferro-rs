@@ -48,7 +48,7 @@ impl BackendStorage<f32> for HostAccessibleBuffer {
         Ok(HostReadGuard::new(self.data.lock().unwrap()))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, f32>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, f32>, HostAccessError> {
         let mut guard = self.data.lock().unwrap();
         let len = guard.len();
         Ok(HostWriteGuard::new(len, move |source| {
@@ -62,7 +62,7 @@ impl BackendStorage<f32> for HostAccessibleBuffer {
 fn backend_host_access_guards_preserve_domain_identity_and_writeback() {
     let domain = AllocationDomainId::fresh();
     let allocation = AllocationId::from_backend_id(17);
-    let buffer = HostAccessibleBuffer {
+    let mut buffer = HostAccessibleBuffer {
         data: std::sync::Mutex::new(vec![1.0, 2.0]),
         domain,
         allocation,
@@ -547,7 +547,7 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 3],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(42, 6))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(42, 6))),
         placement.clone(),
     )
     .unwrap();
@@ -583,7 +583,7 @@ fn typed_tensor_as_view_preserves_rank_and_layout() {
 fn typed_tensor_view_backend_as_slice_returns_runtime_state() {
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(77, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(77, 2))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -654,7 +654,7 @@ fn typed_tensor_owned_layout_is_always_compact() {
 fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
     let err = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new(9))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new(9))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -712,8 +712,7 @@ fn tensor_owned_export_reports_dtype_mismatch() {
 
 #[test]
 fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
-    let handle: Arc<dyn crate::types::BackendStorage<f64>> =
-        Arc::new(BackendStorageHandle::<f64>::new_with_len(42, 2));
+    let handle = BackendStorageHandle::<f64>::new_with_len(42, 2);
 
     assert_eq!(format!("{handle:?}"), "BackendStorageHandle { id: 42 }");
     assert_eq!(handle.backend_family(), "opaque");
@@ -723,7 +722,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
 
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        StorageBuffer::Backend(Arc::clone(&handle)),
+        StorageBuffer::Backend(Box::new(handle)),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -744,17 +743,15 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
 
 #[test]
 fn tensor_buffer_refs_cover_backend_metadata() {
-    let read_handle: Arc<dyn crate::types::BackendStorage<f64>> =
-        Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 0));
-    let read_ref = TensorStorageRef::Backend(Arc::clone(&read_handle));
+    let read_handle = BackendStorageHandle::<f64>::new_with_len(7, 0);
+    let read_ref = TensorStorageRef::Backend(&read_handle);
     let cloned_read_ref = read_ref.clone();
 
     assert_eq!(cloned_read_ref.len(), 0);
     assert!(cloned_read_ref.is_empty());
 
-    let write_handle: Arc<dyn crate::types::BackendStorage<i32>> =
-        Arc::new(BackendStorageHandle::<i32>::new_with_len(8, 2));
-    let write_ref = TensorStorageRefMut::Backend(write_handle);
+    let mut write_handle = BackendStorageHandle::<i32>::new_with_len(8, 2);
+    let write_ref = TensorStorageRefMut::Backend(&mut write_handle);
 
     assert_eq!(write_ref.len(), 2);
     assert!(!write_ref.is_empty());
@@ -1049,7 +1046,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 1))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, 1))),
         placement.clone(),
     )
     .unwrap();
@@ -1062,7 +1059,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
 
     let mut mutable_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(8, 1))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(8, 1))),
         placement,
     )
     .unwrap();
@@ -1084,7 +1081,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
     };
     let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![2, 2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<i32>::new_with_len(91, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<i32>::new_with_len(91, 4))),
         placement.clone(),
     )
     .unwrap();
@@ -1148,7 +1145,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
 fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
     let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![4],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<i32>::new_with_len(92, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<i32>::new_with_len(92, 4))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -1193,7 +1190,7 @@ fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
     };
     let tensor = TypedTensor::<NonCloneElement>::from_buffer_col_major(
         vec![2, 3],
-        StorageBuffer::Backend(Arc::new(
+        StorageBuffer::Backend(Box::new(
             BackendStorageHandle::<NonCloneElement>::new_with_len(9, 6),
         )),
         placement,
@@ -2036,7 +2033,7 @@ fn n_elements_invariant_checks_do_not_use_unsafe_unreachable() {
 fn backend_tensor_f64(id: u64, len: usize) -> TypedTensor<f64> {
     TypedTensor::<f64>::from_buffer_col_major(
         vec![len],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(id, len))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(id, len))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

@@ -1,7 +1,6 @@
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
-use std::sync::Arc;
 
 use crate::config::CompareDir;
 use crate::cubecl::CudaRuntime;
@@ -213,6 +212,37 @@ pub(crate) fn typed_tensor_binding<T: Clone + 'static>(
     // element count of `tensor.shape`; `strides` is the matching dense
     // column-major layout metadata, so kernel indexing stays within that
     // allocation.
+    Ok(unsafe {
+        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
+    })
+}
+
+pub(crate) fn typed_view_binding<T: Clone + 'static>(
+    view: &TypedTensorView<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
+    let buffer = cubecl_view_buffer(view, op)?;
+    if view.offset() != 0 || !view.is_col_major_contiguous()? {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "source",
+            "CUDA compact view binding requires a zero-offset column-major view",
+        ));
+    }
+    let expected_len = checked_shape_product(op, view.shape())?;
+    if expected_len != buffer.element_len() {
+        return Err(crate::Error::runtime_state(
+            op,
+            format!(
+                "expected view shape product {expected_len} elements, actual CubeclBuffer::len {}",
+                buffer.element_len()
+            ),
+        ));
+    }
+    let (shape, strides) = cubecl_shape_and_strides(view.shape())?;
+
+    // SAFETY: the view layout and backing length establish a compact dense
+    // range, and the metadata is the matching column-major binding.
     Ok(unsafe {
         TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
     })
@@ -432,7 +462,7 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Box::new(buffer)),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

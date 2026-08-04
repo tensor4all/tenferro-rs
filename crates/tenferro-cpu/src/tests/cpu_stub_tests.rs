@@ -18,7 +18,7 @@ fn opaque_backend_placement() -> Placement {
 fn backend_tensor_f64(handle_id: u64, len: usize) -> Tensor {
     Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
         vec![len],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(handle_id, len))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(handle_id, len))),
         opaque_backend_placement(),
     ).unwrap())
 }
@@ -40,7 +40,7 @@ fn cpu_backend_rejects_backend_view_without_download() {
     let mut backend = crate::CpuBackend::new();
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, 2))),
         opaque_backend_placement(),
     ).unwrap();
 
@@ -61,7 +61,7 @@ fn cpu_backend_copy_into_rejects_backend_destination_without_download() {
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(8, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(8, 2))),
         opaque_backend_placement(),
     ).unwrap();
 
@@ -83,7 +83,7 @@ fn cpu_dot_general_read_rejects_backend_view_without_panic() {
     let mut backend = crate::CpuBackend::new();
     let lhs = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(9, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 4))),
         opaque_backend_placement(),
     ).unwrap();
     let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
@@ -142,7 +142,7 @@ fn cpu_reduce_read_rejects_backend_views_without_download() {
     let mut backend = crate::CpuBackend::new();
     let input = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(11, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(11, 2))),
         opaque_backend_placement(),
     ).unwrap();
 

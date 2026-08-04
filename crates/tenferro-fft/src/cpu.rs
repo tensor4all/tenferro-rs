@@ -285,7 +285,7 @@ where
 }
 
 fn write_managed_output<T>(
-    output: &TypedTensor<T>,
+    output: &mut TypedTensor<T>,
     expected_domain: AllocationDomainId,
     op: &'static str,
     values: &[T],
@@ -305,7 +305,7 @@ where
             "shared allocation owner returned a non-managed output",
         ));
     }
-    let StorageBuffer::Backend(buffer) = output.buffer() else {
+    let Some(buffer) = output.backend_buffer_mut() else {
         return Err(tenferro_tensor::Error::runtime_state(
             op,
             "shared allocation owner returned a host output",
@@ -327,7 +327,7 @@ macro_rules! write_managed_output {
             op: &'static str,
             values: &[$scalar],
         ) -> tenferro_tensor::Result<Tensor> {
-            let Tensor::$variant(output) = output else {
+            let Tensor::$variant(mut output) = output else {
                 return Err(tenferro_tensor::Error::runtime_state(
                     op,
                     concat!(
@@ -337,7 +337,7 @@ macro_rules! write_managed_output {
                     ),
                 ));
             };
-            write_managed_output(&output, expected_domain, op, values)?;
+            write_managed_output(&mut output, expected_domain, op, values)?;
             Ok(Tensor::$variant(output))
         }
     };

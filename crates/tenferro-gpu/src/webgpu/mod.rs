@@ -251,7 +251,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer<T> {
         }))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
             backend: self.backend_family(),
         })?;
@@ -518,7 +518,7 @@ pub(super) fn typed_from_webgpu<T: Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Box::new(buffer)),
         webgpu_placement(rt),
     )
 }
@@ -563,7 +563,7 @@ pub(super) fn alloc_tensor_in_runtime(
             let buffer = WebGpuBuffer::new_for_runtime(rt, handle, len, "apple_alloc")?;
             Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
                 shape.to_vec(),
-                StorageBuffer::Backend(Arc::new(buffer)),
+                StorageBuffer::Backend(Box::new(buffer)),
                 webgpu_placement(rt),
             )?))
         }

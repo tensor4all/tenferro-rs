@@ -1,6 +1,5 @@
 use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
@@ -63,7 +62,7 @@ fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
     Tensor::F64(
         TypedTensor::<f64>::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
                 handle_id, len,
             ))),
             opaque_backend_placement(),

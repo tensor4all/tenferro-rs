@@ -391,7 +391,6 @@ impl Default for Placement {
 ///
 /// let handle = BackendStorageHandle::<f64>::new(7);
 /// ```
-#[derive(Clone)]
 pub struct BackendStorageHandle<T> {
     id: u64,
     len: usize,
@@ -800,11 +799,14 @@ pub trait BackendStorage<T>: Debug + Send + Sync + 'static {
 
     /// Map the allocation for closure-scoped host writes.
     ///
+    /// The mutable receiver keeps write authority with the owning tensor or
+    /// provider object; borrowed views do not clone or share that authority.
+    ///
     /// # Errors
     ///
     /// The default returns [`HostAccessError::Unsupported`]. Host-visible
     /// backends return typed overlap, pending-GPU, or backend mapping failures.
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         Err(HostAccessError::Unsupported {
             backend: self.backend_family(),
         })
@@ -837,10 +839,10 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for BackendStorageHandle<T> {
 ///
 /// let host = StorageBuffer::Host(vec![1.0_f64, 2.0]);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum StorageBuffer<T> {
     Host(Vec<T>),
-    Backend(Arc<dyn BackendStorage<T>>),
+    Backend(Box<dyn BackendStorage<T>>),
 }
 
 impl<T: 'static> StorageBuffer<T> {
@@ -1018,14 +1020,14 @@ fn group_error(op: &'static str, error: GroupError) -> crate::Error {
 #[derive(Debug)]
 pub enum TensorStorageRef<'a, T> {
     Host(&'a [T]),
-    Backend(Arc<dyn BackendStorage<T>>),
+    Backend(&'a dyn BackendStorage<T>),
 }
 
 impl<T> Clone for TensorStorageRef<'_, T> {
     fn clone(&self) -> Self {
         match self {
             Self::Host(data) => Self::Host(data),
-            Self::Backend(buffer) => Self::Backend(Arc::clone(buffer)),
+            Self::Backend(buffer) => Self::Backend(*buffer),
         }
     }
 }
@@ -1080,7 +1082,7 @@ impl<T: 'static> TensorStorageRef<'_, T> {
 #[derive(Debug)]
 pub enum TensorStorageRefMut<'a, T> {
     Host(&'a mut [T]),
-    Backend(Arc<dyn BackendStorage<T>>),
+    Backend(&'a mut dyn BackendStorage<T>),
 }
 
 impl<T: 'static> TensorStorageRefMut<'_, T> {
@@ -1415,10 +1417,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
 
     /// Return the backend allocation for backend integrations.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
+    pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>> {
         match &self.buffer {
             TensorStorageRef::Host(_) => None,
-            TensorStorageRef::Backend(buffer) => Some(buffer),
+            TensorStorageRef::Backend(buffer) => Some(*buffer),
         }
     }
 
@@ -2224,10 +2226,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
 
     /// Return the backend allocation for backend integrations.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
+    pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>> {
         match &self.buffer {
             TensorStorageRefMut::Host(_) => None,
-            TensorStorageRefMut::Backend(buffer) => Some(buffer),
+            TensorStorageRefMut::Backend(buffer) => Some(&**buffer),
         }
     }
 
@@ -2401,7 +2403,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     pub fn as_read_only(&self) -> TypedTensorView<'_, T, R> {
         let buffer = match &self.buffer {
             TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
-            TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
+            TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(&**buffer),
         };
         TypedTensorView {
             buffer,
@@ -2532,7 +2534,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 placement,
             }),
             TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
+                buffer: TensorStorageRefMut::Backend(*buffer),
                 layout,
                 placement,
             }),
@@ -2779,7 +2781,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 placement,
             }),
             TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
+                buffer: TensorStorageRefMut::Backend(*buffer),
                 layout,
                 placement,
             }),
@@ -3765,7 +3767,7 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
     } else {
         match &tensor.buffer {
             StorageBuffer::Host(data) => TensorStorageRef::Host(data),
-            StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
+            StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(buffer.as_ref()),
         }
     };
     TypedTensorView {
@@ -5598,10 +5600,19 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Return the opaque backend buffer for backend-owned tensors.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendStorage<T>>> {
+    pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>> {
         match &self.buffer {
             StorageBuffer::Host(_) => None,
-            StorageBuffer::Backend(buffer) => Some(buffer),
+            StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
+        }
+    }
+
+    /// Return the mutable backend buffer for an exclusive owner borrow.
+    #[doc(hidden)]
+    pub fn backend_buffer_mut(&mut self) -> Option<&mut dyn BackendStorage<T>> {
+        match &mut self.buffer {
+            StorageBuffer::Host(_) => None,
+            StorageBuffer::Backend(buffer) => Some(buffer.as_mut()),
         }
     }
 
@@ -5730,7 +5741,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         } else {
             match &self.buffer {
                 StorageBuffer::Host(data) => TensorStorageRef::Host(data),
-                StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(Arc::clone(buffer)),
+                StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(buffer.as_ref()),
             }
         };
         TypedTensorView {
@@ -5762,7 +5773,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         } else {
             match &mut self.buffer {
                 StorageBuffer::Host(data) => TensorStorageRefMut::Host(data),
-                StorageBuffer::Backend(buffer) => TensorStorageRefMut::Backend(Arc::clone(buffer)),
+                StorageBuffer::Backend(buffer) => TensorStorageRefMut::Backend(buffer.as_mut()),
             }
         };
         TypedTensorViewMut {
@@ -5821,7 +5832,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
             .map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensorView {
-            buffer: TensorStorageRef::Backend(Arc::clone(buffer)),
+            buffer: TensorStorageRef::Backend(buffer.as_ref()),
             layout,
             placement: self.placement.clone(),
         })
@@ -5838,10 +5849,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// error; mutable host regions must go through
     /// [`TypedTensorViewMut::try_multi_slice_mut`] or host constructors.
     ///
-    /// Backend buffers are shared handles, so distinct region views over one
-    /// buffer can coexist; disjointness between regions used concurrently by
-    /// backend operations is the caller's contract (as with BLAS-style
-    /// in-place update APIs).
+    /// The returned view borrows the tensor's backend owner exclusively for its
+    /// lifetime. This keeps write authority tied to the owner; a second mutable
+    /// region view must be created only after the first borrow ends.
     ///
     /// # Examples
     ///
@@ -5875,7 +5885,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let op = "TypedTensor::backend_region_view_mut";
-        let StorageBuffer::Backend(buffer) = &self.buffer else {
+        let StorageBuffer::Backend(buffer) = &mut self.buffer else {
             return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; mutable host regions use \
@@ -5888,7 +5898,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             .validate_mutable_no_overlap()
             .map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensorViewMut {
-            buffer: TensorStorageRefMut::Backend(Arc::clone(buffer)),
+            buffer: TensorStorageRefMut::Backend(buffer.as_mut()),
             layout,
             placement: self.placement.clone(),
         })

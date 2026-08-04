@@ -281,7 +281,7 @@ fn cubecl_tensor_with_len(
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0, None))),
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(handle, len, 0, None))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

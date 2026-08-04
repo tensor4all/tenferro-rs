@@ -64,7 +64,7 @@ impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T>
         Ok(HostReadGuard::new(guard))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         let mut guard = self
             .values
             .lock()
@@ -114,7 +114,7 @@ impl FakeDomain {
         };
         TypedTensor::from_buffer_col_major(
             shape.to_vec(),
-            StorageBuffer::Backend(Arc::new(buffer)),
+            StorageBuffer::Backend(Box::new(buffer)),
             Placement {
                 memory_kind: MemoryKind::Managed,
                 device: None,

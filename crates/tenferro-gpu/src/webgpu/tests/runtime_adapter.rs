@@ -130,7 +130,7 @@ impl BackendStorage<f32> for TestWebGpuBuffer {
 fn input(family: &'static str, ordinal: usize, domain: Option<AllocationDomainId>) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(TestWebGpuBuffer { family, domain })),
+        StorageBuffer::Backend(Box::new(TestWebGpuBuffer { family, domain })),
         Placement {
             memory_kind: if domain.is_some() {
                 MemoryKind::Managed
@@ -207,13 +207,16 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
     let Tensor::F32(typed) = &input else {
         unreachable!("uploaded f32 tensor")
     };
-    let StorageBuffer::Backend(buffer) = typed.buffer() else {
+    let StorageBuffer::Backend(_buffer) = typed.buffer() else {
         unreachable!("uploaded WebGPU buffer")
     };
     let foreign_ordinal = ordinal.saturating_add(1);
     let relabeled = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::clone(buffer)),
+        StorageBuffer::Backend(Box::new(TestWebGpuBuffer {
+            family: "cubecl-webgpu",
+            domain: managed_domain,
+        })),
         Placement {
             memory_kind: input.placement().memory_kind.clone(),
             device: Some(DeviceId {

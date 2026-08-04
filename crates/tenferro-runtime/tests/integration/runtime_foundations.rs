@@ -339,14 +339,13 @@ mod signature {
     use std::error::Error as _;
     use std::fmt::Debug;
     use std::mem::align_of;
-    use std::sync::Arc;
 
     use tenferro_runtime::runtime::{
         InputSignature, InputSignatureEntry, InputSignatureError, LayoutClass, PrepareError,
     };
     use tenferro_tensor::{
-        BackendStorage, BackendStorageHandle, DType, MemoryKind, Placement, ShapeVec,
-        StorageBuffer, StrideVec, Tensor, TensorRead, TensorScalar, TypedTensor, TypedTensorView,
+        BackendStorageHandle, DType, MemoryKind, Placement, ShapeVec, StorageBuffer, StrideVec,
+        Tensor, TensorRead, TensorScalar, TypedTensor, TypedTensorView,
     };
 
     fn assert_debug<T: Debug>() {}
@@ -509,15 +508,10 @@ mod signature {
 
     #[test]
     fn signature_backend_read_records_unknown_alignment_and_retains_no_buffer() {
-        let allocation = Arc::new(BackendStorageHandle::<f64>::new_with_len(7, 2));
-        let weak = Arc::downgrade(&allocation);
-        let erased: Arc<dyn BackendStorage<f64>> = allocation.clone();
-        drop(allocation);
-
         let signature = {
             let tensor = TypedTensor::from_buffer_col_major(
                 vec![2],
-                StorageBuffer::Backend(erased),
+                StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, 2))),
                 Placement {
                     memory_kind: MemoryKind::Device,
                     device: None,
@@ -533,10 +527,6 @@ mod signature {
         assert_eq!(
             signature.entries()[0].placement().memory_kind,
             MemoryKind::Device
-        );
-        assert!(
-            weak.upgrade().is_none(),
-            "the value-free signature must not retain the backend buffer"
         );
     }
 

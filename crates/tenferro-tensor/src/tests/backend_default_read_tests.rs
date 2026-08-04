@@ -731,9 +731,7 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
 }
 
 #[test]
-fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
-    let shared: std::sync::Arc<dyn crate::BackendStorage<f64>> =
-        std::sync::Arc::new(crate::BackendStorageHandle::<f64>::new_with_len(17, 1));
+fn elementwise_into_accepts_independent_backend_destinations() {
     let placement = crate::Placement {
         memory_kind: crate::MemoryKind::Device,
         device: Some(crate::DeviceId {
@@ -745,7 +743,9 @@ fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
     let lhs = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![1],
-            crate::StorageBuffer::Backend(std::sync::Arc::clone(&shared)),
+            crate::StorageBuffer::Backend(Box::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(17, 1),
+            )),
             placement.clone(),
         )
         .unwrap(),
@@ -754,26 +754,17 @@ fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
     let mut out = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![1],
-            crate::StorageBuffer::Backend(shared),
+            crate::StorageBuffer::Backend(Box::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(18, 1),
+            )),
             placement,
         )
         .unwrap(),
     );
 
-    let error = DefaultReadBackend::default()
+    DefaultReadBackend::default()
         .add_into(&lhs, &rhs, TensorWrite::from_tensor(&mut out))
-        .unwrap_err();
-
-    assert!(matches!(
-        error,
-        crate::Error::Validation {
-            op: "add",
-            source: crate::ValidationError::InvalidArgument {
-                argument: "out",
-                ..
-            },
-        }
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -1626,7 +1617,7 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
     let input = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![2],
-            crate::StorageBuffer::Backend(std::sync::Arc::new(
+            crate::StorageBuffer::Backend(Box::new(
                 crate::BackendStorageHandle::<f64>::new_with_len(41, 2),
             )),
             crate::Placement {

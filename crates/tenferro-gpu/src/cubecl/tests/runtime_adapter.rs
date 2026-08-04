@@ -162,7 +162,7 @@ impl BackendStorage<f32> for TestCudaBuffer {
 fn input(family: &'static str, ordinal: usize) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(TestCudaBuffer {
+        StorageBuffer::Backend(Box::new(TestCudaBuffer {
             family,
             domain: None,
         })),
@@ -221,12 +221,15 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     let Tensor::F32(typed) = &input else {
         unreachable!("uploaded f32 tensor")
     };
-    let StorageBuffer::Backend(buffer) = typed.buffer() else {
+    let StorageBuffer::Backend(_buffer) = typed.buffer() else {
         unreachable!("uploaded CUDA buffer")
     };
     let relabeled = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::clone(buffer)),
+        StorageBuffer::Backend(Box::new(TestCudaBuffer {
+            family: "cubecl",
+            domain: Some(runtime.allocation_domain_id()),
+        })),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

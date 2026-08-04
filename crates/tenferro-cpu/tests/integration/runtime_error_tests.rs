@@ -1,5 +1,4 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
@@ -33,7 +32,7 @@ fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::F64(
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, len))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

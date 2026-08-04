@@ -125,7 +125,7 @@ use dispatch::{
     launch_nullary_into, launch_select_bool, launch_ternary, launch_unary,
     launch_unary_bool_tensor, launch_unary_tensor, launch_unary_tensor_into,
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
-    typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
+    typed_tensor_binding, typed_view_array_arg, typed_view_binding, typed_view_mut_array_arg,
 };
 use error::{unsupported_dtype, unsupported_operation};
 
@@ -1138,7 +1138,7 @@ impl CudaBackend {
             .map_err(|err| crate::Error::validation(op, err))?;
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Arc::new(crate::CubeclBuffer::new(
+            StorageBuffer::Backend(Box::new(crate::CubeclBuffer::new(
                 handle,
                 len,
                 self.runtime().device_ordinal(),
@@ -1238,37 +1238,20 @@ impl CudaBackend {
                 "CUDA backend expected a GPU destination view; call upload_tensor() first",
             )
         })?;
-        if Arc::ptr_eq(source_buffer, destination_buffer) {
+        if std::ptr::eq(source_buffer, destination_buffer) {
             return Err(crate::Error::invalid_argument(
                 op,
                 "source/destination",
                 "CUDA copy_into source and destination allocations must not alias",
             ));
         }
-        if !src.is_col_major_contiguous()?
-            || src.offset() != 0
-            || source_buffer.len() != src.n_elements()
-        {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "source",
-                "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
-            ));
-        }
-        let source_shape = R::shape_from_vec(src.shape().to_vec().into())
-            .map_err(|err| crate::Error::validation(op, err))?;
-        let source_tensor: TypedTensor<T, R> = TypedTensor::from_buffer_col_major(
-            source_shape,
-            StorageBuffer::Backend(Arc::clone(source_buffer)),
-            src.placement().clone(),
-        )?;
         let len = src.n_elements();
         if len == 0 {
             return Ok(());
         }
         let strides = view_strides_i64(dst.strides(), op)?;
         let base_offset = view_offset_i64(dst.offset(), op)?;
-        let src_arg = typed_tensor_binding(&source_tensor, op)?;
+        let src_arg = typed_view_binding(src, op)?;
         let dst_arg = typed_view_mut_array_arg(dst, op)?;
         let rank = dst.shape().len();
         unsafe {
