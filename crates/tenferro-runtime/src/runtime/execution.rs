@@ -13,7 +13,8 @@ use std::thread::{self, ThreadId};
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
-    AllocationGroup, DescriptorSlot, Tensor, TensorBackend, TensorRead, TensorValue,
+    AllocationGroup, DescriptorSlot, GroupError, Tensor, TensorBackend, TensorRead, TensorValue,
+    TensorView,
 };
 
 use crate::error::ErrorPhase;
@@ -97,10 +98,10 @@ impl ExecutionInputs {
         Ok(Self { group, bindings })
     }
 
-    pub(crate) fn as_refs(&self) -> Result<Vec<&Tensor>> {
-        self.group.tensor_refs(&self.bindings).map_err(|error| {
+    pub(crate) fn as_reads(&self) -> Result<Vec<TensorRead<'_>>> {
+        self.group.read_views(&self.bindings).map_err(|error| {
             Error::runtime_state(
-                "ExecutionInputs::as_refs",
+                "ExecutionInputs::as_reads",
                 ErrorPhase::Execution,
                 error.to_string(),
             )
@@ -117,46 +118,137 @@ impl fmt::Debug for ExecutionInputs {
     }
 }
 
+/// A detached execution result retaining one allocation group for all outputs.
+#[derive(Debug)]
+pub struct ExecutionBundle {
+    group: AllocationGroup,
+    outputs: Box<[DescriptorSlot]>,
+}
+
+/// A borrowed output view from an [`ExecutionBundle`].
+#[derive(Debug)]
+pub enum OutputRef<'a> {
+    Tensor(TensorView<'a>),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OutputAccessError {
+    #[error("execution output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("execution output group is invalid: {0}")]
+    Group(#[from] GroupError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OutputExtractError {
+    #[error("execution output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("execution output cannot be extracted: {0}")]
+    Group(#[from] GroupError),
+}
+
+impl ExecutionBundle {
+    fn from_inputs_and_outputs(inputs: ExecutionInputs, outputs: Vec<Tensor>) -> Result<Self> {
+        let mut group = inputs.group;
+        let mut output_slots = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let slot = group.append_tensor(output).map_err(|error| {
+                Error::runtime_state(
+                    "ExecutionBundle::from_inputs_and_outputs",
+                    ErrorPhase::Execution,
+                    error.to_string(),
+                )
+            })?;
+            output_slots.push(slot);
+        }
+        Ok(Self {
+            group,
+            outputs: output_slots.into_boxed_slice(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_outputs(outputs: Vec<Tensor>) -> Result<Self> {
+        let (group, bindings) = AllocationGroup::from_tensors(outputs).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionBundle::from_outputs",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+        Ok(Self {
+            group,
+            outputs: bindings,
+        })
+    }
+
+    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
+        let slot = *self
+            .outputs
+            .get(index)
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        let mut views = self.group.read_views(std::slice::from_ref(&slot))?;
+        let view = views
+            .pop()
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        match view {
+            TensorRead::View(view) => Ok(OutputRef::Tensor(view)),
+            TensorRead::Tensor(_) => Err(OutputAccessError::InvalidOutput { index }),
+        }
+    }
+
+    // INVARIANT: extraction errors return the unchanged move-only bundle so
+    // callers can retry or inspect it without a hidden copy.
+    #[allow(clippy::result_large_err)]
+    pub fn into_output(
+        self,
+        index: usize,
+    ) -> std::result::Result<Tensor, (Self, OutputExtractError)> {
+        let slot = match self.outputs.get(index).copied() {
+            Some(slot) => slot,
+            None => return Err((self, OutputExtractError::InvalidOutput { index })),
+        };
+        let ExecutionBundle { group, outputs } = self;
+        match group.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((group, error)) => Err((Self { group, outputs }, OutputExtractError::Group(error))),
+        }
+    }
+}
+
 /// The result of a detached submission after the provider retirement point.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::runtime::ExecutionOutcome;
-/// use tenferro_tensor::Tensor;
-///
-/// let outcome = ExecutionOutcome::Completed(Vec::<Tensor>::new());
-/// assert!(format!("{outcome:?}").contains("Completed"));
-/// ```
-///
-/// An ordinary execution failure is reported with the input package restored
-/// only after the worker has returned and the provider has retired its work.
-/// A worker panic or equivalent loss of the retirement witness is returned as
-/// the outer error and carries no owner.
 #[derive(Debug)]
 pub enum ExecutionOutcome {
-    /// The scheduled graph completed and produced owned output tensors.
-    Completed(Vec<Tensor>),
+    /// The scheduled graph completed and produced one alias-safe output bundle.
+    Completed(Box<ExecutionBundle>),
     /// The graph retired with an ordinary execution error; the input owner is
     /// available again because retirement was observed.
     RetiredFailed {
         error: Error,
         inputs: Box<ExecutionInputs>,
     },
+    /// Completion could not be proven. No owner is exposed and the private
+    /// in-flight record retains all provider state permanently.
+    CompletionUnproven {
+        error: Error,
+        diagnostic_keys: Box<[String]>,
+    },
 }
 
 /// A detached submission failed before ownership could be transferred to the
-/// in-flight worker, or the worker could not be created after admission.
+/// in-flight worker.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::{Error, runtime::SubmitError};
+/// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
 ///
-/// let error = SubmitError::WorkerSpawn {
-///     source: Box::new(Error::Internal("worker unavailable".into())),
+/// let error = SubmitError::PreAdmission {
+///     source: Box::new(Error::Internal("input rejected".into())),
+///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
 /// };
-/// assert!(error.to_string().contains("worker failed"));
+/// assert!(error.to_string().contains("before admission"));
+/// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
 #[derive(Debug)]
 pub enum SubmitError {
@@ -166,9 +258,6 @@ pub enum SubmitError {
         source: Box<Error>,
         inputs: Box<ExecutionInputs>,
     },
-    /// The worker could not be spawned after admission. The in-flight record
-    /// retains the admitted owner; no recovery owner is manufactured here.
-    WorkerSpawn { source: Box<Error> },
 }
 
 impl SubmitError {
@@ -177,17 +266,18 @@ impl SubmitError {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{Error, runtime::SubmitError};
+    /// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
     ///
-    /// let error = SubmitError::WorkerSpawn {
-    ///     source: Box::new(Error::Internal("worker unavailable".into())),
+    /// let error = SubmitError::PreAdmission {
+    ///     source: Box::new(Error::Internal("input rejected".into())),
+    ///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
     /// };
-    /// assert!(error.into_pre_admission().is_none());
+    /// assert!(error.into_pre_admission().is_some());
+    /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
         match self {
             Self::PreAdmission { source, inputs } => Some((*source, *inputs)),
-            Self::WorkerSpawn { .. } => None,
         }
     }
 }
@@ -198,10 +288,6 @@ impl fmt::Display for SubmitError {
             Self::PreAdmission { source, .. } => {
                 write!(formatter, "submission rejected before admission: {source}")
             }
-            Self::WorkerSpawn { source } => write!(
-                formatter,
-                "submission worker failed after admission: {source}"
-            ),
         }
     }
 }
@@ -209,7 +295,7 @@ impl fmt::Display for SubmitError {
 impl StdError for SubmitError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Self::PreAdmission { source, .. } | Self::WorkerSpawn { source } => {
+            Self::PreAdmission { source, .. } => {
                 // Keep the pre-admission typed source at the same depth as the
                 // historical runtime error chain while the owner travels in
                 // this wrapper.
@@ -222,9 +308,7 @@ impl StdError for SubmitError {
 impl From<SubmitError> for Error {
     fn from(error: SubmitError) -> Self {
         match error {
-            SubmitError::PreAdmission { source, .. } | SubmitError::WorkerSpawn { source } => {
-                *source
-            }
+            SubmitError::PreAdmission { source, .. } => *source,
         }
     }
 }
@@ -265,7 +349,10 @@ struct AdmittedExecution {
 enum InFlightWork {
     Admitted(Box<AdmittedExecution>),
     #[cfg(test)]
-    Test(Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>),
+    Test {
+        inputs: Box<ExecutionInputs>,
+        work: Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>,
+    },
 }
 
 impl InFlightSubmission {
@@ -283,9 +370,25 @@ impl InFlightSubmission {
     #[cfg(test)]
     pub(super) fn for_test(work: impl FnOnce() -> Result<Vec<Tensor>> + Send + 'static) -> Self {
         Self {
-            work: Mutex::new(Some(InFlightWork::Test(Box::new(work)))),
+            work: Mutex::new(Some(InFlightWork::Test {
+                inputs: Box::new(ExecutionInputs::new(Vec::new()).expect("empty test inputs")),
+                work: Box::new(work),
+            })),
             completion: Mutex::new(None),
             completed: Condvar::new(),
+        }
+    }
+
+    fn into_unstarted_inputs(self) -> ExecutionInputs {
+        let work = match self.work.into_inner() {
+            Ok(work) => work,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match work {
+            Some(InFlightWork::Admitted(admitted)) => admitted.inputs,
+            #[cfg(test)]
+            Some(InFlightWork::Test { inputs, .. }) => *inputs,
+            None => unreachable!("unstarted submission must still contain its owner"),
         }
     }
 
@@ -294,41 +397,31 @@ impl InFlightSubmission {
             Ok(mut work) => work.take(),
             Err(poisoned) => poisoned.into_inner().take(),
         };
-        let result = catch_unwind(AssertUnwindSafe(|| match work {
-            Some(InFlightWork::Admitted(admitted)) => {
-                let AdmittedExecution { prepared, inputs } = *admitted;
-                let input_refs = match inputs.as_refs() {
-                    Ok(input_refs) => input_refs,
-                    Err(error) => {
-                        return Ok(ExecutionOutcome::RetiredFailed {
-                            error,
-                            inputs: Box::new(inputs),
-                        });
-                    }
-                };
-                match execute_admitted(&prepared, &input_refs) {
-                    Ok(outputs) => Ok(ExecutionOutcome::Completed(outputs)),
-                    Err(error) => Ok(ExecutionOutcome::RetiredFailed {
-                        error,
-                        inputs: Box::new(inputs),
+        let result = match work {
+            Some(InFlightWork::Admitted(admitted)) => run_admitted_work(admitted),
+            #[cfg(test)]
+            Some(InFlightWork::Test { work, .. }) => {
+                let result = catch_unwind(AssertUnwindSafe(work));
+                match result {
+                    Ok(Ok(outputs)) => ExecutionBundle::from_outputs(outputs)
+                        .map(|bundle| ExecutionOutcome::Completed(Box::new(bundle))),
+                    Ok(Err(error)) => Err(error),
+                    Err(payload) => Ok(ExecutionOutcome::CompletionUnproven {
+                        error: Error::runtime_state(
+                            "ExecutionHandle::wait",
+                            ErrorPhase::Execution,
+                            panic_payload_message(payload),
+                        ),
+                        diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
                     }),
                 }
             }
-            #[cfg(test)]
-            Some(InFlightWork::Test(work)) => work().map(ExecutionOutcome::Completed),
             None => Err(Error::runtime_state(
                 "Runtime::submit",
                 ErrorPhase::Execution,
                 "in-flight submission work was already consumed",
             )),
-        }))
-        .unwrap_or_else(|payload| {
-            Err(Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                panic_payload_message(payload),
-            ))
-        });
+        };
         match self.completion.lock() {
             Ok(mut completion) => {
                 *completion = Some(result);
@@ -373,6 +466,47 @@ impl InFlightSubmission {
     }
 }
 
+fn run_admitted_work(admitted: Box<AdmittedExecution>) -> Result<ExecutionOutcome> {
+    let execution = catch_unwind(AssertUnwindSafe(|| {
+        let input_reads = admitted.inputs.as_reads()?;
+        execute_admitted(&admitted.prepared, &input_reads)
+    }));
+    match execution {
+        Ok(Ok(outputs)) => {
+            let AdmittedExecution { inputs, .. } = *admitted;
+            match ExecutionBundle::from_inputs_and_outputs(inputs, outputs) {
+                Ok(bundle) => Ok(ExecutionOutcome::Completed(Box::new(bundle))),
+                Err(error) => Ok(ExecutionOutcome::CompletionUnproven {
+                    error,
+                    diagnostic_keys: Box::from(["execution.bundle-build".to_owned()]),
+                }),
+            }
+        }
+        Ok(Err(error)) => {
+            let AdmittedExecution { inputs, .. } = *admitted;
+            Ok(ExecutionOutcome::RetiredFailed {
+                error,
+                inputs: Box::new(inputs),
+            })
+        }
+        Err(payload) => {
+            let error = Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            );
+            // The completion witness was lost after admission. Leak the
+            // private record deliberately: no owner or provider state may be
+            // exposed while retirement is unproven.
+            Box::leak(admitted);
+            Ok(ExecutionOutcome::CompletionUnproven {
+                error,
+                diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
+            })
+        }
+    }
+}
+
 pub(super) trait SubmissionSpawner {
     fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()>;
 }
@@ -380,14 +514,23 @@ pub(super) trait SubmissionSpawner {
 pub(super) fn spawn_in_flight(
     submission: Arc<InFlightSubmission>,
     spawner: &dyn SubmissionSpawner,
-) -> Result<ExecutionHandle> {
-    spawner.spawn(Arc::clone(&submission)).map_err(|source| {
-        Error::runtime_state_source(
+) -> std::result::Result<ExecutionHandle, Box<(ExecutionInputs, Error)>> {
+    if let Err(source) = spawner.spawn(Arc::clone(&submission)) {
+        // INVARIANT: a SubmissionSpawner error means it did not take or start
+        // the submission, so the sole Arc can be unwrapped and the exact
+        // pre-admission owner recovered.
+        let submission = match Arc::try_unwrap(submission) {
+            Ok(submission) => submission,
+            Err(_) => unreachable!("failed spawner must not retain submission"),
+        };
+        let inputs = submission.into_unstarted_inputs();
+        let error = Error::runtime_state_source(
             "Runtime::submit",
             ErrorPhase::Execution,
             SubmissionError::WorkerSpawn { source },
-        )
-    })?;
+        );
+        return Err(Box::new((inputs, error)));
+    }
     Ok(ExecutionHandle { submission })
 }
 
@@ -935,16 +1078,7 @@ pub(super) fn submit_with_spawner(
     inputs: ExecutionInputs,
     spawner: &dyn SubmissionSpawner,
 ) -> std::result::Result<ExecutionHandle, SubmitError> {
-    let input_refs = match inputs.as_refs() {
-        Ok(input_refs) => input_refs,
-        Err(source) => {
-            return Err(SubmitError::PreAdmission {
-                source: Box::new(source),
-                inputs: Box::new(inputs),
-            })
-        }
-    };
-    let prepared = match prepare_compiled(runtime, program, &input_refs) {
+    let prepared = match prepare_submission(runtime, program, &inputs) {
         Ok(prepared) => prepared,
         Err(source) => {
             return Err(SubmitError::PreAdmission {
@@ -954,9 +1088,16 @@ pub(super) fn submit_with_spawner(
         }
     };
     let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
-    spawn_in_flight(submission, spawner).map_err(|source| SubmitError::WorkerSpawn {
-        source: Box::new(source),
-    })
+    match spawn_in_flight(submission, spawner) {
+        Ok(handle) => Ok(handle),
+        Err(failure) => {
+            let (inputs, source) = *failure;
+            Err(SubmitError::PreAdmission {
+                source: Box::new(source),
+                inputs: Box::new(inputs),
+            })
+        }
+    }
 }
 
 pub(super) fn run_prepared(
@@ -974,13 +1115,41 @@ pub(super) fn run_prepared(
     )
 }
 
-fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-    let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    execute_scheduled_tensor_refs(
+fn prepare_submission(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &ExecutionInputs,
+) -> Result<PreparedCompiledGraph> {
+    let input_reads = inputs.as_reads()?;
+    prepare_compiled_reads(runtime, program, &input_reads)
+}
+
+fn prepare_compiled_reads(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<PreparedCompiledGraph> {
+    validate_ordered_input_metadata_reads(program, inputs)?;
+    let signature = input_signature_reads(inputs)?;
+    let prepared = prepare(runtime, program, &signature)?;
+    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::submit")?;
+    Ok(PreparedCompiledGraph {
+        runtime_id: runtime.id(),
+        epoch: prepared.root().epoch(),
+        program: program.clone(),
+        prepared,
+    })
+}
+
+fn execute_admitted(
+    prepared: &PreparedCompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<Vec<Tensor>> {
+    execute_scheduled_reads(
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
-        &inputs,
+        inputs,
     )
 }
 
@@ -1070,12 +1239,22 @@ fn execute_scheduled_tensor_refs(
     operations: &[PreparedOperationPlan],
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
-    validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
     let inputs = inputs
         .iter()
-        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-        .collect();
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect::<Vec<_>>();
+    execute_scheduled_reads(program, schedule, operations, &inputs)
+}
+
+fn execute_scheduled_reads(
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationPlan],
+    inputs: &[TensorRead<'_>],
+) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
+    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
     execute_scheduled_slots(
         program,
         schedule,
@@ -2076,7 +2255,11 @@ fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {
         .iter()
         .map(|tensor| TensorRead::from_tensor(tensor))
         .collect();
-    InputSignature::from_reads(&reads).map_err(|source| prepare_error(Arc::new(source)))
+    input_signature_reads(&reads)
+}
+
+fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
+    InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }
 
 fn resolve_input_refs<'a>(
@@ -2111,56 +2294,71 @@ fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputRefs<'
 }
 
 fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) -> Result<()> {
+    let actuals = inputs
+        .iter()
+        .map(|tensor| (tensor.dtype(), tensor.shape().to_vec()))
+        .collect::<Vec<_>>();
+    validate_ordered_input_metadata_values(program, &actuals, "Runtime::run_compiled")
+}
+
+fn validate_ordered_input_metadata_reads(
+    program: &CompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<()> {
+    let actuals = inputs
+        .iter()
+        .map(|input| (input.dtype(), input.shape().to_vec()))
+        .collect::<Vec<_>>();
+    validate_ordered_input_metadata_values(program, &actuals, "Runtime::submit")
+}
+
+fn validate_ordered_input_metadata_values(
+    program: &CompiledGraph,
+    actuals: &[(tenferro_tensor::DType, Vec<usize>)],
+    caller: &'static str,
+) -> Result<()> {
     let expected = program.input_count();
-    if inputs.len() != expected {
+    if actuals.len() != expected {
         return Err(Error::GraphInputCountMismatch {
             expected,
-            actual: inputs.len(),
+            actual: actuals.len(),
         });
     }
-    let input_shapes: RuntimeInputShapes<'_> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    for (input_value, actual) in program.program().inputs().iter().zip(inputs) {
+    let input_shapes: RuntimeInputShapes<'_> =
+        actuals.iter().map(|(_, shape)| shape.as_slice()).collect();
+    for (input_value, (actual_dtype, actual_shape)) in
+        program.program().inputs().iter().zip(actuals)
+    {
         let metadata = program
             .program()
             .value_metadata(*input_value)
-            .map_err(|source| {
-                Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
-            })?;
-        if metadata.dtype() != actual.dtype() {
+            .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
+        if metadata.dtype() != *actual_dtype {
             return Err(Error::PlaceholderDtypeMismatch {
                 expected: metadata.dtype(),
-                actual: actual.dtype(),
+                actual: *actual_dtype,
             });
         }
-        if metadata.shape().len() != actual.shape().len() {
+        if metadata.shape().len() != actual_shape.len() {
             return Err(Error::PlaceholderRankMismatch {
                 expected: metadata.shape().len(),
-                actual: actual.shape().len(),
+                actual: actual_shape.len(),
             });
         }
-        let mut expected_shape: RuntimeShapeScratch = actual.shape().iter().copied().collect();
+        let mut expected_shape: RuntimeShapeScratch = actual_shape.iter().copied().collect();
         let mut exact_mismatch = false;
-        for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual.shape()).enumerate()
-        {
+        for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual_shape).enumerate() {
             match extent {
                 ShapeExtent::Exact(expression) => {
                     let expected = expression.eval(&input_shapes).map_err(|source| {
-                        Error::runtime_state_source(
-                            "Runtime::run_compiled",
-                            ErrorPhase::Execution,
-                            source,
-                        )
+                        Error::runtime_state_source(caller, ErrorPhase::Execution, source)
                     })?;
                     expected_shape[axis] = expected;
                     exact_mismatch |= expected != *actual_size;
                 }
                 ShapeExtent::UpperBound(expression) => {
                     let bound = expression.eval(&input_shapes).map_err(|source| {
-                        Error::runtime_state_source(
-                            "Runtime::run_compiled",
-                            ErrorPhase::Execution,
-                            source,
-                        )
+                        Error::runtime_state_source(caller, ErrorPhase::Execution, source)
                     })?;
                     if *actual_size > bound {
                         return Err(Error::PlaceholderShapeBoundExceeded {
@@ -2176,7 +2374,7 @@ fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) 
         if exact_mismatch {
             return Err(Error::PlaceholderShapeMismatch {
                 expected: expected_shape.into_vec(),
-                actual: actual.shape().to_vec(),
+                actual: actual_shape.clone(),
             });
         }
     }

@@ -8,7 +8,8 @@ use std::thread;
 
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, Placement, StorageBuffer, Tensor, TensorValue, TypedTensor,
+    HostWriteGuard, Placement, StorageBuffer, Tensor, TensorRead, TensorValue, TensorView,
+    TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -214,9 +215,17 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
                 "replacement executor must not serve admitted work",
             ));
         }
-        slot.as_tensor("AdmissionTestExecutor::materialize_slot")
-            .map_err(|error| Error::Internal(error.to_string()))
-            .and_then(|tensor| tensor.duplicate().map_err(Error::from))
+        match slot {
+            ExecSlot::Owned(tensor) => tensor.duplicate().map_err(Error::from),
+            ExecSlot::Read(TensorRead::Tensor(tensor)) => tensor.duplicate().map_err(Error::from),
+            ExecSlot::Read(TensorRead::View(TensorView::F64(view))) => {
+                let data = view.as_slice().map_err(Error::from)?.to_vec();
+                Tensor::from_vec_col_major(view.shape().to_vec(), data).map_err(Error::from)
+            }
+            _ => Err(Error::Internal(
+                "AdmissionTestExecutor received unsupported materialization value".to_owned(),
+            )),
+        }
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> crate::Result<TensorValue> {
@@ -309,7 +318,17 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
         crate::runtime::ExecutionOutcome::Completed(output) => output,
         other => panic!("unexpected submission outcome: {other:?}"),
     };
-    assert_eq!(output[0].as_slice::<f64>()?, &[1.0, 2.0]);
+    match output.output(0)? {
+        crate::runtime::OutputRef::Tensor(tenferro_tensor::TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[1.0, 2.0]);
+        }
+        other => panic!("unexpected output view: {other:?}"),
+    }
+    let extracted = match output.into_output(0) {
+        Ok(tensor) => tensor,
+        Err((_bundle, error)) => return Err(Box::new(error)),
+    };
+    assert_eq!(extracted.as_slice::<f64>()?, &[1.0, 2.0]);
     Ok(())
 }
 
@@ -317,13 +336,14 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
 fn submission_spawn_failure_preserves_typed_source() -> Result<(), Box<dyn StdError>> {
     let submission = Arc::new(InFlightSubmission::for_test(|| Ok(Vec::new())));
 
-    let error = spawn_in_flight(submission, &FailingSpawner).unwrap_err();
+    let (inputs, error) = *spawn_in_flight(submission, &FailingSpawner).unwrap_err();
 
     let source = error
         .source()
         .and_then(|source| source.downcast_ref::<SubmissionError>())
         .expect("typed submission error source");
     assert!(matches!(source, SubmissionError::WorkerSpawn { .. }));
+    assert!(format!("{inputs:?}").contains("ExecutionInputs"));
     Ok(())
 }
 
@@ -340,7 +360,7 @@ fn dropped_handle_does_not_cancel_blocked_worker() -> Result<(), Box<dyn StdErro
         Ok(Vec::new())
     }));
 
-    let handle = spawn_in_flight(submission, &OsThreadSpawner)?;
+    let handle = spawn_in_flight(submission, &OsThreadSpawner).map_err(|failure| failure.1)?;
     entered_rx.recv()?;
     drop(handle);
     assert!(!completed.load(Ordering::Acquire));
@@ -356,12 +376,19 @@ fn worker_panic_and_execution_error_complete_handle() -> Result<(), Box<dyn StdE
     let panic_submission = Arc::new(InFlightSubmission::for_test(|| {
         panic!("injected submission panic")
     }));
-    let panic_error = spawn_in_flight(panic_submission, &OsThreadSpawner)?
-        .wait()
-        .unwrap_err();
-    assert!(panic_error
-        .to_string()
-        .contains("injected submission panic"));
+    let panic_outcome = spawn_in_flight(panic_submission, &OsThreadSpawner)
+        .map_err(|failure| failure.1)?
+        .wait()?;
+    match panic_outcome {
+        crate::runtime::ExecutionOutcome::CompletionUnproven {
+            error,
+            diagnostic_keys,
+        } => {
+            assert!(error.to_string().contains("injected submission panic"));
+            assert_eq!(diagnostic_keys.as_ref(), ["execution.retirement-unproven"]);
+        }
+        other => panic!("unexpected panic outcome: {other:?}"),
+    }
 
     let error_submission = Arc::new(InFlightSubmission::for_test(|| {
         Err(Error::runtime_state(
@@ -370,7 +397,8 @@ fn worker_panic_and_execution_error_complete_handle() -> Result<(), Box<dyn StdE
             "injected execution error",
         ))
     }));
-    let execution_error = spawn_in_flight(error_submission, &OsThreadSpawner)?
+    let execution_error = spawn_in_flight(error_submission, &OsThreadSpawner)
+        .map_err(|failure| failure.1)?
         .wait()
         .unwrap_err();
     assert!(execution_error

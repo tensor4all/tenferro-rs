@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
 use std::ptr::NonNull;
 
-use crate::{DType, DynRank, TensorLayout, TensorRank, TensorScalar};
+use crate::types::{tensor_from_group, tensor_view_from_group};
+use crate::{DType, DynRank, Placement, TensorLayout, TensorRank, TensorRead, TensorScalar};
 use smallvec::SmallVec;
 
 use super::prepared::{
@@ -119,6 +120,7 @@ pub(crate) struct DescriptorRecord {
     element_size: usize,
     element_count: usize,
     provider: ProviderKind,
+    placement: Placement,
     envelope: Option<ByteRange>,
     write_injective: bool,
     checked: CheckedDescriptor<DynRank>,
@@ -151,6 +153,10 @@ impl DescriptorRecord {
 
     pub(crate) const fn provider(&self) -> ProviderKind {
         self.provider
+    }
+
+    pub(crate) fn placement(&self) -> &Placement {
+        &self.placement
     }
 
     pub(crate) const fn envelope(&self) -> Option<ByteRange> {
@@ -238,7 +244,6 @@ pub struct AllocationGroup {
     // explicit multi-descriptor groups.
     allocations: SmallVec<[Option<OwnedStorage>; 1]>,
     descriptors: SmallVec<[Option<DescriptorRecord>; 1]>,
-    tensor_owners: Vec<Option<crate::Tensor>>,
 }
 
 /// A shared descriptor child bounded by the group's shared borrow.
@@ -285,6 +290,20 @@ impl<T, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R> {
 impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
     pub(crate) fn descriptor(&self) -> &DescriptorRecord {
         &self.descriptor
+    }
+
+    pub(crate) fn storage_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
+        // SAFETY: the owner pointer is bounded by the group borrow carried by
+        // this view, and root storage never changes its concrete buffer.
+        let buffer = unsafe {
+            self.owner
+                .as_ref()
+                .host_buffer::<T>()
+                .or_else(|| self.owner.as_ref().backend_buffer::<T>())
+        }?;
+        Some(unsafe {
+            std::mem::transmute::<&crate::StorageBuffer<T>, &'a crate::StorageBuffer<T>>(buffer)
+        })
     }
 
     pub(crate) fn map_read(&self) -> Result<ProviderReadMapping<'_>, AccessError> {
@@ -470,7 +489,6 @@ impl fmt::Debug for AllocationGroup {
             .debug_struct("AllocationGroup")
             .field("allocation_count", &self.allocations.len())
             .field("descriptor_count", &self.descriptors.len())
-            .field("tensor_owner_count", &self.tensor_owners.len())
             .finish()
     }
 }
@@ -502,45 +520,103 @@ impl AllocationGroup {
     ) -> Result<(Self, Box<[DescriptorSlot]>), GroupError> {
         let mut group = Self::new();
         let mut bindings = Vec::with_capacity(tensors.len());
-        for (index, tensor) in tensors.into_iter().enumerate() {
-            let slot = DescriptorSlot::from_index(index).ok_or(GroupError::IndexOverflow)?;
-            group.tensor_owners.push(Some(tensor));
-            bindings.push(slot);
+        for tensor in tensors {
+            let (source, source_slot) = tensor.into_group_parts();
+            bindings.push(group.append_group(source, source_slot)?);
         }
         Ok((group, bindings.into_boxed_slice()))
     }
 
-    /// Borrow the tensors named by a detached input binding set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::{AllocationGroup, DescriptorSlot};
-    ///
-    /// let (group, _) = AllocationGroup::from_tensors(Vec::new())?;
-    /// let refs = group.tensor_refs(&[] as &[DescriptorSlot])?;
-    /// assert!(refs.is_empty());
-    /// # Ok::<(), tenferro_tensor::GroupError>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GroupError::DescriptorSlotOutOfBounds`] or
-    /// [`GroupError::DescriptorSlotVacant`] for an invalid binding.
-    pub fn tensor_refs<'a>(
+    /// Borrow dtype-erased read views for descriptor bindings without
+    /// materializing or cloning any owner.
+    pub fn read_views<'a>(
         &'a self,
         bindings: &[DescriptorSlot],
-    ) -> Result<Vec<&'a crate::Tensor>, GroupError> {
+    ) -> Result<Vec<TensorRead<'a>>, GroupError> {
         bindings
             .iter()
-            .map(|slot| {
-                self.tensor_owners
-                    .get(slot.index())
-                    .ok_or(GroupError::DescriptorSlotOutOfBounds { slot: slot.index() })?
-                    .as_ref()
-                    .ok_or(GroupError::DescriptorSlotVacant { slot: slot.index() })
-            })
+            .map(|&slot| self.tensor_read(slot))
             .collect()
+    }
+
+    fn tensor_read<'a>(&'a self, slot: DescriptorSlot) -> Result<TensorRead<'a>, GroupError> {
+        let dtype = self.resolve_descriptor(slot)?.1.dtype();
+        let view = match dtype {
+            DType::F32 => tensor_view_from_group(self.view::<f32, DynRank>(slot)?),
+            DType::F64 => tensor_view_from_group(self.view::<f64, DynRank>(slot)?),
+            DType::I32 => tensor_view_from_group(self.view::<i32, DynRank>(slot)?),
+            DType::I64 => tensor_view_from_group(self.view::<i64, DynRank>(slot)?),
+            DType::Bool => tensor_view_from_group(self.view::<bool, DynRank>(slot)?),
+            DType::C32 => {
+                tensor_view_from_group(self.view::<num_complex::Complex32, DynRank>(slot)?)
+            }
+            DType::C64 => {
+                tensor_view_from_group(self.view::<num_complex::Complex64, DynRank>(slot)?)
+            }
+        }
+        .map_err(|error| GroupError::InvalidDescriptor {
+            message: error.to_string(),
+        })?;
+        Ok(TensorRead::from_view(view))
+    }
+
+    pub fn append_tensor(&mut self, tensor: crate::Tensor) -> Result<DescriptorSlot, GroupError> {
+        let (source, source_slot) = tensor.into_group_parts();
+        self.append_group(source, source_slot)
+    }
+
+    fn append_group(
+        &mut self,
+        mut source: AllocationGroup,
+        source_slot: DescriptorSlot,
+    ) -> Result<DescriptorSlot, GroupError> {
+        let allocation_offset =
+            u32::try_from(self.allocations.len()).map_err(|_| GroupError::IndexOverflow)?;
+        let descriptor_offset =
+            u32::try_from(self.descriptors.len()).map_err(|_| GroupError::IndexOverflow)?;
+        source.resolve_descriptor(source_slot)?;
+
+        for owner in source.allocations.drain(..) {
+            self.allocations.push(owner);
+        }
+        for descriptor in source.descriptors.drain(..) {
+            let descriptor = match descriptor {
+                Some(mut descriptor) => {
+                    let allocation = descriptor
+                        .allocation
+                        .0
+                        .checked_add(allocation_offset)
+                        .ok_or(GroupError::IndexOverflow)?;
+                    descriptor.allocation = AllocationSlot(allocation);
+                    Some(descriptor)
+                }
+                None => None,
+            };
+            self.descriptors.push(descriptor);
+        }
+
+        let source_descriptor_index =
+            u32::try_from(source_slot.index()).map_err(|_| GroupError::IndexOverflow)?;
+        Ok(DescriptorSlot(
+            source_descriptor_index
+                .checked_add(descriptor_offset)
+                .ok_or(GroupError::IndexOverflow)?,
+        ))
+    }
+
+    pub(crate) fn set_descriptor_placement(
+        &mut self,
+        slot: DescriptorSlot,
+        placement: Placement,
+    ) -> Result<(), GroupError> {
+        let descriptor = self
+            .descriptors
+            .get_mut(slot.index())
+            .ok_or(GroupError::DescriptorSlotOutOfBounds { slot: slot.index() })?
+            .as_mut()
+            .ok_or(GroupError::DescriptorSlotVacant { slot: slot.index() })?;
+        descriptor.placement = placement;
+        Ok(())
     }
 
     pub(crate) fn from_host_vec<T: TensorScalar, R: TensorRank>(
@@ -725,6 +801,7 @@ impl AllocationGroup {
             element_size,
             element_count,
             provider: owner.as_ref().provider_kind(),
+            placement: Placement::default(),
             envelope,
             write_injective,
             checked,
@@ -847,6 +924,7 @@ impl AllocationGroup {
             element_size: target_element_size,
             element_count,
             provider: descriptor.provider,
+            placement: descriptor.placement.clone(),
             envelope,
             write_injective,
             checked,
@@ -1146,6 +1224,95 @@ impl AllocationGroup {
             Ok(owner) => Ok(owner),
             Err(error) => Err((self, error)),
         }
+    }
+
+    /// Consume the group and extract one descriptor as a standalone tensor.
+    ///
+    /// Extraction is structural: it succeeds only when no other descriptor
+    /// aliases the selected physical allocation. Failure returns the exact
+    /// unchanged group and typed error without copying.
+    // INVARIANT: returning the unchanged move-only group is the extraction
+    // failure carrier required by the ownership contract.
+    #[allow(clippy::result_large_err)]
+    pub fn into_tensor(self, slot: DescriptorSlot) -> Result<crate::Tensor, (Self, GroupError)> {
+        let (_, descriptor) = match self.resolve_descriptor(slot) {
+            Ok(value) => value,
+            Err(error) => return Err((self, error)),
+        };
+        let allocation = descriptor.allocation;
+        let references = self
+            .descriptors
+            .iter()
+            .flatten()
+            .filter(|candidate| candidate.allocation == allocation)
+            .count();
+        if references != 1 {
+            return Err((
+                self,
+                GroupError::AliasedAllocation {
+                    allocation: allocation.index(),
+                },
+            ));
+        }
+        let dtype = descriptor.dtype;
+        let layout = descriptor.layout.clone();
+        let placement = descriptor.placement.clone();
+        let (group, slot) = match self.into_single_descriptor(slot) {
+            Ok(value) => value,
+            Err((group, error)) => return Err((group, error)),
+        };
+        Ok(tensor_from_group(group, slot, dtype, layout, placement))
+    }
+
+    // INVARIANT: structural extraction must return the unchanged group on
+    // every validation failure so no owner is lost.
+    #[allow(clippy::result_large_err)]
+    fn into_single_descriptor(
+        mut self,
+        slot: DescriptorSlot,
+    ) -> Result<(Self, DescriptorSlot), (Self, GroupError)> {
+        let (descriptor_index, descriptor) = match self.resolve_descriptor(slot) {
+            Ok(value) => value,
+            Err(error) => return Err((self, error)),
+        };
+        let allocation = descriptor.allocation;
+        let mut descriptor = match self.descriptors[descriptor_index].take() {
+            Some(descriptor) => descriptor,
+            None => {
+                return Err((
+                    self,
+                    GroupError::DescriptorSlotVacant { slot: slot.index() },
+                ))
+            }
+        };
+        let owner = match self.allocations.get_mut(allocation.index()) {
+            Some(owner) => match owner.take() {
+                Some(owner) => owner,
+                None => {
+                    self.descriptors[descriptor_index] = Some(descriptor);
+                    return Err((
+                        self,
+                        GroupError::AllocationSlotVacant {
+                            slot: allocation.index(),
+                        },
+                    ));
+                }
+            },
+            None => {
+                self.descriptors[descriptor_index] = Some(descriptor);
+                return Err((
+                    self,
+                    GroupError::AllocationSlotOutOfBounds {
+                        slot: allocation.index(),
+                    },
+                ));
+            }
+        };
+        let mut group = Self::new();
+        descriptor.allocation = AllocationSlot(0);
+        group.allocations.push(Some(owner));
+        group.descriptors.push(Some(descriptor));
+        Ok((group, DescriptorSlot(0)))
     }
 
     pub(crate) fn into_host_vec<T: TensorScalar>(

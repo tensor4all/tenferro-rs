@@ -51,7 +51,8 @@ pub use event_domain::{
     ImmediateEventDomainDriver,
 };
 pub use execution::{
-    ExecutionHandle, ExecutionInputs, ExecutionOutcome, PreparedCompiledGraph, SubmitError,
+    ExecutionBundle, ExecutionHandle, ExecutionInputs, ExecutionOutcome, OutputAccessError,
+    OutputExtractError, OutputRef, PreparedCompiledGraph, SubmitError,
 };
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};

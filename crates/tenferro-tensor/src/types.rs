@@ -1067,8 +1067,12 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
     fn from_backend_buffer<T: TensorScalar + Send + Sync + 'static>(
         shape: R::Shape,
         buffer: StorageBuffer<T>,
+        placement: Placement,
     ) -> crate::Result<Self> {
-        let (group, slot) = AllocationGroup::from_backend_buffer::<T, R>(shape, buffer)
+        let (mut group, slot) = AllocationGroup::from_backend_buffer::<T, R>(shape, buffer)
+            .map_err(|error| group_error("TypedTensor::from_backend_buffer", error))?;
+        group
+            .set_descriptor_placement(slot, placement)
             .map_err(|error| group_error("TypedTensor::from_backend_buffer", error))?;
         Ok(Self {
             group,
@@ -1139,6 +1143,10 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
         self.group
             .into_host_vec::<T>(self.slot)
             .map_err(|error| crate::Error::runtime_state("TypedTensor::into_vec_col_major", error))
+    }
+
+    fn into_parts(self) -> (AllocationGroup, DescriptorSlot) {
+        (self.group, self.slot)
     }
 
     #[allow(clippy::result_large_err)]
@@ -3534,6 +3542,20 @@ pub enum Tensor {
     C64(TypedTensor<Complex<f64>>),
 }
 
+impl Tensor {
+    pub(crate) fn into_group_parts(self) -> (AllocationGroup, DescriptorSlot) {
+        match self {
+            Self::F32(tensor) => tensor.group.into_parts(),
+            Self::F64(tensor) => tensor.group.into_parts(),
+            Self::I32(tensor) => tensor.group.into_parts(),
+            Self::I64(tensor) => tensor.group.into_parts(),
+            Self::Bool(tensor) => tensor.group.into_parts(),
+            Self::C32(tensor) => tensor.group.into_parts(),
+            Self::C64(tensor) => tensor.group.into_parts(),
+        }
+    }
+}
+
 /// Dynamic read-only borrowed tensor view.
 ///
 /// `TensorView` keeps dtype erased while borrowing typed view metadata and
@@ -4093,6 +4115,66 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
         root: Some(root),
         layout,
         placement: tensor.placement.clone(),
+    }
+}
+
+pub(crate) fn tensor_view_from_group<'a, T: TensorScalar>(
+    view: GroupReadView<'a, T, DynRank>,
+) -> crate::Result<TensorView<'a>> {
+    let storage = view.storage_buffer().ok_or_else(|| {
+        crate::Error::runtime_state(
+            "AllocationGroup::tensor_read",
+            "group descriptor has no backing storage",
+        )
+    })?;
+    let buffer = match storage {
+        StorageBuffer::Host(data) => TensorStorageRef::Host(data),
+        StorageBuffer::Backend(buffer) => TensorStorageRef::Backend(buffer.as_ref()),
+    };
+    let layout = view.descriptor().layout().clone();
+    let placement = view.descriptor().placement().clone();
+    let typed = TypedTensorView {
+        buffer,
+        root: Some(view.clone()),
+        layout,
+        placement,
+    };
+    Ok(T::tensor_view(typed))
+}
+
+pub(crate) fn tensor_from_group(
+    group: AllocationGroup,
+    slot: DescriptorSlot,
+    dtype: DType,
+    layout: TensorLayout<DynRank>,
+    placement: Placement,
+) -> Tensor {
+    fn typed<T: TensorScalar>(
+        group: AllocationGroup,
+        slot: DescriptorSlot,
+        layout: TensorLayout<DynRank>,
+        placement: Placement,
+    ) -> TypedTensor<T> {
+        TypedTensor {
+            group: OwnedTensorGroup {
+                group,
+                slot,
+                _rank: PhantomData,
+            },
+            layout,
+            placement,
+            _scalar: PhantomData,
+        }
+    }
+
+    match dtype {
+        DType::F32 => Tensor::F32(typed(group, slot, layout, placement)),
+        DType::F64 => Tensor::F64(typed(group, slot, layout, placement)),
+        DType::I32 => Tensor::I32(typed(group, slot, layout, placement)),
+        DType::I64 => Tensor::I64(typed(group, slot, layout, placement)),
+        DType::Bool => Tensor::Bool(typed(group, slot, layout, placement)),
+        DType::C32 => Tensor::C32(typed(group, slot, layout, placement)),
+        DType::C64 => Tensor::C64(typed(group, slot, layout, placement)),
     }
 }
 
@@ -5701,9 +5783,11 @@ fn try_typed_tensor_from_buffer_col_major<
         .map_err(|err| tensor_layout_error("from_buffer_col_major", err))?;
     let group = match buffer {
         StorageBuffer::Host(data) => OwnedTensorGroup::from_host_vec(group_shape, data)?,
-        StorageBuffer::Backend(buffer) => {
-            OwnedTensorGroup::from_backend_buffer(group_shape, StorageBuffer::Backend(buffer))?
-        }
+        StorageBuffer::Backend(buffer) => OwnedTensorGroup::from_backend_buffer(
+            group_shape,
+            StorageBuffer::Backend(buffer),
+            placement.clone(),
+        )?,
     };
     Ok(TypedTensor {
         group,

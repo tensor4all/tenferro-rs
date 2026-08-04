@@ -3802,7 +3802,12 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
         other => panic!("unexpected submission outcome: {other:?}"),
     };
 
-    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
+    match output.output(0)? {
+        tenferro_runtime::OutputRef::Tensor(tenferro_tensor::TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[2.0, 4.0])
+        }
+        other => panic!("unexpected output view: {other:?}"),
+    }
     assert!(runtime.cache_stats()?.prepared_plans.entries > 0);
 
     Ok(())
