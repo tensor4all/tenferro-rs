@@ -1184,3 +1184,26 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
         &[5.0, 11.0, 17.0, 11.0, 25.0, 39.0, 17.0, 39.0, 61.0]
     );
 }
+
+#[test]
+fn eager_retention_exposes_borrowed_values_and_explicit_duplication() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let sibling = x.clone();
+
+    let value = x.value().unwrap();
+    assert_eq!(value.shape(), &[2]);
+    drop(value);
+    assert!(!x.materialized_cache_is_initialized());
+
+    let duplicate = x.duplicate_value().unwrap();
+    assert_eq!(duplicate.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let error = x.into_value().unwrap_err();
+    assert!(matches!(error, crate::IntoValueError::NotUnique(_)));
+    drop(sibling);
+}
