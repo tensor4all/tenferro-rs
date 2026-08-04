@@ -11,6 +11,7 @@ When ``.env`` exists at the repository root it is loaded automatically.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -30,7 +31,7 @@ PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
 PROMPT_VERSION = "1"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
-MAX_DIFF_CHARS = 120_000
+MAX_DIFF_CHARS = 60_000
 MAX_FILE_DIFF_CHARS = 40_000
 MAX_FINDINGS_PER_CHUNK = 8
 MAX_ROUTED_SECTION_LINES = 100
@@ -703,6 +704,20 @@ def reconcile_verdict(findings: list[Finding]) -> str:
     return "fail" if any(item.severity == "block" for item in findings) else "pass"
 
 
+# Every way the request can fail below the JSON layer. OSError covers
+# socket.timeout, TimeoutError, ConnectionResetError, ssl.SSLError, and
+# urllib.error.URLError/HTTPError. http.client.HTTPException is a sibling of
+# OSError, not a subclass, so a truncated chunked response (IncompleteRead)
+# needs naming separately. socket.timeout only aliases TimeoutError from
+# Python 3.10 on, so listing TimeoutError alone is not enough on 3.9.
+TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    http.client.HTTPException,
+)
+NETWORK_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 5.0
+
+
 def call_deepseek(
     *,
     api_key: str,
@@ -730,8 +745,27 @@ def call_deepseek(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    last_error: BaseException | None = None
+    for attempt in range(1, NETWORK_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except TRANSPORT_ERRORS as exc:
+            # Timeouts and connection resets are common enough on large diffs
+            # that one blocked PR per blip is not an acceptable failure mode.
+            last_error = exc
+            if attempt == NETWORK_RETRIES:
+                raise
+            print(
+                f"LLM request attempt {attempt}/{NETWORK_RETRIES} failed "
+                f"({type(exc).__name__}: {exc}); retrying in "
+                f"{RETRY_BACKOFF_SECONDS:.0f}s",
+                file=sys.stderr,
+            )
+            time.sleep(RETRY_BACKOFF_SECONDS)
+    else:  # pragma: no cover - the loop either breaks or raises
+        raise last_error if last_error else RuntimeError("no response")
     content = body["choices"][0]["message"]["content"]
     return extract_json_payload(content)
 
@@ -1027,7 +1061,7 @@ def main(argv: list[str] | None = None) -> int:
         "--api-url",
         default=os.environ.get("DEEPSEEK_API_URL", DEFAULT_API_URL),
     )
-    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--timeout", type=float, default=300.0)
     args = parser.parse_args(argv)
 
     if args.llm_skipped_reason and not args.dry_run:
@@ -1128,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
                     diff_chunk=chunk,
                     timeout=args.timeout,
                 )
-            except (KeyError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+            except (KeyError, ValueError, *TRANSPORT_ERRORS) as exc:
                 print(
                     f"LLM chunk {index}/{len(chunks)}: failed after "
                     f"{time.monotonic() - chunk_started:.1f}s: "
