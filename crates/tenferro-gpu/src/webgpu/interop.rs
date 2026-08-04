@@ -76,8 +76,11 @@ pub fn fft_limits(session: &WebGpuExecSession<'_>) -> WebGpuFftLimits {
 ///
 /// # Errors
 ///
-/// Returns a typed placement, layout, allocation, launch, or output-validation
-/// error when the input or requested output is not supported by the session.
+/// Returns [`Error::Unsupported`] for an unsupported placement or FFT
+/// configuration, [`Error::Validation`] for invalid shape/layout metadata,
+/// [`Error::BackendSource`] for a provider launch failure, or
+/// [`Error::RuntimeState`] when output completion or allocation state is
+/// invalid.
 pub fn execute_c32_fft(
     session: &WebGpuExecSession<'_>,
     input: &TypedTensor<Complex32>,
@@ -124,8 +127,11 @@ pub fn execute_c32_fft(
 ///
 /// # Errors
 ///
-/// Returns a typed placement, layout, allocation, launch, or output-validation
-/// error when the input or requested output is not supported by the session.
+/// Returns [`Error::Unsupported`] for an unsupported placement or FFT
+/// configuration, [`Error::Validation`] for invalid shape/layout metadata,
+/// [`Error::BackendSource`] for a provider launch failure, or
+/// [`Error::RuntimeState`] when output completion or allocation state is
+/// invalid.
 pub fn execute_f32_rfft(
     session: &WebGpuExecSession<'_>,
     input: &TypedTensor<f32>,
@@ -166,8 +172,11 @@ pub fn execute_f32_rfft(
 ///
 /// # Errors
 ///
-/// Returns a typed placement, layout, allocation, launch, or output-validation
-/// error when the input or requested output is not supported by the session.
+/// Returns [`Error::Unsupported`] for an unsupported placement or FFT
+/// configuration, [`Error::Validation`] for invalid shape/layout metadata,
+/// [`Error::BackendSource`] for a provider launch failure, or
+/// [`Error::RuntimeState`] when output completion or allocation state is
+/// invalid.
 pub fn execute_c32_irfft(
     session: &WebGpuExecSession<'_>,
     input: &TypedTensor<Complex32>,

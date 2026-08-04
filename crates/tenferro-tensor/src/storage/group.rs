@@ -554,6 +554,12 @@ impl AllocationGroup {
 
     /// Borrow dtype-erased read views for descriptor bindings without
     /// materializing or cloning any owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::DescriptorSlotOutOfBounds`],
+    /// [`GroupError::DescriptorSlotVacant`], or [`GroupError::InvalidDescriptor`]
+    /// when a binding does not identify a valid descriptor.
     pub fn read_views<'a>(
         &'a self,
         bindings: &[DescriptorSlot],
@@ -566,6 +572,12 @@ impl AllocationGroup {
 
     /// Borrow one dtype-erased read view for a descriptor without materializing
     /// or cloning its physical owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::DescriptorSlotOutOfBounds`],
+    /// [`GroupError::DescriptorSlotVacant`], or [`GroupError::InvalidDescriptor`]
+    /// when `slot` is not a valid descriptor.
     pub fn read_view<'a>(&'a self, slot: DescriptorSlot) -> Result<TensorRead<'a>, GroupError> {
         self.tensor_read(slot)
     }
@@ -591,12 +603,24 @@ impl AllocationGroup {
         Ok(TensorRead::from_view(view))
     }
 
+    /// Append a tensor owner and return its new descriptor slot without copying.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::IndexOverflow`] when allocation or descriptor
+    /// indices cannot be represented, or [`GroupError::InvalidDescriptor`]
+    /// when the consumed tensor descriptor is invalid.
     pub fn append_tensor(&mut self, tensor: crate::Tensor) -> Result<DescriptorSlot, GroupError> {
         let (source, source_slot) = tensor.into_group_parts();
         self.append_group(source, source_slot)
     }
 
     /// Append one descriptor and all of its physical owners without copying.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::IndexOverflow`] when group indices overflow or
+    /// [`GroupError::InvalidDescriptor`] when `source_slot` is invalid.
     pub fn append_group(
         &mut self,
         mut source: AllocationGroup,
@@ -1375,6 +1399,12 @@ impl AllocationGroup {
     ///
     /// This is structural: aliased allocations return a typed error and the
     /// group remains unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::AliasedAllocation`] for an aliased allocation or
+    /// [`GroupError::InvalidDescriptor`] for an invalid slot; every extraction
+    /// failure leaves the group unchanged.
     #[allow(clippy::result_large_err)]
     pub fn take_tensor(&mut self, slot: DescriptorSlot) -> Result<crate::Tensor, GroupError> {
         let (_, descriptor) = self.resolve_descriptor(slot)?;
@@ -1416,13 +1446,19 @@ impl AllocationGroup {
         }
     }
 
+    // INVARIANT: returning the unchanged move-only group is the extraction
+    // failure carrier required by the ownership contract.
     /// Consume the group and extract one descriptor as a standalone tensor.
     ///
     /// Extraction is structural: it succeeds only when no other descriptor
     /// aliases the selected physical allocation. Failure returns the exact
     /// unchanged group and typed error without copying.
-    // INVARIANT: returning the unchanged move-only group is the extraction
-    // failure carrier required by the ownership contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::AliasedAllocation`] when another descriptor
+    /// references the allocation, or [`GroupError::InvalidDescriptor`] for an
+    /// invalid slot. Each extraction failure returns the unchanged group.
     #[allow(clippy::result_large_err)]
     pub fn into_tensor(self, slot: DescriptorSlot) -> Result<crate::Tensor, (Self, GroupError)> {
         let (_, descriptor) = match self.resolve_descriptor(slot) {

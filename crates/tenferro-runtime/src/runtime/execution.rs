@@ -227,6 +227,12 @@ impl fmt::Debug for ScopedExecutionBundle<'_> {
 
 impl<'env> ScopedExecutionBundle<'env> {
     /// Borrow one completed output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
+    /// index or [`OutputAccessError::Group`] when the completed descriptor
+    /// group reports an output access failure.
     pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
         let output = self
             .outputs
@@ -240,6 +246,14 @@ impl<'env> ScopedExecutionBundle<'env> {
     }
 
     /// Consume the bundle and extract a fresh owned output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScopedOutputExtractError::InvalidOutput`],
+    /// [`ScopedOutputExtractError::BorrowedOutput`], or
+    /// [`ScopedOutputExtractError::MetadataOutput`] for an output that cannot
+    /// be consumed, and [`ScopedOutputExtractError::Output`] for a structural
+    /// group extraction failure. Each error returns the unchanged bundle.
     #[allow(clippy::result_large_err)]
     pub fn into_owned_output(
         self,
@@ -391,6 +405,11 @@ impl ExecutionBundle {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
+    /// index or [`OutputAccessError::Group`] when the output descriptor group
+    /// reports an access failure.
     pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
         let slot = *self
             .outputs
@@ -408,6 +427,12 @@ impl ExecutionBundle {
 
     // INVARIANT: extraction errors return the unchanged move-only bundle so
     // callers can retry or inspect it without a hidden copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputExtractError::InvalidOutput`] for an invalid index or
+    /// [`OutputExtractError::Group`] for a structural group extraction
+    /// failure. Each error returns the unchanged bundle without copying.
     #[allow(clippy::result_large_err)]
     pub fn into_output(
         self,

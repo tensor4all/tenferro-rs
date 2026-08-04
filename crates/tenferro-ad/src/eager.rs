@@ -392,6 +392,13 @@ impl<'a> ValueGuard<'a> {
     ///
     /// Backend-resident values return the backend's typed host-access error;
     /// this method does not download storage implicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when
+    /// `T` does not match the view dtype, [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]
+    /// for a non-contiguous view, or [`tenferro_tensor::Error::HostAccess`]
+    /// when backend storage cannot be mapped as a host slice.
     pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&'a [T]> {
         self.view.as_slice()
     }
@@ -445,16 +452,33 @@ impl GradientValue {
     }
 
     /// Borrow the gradient's value guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained gradient record is
+    /// unavailable or its allocation-group descriptor is invalid.
     pub fn value(&self) -> Result<ValueGuard<'_>> {
         self.record.value("GradientValue::value")
     }
 
     /// Borrow the gradient as a dtype-erased read target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained gradient record or
+    /// its allocation-group descriptor is unavailable.
     pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
         self.record.tensor_read("GradientValue::tensor_read")
     }
 
     /// Borrow a compact host slice without downloading backend storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value is unavailable,
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the gradient dtype, or [`tenferro_tensor::Error::HostAccess`]
+    /// when backend storage cannot be mapped as a host slice.
     pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
         self.record
             .value("GradientValue::as_slice")
@@ -465,6 +489,12 @@ impl GradientValue {
     }
 
     /// Explicitly copy a host-resident gradient into a standalone tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value or execution
+    /// session is unavailable, or a typed backend/host-access error when the
+    /// gradient cannot be materialized as a contiguous tensor.
     pub fn to_tensor(&self) -> Result<Tensor> {
         let value = self
             .record
@@ -530,6 +560,12 @@ impl Gradients {
     }
 
     /// Consume one gradient owner while leaving the bundle unchanged on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::RuntimeState`] when the descriptor is
+    /// invalid or its allocation is aliased. A missing key is reported as
+    /// `Ok(None)`.
     pub fn take_grad(
         &mut self,
         key: &ValueKey<StdTensorOp>,
@@ -3177,11 +3213,22 @@ impl EagerTensor {
     }
 
     /// Borrow the retained value without creating an owner or copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained allocation-group
+    /// descriptor is unavailable or invalid.
     pub fn value(&self) -> Result<ValueGuard<'_>> {
         self._record.value.value("EagerTensor::value")
     }
 
     /// Explicitly duplicate this value into a fresh standalone allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value or execution
+    /// session is unavailable, or a typed host/backend error when the value
+    /// cannot be materialized as a contiguous tensor.
     pub fn duplicate_value(&self) -> Result<Tensor> {
         let value = self.value()?;
         match value.duplicate_host_tensor() {
@@ -3203,6 +3250,12 @@ impl EagerTensor {
     /// A shared handle is returned unchanged as [`IntoValueError::NotUnique`].
     /// Group extraction failures return the unchanged handle and typed group
     /// error; no copy or fallback materialization is attempted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntoValueError::NotUnique`] when another handle retains the
+    /// value, or [`IntoValueError::Extract`] when structural group extraction
+    /// fails because the allocation is aliased or its descriptor is invalid.
     #[allow(clippy::result_large_err)]
     pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
         if Arc::strong_count(&self._record) != 1 {

@@ -40,6 +40,10 @@ pub use tenferro_runtime::extension::{
 /// assert!(!eager.tracks_grad());
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`Error::RuntimeState`] when the value cannot be registered in the
+/// supplied runtime, including an invalid or incompatible retained descriptor.
 #[must_use = "the adopted eager tensor carries the runtime value"]
 pub fn adopt_untracked_eager_value(
     ctx: Arc<EagerRuntime>,

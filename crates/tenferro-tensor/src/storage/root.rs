@@ -62,6 +62,13 @@ pub unsafe trait BackendAllocation: std::fmt::Debug + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeviceAccessError::Unsupported`] when the provider has no
+    /// device preparation path, [`DeviceAccessError::InvalidRequest`] for a
+    /// mismatched identity or layout request, or
+    /// [`DeviceAccessError::ProviderFailure`] for provider setup failure.
     fn prepare_device_access(
         &self,
         _request: DeviceAccessRequest<'_>,
@@ -76,6 +83,13 @@ pub unsafe trait BackendAllocation: std::fmt::Debug + Send + Sync + 'static {
     /// exact span length stable and retain the provider allocation for the
     /// returned borrow; typed preparation checks the returned pointer's
     /// alignment before any typed access.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccessError::InvalidLayout`] or [`AccessError::DTypeMismatch`]
+    /// for invalid mapping metadata, [`AccessError::Unsupported`] when host
+    /// mapping is unavailable, or [`AccessError::Provider`] for provider
+    /// mapping failure.
     fn map_read(
         &self,
         _span: RootBoundSpan,
@@ -91,6 +105,13 @@ pub unsafe trait BackendAllocation: std::fmt::Debug + Send + Sync + 'static {
     /// exact span length stable and retain exclusive provider access for the
     /// returned borrow; typed preparation checks the returned pointer's
     /// alignment before any typed access.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccessError::InvalidLayout`] or [`AccessError::DTypeMismatch`]
+    /// for invalid mapping metadata, [`AccessError::Unsupported`] when writable
+    /// mapping is unavailable, or [`AccessError::Provider`] for provider
+    /// mapping failure.
     fn map_write(
         &self,
         _span: RootBoundSpan,

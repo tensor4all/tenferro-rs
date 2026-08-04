@@ -41,6 +41,11 @@ impl fmt::Debug for RetainedValue {
 
 impl RetainedValue {
     /// Move an owned tensor value into a retained group-backed handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the value's descriptor cannot be
+    /// transferred into a retention allocation group.
     pub fn from_tensor_value(value: TensorValue) -> Result<Self> {
         let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
             Error::runtime_state(
@@ -74,6 +79,11 @@ impl RetainedValue {
     }
 
     /// Borrow the retained descriptor for one read-only execution boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained descriptor is vacant,
+    /// out of bounds, or otherwise invalid in its allocation group.
     pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
         self.container.group.read_view(self.slot).map_err(|error| {
             Error::runtime_state(

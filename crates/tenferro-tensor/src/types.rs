@@ -1965,8 +1965,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     ///
     /// # Errors
     ///
-    /// Returns a typed host-access or layout error when the view is backend
-    /// owned or not contiguous.
+    /// Returns [`crate::Error::HostAccess`] or
+    /// [`ValidationError::NonContiguousViewAsSlice`] when the view is backend
+    /// owned or not contiguous, and [`ValidationError::InvalidArgument`] when
+    /// the static-rank shape cannot be reconstructed.
     pub fn duplicate(&self) -> crate::Result<TypedTensor<T, R>>
     where
         T: TensorScalar,
@@ -2833,8 +2835,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// # Errors
     ///
-    /// Returns the same typed host-access or layout error as the read-only
-    /// duplicate boundary.
+    /// Returns [`crate::Error::HostAccess`] or
+    /// [`ValidationError::NonContiguousViewAsSlice`] when the view is backend
+    /// owned or not contiguous, and [`ValidationError::InvalidArgument`] when
+    /// the static-rank shape cannot be reconstructed.
     ///
     /// # Examples
     ///
@@ -4061,13 +4065,19 @@ impl TensorValue {
         })
     }
 
+    // INVARIANT: unchanged-owner recovery is part of the consuming ownership
+    // contract, so this intentionally carries the large move-only error.
+    #[doc(hidden)]
     /// Move the value's sole physical owner into an allocation group.
     ///
     /// This preserves metadata-only views without copying. The consumed value
     /// always contains one unique owner, so no compatibility fallback exists.
-    #[doc(hidden)]
-    // INVARIANT: unchanged-owner recovery is part of the consuming ownership
-    // contract, so this intentionally carries the large move-only error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the unchanged value when descriptor publication fails because
+    /// of [`ValidationError::InvalidArgument`] or
+    /// [`ValidationError::IntegerOverflow`].
     #[allow(clippy::result_large_err)]
     pub fn try_into_group_parts(
         self,
@@ -4155,6 +4165,8 @@ impl TensorValue {
         })
     }
 
+    // INVARIANT: unchanged-owner recovery is part of the consuming view
+    // contract, so this intentionally carries the large move-only error.
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -4167,8 +4179,6 @@ impl TensorValue {
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    // INVARIANT: unchanged-owner recovery is part of the consuming view
-    // contract, so this intentionally carries the large move-only error.
     #[allow(clippy::result_large_err)]
     pub fn try_reshape_view(
         self,
@@ -4190,6 +4200,14 @@ impl TensorValue {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]
+    /// when the source is not compact, [`tenferro_tensor_core::ValidationError::ShapeMismatch`]
+    /// when element counts differ, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// / [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] for invalid
+    /// target-shape arithmetic or bounds.
     pub fn reshape_view(
         self,
         shape: impl tenferro_tensor_core::IntoShapeVec,
@@ -4789,6 +4807,13 @@ impl<'a> TensorView<'a> {
     ///
     /// Backend buffers and non-contiguous views return an explicit error. No
     /// download or materialization is performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
+    /// view dtype, [`ValidationError::NonContiguousViewAsSlice`] for a
+    /// non-contiguous layout, or [`crate::Error::HostAccess`] for unavailable
+    /// backend host access.
     pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&'a [T]> {
         if self.dtype() != T::dtype() {
             return Err(crate::Error::validation(
@@ -5019,6 +5044,12 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(copy.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::HostAccess`] for backend-owned views,
+    /// [`ValidationError::NonContiguousViewAsSlice`] for non-contiguous views,
+    /// or [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn duplicate(&self) -> crate::Result<Tensor> {
         fn duplicate_typed<T: TensorScalar>(
             view: &TypedTensorView<'_, T>,
@@ -5199,6 +5230,12 @@ impl<'a> TensorViewMut<'a> {
     /// assert_eq!(copy.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::HostAccess`] for backend-owned views,
+    /// [`ValidationError::NonContiguousViewAsSlice`] for non-contiguous views,
+    /// or [`ValidationError::InvalidArgument`] for invalid layout metadata.
     pub fn duplicate(&self) -> crate::Result<Tensor> {
         self.as_read_only().duplicate()
     }

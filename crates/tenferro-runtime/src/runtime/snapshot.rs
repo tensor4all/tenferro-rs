@@ -840,6 +840,14 @@ impl Runtime {
     /// Host/CPU providers may complete this call. Asynchronous device
     /// providers reject before admission and return the unchanged borrowed
     /// package through [`crate::ScopedSubmitRejected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Unsupported`] when the selected asynchronous
+    /// provider cannot execute borrowed inputs synchronously, or
+    /// [`crate::ScopedSubmitRejected`] when pre-admission validation fails.
+    /// Provider execution failures are reported as
+    /// [`crate::runtime::execution::ScopedExecutionOutcome::RetiredFailed`].
     pub fn execute_scoped_read_only<'env>(
         &self,
         program: &CompiledGraph,
