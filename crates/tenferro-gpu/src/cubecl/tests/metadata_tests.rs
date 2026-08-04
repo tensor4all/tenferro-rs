@@ -22,17 +22,17 @@ fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
         cubecl::server::Handle::new(StreamId::current(), 4),
         1,
         0,
-        Some(domain),
+        domain,
     );
     let second = CubeclBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
         1,
         0,
-        Some(domain),
+        domain,
     );
 
-    assert_eq!(first.allocation_domain(), Some(domain));
-    assert_eq!(second.allocation_domain(), Some(domain));
+    assert_eq!(first.allocation_domain(), domain);
+    assert_eq!(second.allocation_domain(), domain);
     assert_ne!(
         <CubeclBuffer as BackendStorage<f32>>::allocation_id(&first),
         <CubeclBuffer as BackendStorage<f32>>::allocation_id(&second)
@@ -278,13 +278,14 @@ fn cubecl_tensor_with_len(
     shape: Vec<usize>,
     len: usize,
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
+    let domain = AllocationDomainId::fresh();
     let handle = cubecl::server::Handle::new(
         StreamId::current(),
         (len * core::mem::size_of::<f32>()) as u64,
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(Box::new(CubeclBuffer::new(handle, len, 0, None))),
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(handle, len, 0, domain))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

@@ -290,7 +290,7 @@ fn webgpu_view_has_owner<T: 'static>(
             .downcast_ref::<WebGpuBuffer>()
             .is_some_and(|buffer| {
                 buffer.device_ordinal() == device_ordinal
-                    && buffer.allocation_domain() == Some(allocation_domain)
+                    && buffer.allocation_domain() == allocation_domain
             })
     })
 }

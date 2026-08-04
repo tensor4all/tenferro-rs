@@ -28,6 +28,9 @@ follow Rust borrowing.
 - The concrete `CubeclBuffer` and `WebGpuBuffer` owners are scalar-independent;
   dtype appears only in the `BackendStorage<T>` implementation and borrowed
   tensor/view descriptor, not in the owning provider resource type.
+- Provider owners now require a non-optional `AllocationDomainId`; the public
+  metadata trait still reports `Some(id)`, while Apple managed-resource state
+  remains a separate optional endpoint marker rather than an identity fallback.
 - Runtime and CPU/FFT/linalg managed-buffer test providers now use mutable
   mapping receivers and allocate a fresh same-domain output where an old test
   path previously aliased an owner.
@@ -58,6 +61,13 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-runtime --test integration` — 122 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — passed after updating the owner-borrowing contract assertions.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --no-run` — passed.
+- `cargo test -p tenferro-gpu --features cuda,webgpu --lib domain_and_distinguish_allocations` — 2 passed.
+- `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
+- The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
+- Full GPU integration reached 89/90; the sole failure is the pre-existing
+  `session_contract` trybuild fixture drift for removed CUDA symbols (the
+  compiler now emits a similar-name help line), unrelated to allocation-domain
+  changes and intentionally not blessed here.
 
 This is a migration checkpoint, not P7/P8 completion: concrete provider root,
 claim, prepared-access, and hardware evidence obligations remain for the

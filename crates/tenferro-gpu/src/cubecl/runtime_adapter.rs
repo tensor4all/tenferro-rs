@@ -204,7 +204,7 @@ fn cuda_input_has_owned_buffer(
                 .downcast_ref::<crate::CubeclBuffer>()
                 .is_some_and(|buffer| {
                     buffer.device_ordinal() == device_ordinal
-                        && buffer.allocation_domain() == Some(expected_domain)
+                        && buffer.allocation_domain() == expected_domain
                 })
         }),
         TensorView::C64(view) => view.backend_buffer().is_some_and(|buffer| {
@@ -213,7 +213,7 @@ fn cuda_input_has_owned_buffer(
                 .downcast_ref::<crate::CubeclBuffer>()
                 .is_some_and(|buffer| {
                     buffer.device_ordinal() == device_ordinal
-                        && buffer.allocation_domain() == Some(expected_domain)
+                        && buffer.allocation_domain() == expected_domain
                 })
         }),
     }
@@ -230,7 +230,7 @@ fn cubecl_view_has_owner<T: 'static>(
             .downcast_ref::<crate::CubeclBuffer>()
             .is_some_and(|buffer| {
                 buffer.device_ordinal() == device_ordinal
-                    && buffer.allocation_domain() == Some(expected_domain)
+                    && buffer.allocation_domain() == expected_domain
             })
     })
 }

@@ -120,7 +120,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
             handle,
             host_data.len(),
             rt.device_ordinal(),
-            Some(rt.allocation_domain_id()),
+            rt.allocation_domain_id(),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,
@@ -194,7 +194,7 @@ fn upload_bool(
             handle,
             host_data.len(),
             rt.device_ordinal(),
-            Some(rt.allocation_domain_id()),
+            rt.allocation_domain_id(),
         ))),
         Placement {
             memory_kind: MemoryKind::Device,

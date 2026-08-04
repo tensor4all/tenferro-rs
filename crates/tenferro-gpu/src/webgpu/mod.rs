@@ -49,7 +49,7 @@ pub(crate) struct WebGpuBuffer {
     device_ordinal: usize,
     managed: Option<Arc<cubecl_runtime::storage::ManagedResource<cubecl_wgpu::WgpuResource>>>,
     domain: Option<Arc<apple::AppleDomainState>>,
-    allocation_domain: Option<AllocationDomainId>,
+    allocation_domain: AllocationDomainId,
     allocation_id: AllocationId,
 }
 
@@ -80,7 +80,7 @@ impl WebGpuBuffer {
             device_ordinal,
             managed: None,
             domain: None,
-            allocation_domain: Some(allocation_domain),
+            allocation_domain,
             allocation_id: AllocationId::from_backend_id(
                 NEXT_WEBGPU_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
@@ -112,7 +112,7 @@ impl WebGpuBuffer {
             device_ordinal: rt.device_ordinal(),
             managed: Some(Arc::new(managed)),
             domain: Some(Arc::clone(domain)),
-            allocation_domain: Some(domain.id),
+            allocation_domain: rt.allocation_domain_id(),
             allocation_id,
         })
     }
@@ -121,7 +121,7 @@ impl WebGpuBuffer {
         &self.handle
     }
 
-    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+    fn allocation_domain(&self) -> AllocationDomainId {
         self.allocation_domain
     }
 
@@ -230,7 +230,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer {
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
-        self.allocation_domain
+        Some(self.allocation_domain)
     }
 
     fn allocation_id(&self) -> Option<AllocationId> {
@@ -423,23 +423,14 @@ pub(super) fn ensure_resident_on_runtime<T: 'static>(
 ) -> crate::Result<()> {
     let buffer = webgpu_buffer(tensor, op)?;
     let expected_allocation_domain = rt.allocation_domain_id();
-    match buffer.allocation_domain() {
-        Some(actual) if actual == expected_allocation_domain => {}
-        Some(actual) => {
-            return Err(Error::host_access(
-                op,
-                HostAccessError::ForeignDomain {
-                    expected: expected_allocation_domain,
-                    actual,
-                },
-            ));
-        }
-        None => {
-            return Err(Error::runtime_state(
-                op,
-                "WebGPU buffer is missing its runtime allocation domain",
-            ));
-        }
+    if buffer.allocation_domain() != expected_allocation_domain {
+        return Err(Error::host_access(
+            op,
+            HostAccessError::ForeignDomain {
+                expected: expected_allocation_domain,
+                actual: buffer.allocation_domain(),
+            },
+        ));
     }
     if let Some(expected) = rt.allocation_domain() {
         match buffer.domain.as_ref().map(|domain| domain.id) {

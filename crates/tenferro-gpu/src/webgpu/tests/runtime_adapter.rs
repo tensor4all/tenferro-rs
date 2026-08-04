@@ -36,8 +36,8 @@ fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
         domain,
     );
 
-    assert_eq!(first.allocation_domain(), Some(domain));
-    assert_eq!(second.allocation_domain(), Some(domain));
+    assert_eq!(first.allocation_domain(), domain);
+    assert_eq!(second.allocation_domain(), domain);
     assert_ne!(
         <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&first),
         <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&second)

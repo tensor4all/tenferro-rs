@@ -346,6 +346,10 @@ fn provider_buffer_owners_are_scalar_independent_and_not_cloneable() {
                 && !source.contains("impl Clone for WebGpuBuffer"),
             "{name} provider owner must not expose a shallow clone"
         );
+        assert!(
+            !source.contains("allocation_domain: Option<AllocationDomainId>"),
+            "{name} provider owner must require an allocation domain"
+        );
     }
 }
 

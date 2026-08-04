@@ -406,7 +406,7 @@ fn ensure_allocation_domain(
     rt: &CudaRuntime,
     op: &'static str,
 ) -> crate::Result<()> {
-    if buffer.allocation_domain() != Some(rt.allocation_domain_id()) {
+    if buffer.allocation_domain() != rt.allocation_domain_id() {
         return Err(crate::Error::runtime_state(
             op,
             "CubeCL allocation belongs to a different runtime domain",
@@ -489,12 +489,7 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     let handle = rt.client().empty(byte_len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(
-            handle,
-            len,
-            rt.device_ordinal(),
-            Some(rt.allocation_domain_id()),
-        ),
+        CubeclBuffer::new(handle, len, rt.device_ordinal(), rt.allocation_domain_id()),
         rt.device_ordinal(),
     )
 }
@@ -507,12 +502,7 @@ pub(crate) fn alloc_bool_output(
     let handle = rt.client().empty(len);
     typed_from_cubecl(
         shape.to_vec(),
-        CubeclBuffer::new(
-            handle,
-            len,
-            rt.device_ordinal(),
-            Some(rt.allocation_domain_id()),
-        ),
+        CubeclBuffer::new(handle, len, rt.device_ordinal(), rt.allocation_domain_id()),
         rt.device_ordinal(),
     )
 }

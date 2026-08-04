@@ -1142,7 +1142,7 @@ impl CudaBackend {
                 handle,
                 len,
                 self.runtime().device_ordinal(),
-                Some(self.runtime().allocation_domain_id()),
+                self.runtime().allocation_domain_id(),
             ))),
             Placement {
                 memory_kind: MemoryKind::Device,
