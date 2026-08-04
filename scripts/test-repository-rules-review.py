@@ -1190,9 +1190,13 @@ def test_call_deepseek_does_not_retry_past_the_deadline() -> None:
 
 def test_budget_exhausted_finding_warns_without_blocking() -> None:
     mod = load_module()
-    finding = mod.budget_exhausted_finding(2, 5)
+    finding = mod.budget_exhausted_finding(2, 5, 30.0)
     assert finding.severity == "warn"
     assert "2 of 5" in finding.detail
+    # The configured budget, not the default, or the diagnostic misleads
+    # whoever is trying to work out why the review was incomplete.
+    assert "30s budget" in finding.detail
+    assert "900s" not in finding.detail
 
 
 def test_sensitive_diff_blocks_a_value_on_a_continuation_line() -> None:
