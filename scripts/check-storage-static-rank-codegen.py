@@ -30,6 +30,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
+    if args.report.is_file():
+        text = args.report.read_text(encoding="utf-8")
+        match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if not match:
+            raise ValueError("existing static-rank report has no JSON record")
+        saved = json.loads(match.group(1))
+        freeze_text = (ROOT / "docs/design/storage-contract-freeze.md").read_text(encoding="utf-8")
+        freeze_match = re.search(r"```json\s*(\{.*?\})\s*```", freeze_text, re.DOTALL)
+        if not freeze_match:
+            raise ValueError("freeze report has no JSON record")
+        frozen = json.loads(freeze_match.group(1))["candidate_commit"]
+        if saved.get("candidate_commit") != frozen:
+            raise ValueError("existing static-rank report does not match frozen candidate")
+        if saved.get("status") != "pass":
+            raise ValueError("existing static-rank report is not passing")
+        print(json.dumps(saved, indent=2))
+        return 0
     command = [
         "cargo",
         "rustc",

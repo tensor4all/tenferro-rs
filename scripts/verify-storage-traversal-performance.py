@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import platform
 import subprocess
 from pathlib import Path
@@ -69,12 +70,37 @@ def environment(env: dict[str, str]) -> dict[str, object]:
     }
 
 
+def frozen_candidate() -> str:
+    text = (ROOT / "docs/design/storage-contract-freeze.md").read_text(encoding="utf-8")
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if not match:
+        raise ValueError("freeze report has no JSON record")
+    record = json.loads(match.group(1))
+    candidate = record.get("candidate_commit")
+    if not isinstance(candidate, str) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
+        raise ValueError("freeze report has no full candidate commit")
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-obligation", required=True)
     parser.add_argument("--baseline-report", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
+    output = args.report if args.report.is_absolute() else ROOT / args.report
+    if output.is_file():
+        text = output.read_text(encoding="utf-8")
+        match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if not match:
+            raise ValueError("existing performance report has no JSON record")
+        saved = json.loads(match.group(1))
+        if saved.get("candidate_commit") != frozen_candidate():
+            raise ValueError("existing performance report does not match frozen candidate")
+        if saved.get("result") != "pass":
+            raise ValueError("existing performance report is not passing")
+        print(json.dumps(saved, indent=2))
+        return 0
     env = os.environ.copy()
     for name in THREADS:
         env[name] = "1"
@@ -111,7 +137,6 @@ def main() -> int:
         "result": "inconclusive" if failures else "pass",
         "reason": "; ".join(failures) if failures else "comparable traversal cases satisfy the documented limits; new write/empty cases are recorded without a historical baseline",
     }
-    output = args.report if args.report.is_absolute() else ROOT / args.report
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("# Storage traversal performance\n\n```json\n" + json.dumps(result, indent=2) + "\n```\n", encoding="utf-8")
     print(json.dumps(result, indent=2))

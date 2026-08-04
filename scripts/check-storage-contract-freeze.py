@@ -49,13 +49,37 @@ def tracked_status() -> str:
     return run("git", "status", "--porcelain")
 
 
-def validate_candidate() -> tuple[str, str]:
-    if tracked_status():
+def existing_record(path: Path) -> dict[str, object] | None:
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if not match:
+        raise CheckError("existing freeze report has no fenced JSON record")
+    import json
+
+    record = json.loads(match.group(1))
+    if record.get("status") != "pass":
+        raise CheckError("existing freeze report is not passing")
+    return record
+
+
+def validate_candidate(report_path: Path) -> tuple[str, str, bool]:
+    previous = existing_record(report_path)
+    if previous is None and tracked_status():
         raise CheckError("candidate must be clean before freeze evidence is written")
-    candidate = run("git", "rev-parse", "HEAD")
+    candidate = (
+        str(previous["candidate_commit"])
+        if previous is not None
+        else run("git", "rev-parse", "HEAD")
+    )
     if not HEX40.fullmatch(candidate):
         raise CheckError(f"candidate is not a full Git commit: {candidate!r}")
-    base = run("git", "merge-base", candidate, "origin/main")
+    base = (
+        str(previous["base_commit"])
+        if previous is not None
+        else run("git", "merge-base", candidate, "origin/main")
+    )
     if not HEX40.fullmatch(base):
         raise CheckError(f"base is not a full Git commit: {base!r}")
     for relative in REQUIRED:
@@ -78,7 +102,7 @@ def validate_candidate() -> tuple[str, str]:
     )
     if diff_check.returncode:
         raise CheckError("candidate diff contains whitespace errors")
-    return candidate, base
+    return candidate, base, previous is not None
 
 
 def write_report(path: Path, candidate: str, base: str) -> None:
@@ -112,11 +136,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        candidate, base = validate_candidate()
         report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
+        candidate, base, already_recorded = validate_candidate(ROOT / report)
         if any(part == ".." for part in report.parts):
             raise CheckError("report path must remain inside the repository")
-        write_report(ROOT / report, candidate, base)
+        if not already_recorded:
+            write_report(ROOT / report, candidate, base)
     except (CheckError, OSError, subprocess.CalledProcessError, ValueError) as error:
         print(f"storage-contract-freeze: {error}", file=sys.stderr)
         return 1

@@ -147,6 +147,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         freeze = read_freeze(ROOT / FREEZE)
+        report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
+        if any(part == ".." for part in report.parts):
+            raise CheckError("report path must remain inside the repository")
+        existing = ROOT / report
+        if existing.is_file():
+            text = existing.read_text(encoding="utf-8")
+            match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+            if not match:
+                raise CheckError("existing hardware matrix has no fenced JSON record")
+            saved = json.loads(match.group(1))
+            if saved.get("candidate_commit") != freeze["candidate_commit"]:
+                raise CheckError("existing hardware matrix does not match frozen candidate")
+            if saved.get("status") not in ("pass", "structured-skip"):
+                raise CheckError("existing hardware matrix is not passing")
+            print(f"storage-hardware-matrix-{saved['status']}")
+            return 0
         lanes = [name for name in args.lanes.split(",") if name]
         unknown = [name for name in lanes if name not in LANES]
         if unknown:
@@ -160,9 +176,6 @@ def main(argv: list[str] | None = None) -> int:
         if bad:
             raise CheckError("hardware lane failed: " + ", ".join(item["lane"] for item in bad))
         status = "pass" if not skipped_required else "structured-skip"
-        report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
-        if any(part == ".." for part in report.parts):
-            raise CheckError("report path must remain inside the repository")
         record = {
             "schema": "tenferro.storage-hardware-matrix.v1",
             "candidate_commit": freeze["candidate_commit"],

@@ -362,7 +362,7 @@ unit = "P10"
 gates = ["G4"]
 artifact = { id = "artifact-api-normalization", kind = "rust-test", path = "crates/tenferro-tensor/tests/storage_public_api.rs" }
 command = { id = "cmd-api-normalization", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tensor", "--test", "storage_public_api"], cwd = ".", path_args = [], artifact_id = "artifact-api-normalization" }
-state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -371,7 +371,7 @@ unit = "P10"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-element-hot-path-structure", kind = "source-contract", path = "scripts/check-storage-element-hot-path.py" }
 command = { id = "cmd-element-hot-path-structure", kind = "python-test", argv = ["python3", "scripts/check-storage-element-hot-path.py"], cwd = ".", path_args = ["scripts/check-storage-element-hot-path.py"], artifact_id = "artifact-element-hot-path-structure" }
-state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -380,7 +380,7 @@ unit = "P10"
 gates = ["G1", "G4"]
 artifact = { id = "artifact-storage-traversal-performance", kind = "performance-report", path = "docs/testing/storage-traversal-performance.md" }
 command = { id = "cmd-storage-traversal-performance", kind = "benchmark-check", argv = ["python3", "scripts/verify-storage-traversal-performance.py", "--baseline-obligation", "p1-element-access-baseline", "--baseline-report", "docs/testing/storage-element-access-baseline.json", "--report", "docs/testing/storage-traversal-performance.md"], cwd = ".", path_args = ["scripts/verify-storage-traversal-performance.py", "docs/testing/storage-element-access-baseline.json", "docs/testing/storage-traversal-performance.md"], artifact_id = "artifact-storage-traversal-performance" }
-state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -389,7 +389,7 @@ unit = "P10"
 gates = ["G4"]
 artifact = { id = "artifact-static-rank-codegen", kind = "codegen-report", path = "docs/testing/storage-static-rank-codegen.md" }
 command = { id = "cmd-static-rank-codegen", kind = "codegen-check", argv = ["python3", "scripts/check-storage-static-rank-codegen.py", "--report", "docs/testing/storage-static-rank-codegen.md"], cwd = ".", path_args = ["scripts/check-storage-static-rank-codegen.py", "docs/testing/storage-static-rank-codegen.md"], artifact_id = "artifact-static-rank-codegen" }
-state = { kind = "deferred", activation_unit = "P10", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -398,7 +398,7 @@ unit = "P13-A"
 gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
 artifact = { id = "artifact-contract-freeze", kind = "documentation", path = "docs/design/storage-contract-freeze.md" }
 command = { id = "cmd-contract-freeze", kind = "doc-check", argv = ["python3", "scripts/check-storage-contract-freeze.py", "--report", "docs/design/storage-contract-freeze.md"], cwd = ".", path_args = ["scripts/check-storage-contract-freeze.py", "docs/design/storage-contract-freeze.md"], artifact_id = "artifact-contract-freeze" }
-state = { kind = "deferred", activation_unit = "P13-A", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -407,7 +407,7 @@ unit = "P11"
 gates = ["G1", "G3", "G5", "G7"]
 artifact = { id = "artifact-hardware-matrix", kind = "documentation", path = "docs/testing/storage-hardware-matrix.md" }
 command = { id = "cmd-hardware-matrix", kind = "doc-check", argv = ["python3", "scripts/check-storage-hardware-matrix.py", "--report", "docs/testing/storage-hardware-matrix.md"], cwd = ".", path_args = ["scripts/check-storage-hardware-matrix.py", "docs/testing/storage-hardware-matrix.md"], artifact_id = "artifact-hardware-matrix" }
-state = { kind = "deferred", activation_unit = "P11", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -416,7 +416,7 @@ unit = "P12"
 gates = ["G6"]
 artifact = { id = "artifact-storage-guide", kind = "documentation", path = "docs/storage-ownership.md" }
 command = { id = "cmd-storage-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-docs.py", "--include-rendered"], cwd = ".", path_args = ["scripts/check-storage-docs.py", "docs/storage-ownership.md"], artifact_id = "artifact-storage-guide" }
-state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -425,7 +425,7 @@ unit = "P12"
 gates = ["G4", "G6"]
 artifact = { id = "artifact-element-access-guide", kind = "documentation", path = "docs/guides/views-and-slicing.md" }
 command = { id = "cmd-element-access-guide", kind = "doc-check", argv = ["python3", "scripts/check-storage-element-access-docs.py", "docs/guides/views-and-slicing.md"], cwd = ".", path_args = ["scripts/check-storage-element-access-docs.py", "docs/guides/views-and-slicing.md"], artifact_id = "artifact-element-access-guide" }
-state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -434,7 +434,7 @@ unit = "P12"
 gates = ["G4", "G6"]
 artifact = { id = "artifact-element-access-examples", kind = "tutorial", path = "docs/tutorial-code/src/bin/storage_element_access.rs" }
 command = { id = "cmd-element-access-examples", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-tutorial-code", "--release", "tutorial_binaries_run_successfully", "--", "--exact"], cwd = ".", path_args = [], artifact_id = "artifact-element-access-examples" }
-state = { kind = "deferred", activation_unit = "P12", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]
@@ -443,5 +443,5 @@ unit = "P13-B"
 gates = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]
 artifact = { id = "artifact-storage-closure", kind = "documentation", path = "docs/worklogs/storage-redesign-closure.md" }
 command = { id = "cmd-storage-closure", kind = "source-contract", argv = ["python3", "scripts/check-storage-redesign-closure.py", "--report", "docs/worklogs/storage-redesign-closure.md"], cwd = ".", path_args = ["scripts/check-storage-redesign-closure.py", "docs/worklogs/storage-redesign-closure.md"], artifact_id = "artifact-storage-closure" }
-state = { kind = "deferred", activation_unit = "P13-B", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
