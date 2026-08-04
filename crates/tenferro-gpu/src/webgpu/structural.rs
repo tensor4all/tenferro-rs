@@ -209,23 +209,14 @@ where
             )
         })?;
     let expected_allocation_domain = backend.runtime().allocation_domain_id();
-    match buffer.allocation_domain() {
-        Some(actual) if actual == expected_allocation_domain => {}
-        Some(actual) => {
-            return Err(crate::Error::host_access(
-                op,
-                crate::HostAccessError::ForeignDomain {
-                    expected: expected_allocation_domain,
-                    actual,
-                },
-            ));
-        }
-        None => {
-            return Err(crate::Error::runtime_state(
-                op,
-                "WebGPU buffer is missing its runtime allocation domain",
-            ));
-        }
+    if buffer.allocation_domain() != expected_allocation_domain {
+        return Err(crate::Error::host_access(
+            op,
+            crate::HostAccessError::ForeignDomain {
+                expected: expected_allocation_domain,
+                actual: buffer.allocation_domain(),
+            },
+        ));
     }
     if let Some(expected) = backend.runtime().allocation_domain() {
         match buffer.domain.as_ref().map(|domain| domain.id) {

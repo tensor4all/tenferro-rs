@@ -95,7 +95,7 @@ pub(crate) struct CubeclBuffer {
     handle: cubecl_runtime::server::Handle,
     len: usize,
     device_ordinal: usize,
-    allocation_domain: Option<AllocationDomainId>,
+    allocation_domain: AllocationDomainId,
     allocation_id: AllocationId,
 }
 
@@ -120,7 +120,7 @@ impl CubeclBuffer {
         handle: cubecl_runtime::server::Handle,
         len: usize,
         device_ordinal: usize,
-        allocation_domain: Option<AllocationDomainId>,
+        allocation_domain: AllocationDomainId,
     ) -> Self {
         Self {
             handle,
@@ -145,7 +145,7 @@ impl CubeclBuffer {
         self.device_ordinal
     }
 
-    pub(crate) fn allocation_domain(&self) -> Option<AllocationDomainId> {
+    pub(crate) fn allocation_domain(&self) -> AllocationDomainId {
         self.allocation_domain
     }
 }
@@ -161,7 +161,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer {
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
-        self.allocation_domain
+        Some(self.allocation_domain)
     }
 
     fn allocation_id(&self) -> Option<AllocationId> {
