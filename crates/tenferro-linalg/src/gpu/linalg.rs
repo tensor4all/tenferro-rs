@@ -1924,7 +1924,9 @@ where
 }
 
 fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
-    with_raw_cuda_stream(rt, op, |stream| stream as usize as CudaStream)
+    let mut stream = 0;
+    with_raw_cuda_stream(rt, op, |value| stream = value)?;
+    Ok(stream as usize as CudaStream)
 }
 
 fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
@@ -1961,7 +1963,9 @@ fn typed_device_ptr<T: 'static>(
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<*mut c_void> {
-    interop_with_typed_device_ptr(rt, tensor, op, |ptr| ptr)
+    let mut ptr = std::ptr::null_mut();
+    interop_with_typed_device_ptr(rt, tensor, op, |value| ptr = value)?;
+    Ok(ptr)
 }
 
 fn clone_device_tensor<T>(

@@ -162,7 +162,8 @@ gpu_test!(test_pointer_bridge, {
     let Tensor::F64(gpu) = &gpu else {
         unreachable!("f64 upload should preserve dtype");
     };
-    let ptr = with_typed_device_ptr(&rt, gpu, "test_pointer_bridge", |ptr| ptr).unwrap();
+    let mut ptr = std::ptr::null_mut();
+    with_typed_device_ptr(&rt, gpu, "test_pointer_bridge", |value| ptr = value).unwrap();
 
     assert!(!ptr.is_null(), "Device pointer should be non-null");
 });
@@ -291,8 +292,11 @@ gpu_test!(test_pointer_and_stream_bridge, {
     let Tensor::F64(gpu_typed) = &gpu else {
         unreachable!("f64 upload should preserve dtype");
     };
-    let ptr =
-        with_typed_device_ptr(&rt, gpu_typed, "test_pointer_and_stream_bridge", |ptr| ptr).unwrap();
+    let mut ptr = std::ptr::null_mut();
+    with_typed_device_ptr(&rt, gpu_typed, "test_pointer_and_stream_bridge", |value| {
+        ptr = value
+    })
+    .unwrap();
     assert!(!ptr.is_null());
 
     let stream = rt.raw_cuda_stream().unwrap();

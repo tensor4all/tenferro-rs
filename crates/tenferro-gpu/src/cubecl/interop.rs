@@ -44,7 +44,7 @@ impl DeviceByteBuffer {
     ///
     /// The pointer is only exposed while this owner is borrowed, so callers
     /// cannot obtain an unscoped pointer from the workspace handle.
-    pub fn with_ptr<R>(&self, f: impl FnOnce(*mut c_void) -> R) -> R {
+    pub fn with_ptr(&self, f: impl FnOnce(*mut c_void)) {
         f(self.ptr)
     }
 
@@ -94,15 +94,16 @@ pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<
 ///
 /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
 /// stream, or [`crate::Error::RuntimeState`] when its server is unavailable.
-pub fn with_raw_cuda_stream<R>(
+pub fn with_raw_cuda_stream(
     rt: &CudaRuntime,
     op: &'static str,
-    f: impl FnOnce(u64) -> R,
-) -> crate::Result<R> {
+    f: impl FnOnce(u64),
+) -> crate::Result<()> {
     let stream = rt
         .raw_cuda_stream()
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    Ok(f(stream))
+    f(stream);
+    Ok(())
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
@@ -180,12 +181,12 @@ pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
 /// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
 /// [`crate::Error::Validation`] when the pointer address overflows `usize`.
-pub fn with_typed_device_ptr<T: 'static, R>(
+pub fn with_typed_device_ptr<T: 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-    f: impl FnOnce(*mut c_void) -> R,
-) -> crate::Result<R> {
+    f: impl FnOnce(*mut c_void),
+) -> crate::Result<()> {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;
     let resource = rt
@@ -195,7 +196,8 @@ pub fn with_typed_device_ptr<T: 'static, R>(
     // The residency check above ties this raw FFI pointer to the caller's
     // runtime/device for the duration of the callback.
     let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, op)?;
-    Ok(f(ptr))
+    f(ptr);
+    Ok(())
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
