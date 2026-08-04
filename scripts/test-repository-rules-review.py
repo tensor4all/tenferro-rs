@@ -1083,6 +1083,47 @@ def test_pub_item_matches_a_public_union() -> None:
     assert match.group(2) == "Slot"
 
 
+def test_rust_inline_test_blocks_ignores_braces_in_literals() -> None:
+    """A brace inside a literal is not structural.
+
+    `let expected = "}";` ended the detected block at that line, so a test
+    added below fell outside the span and evaded the audit entirely.
+    """
+    mod = load_module()
+    src = "\n".join(
+        [
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn a() {",
+            '        let expected = "}";',
+            "    }",
+            "    #[test]",
+            "    fn b() { assert!(true); }",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(src) == [(1, 9)]
+
+
+def test_rust_inline_test_blocks_handles_literal_edge_cases() -> None:
+    """Char literals, raw strings, escapes and multi-line strings.
+
+    Lifetimes (`&'a str`) must NOT be read as an unterminated char literal.
+    """
+    mod = load_module()
+    cases = [
+        (["    let c = '}';", "    let d = '{';"], 5),
+        (["    fn f<'a>(x: &'a str) -> &'a str { x }"], 4),
+        (['    let s = r#"} { "#;'], 4),
+        ([r'    let s = "a\"} b";'], 4),
+        (['    let s = "start', '        } still string";'], 5),
+    ]
+    for body, expected_end in cases:
+        src = "\n".join(["#[cfg(test)]", "mod tests {"] + body + ["}"])
+        assert mod.rust_inline_test_blocks(src) == [(1, expected_end)], body
+
+
 def test_rust_inline_test_blocks_reports_span() -> None:
     mod = load_module()
     blocks = mod.rust_inline_test_blocks(INLINE_TEST_SOURCE)
@@ -2274,6 +2315,8 @@ def main() -> int:
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
         test_rust_inline_test_blocks_reports_span,
+        test_rust_inline_test_blocks_ignores_braces_in_literals,
+        test_rust_inline_test_blocks_handles_literal_edge_cases,
         test_rust_inline_test_blocks_ignores_mod_declaration,
         test_inline_test_module_findings_flags_grown_block,
         test_inline_test_module_findings_ignores_a_shrinking_block,

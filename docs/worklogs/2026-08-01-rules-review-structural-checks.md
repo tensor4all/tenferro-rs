@@ -199,3 +199,33 @@ Coverage: `test_vacuous_doc_example_findings_skips_non_rust_fences`,
 `test_parse_cargo_tenferro_dependencies_reads_target_tables`, and
 `test_pub_item_matches_a_public_union`. The round-2 shrink-exemption test still
 passes, pinning that the per-block refinement did not undo it.
+
+## Review Follow-ups, Round 4 (Codex on PR #1582)
+
+Both findings restate limitations already recorded under §Residual Risks. One
+is a repair and is fixed here; one is a scope expansion and is now tracked.
+
+- **Fixed — braces inside Rust literals mis-span a block.** `let expected =
+  "}";` inside an inline test module ended the detected block at that line
+  (measured: a 9-line block reported as 1..6), so a test added below fell
+  outside the span and evaded `inline-test-module` entirely — a silent false
+  negative, not a waivable warning. `strip_code_comments_and_literals` now
+  blanks string, raw-string and char-literal contents as well as comments, with
+  carried state for multi-line strings. Lifetimes (`&'a str`) are explicitly
+  distinguished from char literals. Only the two brace-COUNTING scanners use
+  it; `scan_runtime_boundary_text` keeps `strip_code_comments`, because a
+  forbidden symbol inside a string is still worth reporting there. This retires
+  the first Residual Risk entry.
+- **Deferred — methods added to public traits.** A trait-body `fn spin(&self);`
+  has no `pub` token, so `PUB_ITEM` never matches it and
+  `missing-doc-examples` skips public API. Confirmed, and it is the
+  checker-side counterpart of the second Residual Risk entry. Not folded in:
+  it needs public-trait body spans, a method matcher, and an `item_filter`
+  decision (a trait method is not a module-level re-export name), and it makes
+  the audit materially stricter repo-wide while #1575 shows an existing
+  documentation backlog. Filed as #1605 with the proposed approach and a
+  before/after sizing step.
+
+Coverage: `test_rust_inline_test_blocks_ignores_braces_in_literals` and
+`test_rust_inline_test_blocks_handles_literal_edge_cases` (char literals, raw
+strings, escaped quotes, multi-line strings, and the lifetime negative case).

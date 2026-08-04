@@ -1344,6 +1344,85 @@ def strip_code_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
     return "".join(result), in_block_comment
 
 
+def strip_code_comments_and_literals(
+    line: str, state: tuple[bool, bool, int | None]
+) -> tuple[str, tuple[bool, bool, int | None]]:
+    """Drop comments AND string/char literal contents, for brace counting.
+
+    A brace inside a literal is not structural: `let expected = "}";` inside an
+    inline test module ended the block at that line, so a test added below fell
+    outside the computed span and evaded the audit entirely. Only the scanners
+    that COUNT braces use this; `scan_runtime_boundary_text` keeps
+    `strip_code_comments`, because a forbidden symbol appearing inside a string
+    is still worth reporting there.
+
+    `state` is `(in_block_comment, in_string, raw_hashes)`; `raw_hashes` is the
+    `#` count of an open raw string (`r#"..."#`), or `None` when not in one.
+    Rust normal strings and raw strings may span lines, hence the carried state.
+    """
+    in_block_comment, in_string, raw_hashes = state
+    result: list[str] = []
+    index = 0
+    length = len(line)
+    while index < length:
+        if in_block_comment:
+            end = line.find("*/", index)
+            if end == -1:
+                return "".join(result), (True, False, None)
+            index = end + 2
+            in_block_comment = False
+            continue
+        if raw_hashes is not None:
+            closer = '"' + "#" * raw_hashes
+            end = line.find(closer, index)
+            if end == -1:
+                return "".join(result), (False, False, raw_hashes)
+            index = end + len(closer)
+            raw_hashes = None
+            continue
+        if in_string:
+            index, in_string = _scan_string_body(line, index)
+            continue
+        if line.startswith("/*", index):
+            in_block_comment = True
+            index += 2
+            continue
+        if line.startswith("//", index):
+            break
+        raw = RAW_STRING_OPEN.match(line, index)
+        if raw:
+            raw_hashes = len(raw.group(1))
+            index = raw.end()
+            continue
+        if line[index] == '"':
+            index, in_string = _scan_string_body(line, index + 1)
+            continue
+        if line[index] == "'":
+            # `'a` is a lifetime, `'x'` a char literal. Only the literal hides
+            # braces, and only it has a closing quote on the same line.
+            char = CHAR_LITERAL.match(line, index)
+            if char:
+                index = char.end()
+            else:
+                index += 1
+            continue
+        result.append(line[index])
+        index += 1
+    return "".join(result), (in_block_comment, in_string, raw_hashes)
+
+
+def _scan_string_body(line: str, index: int) -> tuple[int, bool]:
+    """Consume a normal string from `index`; return (next index, still open)."""
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] == '"':
+            return index + 1, False
+        index += 1
+    return index, True
+
+
 def scan_runtime_boundary_text(
     path: str,
     text: str,
@@ -1407,6 +1486,10 @@ PUB_ITEM = re.compile(
 )
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# `r"..."`, `r#"..."#`, `br"..."` — the byte/raw prefixes rustc accepts.
+RAW_STRING_OPEN = re.compile(r'(?:b?r)(#*)"')
+# `'x'`, `'\\n'`, `'\\u{1F600}'` — a lifetime has no closing quote.
+CHAR_LITERAL = re.compile(r"'(?:\\\\(?:u\\{[0-9a-fA-F]{1,6}\\}|x[0-9a-fA-F]{2}|.)|[^\\\\'])'")
 CFG_ATTR = re.compile(r"^#\[cfg\((.*)\)\]\s*$")
 CFG_PREDICATE_CALL = re.compile(r"^(all|any|not)\s*\((.*)\)$", re.DOTALL)
 
@@ -1588,10 +1671,10 @@ def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
             if probe < total and INLINE_TEST_MOD.match(lines[probe].strip()):
                 depth = 0
                 end = total - 1
-                in_block_comment = False
+                scan_state: tuple[bool, bool, int | None] = (False, False, None)
                 for cursor in range(probe, total):
-                    code, in_block_comment = strip_code_comments(
-                        lines[cursor], in_block_comment
+                    code, scan_state = strip_code_comments_and_literals(
+                        lines[cursor], scan_state
                     )
                     depth += code.count("{") - code.count("}")
                     if cursor >= probe and depth <= 0:
@@ -1703,10 +1786,10 @@ def rust_private_mod_spans(text: str) -> list[tuple[int, int]]:
             continue
         depth = 0
         end = total - 1
-        in_block_comment = False
+        scan_state: tuple[bool, bool, int | None] = (False, False, None)
         for cursor in range(index, total):
-            code, in_block_comment = strip_code_comments(
-                lines[cursor], in_block_comment
+            code, scan_state = strip_code_comments_and_literals(
+                lines[cursor], scan_state
             )
             depth += code.count("{") - code.count("}")
             if cursor >= index and depth <= 0:
