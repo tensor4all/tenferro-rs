@@ -122,12 +122,36 @@ OPEN_SECRET_ASSIGNMENT = re.compile(
 # covered by SECRET_VALUE_PATTERNS). A dotted token is far more often a FIELD
 # ACCESS — `let api_key =` continued by `settings.api_key;` — and blocking
 # credential-loading code on the required gate is the worse error of the two.
-BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9_~+/=-]{7,}"
+#
+# Length and word-shape carry the rest of the discrimination, because a plain
+# IDENTIFIER is spelled from the same alphabet as a credential:
+# `let api_key =` continued by `configured_token;` or `ENV_API_KEY;` is
+# ordinary code with no secret in the diff.
+#   * 20 characters is the floor the file already uses for a bare credential
+#     (`github_pat_…{20,}`, `gh[pousr]_…{20,}`, `sk-…{20,}`); the reported
+#     identifiers are 16 and 11.
+#   * a snake_case / SCREAMING_SNAKE_CASE token is an identifier by
+#     convention, while base64/hex credentials mix case and digits, so
+#     `IDENTIFIER_WORD_SHAPE` rejects the former even past the length floor.
+# A long single-word identifier with no underscore remains a residual false
+# positive; it is waivable, whereas the reverse error would upload a secret.
+BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9_~+/=-]{19,}"
+IDENTIFIER_WORD_SHAPE = re.compile(
+    r"^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$"
+)
 STANDALONE_VALUE = re.compile(
-    r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|"""
+    r"""^[ \t]*(?P<value>"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|"""
     + BARE_SECRET_VALUE
     + r""")[ \t]*[,;]?[ \t]*$"""
 )
+
+
+def is_standalone_secret_value(body: str) -> bool:
+    """Whether a continuation line carries a credential value rather than code."""
+    match = STANDALONE_VALUE.match(body)
+    if not match:
+        return False
+    return not IDENTIFIER_WORD_SHAPE.match(match.group("value"))
 # A quote opened on this line and closed on a later one hides the value from
 # any single-line pattern, so treat the opening alone as disqualifying.
 UNTERMINATED_SECRET_ASSIGNMENT = re.compile(
@@ -613,10 +637,16 @@ def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
     is deleted outright (``+++ /dev/null``) — that is the path a finding about
     the removal names, and without the fallback a whole-file deletion was
     omitted from the very set that exists to retain it.
+
+    File headers are only read OUTSIDE a hunk. Inside one, ``--- validation``
+    is the deletion of a source line reading ``-- validation``, not an
+    old-file header; treating it as a header reset the hunk flags and lost the
+    file. ``diff --git`` returns the parser to the header state.
     """
     result: set[str] = set()
     current_file: str | None = None
     old_file: str | None = None
+    in_hunk = False
     hunk_deleted = False
     hunk_added = False
 
@@ -625,25 +655,32 @@ def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
             result.add(current_file)
 
     for line in diff_text.splitlines():
-        if line.startswith("--- "):
+        if line.startswith("diff --git"):
             close_hunk()
+            in_hunk = False
             hunk_deleted = hunk_added = False
-            raw = line.removeprefix("--- a/").removeprefix("--- ")
-            old_file = None if raw == "/dev/null" else raw
-            continue
-        if line.startswith("+++ "):
-            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = old_file if raw == "/dev/null" else raw
+            current_file = old_file = None
             continue
         if line.startswith("@@"):
             close_hunk()
+            in_hunk = True
             hunk_deleted = hunk_added = False
+            continue
+        if not in_hunk:
+            if line.startswith("--- "):
+                raw = line.removeprefix("--- a/").removeprefix("--- ")
+                old_file = None if raw == "/dev/null" else raw
+                continue
+            if line.startswith("+++ "):
+                raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+                current_file = old_file if raw == "/dev/null" else raw
+                continue
             continue
         if current_file is None:
             continue
-        if line.startswith("-") and not line.startswith("---"):
+        if line.startswith("-"):
             hunk_deleted = True
-        elif line.startswith("+") and not line.startswith("+++"):
+        elif line.startswith("+"):
             hunk_added = True
     close_hunk()
     return result
@@ -979,7 +1016,7 @@ def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
 
         if is_added and contains_sensitive_text(body):
             return current_file, new_line
-        if is_added and awaiting_value and STANDALONE_VALUE.match(body):
+        if is_added and awaiting_value and is_standalone_secret_value(body):
             return current_file, new_line
 
         opener = OPEN_SECRET_ASSIGNMENT.search(body)

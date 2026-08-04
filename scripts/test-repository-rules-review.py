@@ -2421,6 +2421,74 @@ def test_sensitive_diff_ignores_a_field_access_continuation() -> None:
         assert mod.sensitive_diff_finding(diff) is None, continuation
 
 
+def test_sensitive_diff_ignores_an_identifier_continuation() -> None:
+    """A plain identifier is spelled from the same alphabet as a credential.
+
+    Length and word shape carry the discrimination: `configured_token` (16)
+    and `ENV_API_KEY` (11) are below the 20-character floor the file already
+    uses for bare credentials, and snake_case / SCREAMING_SNAKE_CASE is an
+    identifier convention that base64/hex credentials do not follow.
+    """
+    mod = load_module()
+    for continuation in (
+        "+    configured_token;",
+        "+    ENV_API_KEY;",
+        "+    configured_authentication_token;",
+    ):
+        diff = "\n".join(
+            [
+                "diff --git a/src/x.rs b/src/x.rs",
+                "--- a/src/x.rs",
+                "+++ b/src/x.rs",
+                "@@ -1,2 +1,2 @@",
+                f" {KEYNAME} =",
+                continuation,
+            ]
+        )
+        assert mod.sensitive_diff_finding(diff) is None, continuation
+
+
+def test_is_standalone_secret_value_keeps_credential_shapes() -> None:
+    """The positive cases the guard exists for must survive the narrowing."""
+    mod = load_module()
+    assert mod.is_standalone_secret_value("    abcdefghijklmnopqrstuvwx")
+    assert mod.is_standalone_secret_value("    A1b2C3d4E5f6G7h8J9k0;")
+    assert mod.is_standalone_secret_value('    "quoted-secret-value"')
+    assert not mod.is_standalone_secret_value("    short_id;")
+
+
+def test_files_with_unanchorable_deletions_reads_headers_outside_hunks() -> None:
+    """`--- validation` inside a hunk is a deleted body line, not a header.
+
+    Treating it as an old-file header reset the hunk flags, so the file was
+    lost from the set and a real unanchored block was still discarded.
+    """
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1,2 +1,1 @@",
+            " keep",
+            "--- validation",
+        ]
+    )
+    assert mod.files_with_unanchorable_deletions(diff) == {"a.rs"}
+    # The `+++` twin: deleting nothing, adding a line that reads `++ added`.
+    added = "\n".join(
+        [
+            "diff --git a/b.rs b/b.rs",
+            "--- a/b.rs",
+            "+++ b/b.rs",
+            "@@ -1,2 +1,3 @@",
+            " keep",
+            "+++ added",
+        ]
+    )
+    assert mod.files_with_unanchorable_deletions(added) == set()
+
+
 def test_sensitive_diff_blocks_a_bare_continuation_value() -> None:
     """The continuation value need not be quoted."""
     mod = load_module()
@@ -2560,6 +2628,9 @@ def main() -> int:
         test_files_with_unanchorable_deletions_skips_replacement_edits,
         test_sensitive_diff_ignores_an_expression_continuation,
         test_sensitive_diff_ignores_a_field_access_continuation,
+        test_sensitive_diff_ignores_an_identifier_continuation,
+        test_is_standalone_secret_value_keeps_credential_shapes,
+        test_files_with_unanchorable_deletions_reads_headers_outside_hunks,
         test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion,
         test_sensitive_diff_blocks_a_bare_continuation_value,
         test_sensitive_diff_ignores_an_ordinary_bare_continuation,

@@ -222,3 +222,38 @@ Coverage: `test_sensitive_diff_ignores_a_field_access_continuation` and
 `test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion`, alongside
 the existing replacement-edit and whole-file-deletion cases which pin that the
 per-hunk rule did not widen the exception back out.
+
+## Review Follow-ups, Round 3 (Codex on PR #1604)
+
+Both reproduced against `f1c2cd37` first.
+
+- **P1 — plain identifiers still read as bare secret literals.** After the
+  expression and field-access narrowings, the class still accepted every
+  identifier-only continuation of eight or more characters, so `let api_key =`
+  followed by `configured_token;` or `ENV_API_KEY;` blocked the required gate
+  with no credential in the diff. An identifier is spelled from the same
+  alphabet as a credential, so shape alone cannot separate them; two further
+  discriminators do:
+  * the bare floor rises from 8 to **20** characters — the threshold this file
+    already uses for bare credentials (`github_pat_…{20,}`, `gh[pousr]_…{20,}`,
+    `sk-…{20,}`). The reported identifiers are 16 and 11.
+  * `IDENTIFIER_WORD_SHAPE` rejects snake_case / SCREAMING_SNAKE_CASE past the
+    floor, since that is an identifier convention base64/hex credentials do not
+    follow. This covers `configured_authentication_token` (31).
+  `is_standalone_secret_value` composes the two so the call site reads as one
+  decision. Residual: a long single-word identifier with no underscore still
+  trips; it is waivable, whereas the reverse error would upload a secret.
+- **P2 — diff body lines mistaken for file headers.** Deleting a source line
+  reading `-- validation` produces the body line `--- validation`, which the
+  parser read as an old-file header: it closed the hunk, reset the flags and
+  cleared the path, so a deletion-only hunk returned nothing (measured:
+  `set()` instead of `{"a.rs"}`) and the unanchored block was discarded after
+  all. Header parsing now happens only OUTSIDE a hunk — `@@` enters the hunk
+  state and `diff --git` returns to the header state — which fixes the `+++`
+  twin at the same time.
+
+Coverage: `test_sensitive_diff_ignores_an_identifier_continuation`,
+`test_is_standalone_secret_value_keeps_credential_shapes` (positive control for
+the shapes the guard exists for), and
+`test_files_with_unanchorable_deletions_reads_headers_outside_hunks`. The
+round-1/2 replacement-edit, whole-file-deletion and mixed-hunk tests still pass.
