@@ -110,6 +110,29 @@ pub(crate) struct OwnedStorage {
     claim: OwnedSpanClaim,
 }
 
+fn validate_device_request(
+    identity: RootResourceIdentity,
+    request: DeviceAccessRequest<'_>,
+) -> Result<(), DeviceAccessError> {
+    let key = identity.extent().key();
+    if request.allocation_domain() != key.domain() || request.allocation_id() != key.local() {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: "prepared request does not match the root allocation identity".to_owned(),
+        });
+    }
+    if request.byte_len() > identity.extent().byte_len() {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: "prepared request exceeds the root allocation extent".to_owned(),
+        });
+    }
+    if request.element_size() == 0 {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: "prepared request has a zero element size".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Read-only capability derived from a shared borrow of an owner.
 pub(crate) struct StorageRef<'a> {
     owner: &'a OwnedStorage,
@@ -986,6 +1009,7 @@ impl<'a> StorageRef<'a> {
         &self,
         request: DeviceAccessRequest<'_>,
     ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        validate_device_request(self.owner.claim.root, request)?;
         self.owner.pin.prepare_device_access(request)
     }
 
@@ -1055,7 +1079,20 @@ impl<'a> StorageMut<'a> {
         &self,
         request: DeviceAccessRequest<'_>,
     ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        validate_device_request(self.owner.claim.root, request)?;
         self.owner.pin.prepare_device_access(request)
+    }
+
+    pub(super) fn backend_buffer_mut<T: 'static>(
+        &mut self,
+    ) -> Option<&'a mut crate::StorageBuffer<T>> {
+        let buffer = self.owner.pin.backend_buffer_mut::<T>()?;
+        // SAFETY: `StorageMut` represents the exclusive root borrow for `'a`.
+        Some(unsafe {
+            std::mem::transmute::<&mut crate::StorageBuffer<T>, &'a mut crate::StorageBuffer<T>>(
+                buffer,
+            )
+        })
     }
 
     pub(super) fn host_slice_mut<T: TensorScalar>(

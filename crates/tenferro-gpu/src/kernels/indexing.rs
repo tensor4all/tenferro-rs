@@ -1,3 +1,5 @@
+#![allow(clippy::manual_is_multiple_of)]
+
 use cubecl::prelude::*;
 
 use crate::kernels::helpers::{

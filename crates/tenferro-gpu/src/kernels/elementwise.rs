@@ -1,3 +1,5 @@
+#![allow(clippy::eq_op)]
+
 use cubecl::prelude::*;
 
 use crate::kernels::helpers::{

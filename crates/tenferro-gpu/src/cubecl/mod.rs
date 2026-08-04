@@ -96,8 +96,8 @@ use crate::native_permutation::{
 };
 use crate::{
     DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
-    TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    TensorScalar, TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 mod capability;
@@ -959,7 +959,7 @@ impl CudaBackend {
         perm: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
     {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
@@ -1015,7 +1015,7 @@ impl CudaBackend {
         dims: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         validate_broadcast_in_dim(input.shape(), shape, dims)?;
         launch_unary_tensor(
@@ -1069,7 +1069,7 @@ impl CudaBackend {
         axes: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         ensure_axes_unique("reverse", "axes", axes, input.shape().len())?;
         launch_unary_tensor(
@@ -1122,7 +1122,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T, R>>
     where
-        T: CubeElement + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
         R: TensorRank,
     {
         let len = checked_dim_product(op, "output shape", shape)?;
@@ -1161,7 +1161,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T, R>>
     where
-        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
         R: TensorRank,
     {
         ensure_view_resident_on_runtime(self.runtime(), view, op)?;
@@ -1214,7 +1214,7 @@ impl CudaBackend {
         op: &'static str,
     ) -> crate::Result<()>
     where
-        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
         R: TensorRank,
     {
         ensure_view_resident_on_runtime(self.runtime(), src, op)?;
@@ -1296,8 +1296,8 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<Out>>
     where
-        In: CubeElement + CubeFloat + Clone,
-        Out: CubeElement + CubeFloat + Clone,
+        In: CubeElement + TensorScalar + CubeFloat + Clone,
+        Out: CubeElement + TensorScalar + CubeFloat + Clone,
     {
         launch_unary(
             self.runtime(),
@@ -1314,8 +1314,8 @@ impl CudaBackend {
 
     fn convert_numeric<In, Out>(&self, input: &TypedTensor<In>) -> crate::Result<TypedTensor<Out>>
     where
-        In: CubeElement + CubeNumeric + Clone,
-        Out: CubeElement + CubeNumeric + Clone,
+        In: CubeElement + TensorScalar + CubeNumeric + Clone,
+        Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
             structural::convert_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
@@ -1336,8 +1336,8 @@ impl CudaBackend {
         ),
     ) -> crate::Result<TypedTensor<Out>>
     where
-        In: CubeElement + Clone,
-        Out: CubeElement + Clone,
+        In: CubeElement + TensorScalar + Clone,
+        Out: CubeElement + TensorScalar + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let input_arg = typed_tensor_array_arg(input, "cast")?;
@@ -1367,7 +1367,7 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<bool>>
     where
-        In: CubeElement + CubeNumeric + Clone,
+        In: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let input_arg = typed_tensor_array_arg(input, "cast")?;
@@ -1399,7 +1399,7 @@ impl CudaBackend {
         input: &TypedTensor<bool>,
     ) -> crate::Result<TypedTensor<Out>>
     where
-        Out: CubeElement + CubeNumeric + Clone,
+        Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let input_arg = bool_tensor_array_arg(input, "cast")?;
@@ -1431,8 +1431,8 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
-        In: CubeElement + CubeNumeric + Clone,
-        OutComplex: CubeElement + Clone,
+        In: CubeElement + TensorScalar + CubeNumeric + Clone,
+        OutComplex: CubeElement + TensorScalar + Clone,
         OutFloat: CubeElement + CubeFloat + Clone,
     {
         self.convert_float_to_complex_raw::<In, OutComplex, OutFloat>(
@@ -1455,7 +1455,7 @@ impl CudaBackend {
         input: &TypedTensor<bool>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
-        OutComplex: CubeElement + Clone,
+        OutComplex: CubeElement + TensorScalar + Clone,
         OutFloat: CubeElement + CubeFloat + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
@@ -1491,8 +1491,8 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<Out>>
     where
-        In: CubeElement + CubeComplex + Clone,
-        Out: CubeElement + CubeNumeric + Clone,
+        In: CubeElement + TensorScalar + CubeComplex + Clone,
+        Out: CubeElement + TensorScalar + CubeNumeric + Clone,
     {
         self.launch_cast_unary(input, |client, count, dim, out, input| unsafe {
             structural::convert_complex_to_numeric::launch_unchecked::<Out, In, CubeclCudaRuntime>(
@@ -1506,8 +1506,8 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<bool>>
     where
-        In: CubeElement + CubeComplex<FloatElem = F> + Clone,
-        F: CubeElement + CubeFloat,
+        In: CubeElement + TensorScalar + CubeComplex<FloatElem = F> + Clone,
+        F: CubeElement + TensorScalar + CubeFloat,
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let part_len = input.n_elements().checked_mul(2).ok_or_else(|| {
@@ -1652,8 +1652,8 @@ impl CudaBackend {
         ) -> crate::Result<()>,
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
-        InFloat: CubeElement + Clone,
-        OutComplex: CubeElement + Clone,
+        InFloat: CubeElement + TensorScalar + Clone,
+        OutComplex: CubeElement + TensorScalar + Clone,
         OutFloat: CubeElement + Clone,
     {
         ensure_resident_on_runtime(self.runtime(), input, "convert")?;
@@ -1757,8 +1757,8 @@ impl CudaBackend {
         input: &TypedTensor<In>,
     ) -> crate::Result<TypedTensor<Out>>
     where
-        In: CubeElement + CubeComplex + Clone,
-        Out: CubeElement + CubeComplex + Clone,
+        In: CubeElement + TensorScalar + CubeComplex + Clone,
+        Out: CubeElement + TensorScalar + CubeComplex + Clone,
         InFloat: CubeElement + CubeFloat + Clone,
         OutFloat: CubeElement + CubeFloat + Clone,
     {
@@ -1796,7 +1796,7 @@ impl CudaBackend {
         axis_b: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         let (output_shape, diag_output_axis) =
             extract_diagonal_shape(input.shape(), axis_a, axis_b)?;
@@ -1859,7 +1859,7 @@ impl CudaBackend {
         axis_b: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
@@ -1951,7 +1951,7 @@ impl CudaBackend {
     #[doc(hidden)]
     pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         if input.shape().len() < 2 {
             return Err(crate::Error::rank_mismatch("tril", 2, input.shape().len()));
@@ -1999,7 +1999,7 @@ impl CudaBackend {
     #[doc(hidden)]
     pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         if input.shape().len() < 2 {
             return Err(crate::Error::rank_mismatch("triu", 2, input.shape().len()));
@@ -2056,7 +2056,7 @@ impl CudaBackend {
         ) -> crate::kernels::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + Clone,
+        T: CubeElement + TensorScalar + Clone,
     {
         let output_shape = reduction_keepdims_shape(input.shape(), axis);
         let input_binding = typed_tensor_binding(input, op)?;
@@ -2473,7 +2473,7 @@ impl CudaBackend {
         config: &SliceConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         let output_shape = validate_slice(input.shape(), config)?;
         launch_unary_tensor(
@@ -2527,8 +2527,8 @@ impl CudaBackend {
         slice_sizes: &[usize],
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape().len())?;
@@ -2584,7 +2584,7 @@ impl CudaBackend {
         slice_sizes: &[usize],
     ) -> crate::Result<TypedTensor<bool>>
     where
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         if starts.shape().len() != 1 {
@@ -2649,7 +2649,7 @@ impl CudaBackend {
         config: &PadConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         let output_shape = pad_output_shape(input.shape(), config)?;
         launch_unary_tensor(
@@ -2702,7 +2702,7 @@ impl CudaBackend {
         axis: usize,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         let output_shape = concatenate_output_shape(inputs, axis)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape)?;
@@ -2785,8 +2785,8 @@ impl CudaBackend {
         config: &GatherConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
         let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
@@ -2832,7 +2832,7 @@ impl CudaBackend {
         config: &GatherConfig,
     ) -> crate::Result<TypedTensor<bool>>
     where
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
         let output_len = checked_dim_product("gather", "output shape", &meta.output_shape)?;
@@ -2879,8 +2879,8 @@ impl CudaBackend {
         config: &ScatterConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        T: CubeElement + TensorScalar + CubeFloat + Clone,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = scatter_launch_meta(
             operand.shape(),
@@ -2972,9 +2972,9 @@ impl CudaBackend {
         config: &ScatterConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubeComplex + Clone,
-        F: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
+        T: CubeElement + TensorScalar + CubeComplex + Clone,
+        F: CubeElement + TensorScalar + CubeFloat + Clone,
+        I: CubeElement + TensorScalar + CubePrimitive + CubeNumeric + Clone + CudaIndexValidation,
     {
         let meta = scatter_launch_meta(
             operand.shape(),
@@ -3095,6 +3095,7 @@ enum CastIntegerTarget {
 
 trait CudaCastFloat:
     CubeElement
+    + TensorScalar
     + CubeFloat
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
     + Clone
@@ -3179,7 +3180,7 @@ fn validate_cuda_real_cast<S, F>(
     target: CastIntegerTarget,
 ) -> crate::Result<()>
 where
-    S: CubeElement + Clone,
+    S: CubeElement + TensorScalar + Clone,
     F: CudaCastFloat,
 {
     ensure_resident_on_runtime(backend.runtime(), input, "cast")?;
@@ -3277,6 +3278,7 @@ fn read_checked_integer_flag(
 
 trait CudaFloatIndex:
     CubeElement
+    + TensorScalar
     + CubePrimitive<WithScalar<bool> = bool, WithScalar<Self> = Self>
     + CubeFloat
     + Clone
@@ -3455,7 +3457,7 @@ fn launch_checked_integer_binary<I>(
     ),
 ) -> crate::Result<TypedTensor<I>>
 where
-    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
 {
     dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
     ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
@@ -3516,7 +3518,7 @@ fn launch_scalar_binary<I>(
     ),
 ) -> crate::Result<TypedTensor<I>>
 where
-    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
 {
     if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
         return Err(crate::Error::shape_mismatch(
@@ -3558,8 +3560,15 @@ fn launch_real_complex_scalar_binary<R, C>(
     mode: usize,
 ) -> crate::Result<TypedTensor<C>>
 where
-    R: CubeFloat + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
-    C: CubeComplex<FloatElem = R> + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    R: TensorScalar + CubeFloat + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    C: CubeComplex<FloatElem = R>
+        + TensorScalar
+        + CubeElement
+        + CubePrimitive
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     if !real.shape().is_empty() {
         return Err(crate::Error::shape_mismatch(
@@ -3654,7 +3663,7 @@ fn launch_checked_integer_scalar_binary<I>(
     ),
 ) -> crate::Result<TypedTensor<I>>
 where
-    I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    I: CubeElement + TensorScalar + CubePrimitive + Clone + Send + Sync + 'static,
 {
     if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
         return Err(crate::Error::shape_mismatch(
@@ -5719,7 +5728,7 @@ fn launch_broadcast_multiply_typed<T>(
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + CubeFloat + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + CubeFloat + Clone,
 {
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
@@ -5756,7 +5765,7 @@ fn launch_broadcast_multiply_int_typed<T>(
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + CubeInt + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + CubeInt + Clone,
 {
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
@@ -5793,7 +5802,7 @@ fn launch_broadcast_multiply_complex_typed<T>(
     rhs_dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + CubeComplex + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + CubeComplex + Clone,
 {
     ensure_same_shape_for_broadcast_multiply(lhs_shape, rhs_shape)?;
     validate_broadcast_in_dim(lhs.shape(), lhs_shape, lhs_dims)?;
@@ -5976,7 +5985,7 @@ fn pad_output_shape(input_shape: &[usize], config: &PadConfig) -> crate::Result<
     ensure_rank("pad", rank, config.edge_padding_high.len())?;
     ensure_rank("pad", rank, config.interior_padding.len())?;
     let mut out_shape = Vec::with_capacity(rank);
-    for axis in 0..rank {
+    for (axis, &input_dim_raw) in input_shape.iter().enumerate().take(rank) {
         if config.interior_padding[axis] < 0 {
             return Err(crate::Error::invalid_argument(
                 "pad",
@@ -5984,7 +5993,7 @@ fn pad_output_shape(input_shape: &[usize], config: &PadConfig) -> crate::Result<
                 format!("interior padding must be non-negative on axis {axis}"),
             ));
         }
-        let input_dim = i64::try_from(input_shape[axis]).map_err(|_| {
+        let input_dim = i64::try_from(input_dim_raw).map_err(|_| {
             crate::Error::invalid_argument(
                 "pad",
                 "input_shape",

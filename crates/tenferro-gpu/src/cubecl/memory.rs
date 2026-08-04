@@ -9,7 +9,7 @@ use super::dispatch;
 use crate::cubecl::runtime::CudaRuntime;
 use crate::types::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
-    Tensor, TypedTensor,
+    Tensor, TensorScalar, TypedTensor,
 };
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
@@ -70,7 +70,7 @@ pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tenso
     }
 }
 
-fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
+fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     client: &ComputeClient<CubeclCudaRuntime>,
     typed: &TypedTensor<T>,
@@ -109,7 +109,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     )
 }
 
-fn download_typed<T: CubeElement + Clone + 'static>(
+fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
     rt: &CudaRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {

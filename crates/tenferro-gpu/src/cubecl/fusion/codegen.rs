@@ -26,11 +26,11 @@ where
     let item = T::as_type(&builder.scope);
     let mut input_arrays = Vec::with_capacity(plan.input_count());
     for _ in 0..plan.input_count() {
-        input_arrays.push(builder.input_array(item.clone()));
+        input_arrays.push(builder.input_array(item));
     }
     let mut output_arrays = Vec::with_capacity(plan.outputs().len());
     for _ in plan.outputs() {
-        output_arrays.push(builder.output_array(item.clone()));
+        output_arrays.push(builder.output_array(item));
     }
 
     let absolute_pos = ManagedVariable::Plain(Variable::builtin(
@@ -52,7 +52,7 @@ where
         Comparison::Lower,
     );
     let mut body = builder.scope.child();
-    let body = build_body::<T>(plan, &mut body, &input_arrays, &output_arrays, absolute_pos);
+    let body = build_body(plan, &mut body, &input_arrays, &output_arrays, absolute_pos);
     builder.scope.register(Branch::If(Box::new(If {
         cond: *in_bounds,
         scope: body,
@@ -66,16 +66,13 @@ where
     )
 }
 
-fn build_body<T>(
+fn build_body(
     plan: &ElementwiseFusionPlan,
     scope: &mut cubecl::prelude::Scope,
     input_arrays: &[ManagedVariable],
     output_arrays: &[ManagedVariable],
     absolute_pos: ManagedVariable,
-) -> cubecl::ir::Scope
-where
-    T: CubeElement + CubePrimitive + Clone,
-{
+) -> cubecl::ir::Scope {
     let mut values = Vec::with_capacity(plan.input_count() + plan.ops().len());
     for array in input_arrays {
         values.push(load_array_element(
@@ -90,7 +87,7 @@ where
             .iter()
             .map(|&value| values[value].clone())
             .collect::<Vec<_>>();
-        values.push(emit_op::<T>(scope, &inst.op(), &inputs));
+        values.push(emit_op(scope, &inst.op(), &inputs));
     }
     for (array, &value_id) in output_arrays.iter().zip(plan.outputs().iter()) {
         store_array_element(
@@ -103,14 +100,11 @@ where
     scope.clone()
 }
 
-fn emit_op<T>(
+fn emit_op(
     scope: &mut cubecl::prelude::Scope,
     op: &ElementwiseFusionOp,
     inputs: &[ManagedVariable],
-) -> ManagedVariable
-where
-    T: CubeElement + CubePrimitive + Clone,
-{
+) -> ManagedVariable {
     match op {
         ElementwiseFusionOp::Add => {
             emit_binary_arithmetic(scope, &inputs[0], &inputs[1], Arithmetic::Add)

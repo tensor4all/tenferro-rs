@@ -81,6 +81,10 @@ name = "storage_provider_cuda_progress"
 path = "tests/storage_provider_cuda_progress.rs"
 
 [[test]]
+name = "storage_provider_cuda"
+path = "tests/storage_provider_cuda.rs"
+
+[[test]]
 name = "storage_provider_webgpu_progress"
 path = "tests/storage_provider_webgpu_progress.rs"
 

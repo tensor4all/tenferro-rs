@@ -1169,7 +1169,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     );
     let interop_ptr = source_section(
         &interop_source,
-        "pub fn with_typed_device_ptr<T: 'static>(",
+        "pub fn with_typed_device_ptr<T: TensorScalar + 'static>(",
         "/// Upload host data into a dense GPU tensor",
     );
     assert_ordered_needles(
@@ -1185,7 +1185,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     let gemm_source = cubecl_source("gemm.rs");
     let gemm_ptr = source_section(
         &gemm_source,
-        "fn typed_device_ptr<T: 'static>(",
+        "fn typed_device_ptr<T: TensorScalar + 'static>(",
         "fn zero_alloc<T>",
     );
     assert_ordered_needles(
@@ -1237,7 +1237,7 @@ fn cubecl_host_download_paths_synchronize_before_reading() {
     let memory_source = cubecl_source("memory.rs");
     let typed_download = source_section(
         &memory_source,
-        "fn download_typed<T: CubeElement + Clone + 'static>(",
+        "fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(",
         "fn upload_bool(",
     );
     assert_ordered_needles(
@@ -1370,7 +1370,7 @@ fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
 
     let pad_shape = source_section(&mod_source, "fn pad_output_shape(", "fn index_vector_size(");
     assert!(
-        pad_shape.contains("i64::try_from(input_shape[axis])"),
+        pad_shape.contains("i64::try_from(input_dim_raw)"),
         "GPU pad output shape must not cast usize dimensions to i64 with `as`"
     );
     assert!(

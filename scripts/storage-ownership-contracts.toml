@@ -344,7 +344,7 @@ unit = "P7"
 gates = ["G1", "G3", "G5"]
 artifact = { id = "artifact-cuda-provider", kind = "hardware-test", path = "crates/tenferro-gpu/tests/storage_provider_cuda.rs" }
 command = { id = "cmd-cuda-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-gpu", "--features", "cuda", "--test", "storage_provider_cuda"], cwd = ".", path_args = [], artifact_id = "artifact-cuda-provider" }
-state = { kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }
+state = { kind = "active" }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
 [[obligations]]

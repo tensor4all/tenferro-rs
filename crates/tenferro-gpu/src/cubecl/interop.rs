@@ -127,7 +127,7 @@ pub fn cube_dim_1d() -> CubeDim {
 ///
 /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the shape
 /// product overflows, or [`crate::Error::BackendSource`] when allocation fails.
-pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
+pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -152,7 +152,7 @@ pub fn ensure_typed_tensor_resident<T: 'static>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_binding<T: CubeElement + Clone>(
+pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
@@ -164,7 +164,7 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
+pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
@@ -181,7 +181,7 @@ pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
 /// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
 /// [`crate::Error::Validation`] when the pointer address overflows `usize`.
-pub fn with_typed_device_ptr<T: 'static>(
+pub fn with_typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
@@ -212,7 +212,7 @@ pub fn upload_typed_tensor<T>(
     data: Vec<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let byte_len = T::as_bytes(&data).len();
     let handle = rt.client().create_from_slice(T::as_bytes(&data));

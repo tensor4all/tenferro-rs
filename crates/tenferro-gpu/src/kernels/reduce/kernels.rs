@@ -5,6 +5,10 @@
 
 //! CubeCL reduction kernel definitions.
 
+// CubeCL's kernel DSL uses operator tokens and typed launch indices that
+// Clippy cannot model as ordinary host Rust expressions.
+#![allow(clippy::assign_op_pattern, clippy::unnecessary_cast)]
+
 use cubecl::prelude::*;
 
 use crate::kernels::helpers::{

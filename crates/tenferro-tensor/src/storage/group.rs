@@ -192,13 +192,38 @@ pub struct AllocationGroup {
 }
 
 /// A shared descriptor child bounded by the group's shared borrow.
-pub(crate) struct GroupReadView<'a, T: TensorScalar, R: TensorRank> {
+pub(crate) struct GroupReadView<'a, T, R: TensorRank> {
     owner: NonNull<OwnedStorage>,
     descriptor: DescriptorRecord,
     _borrow: PhantomData<(&'a OwnedStorage, T, R)>,
 }
 
-impl<T: TensorScalar, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R> {
+// SAFETY: the view is a shared capability over an immutable root borrow;
+// `OwnedStorage` is `Sync`, and the descriptor contains only checked metadata.
+unsafe impl<'a, T: Send, R: TensorRank> Send for GroupReadView<'a, T, R> {}
+unsafe impl<'a, T: Sync, R: TensorRank> Sync for GroupReadView<'a, T, R> {}
+
+impl<'a, T, R: TensorRank> Clone for GroupReadView<'a, T, R> {
+    fn clone(&self) -> Self {
+        Self {
+            owner: self.owner,
+            descriptor: self.descriptor.clone(),
+            _borrow: PhantomData,
+        }
+    }
+}
+
+impl<'a, T, R: TensorRank> GroupReadView<'a, T, R> {
+    pub(crate) fn clone_dyn(&self) -> GroupReadView<'a, T, crate::DynRank> {
+        GroupReadView {
+            owner: self.owner,
+            descriptor: self.descriptor.clone(),
+            _borrow: PhantomData,
+        }
+    }
+}
+
+impl<T, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("GroupReadView")
@@ -221,6 +246,41 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
                 .as_ref()
                 .map_read(self.descriptor.span, self.descriptor.dtype)
         }
+    }
+
+    pub(crate) fn backend_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
+        // SAFETY: the owner pointer is bounded by the group borrow carried by
+        // this view, and the root buffer cannot be resized after import.
+        let buffer = unsafe { self.owner.as_ref().backend_buffer::<T>() }?;
+        Some(unsafe {
+            std::mem::transmute::<&crate::StorageBuffer<T>, &'a crate::StorageBuffer<T>>(buffer)
+        })
+    }
+
+    pub(crate) fn prepare_device_read_for_layout(
+        &self,
+        layout: &TensorLayout<R>,
+    ) -> Result<Box<dyn crate::PreparedDeviceAccess + 'a>, AccessError> {
+        let owner: crate::storage::root::StorageRef<'a> = unsafe { self.owner.as_ref().as_ref() };
+        let checked: CheckedRead<'a, R> = CheckedRead::new::<T>(
+            // SAFETY: `owner` is bounded by the group's shared borrow.
+            owner,
+            self.descriptor.span,
+            R::shape_from_vec(layout.shape().iter().copied().collect()).map_err(|error| {
+                AccessError::InvalidLayout {
+                    message: error.to_string(),
+                }
+            })?,
+            R::strides_from_vec(layout.strides().iter().copied().collect()).map_err(|error| {
+                AccessError::InvalidLayout {
+                    message: error.to_string(),
+                }
+            })?,
+            layout.offset(),
+        )?;
+        prepare_read::<T, R>(checked, AccessTarget::Device)
+            .map_err(|failure| failure.1)?
+            .into_device_state()
     }
 
     pub(crate) fn prepare_host_read(&self) -> Result<PreparedRead<'_, T, DynRank>, AccessError> {
@@ -249,13 +309,17 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
 /// A non-cloneable mutable descriptor child bounded by the group's exclusive
 /// borrow. The raw owner pointer is never exposed and is dereferenced only for
 /// a provider mapping whose retained byte envelope was proven by the group.
-pub(crate) struct GroupWriteView<'a, T: TensorScalar, R: TensorRank> {
+pub(crate) struct GroupWriteView<'a, T, R: TensorRank> {
     owner: NonNull<OwnedStorage>,
     descriptor: DescriptorRecord,
     _borrow: PhantomData<(&'a mut [u8], T, R)>,
 }
 
-impl<T: TensorScalar, R: TensorRank> std::fmt::Debug for GroupWriteView<'_, T, R> {
+// SAFETY: this is the exclusive capability for one owner borrow; moving it
+// transfers that exclusive borrow and cannot create a second access path.
+unsafe impl<'a, T: Send, R: TensorRank> Send for GroupWriteView<'a, T, R> {}
+
+impl<T, R: TensorRank> std::fmt::Debug for GroupWriteView<'_, T, R> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("GroupWriteView")
@@ -279,6 +343,51 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupWriteView<'a, T, R> {
                 .as_mut()
                 .map_write(self.descriptor.span, self.descriptor.dtype)
         }
+    }
+
+    pub(crate) fn backend_buffer(&self) -> Option<&crate::StorageBuffer<T>> {
+        // SAFETY: the owner pointer is bounded by the group's exclusive borrow;
+        // this shared inspection does not expose a mutable projection.
+        unsafe { self.owner.as_ref().backend_buffer::<T>() }
+    }
+
+    pub(crate) fn backend_buffer_mut(&mut self) -> Option<&'a mut crate::StorageBuffer<T>> {
+        // SAFETY: this child carries the group's exclusive borrow, so the
+        // mutable root projection cannot alias another owner capability.
+        let owner = unsafe { &mut *self.owner.as_ptr() };
+        let buffer = owner.backend_buffer_mut::<T>()?;
+        Some(unsafe {
+            std::mem::transmute::<&mut crate::StorageBuffer<T>, &'a mut crate::StorageBuffer<T>>(
+                buffer,
+            )
+        })
+    }
+
+    pub(crate) fn prepare_device_write_for_layout(
+        &mut self,
+        layout: &TensorLayout<R>,
+    ) -> Result<Box<dyn crate::PreparedDeviceAccess + 'a>, AccessError> {
+        let owner: crate::storage::root::StorageMut<'a> =
+            unsafe { (&mut *self.owner.as_ptr()).as_mut() };
+        let checked: CheckedWrite<'a, R> = CheckedWrite::new::<T>(
+            // SAFETY: this child carries the group's exclusive borrow.
+            owner,
+            self.descriptor.span,
+            R::shape_from_vec(layout.shape().iter().copied().collect()).map_err(|error| {
+                AccessError::InvalidLayout {
+                    message: error.to_string(),
+                }
+            })?,
+            R::strides_from_vec(layout.strides().iter().copied().collect()).map_err(|error| {
+                AccessError::InvalidLayout {
+                    message: error.to_string(),
+                }
+            })?,
+            layout.offset(),
+        )?;
+        prepare_write::<T, R>(checked, AccessTarget::Device)
+            .map_err(|failure| failure.1)?
+            .into_device_state()
     }
 
     pub(crate) fn prepare_host_write(
@@ -311,6 +420,11 @@ impl AllocationGroup {
     }
 
     /// Build one move-only group for detached runtime input ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::IndexOverflow`] when the input count cannot be
+    /// represented by a descriptor slot.
     pub fn from_tensors(
         tensors: Vec<crate::Tensor>,
     ) -> Result<(Self, Box<[DescriptorSlot]>), GroupError> {
@@ -325,6 +439,11 @@ impl AllocationGroup {
     }
 
     /// Borrow the tensors named by a detached input binding set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GroupError::DescriptorSlotOutOfBounds`] or
+    /// [`GroupError::DescriptorSlotVacant`] for an invalid binding.
     pub fn tensor_refs<'a>(
         &'a self,
         bindings: &[DescriptorSlot],
@@ -674,6 +793,40 @@ impl AllocationGroup {
         })
     }
 
+    pub(crate) fn view_raw<T: 'static, R: TensorRank>(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Result<GroupReadView<'_, T, R>, GroupError> {
+        let (_, descriptor) = self.resolve_descriptor(slot)?;
+        let owner = self
+            .allocations
+            .get(descriptor.allocation.index())
+            .ok_or(GroupError::AllocationSlotOutOfBounds {
+                slot: descriptor.allocation.index(),
+            })?
+            .as_ref()
+            .ok_or(GroupError::AllocationSlotVacant {
+                slot: descriptor.allocation.index(),
+            })?;
+        Ok(GroupReadView {
+            owner: NonNull::from(owner),
+            descriptor: descriptor.clone(),
+            _borrow: PhantomData,
+        })
+    }
+
+    pub(crate) fn prepare_device_read_for_layout<T: TensorScalar, R: TensorRank>(
+        &self,
+        slot: DescriptorSlot,
+        layout: &TensorLayout<R>,
+    ) -> Result<Box<dyn crate::PreparedDeviceAccess + '_>, AccessError> {
+        self.view_raw::<T, R>(slot)
+            .map_err(|error| AccessError::InvalidLayout {
+                message: error.to_string(),
+            })?
+            .prepare_device_read_for_layout(layout)
+    }
+
     pub(crate) fn host_buffer<T: 'static>(
         &self,
         slot: DescriptorSlot,
@@ -721,6 +874,41 @@ impl AllocationGroup {
             .first_mut()
             .and_then(|owner| owner.as_mut())
             .and_then(|owner| owner.backend_buffer_mut::<T>())
+    }
+
+    pub(crate) fn view_mut_raw<T: 'static, R: TensorRank>(
+        &mut self,
+        slot: DescriptorSlot,
+    ) -> Result<GroupWriteView<'_, T, R>, GroupError> {
+        let (_, descriptor) = self.resolve_descriptor(slot)?;
+        let descriptor = descriptor.clone();
+        let owner = self
+            .allocations
+            .get_mut(descriptor.allocation.index())
+            .ok_or(GroupError::AllocationSlotOutOfBounds {
+                slot: descriptor.allocation.index(),
+            })?
+            .as_mut()
+            .ok_or(GroupError::AllocationSlotVacant {
+                slot: descriptor.allocation.index(),
+            })?;
+        Ok(GroupWriteView {
+            owner: NonNull::from(&mut *owner),
+            descriptor: descriptor.clone(),
+            _borrow: PhantomData,
+        })
+    }
+
+    pub(crate) fn prepare_device_write_for_layout<T: TensorScalar, R: TensorRank>(
+        &mut self,
+        slot: DescriptorSlot,
+        layout: &TensorLayout<R>,
+    ) -> Result<Box<dyn crate::PreparedDeviceAccess + '_>, AccessError> {
+        self.view_mut_raw::<T, R>(slot)
+            .map_err(|error| AccessError::InvalidLayout {
+                message: error.to_string(),
+            })?
+            .prepare_device_write_for_layout(layout)
     }
 
     pub(crate) fn view_mut<T: TensorScalar, R: TensorRank>(

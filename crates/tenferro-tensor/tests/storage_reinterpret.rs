@@ -111,7 +111,7 @@ fn consuming_owner_failure_recovers_original() {
 }
 
 #[test]
-fn consuming_non_group_host_owner_is_rejected_without_retagging() {
+fn consuming_buffer_host_owner_reinterprets_without_retagging() {
     let tensor = TypedTensor::<Complex32>::from_buffer_col_major(
         vec![1],
         StorageBuffer::Host(vec![Complex32::new(1.0, 2.0)]),
@@ -122,10 +122,10 @@ fn consuming_non_group_host_owner_is_rejected_without_retagging() {
         },
     )
     .unwrap();
-    let failure = tensor.into_real().unwrap_err();
-    let original = failure.into_owner();
+    let real = tensor.into_real().unwrap();
 
-    assert_eq!(original.host_data().unwrap(), &[Complex32::new(1.0, 2.0)]);
+    assert_eq!(real.shape(), &[2, 1]);
+    assert_eq!(real.host_data().unwrap(), &[1.0, 2.0]);
 }
 
 #[test]

@@ -26,8 +26,8 @@ use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
-    CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
+    CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
+    TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 
 const OP: &str = "dot_general";
@@ -35,7 +35,7 @@ const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
 const DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES: usize = 64;
 type CutensorPlanCacheState = Arc<Mutex<CutensorContractionPlanCache>>;
 
-trait CutensorScalar: CubeElement + CubePrimitive + Clone + One + Zero {
+trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One + Zero {
     const DATA_TYPE: CudaDataType;
     const DTYPE: DType;
     const IS_COMPLEX: bool;
@@ -1200,7 +1200,7 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     })
 }
 
-fn typed_device_ptr<T: 'static>(
+fn typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
 ) -> crate::Result<*mut c_void> {

@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use num_complex::{Complex32, Complex64};
 use num_traits::One;
-use tenferro_tensor::{CacheStats, DType, TensorRank, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{
+    CacheStats, DType, TensorRank, TensorScalar, TypedTensorView, TypedTensorViewMut,
+};
 
 use super::dispatch::{
     ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
@@ -28,7 +30,7 @@ const DEFAULT_CUTENSOR_PERMUTATION_PLAN_CACHE_MAX_ENTRIES: usize = 64;
 type CutensorPermutationPlanCacheState = Arc<Mutex<CutensorPermutationPlanCache>>;
 
 pub(super) trait CutensorPermutationScalar:
-    CubeElement + CubePrimitive + Clone + One + Send + Sync + 'static
+    CubeElement + TensorScalar + CubePrimitive + Clone + One + Send + Sync + 'static
 {
     const DATA_TYPE: CudaDataType;
     const DTYPE: DType;
@@ -677,7 +679,7 @@ fn resolve_owned_operand<T, R>(
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand>
 where
-    T: 'static,
+    T: TensorScalar + 'static,
     R: TensorRank,
 {
     ensure_resident_on_runtime(rt, tensor, op)?;
@@ -693,7 +695,7 @@ fn resolve_view_operand<T, R>(
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand>
 where
-    T: 'static,
+    T: TensorScalar + 'static,
     R: TensorRank,
 {
     ensure_view_resident_on_runtime(rt, view, op)?;
@@ -706,7 +708,7 @@ fn typed_device_ptr<T, R>(
     op: &'static str,
 ) -> crate::Result<*mut c_void>
 where
-    T: 'static,
+    T: TensorScalar + 'static,
     R: TensorRank,
 {
     let prepared = prepared_tensor_access(tensor, op)?;
@@ -717,7 +719,7 @@ where
     cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }
 
-fn resolve_prepared_device_region<T: 'static>(
+fn resolve_prepared_device_region<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     prepared: CubeclPreparedAccess,
     offset: isize,

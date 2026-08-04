@@ -433,6 +433,8 @@ impl CutensorHandle {
         Ok(workspace_size)
     }
 
+    // cuTENSOR's C ABI mirrors this argument list; keep the FFI boundary explicit.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn contract(
         &self,
         plan: &Plan,
@@ -540,6 +542,8 @@ pub(crate) struct OperationDescriptor {
 }
 
 impl OperationDescriptor {
+    // The descriptor arguments map one-for-one to cuTENSOR's C descriptor API.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_contraction_with_ops(
         handle: &CutensorHandle,
         desc_a: &TensorDescriptor,
@@ -583,6 +587,8 @@ impl OperationDescriptor {
         })
     }
 
+    // The descriptor arguments map one-for-one to cuTENSOR's C descriptor API.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_permutation(
         handle: &CutensorHandle,
         desc_a: &TensorDescriptor,

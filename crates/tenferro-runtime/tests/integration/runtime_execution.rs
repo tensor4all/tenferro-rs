@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::CpuBackend;
@@ -32,9 +32,9 @@ use tenferro_runtime::{
     TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendSessionHost, BackendStorage, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
-    TensorRead, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TypedTensor,
 };
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -46,6 +46,12 @@ const ROUTE_HOST_CUDA0_FAMILY: &str = "tenferro-test.route-host-cuda0.v1";
 const ROUTE_HOST_CUDA1_FAMILY: &str = "tenferro-test.route-host-cuda1.v1";
 const ROUTE_CUDA0_HOST_FAMILY: &str = "tenferro-test.route-cuda0-host.v1";
 const ROUTE_CUDA1_HOST_FAMILY: &str = "tenferro-test.route-cuda1-host.v1";
+
+static NEXT_TEST_ALLOCATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_test_allocation_id() -> AllocationId {
+    AllocationId::from_backend_id(NEXT_TEST_ALLOCATION_ID.fetch_add(1, Ordering::Relaxed))
+}
 
 fn test_provider_device_identity(
     engine_id: &str,
@@ -416,6 +422,7 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
                 let buffer = TestDomainBuffer::<$scalar> {
                     values: Arc::new(Mutex::new(vec![<$scalar>::default(); len])),
                     domain: self.0,
+                    allocation: next_test_allocation_id(),
                 };
                 TypedTensor::from_buffer_col_major(
                     shape.to_vec(),
@@ -441,6 +448,7 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
 struct TestDomainBuffer<T> {
     values: Arc<Mutex<Vec<T>>>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
 impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendStorage<T> for TestDomainBuffer<T> {
@@ -454,6 +462,10 @@ impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendStorage<T> for T
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
         Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
@@ -689,6 +701,8 @@ impl TransferProvider for FaultyTransferProvider {
                 let len = Arc::new(AtomicUsize::new(2));
                 let buffer = StorageBuffer::Backend(Box::new(MutableLengthBuffer {
                     len: Arc::clone(&len),
+                    domain: AllocationDomainId::fresh(),
+                    allocation: next_test_allocation_id(),
                 }));
                 let tensor = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
@@ -703,6 +717,7 @@ impl TransferProvider for FaultyTransferProvider {
                 let buffer = StorageBuffer::Backend(Box::new(TestDomainBuffer::<f64> {
                     values: Arc::new(Mutex::new(vec![0.0; 2])),
                     domain,
+                    allocation: next_test_allocation_id(),
                 }));
                 Ok(TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
@@ -722,6 +737,8 @@ struct TestTransferFailure;
 #[derive(Debug)]
 struct MutableLengthBuffer {
     len: Arc<AtomicUsize>,
+    domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
 impl BackendStorage<f64> for MutableLengthBuffer {
@@ -731,6 +748,14 @@ impl BackendStorage<f64> for MutableLengthBuffer {
 
     fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -743,6 +768,7 @@ struct DropTrackedBuffer {
     len: usize,
     drops: Arc<AtomicUsize>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
     events: Option<Arc<Mutex<Vec<String>>>>,
 }
 
@@ -769,6 +795,10 @@ impl BackendStorage<f64> for DropTrackedBuffer {
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
         Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -955,6 +985,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             let buffer = StorageBuffer::Backend(Box::new(TestDomainBuffer::<f64> {
                 values: Arc::new(Mutex::new(vec![0.0; len])),
                 domain,
+                allocation: next_test_allocation_id(),
             }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
                 shape,
@@ -985,6 +1016,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 len,
                 drops,
                 domain,
+                allocation: next_test_allocation_id(),
                 events,
             }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(

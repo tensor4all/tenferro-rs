@@ -46,11 +46,15 @@ impl PreparedDeviceAccess for PreparedMarker {
     }
 }
 
+type PreparedRequest = (Vec<usize>, Vec<isize>, isize);
+type PreparedRequests = Arc<Mutex<Vec<PreparedRequest>>>;
+
 #[derive(Debug)]
 struct PreparedAllocation {
     extent: RootResourceExtent,
     prepares: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
+    requests: PreparedRequests,
 }
 
 unsafe impl BackendAllocation for PreparedAllocation {
@@ -78,11 +82,11 @@ unsafe impl BackendAllocation for PreparedAllocation {
         &self,
         request: DeviceAccessRequest<'_>,
     ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
-        assert_eq!(request.allocation_domain(), self.extent.key().domain());
-        assert_eq!(request.allocation_id(), self.extent.key().local());
-        assert_eq!(request.byte_len(), self.extent.byte_len());
-        assert_eq!(request.element_size(), 1);
-        assert_eq!(request.dtype(), Some(DType::Bool));
+        self.requests.lock().expect("prepared request lock").push((
+            request.shape().to_vec(),
+            request.strides().to_vec(),
+            request.offset(),
+        ));
         self.prepares.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(PreparedMarker {
             drops: Arc::clone(&self.drops),
@@ -691,10 +695,12 @@ fn device_preparation_retains_provider_state_until_checked_access_drops() {
     let extent = RootResourceExtent::try_new(key(26), 0, 2, 1).expect("prepared extent");
     let prepares = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
     let owner = import_unique_root(Box::new(PreparedAllocation {
         extent,
         prepares: Arc::clone(&prepares),
         drops: Arc::clone(&drops),
+        requests: Arc::clone(&requests),
     }))
     .expect("prepared root import");
     let checked = CheckedRead::<DynRank>::new::<bool>(
@@ -708,6 +714,10 @@ fn device_preparation_retains_provider_state_until_checked_access_drops() {
     let prepared = prepare_read::<bool, DynRank>(checked, AccessTarget::Device)
         .expect("provider prepared read");
     assert_eq!(prepares.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        requests.lock().expect("prepared request lock").as_slice(),
+        &[(vec![2], vec![1], 0)]
+    );
     assert_eq!(drops.load(Ordering::Relaxed), 0);
     drop(prepared);
     assert_eq!(drops.load(Ordering::Relaxed), 1);

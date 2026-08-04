@@ -2,6 +2,46 @@
 
 Date: 2026-08-04
 
+## Current P7 CUDA cutover candidate
+
+This section supersedes the earlier checkpoint statements below for the
+current P7 slice. P8 and all later phases remain deferred.
+
+- `TypedTensor<T, R>` now owns one `OwnedTensorGroup<R>` with a mandatory
+  descriptor slot; backend owners are moved into the allocation root and are
+  not retained in a parallel tensor field.
+- Device preparation uses the checked storage hierarchy exactly once. The
+  provider-prepared CUDA state retains one CubeCL handle plus binding metadata;
+  binding, array, or owner-scoped interop consumes that exact state without a
+  second handle clone or repeated root identity/range validation.
+- `DeviceAccessRequest` carries only metadata consumed by the root/provider
+  seam. The obsolete dtype and writable fields, duplicate raw group seam, and
+  optional descriptor-slot fallback are removed.
+- The P7 artifact is
+  `crates/tenferro-gpu/tests/storage_provider_cuda.rs`, registered as an
+  explicit Cargo test target. The exact command passed with four tests:
+  `cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda`.
+  Hardware-dependent cases remain guarded by `gpu_available()`.
+- Fresh checks passed: `cargo fmt --all -- --check`,
+  `cargo check --workspace --quiet`, tensor CI-parity clippy, CUDA GPU clippy,
+  `cargo test -p tenferro-tensor --lib` (258),
+  `cargo test -p tenferro-tensor --test storage_reinterpret` (11),
+  `cargo test -p tenferro-gpu --features cuda --lib` (86 passed, 116 ignored),
+  `cargo test -p tenferro-gpu --features cuda --test integration` (70),
+  `cargo test -p tenferro-ad --features cuda --quiet`
+  (396 passed, 1 ignored across the unit and trybuild targets),
+  `cargo test -p tenferro-runtime --test integration --quiet` (122),
+  `cargo check -p tenferro-linalg --features cuda --quiet`,
+  `cargo test -p tenferro-linalg --features cuda --test integration --quiet`
+  (129 passed, 18 ignored),
+  `python3 scripts/check-storage-ownership-contracts.py`, and
+  `python3 scripts/check-storage-design-docs.py`.
+- Candidate commit `ce0ec2a7ab118af932a4efdfa22d561e61b342aa` is clean. The
+  exact ownership runner passed all 20 active obligations and wrote
+  `/tmp/tenferro-storage-ownership-receipt-p7.json`; the checker accepted that
+  receipt with `terminal: false` because P8 and later deferred rows remain.
+  This is not a parent Issue #1555 closure claim.
+
 ## Scope and authority
 
 This checkpoint starts only the selected P7/P8 migration boundary after the

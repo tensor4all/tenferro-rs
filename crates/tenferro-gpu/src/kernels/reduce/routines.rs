@@ -17,6 +17,8 @@
 
 //! Shared reduction launch routines.
 
+#![allow(clippy::manual_is_multiple_of)]
+
 use cubecl::prelude::*;
 
 use crate::kernels::{CubeclKernelError, Result};

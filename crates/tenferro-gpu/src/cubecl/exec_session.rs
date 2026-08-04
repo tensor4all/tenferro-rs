@@ -37,7 +37,7 @@ impl CudaExecSession<'_> {
     #[doc(hidden)]
     pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         self.backend.tril_typed(input, k)
     }
@@ -49,7 +49,7 @@ impl CudaExecSession<'_> {
         config: &SliceConfig,
     ) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         self.backend.slice_typed(input, config)
     }
@@ -63,7 +63,7 @@ impl CudaExecSession<'_> {
     #[doc(hidden)]
     pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
-        T: CubeElement + CubePrimitive + Clone,
+        T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
         self.backend.triu_typed(input, k)
     }

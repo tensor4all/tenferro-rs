@@ -70,6 +70,41 @@ fn typed_tensor_storage_fields_are_accessor_based() {
 }
 
 #[test]
+fn typed_tensor_uses_one_typed_group_owner() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(crate_dir.join("src/types.rs"))
+        .expect("tenferro-tensor types source must be readable");
+    let typed_tensor = source
+        .split_once("pub struct TypedTensor<T, R: TensorRank = DynRank>")
+        .expect("TypedTensor definition must exist")
+        .1
+        .split_once("/// The sole owner handle")
+        .expect("TypedTensor definition must precede OwnedTensorGroup")
+        .0;
+
+    assert!(
+        !typed_tensor.contains("buffer: StorageBuffer<T>"),
+        "TypedTensor must not retain a second physical buffer owner"
+    );
+    assert!(
+        !typed_tensor.contains("group: Option<OwnedTensorGroup<R>>"),
+        "TypedTensor must always carry its typed owner group"
+    );
+    assert!(
+        typed_tensor.contains("group: OwnedTensorGroup<R>"),
+        "TypedTensor must own one typed allocation group"
+    );
+    assert!(
+        !source.contains("slot: Option<DescriptorSlot>"),
+        "the single-owner tensor group must always retain its descriptor slot"
+    );
+    assert!(
+        !source.contains("from_backend_buffer_untyped"),
+        "backend construction must not create an untyped group fallback"
+    );
+}
+
+#[test]
 fn tensor_views_do_not_expose_legacy_physical_slice_names() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(crate_dir.join("src/types.rs"))

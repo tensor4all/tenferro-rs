@@ -2,13 +2,13 @@ use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 
 use tenferro_tensor::{
-    AllocationDomainId, BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard,
-    Placement, StorageBuffer, Tensor, TensorValue, TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
+    HostWriteGuard, Placement, StorageBuffer, Tensor, TensorValue, TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -48,10 +48,17 @@ fn qualified_domain(ordinal: u64) -> EventDomainId {
     )
 }
 
+static NEXT_TEST_ALLOCATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_test_allocation_id() -> AllocationId {
+    AllocationId::from_backend_id(NEXT_TEST_ALLOCATION_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 #[derive(Debug)]
 struct ForeignProbeBuffer {
     values: Arc<Mutex<Vec<f64>>>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
 impl BackendStorage<f64> for ForeignProbeBuffer {
@@ -65,6 +72,10 @@ impl BackendStorage<f64> for ForeignProbeBuffer {
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
         Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn map_read(&self) -> Result<HostReadGuard<'_, f64>, HostAccessError> {
@@ -387,6 +398,7 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
     let buffer = StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
         values: Arc::new(Mutex::new(vec![1.0, 2.0, 3.0, 4.0])),
         domain,
+        allocation: next_test_allocation_id(),
     }));
     let base: Tensor =
         TypedTensor::<f64>::from_buffer_col_major(vec![4], buffer, Placement::default())?.into();

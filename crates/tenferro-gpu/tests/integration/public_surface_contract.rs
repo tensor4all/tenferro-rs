@@ -16,6 +16,53 @@ fn repo_file_if_exists(path: &str) -> Option<String> {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn cuda_prepared_access_has_one_provider_handle_and_no_dead_request_metadata() {
+    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    let prepared_start = dispatch
+        .find("pub(crate) struct CubeclPreparedAccess")
+        .expect("prepared access definition must exist");
+    let prepared_end = dispatch[prepared_start..]
+        .find("impl CubeclPreparedAccess")
+        .map(|offset| prepared_start + offset)
+        .expect("prepared access implementation must exist");
+    let prepared = &dispatch[prepared_start..prepared_end];
+    assert_eq!(
+        prepared
+            .matches("handle: cubecl_runtime::server::Handle")
+            .count(),
+        1,
+        "prepared CUDA state must retain one provider handle"
+    );
+    assert!(
+        !prepared.contains("binding: TensorBinding"),
+        "prepared CUDA state must not retain a second binding owner"
+    );
+
+    let group = repo_file("crates/tenferro-tensor/src/storage/group.rs");
+    assert!(
+        !group.contains("prepare_device_read_for_layout_raw")
+            && !group.contains("prepare_device_write_for_layout_raw")
+            && !group.contains("DeviceAccessRequest::new"),
+        "device preparation must use the single checked storage hierarchy"
+    );
+
+    let tensor_types = repo_file("crates/tenferro-tensor/src/types.rs");
+    let request_start = tensor_types
+        .find("pub struct DeviceAccessRequest")
+        .expect("device request definition must exist");
+    let request_end = tensor_types[request_start..]
+        .find("/// Typed failure returned")
+        .map(|offset| request_start + offset)
+        .expect("device request boundary must exist");
+    let request = &tensor_types[request_start..request_end];
+    assert!(
+        !request.contains("dtype:") && !request.contains("writable:"),
+        "device requests must carry only metadata consumed by the root/provider seam"
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     use tenferro_gpu::{
         cuda_runtime_engine_registration, CudaBackend, CudaDeviceError, CudaDeviceId, CudaRuntime,
@@ -26,6 +73,33 @@ fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
     let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
         cuda_runtime_engine_registration;
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_prepared_access_has_one_state_and_one_downcast_boundary() {
+    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    assert!(
+        !dispatch.contains("writable: bool"),
+        "prepared CUDA state must not retain a dead writable flag"
+    );
+    assert!(
+        !dispatch.contains("offset: isize") && !dispatch.contains("element_size: usize"),
+        "prepared CUDA state must not retain dead layout scalar fields"
+    );
+    assert_eq!(
+        dispatch
+            .matches("downcast::<CubeclPreparedAccess>()")
+            .count(),
+        1,
+        "CUDA dispatch must centralize prepared-state downcasting"
+    );
+    assert!(
+        !dispatch.contains("request.allocation_domain()")
+            && !dispatch.contains("request.allocation_id()")
+            && !dispatch.contains("request.byte_len()"),
+        "CUDA preparation must not repeat root identity validation"
+    );
 }
 
 fn feature_block(manifest: &str, name: &str) -> String {

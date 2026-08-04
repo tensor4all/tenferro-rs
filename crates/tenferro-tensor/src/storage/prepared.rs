@@ -230,6 +230,9 @@ impl<R: TensorRank> CheckedLayout<R> {
 pub(crate) struct CheckedDescriptor<R: TensorRank> {
     span: RootBoundSpan,
     layout: CheckedLayout<R>,
+    shape: R::Shape,
+    strides: R::Strides,
+    offset: isize,
     dtype: DType,
     element_size: usize,
 }
@@ -249,6 +252,18 @@ impl<R: TensorRank> CheckedDescriptor<R> {
 
     pub(crate) fn layout(&self) -> &CheckedLayout<R> {
         &self.layout
+    }
+
+    pub(crate) fn shape(&self) -> &[usize] {
+        self.shape.as_ref()
+    }
+
+    pub(crate) fn strides(&self) -> &[isize] {
+        self.strides.as_ref()
+    }
+
+    pub(crate) const fn offset(&self) -> isize {
+        self.offset
     }
 }
 
@@ -382,8 +397,8 @@ where
             })
             .collect::<Result<Box<[_]>, AccessError>>()?;
         CheckedLayout::Strided(CheckedStrided {
-            shape,
-            strides,
+            shape: shape.clone(),
+            strides: strides.clone(),
             carry,
             offset: layout.offset(),
             element_count,
@@ -395,6 +410,9 @@ where
         CheckedDescriptor {
             span,
             layout: checked_layout,
+            shape: shape.clone(),
+            strides: strides.clone(),
+            offset,
             dtype: T::dtype(),
             element_size,
         },
@@ -746,6 +764,15 @@ pub(crate) enum PreparedWrite<'a, T: TensorScalar, R: TensorRank> {
 }
 
 impl<'a, T: TensorScalar, R: TensorRank> PreparedRead<'a, T, R> {
+    pub(crate) fn into_device_state(
+        self,
+    ) -> Result<Box<dyn PreparedDeviceAccess + 'a>, AccessError> {
+        match self {
+            Self::Device(device) => Ok(device.provider_state),
+            Self::Host(_) => Err(AccessError::Unsupported { backend: "host" }),
+        }
+    }
+
     pub(crate) fn as_slice(&self) -> Option<&[T]> {
         match self {
             Self::Host(PreparedHostRead::Contiguous(access)) => Some(access.as_slice()),
@@ -762,6 +789,15 @@ impl<'a, T: TensorScalar, R: TensorRank> PreparedRead<'a, T, R> {
 }
 
 impl<'a, T: TensorScalar, R: TensorRank> PreparedWrite<'a, T, R> {
+    pub(crate) fn into_device_state(
+        self,
+    ) -> Result<Box<dyn PreparedDeviceAccess + 'a>, AccessError> {
+        match self {
+            Self::Device(device) => Ok(device.provider_state),
+            Self::Host(_) => Err(AccessError::Unsupported { backend: "host" }),
+        }
+    }
+
     pub(crate) fn as_slice_mut(&mut self) -> Option<&mut [T]> {
         match self {
             Self::Host(PreparedHostWrite::Contiguous(access)) => Some(access.as_slice_mut()),
@@ -799,26 +835,22 @@ fn device_access_error(error: DeviceAccessError) -> AccessError {
     }
 }
 
-fn device_request<R: TensorRank>(
+fn device_request<'a, R: TensorRank>(
     owner: RootResourceIdentity,
-    descriptor: &CheckedDescriptor<R>,
-    writable: bool,
-) -> DeviceAccessRequest<'static> {
+    descriptor: &'a CheckedDescriptor<R>,
+) -> DeviceAccessRequest<'a> {
     let key = owner.extent().key();
-    // The storage transition only admits the root identity and exact byte
-    // envelope. CUDA tensor/view bindings provide their checked layout through
-    // the typed preparation path; this private transition does not invent a
-    // second layout representation.
+    // The request owns no identity or access authority. Its layout metadata is
+    // copied into the provider transition so the provider sees the checked
+    // descriptor rather than an empty root fallback.
     DeviceAccessRequest::new(
         key.domain(),
         key.local(),
         descriptor.span.byte_len(),
         descriptor.element_size(),
-        Some(descriptor.dtype()),
-        &[],
-        &[],
-        0,
-        writable,
+        descriptor.shape(),
+        descriptor.strides(),
+        descriptor.offset(),
     )
 }
 
@@ -831,7 +863,7 @@ pub(crate) fn prepare_read<'a, T: TensorScalar, R: TensorRank>(
     }
     if target == AccessTarget::Device {
         let CheckedRead { owner, descriptor } = checked;
-        let request = device_request(owner.root_identity(), &descriptor, false);
+        let request = device_request(owner.root_identity(), &descriptor);
         let provider_state = match owner.prepare_device_access(request) {
             Ok(state) => state,
             Err(error) => {
@@ -883,7 +915,7 @@ pub(crate) fn prepare_write<'a, T: TensorScalar, R: TensorRank>(
     if target == AccessTarget::Device {
         let CheckedWrite { owner, descriptor } = checked;
         let descriptor_value = descriptor.descriptor.clone();
-        let request = device_request(owner.root_identity(), &descriptor_value, true);
+        let request = device_request(owner.root_identity(), &descriptor_value);
         let provider_state = match owner.prepare_device_access(request) {
             Ok(state) => state,
             Err(error) => {
