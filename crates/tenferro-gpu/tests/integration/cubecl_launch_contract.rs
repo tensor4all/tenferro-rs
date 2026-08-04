@@ -1196,6 +1196,19 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
 }
 
 #[test]
+fn cubecl_workspace_pointer_is_scoped_to_owner_borrow() {
+    let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn ptr(&self) -> *mut c_void"),
+        "workspace owners must not expose an unscoped raw pointer accessor"
+    );
+    assert!(
+        interop_source.contains("pub fn with_ptr<R>(&self, f: impl FnOnce(*mut c_void) -> R) -> R"),
+        "workspace pointers must be borrowed through a scoped closure"
+    );
+}
+
+#[test]
 fn cubecl_host_download_paths_synchronize_before_reading() {
     let memory_source = cubecl_source("memory.rs");
     let typed_download = source_section(
