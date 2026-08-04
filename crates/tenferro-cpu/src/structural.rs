@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 use strided_kernel::{
     col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
 };
@@ -202,7 +201,7 @@ where
         ));
     }
     if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
-        if Arc::ptr_eq(src_buffer, dst_buffer) {
+        if std::ptr::eq(src_buffer, dst_buffer) {
             return Err(crate::Error::invalid_argument(
                 op,
                 "configuration",
@@ -253,7 +252,7 @@ where
         ));
     }
     if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
-        if Arc::ptr_eq(src_buffer, dst_buffer) {
+        if std::ptr::eq(src_buffer, dst_buffer) {
             return Err(crate::Error::invalid_argument(
                 op,
                 "configuration",

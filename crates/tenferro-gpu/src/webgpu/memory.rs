@@ -2,7 +2,6 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
 use cubecl_wgpu::WgpuRuntime;
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
 
 use super::{
     ensure_resident_on_runtime, typed_from_webgpu, webgpu_handle_from_backend, WebGpuBuffer,
@@ -151,7 +150,7 @@ fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<T
     rt.record_upload(bytes.len());
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        StorageBuffer::Backend(Arc::new(buffer)),
+        StorageBuffer::Backend(Box::new(buffer)),
         super::webgpu_placement(rt),
     )
 }

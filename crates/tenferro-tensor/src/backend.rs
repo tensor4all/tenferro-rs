@@ -1511,14 +1511,12 @@ fn host_storage_identity<T>(data: &[T]) -> StorageIdentity {
     }
 }
 
-fn backend_storage_identity<T: 'static>(
-    buffer: &std::sync::Arc<dyn crate::BackendStorage<T>>,
-) -> StorageIdentity {
+fn backend_storage_identity<T: 'static>(buffer: &dyn crate::BackendStorage<T>) -> StorageIdentity {
     StorageIdentity::Backend {
         domain: buffer.allocation_domain(),
         allocation: buffer.allocation_id(),
         family: buffer.backend_family(),
-        object: std::sync::Arc::as_ptr(buffer) as *const () as usize,
+        object: buffer as *const dyn crate::BackendStorage<T> as *const () as usize,
     }
 }
 

@@ -220,7 +220,7 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
     let source = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let opaque = TypedTensor::from_buffer_col_major(
         vec![2, 2],
-        StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(17, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(17, 4))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: None,

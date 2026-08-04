@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use std::error::Error as StdError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 mod support;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::{EagerRuntime, EagerTensor};
@@ -135,7 +134,7 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<Complex64>::new_with_len(
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(
                 7, len,
             ))),
             Placement {

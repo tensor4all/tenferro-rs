@@ -73,7 +73,7 @@ impl BackendStorage<f64> for ForeignProbeBuffer {
         ))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, f64>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, f64>, HostAccessError> {
         let values = Arc::clone(&self.values);
         Ok(HostWriteGuard::new(self.len(), move |source| {
             values
@@ -384,7 +384,7 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
     let domain = AllocationDomainId::fresh();
-    let buffer = StorageBuffer::Backend(Arc::new(ForeignProbeBuffer {
+    let buffer = StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
         values: Arc::new(Mutex::new(vec![1.0, 2.0, 3.0, 4.0])),
         domain,
     }));

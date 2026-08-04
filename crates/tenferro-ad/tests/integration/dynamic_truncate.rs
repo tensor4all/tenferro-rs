@@ -1,6 +1,5 @@
 use crate::support;
 use std::error::Error as StdError;
-use std::sync::Arc;
 use tenferro_ad::TracedTensorAdExt;
 
 use support::{cpu_runtime, RunTraced};
@@ -33,7 +32,7 @@ fn backend_f64_scalar() -> Tensor {
     Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![],
-            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<f64>::new_with_len(11, 1))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(11, 1))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

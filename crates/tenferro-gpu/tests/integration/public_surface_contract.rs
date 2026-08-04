@@ -332,7 +332,7 @@ fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
 }
 
 #[test]
-fn cubecl_copy_into_rejects_aliased_backend_allocations() {
+fn cubecl_copy_into_checks_borrowed_backend_identity() {
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
     let copy_body = cubecl_mod
         .split_once("fn copy_view_to_view_typed")
@@ -343,8 +343,8 @@ fn cubecl_copy_into_rejects_aliased_backend_allocations() {
         .0;
 
     assert!(
-        copy_body.contains("Arc::ptr_eq(source_buffer, destination_buffer)"),
-        "CUDA copy_into must reject source and destination views backed by the same allocation"
+        copy_body.contains("std::ptr::eq(source_buffer, destination_buffer)"),
+        "CUDA copy_into must compare source and destination through borrowed backend identity"
     );
 }
 
@@ -420,8 +420,8 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
         .0;
     assert!(copy_helper.contains("ensure_view_resident_on_runtime"));
     assert!(copy_helper.contains("ensure_view_mut_resident_on_runtime"));
-    assert!(copy_helper.contains("Arc::ptr_eq(source_buffer, destination_buffer)"));
-    assert!(copy_helper.contains("compact source view covering its full allocation"));
+    assert!(copy_helper.contains("std::ptr::eq(source_buffer, destination_buffer)"));
+    assert!(copy_helper.contains("typed_view_binding(src, op)?"));
 }
 
 #[test]

@@ -457,7 +457,7 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            StorageBuffer::Backend(Arc::new(BackendStorageHandle::<Complex64>::new_with_len(
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(
                 7, len,
             ))),
             Placement {

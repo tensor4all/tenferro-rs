@@ -398,6 +398,14 @@ scatter-add. Because floating-point atomic addition does not define a stable
 inter-thread accumulation order, overlapping floating-point scatter updates are
 numerically nondeterministic within normal floating-point roundoff.
 
+## Backend Allocation Ownership
+
+`StorageBuffer::Backend` owns one provider allocation. Tensor views borrow that
+owner, and host writes require an exclusive mutable owner borrow; creating a
+view never clones an allocation handle. CUDA/WebGPU provider objects may retain
+their own runtime or resource state, but tensor-level ownership and aliasing
+must remain represented by Rust borrowing and the provider allocation identity.
+
 ## Device Transfer Policy
 
 tenferro follows the PyTorch convention: no implicit CPU/GPU transfer at tensor

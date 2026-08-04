@@ -428,7 +428,7 @@ where
     let destination_storage = dst
         .backend_buffer()
         .ok_or_else(|| Error::runtime_state(op, "expected a CUDA destination view"))?;
-    if std::sync::Arc::ptr_eq(source_storage, destination_storage) {
+    if std::ptr::eq(source_storage, destination_storage) {
         return Err(crate::Error::invalid_argument(
             op,
             "source/destination",
