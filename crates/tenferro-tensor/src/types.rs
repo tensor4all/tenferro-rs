@@ -394,6 +394,7 @@ impl Default for Placement {
 pub struct BackendStorageHandle<T> {
     id: u64,
     len: usize,
+    allocation_domain: AllocationDomainId,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -494,6 +495,107 @@ pub enum HostAccessError {
     /// The source did not cover the full write-only mapping.
     #[error("host write length mismatch: expected {expected}, got {actual}")]
     LengthMismatch { expected: usize, actual: usize },
+}
+
+/// Metadata sealed at the tensor/root boundary before a provider launch.
+///
+/// Providers receive this request exactly once for a prepared access. Binding
+/// code consumes the resulting opaque state and does not receive replacement
+/// storage, ranges, or raw pointers.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceAccessRequest<'a> {
+    allocation_domain: AllocationDomainId,
+    allocation_id: AllocationId,
+    byte_len: usize,
+    element_size: usize,
+    dtype: Option<DType>,
+    shape: &'a [usize],
+    strides: &'a [isize],
+    offset: isize,
+    writable: bool,
+}
+
+impl<'a> DeviceAccessRequest<'a> {
+    pub(crate) fn new(
+        allocation_domain: AllocationDomainId,
+        allocation_id: AllocationId,
+        byte_len: usize,
+        element_size: usize,
+        dtype: Option<DType>,
+        shape: &'a [usize],
+        strides: &'a [isize],
+        offset: isize,
+        writable: bool,
+    ) -> Self {
+        Self {
+            allocation_domain,
+            allocation_id,
+            byte_len,
+            element_size,
+            dtype,
+            shape,
+            strides,
+            offset,
+            writable,
+        }
+    }
+
+    pub fn allocation_domain(&self) -> AllocationDomainId {
+        self.allocation_domain
+    }
+
+    pub fn allocation_id(&self) -> AllocationId {
+        self.allocation_id
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.byte_len
+    }
+
+    pub fn element_size(&self) -> usize {
+        self.element_size
+    }
+
+    pub fn dtype(&self) -> Option<DType> {
+        self.dtype
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        self.shape
+    }
+
+    pub fn strides(&self) -> &[isize] {
+        self.strides
+    }
+
+    pub fn offset(&self) -> isize {
+        self.offset
+    }
+
+    pub fn writable(&self) -> bool {
+        self.writable
+    }
+}
+
+/// Typed failure returned while preparing a provider-native device access.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DeviceAccessError {
+    #[error("backend `{backend}` does not support prepared device access")]
+    Unsupported { backend: &'static str },
+    #[error("prepared device access request is invalid: {message}")]
+    InvalidRequest { message: String },
+    #[error("provider device preparation failed: {message}")]
+    ProviderFailure { message: String },
+}
+
+/// Opaque provider-prepared state retained for one device binding.
+#[doc(hidden)]
+pub trait PreparedDeviceAccess: Debug {
+    fn as_any(&self) -> &dyn Any;
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 trait ReadGuardAccess<T> {
@@ -742,6 +844,10 @@ impl<T> BackendStorageHandle<T> {
         Self {
             id,
             len,
+            // Synthetic opaque handles are test/adapter allocations. Give
+            // each one an explicit domain so root import never fabricates
+            // identity from a missing provider field.
+            allocation_domain: AllocationDomainId::fresh(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -785,6 +891,20 @@ pub trait BackendStorage<T>: Debug + Send + Sync + 'static {
         None
     }
 
+    /// Prepare one provider-native device access from the root-owned buffer.
+    ///
+    /// The returned state is consumed by the provider binding path. Providers
+    /// that do not expose device launches return [`DeviceAccessError::Unsupported`].
+    #[doc(hidden)]
+    fn prepare_device_access(
+        &self,
+        _request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        Err(DeviceAccessError::Unsupported {
+            backend: self.backend_family(),
+        })
+    }
+
     /// Map the allocation for closure-scoped host reads.
     ///
     /// # Errors
@@ -823,6 +943,14 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for BackendStorageHandle<T> {
 
     fn len(&self) -> usize {
         self.len
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.allocation_domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(AllocationId::from_backend_id(self.id))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -926,7 +1054,7 @@ pub struct TypedTensor<T, R: TensorRank = DynRank> {
 /// provider root; the descriptor slot carries only the logical view metadata.
 struct OwnedTensorGroup<R: TensorRank> {
     group: AllocationGroup,
-    slot: DescriptorSlot,
+    slot: Option<DescriptorSlot>,
     _rank: PhantomData<R>,
 }
 
@@ -945,30 +1073,80 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
             .map_err(|error| group_error("TypedTensor::from_host_vec", error))?;
         Ok(Self {
             group,
-            slot,
+            slot: Some(slot),
+            _rank: PhantomData,
+        })
+    }
+
+    fn from_backend_buffer_untyped<T: Send + Sync + 'static>(
+        buffer: StorageBuffer<T>,
+    ) -> crate::Result<Self> {
+        let group = AllocationGroup::from_backend_root(buffer)
+            .map_err(|error| group_error("TypedTensor::from_backend_buffer", error))?;
+        Ok(Self {
+            group,
+            slot: None,
             _rank: PhantomData,
         })
     }
 
     fn view<T: TensorScalar>(&self) -> crate::Result<GroupReadView<'_, T, R>> {
+        let slot = self.slot.ok_or_else(|| {
+            crate::Error::runtime_state(
+                "TypedTensor::group_view",
+                "untyped backend storage has no typed descriptor",
+            )
+        })?;
         self.group
-            .view(self.slot)
+            .view(slot)
             .map_err(|error| group_error("TypedTensor::group_view", error))
     }
 
     fn view_mut<T: TensorScalar>(&mut self) -> crate::Result<GroupWriteView<'_, T, R>> {
+        let slot = self.slot.ok_or_else(|| {
+            crate::Error::runtime_state(
+                "TypedTensor::group_view_mut",
+                "untyped backend storage has no typed descriptor",
+            )
+        })?;
         self.group
-            .view_mut(self.slot)
+            .view_mut(slot)
             .map_err(|error| group_error("TypedTensor::group_view_mut", error))
     }
 
     fn host_buffer<T: 'static>(&self) -> Option<&StorageBuffer<T>> {
-        self.group.host_buffer::<T>(self.slot)
+        self.slot.and_then(|slot| self.group.host_buffer::<T>(slot))
+    }
+
+    fn backend_buffer<T: 'static>(&self) -> Option<&StorageBuffer<T>> {
+        self.slot
+            .and_then(|slot| self.group.backend_buffer::<T>(slot))
+            .or_else(|| self.group.backend_root_buffer::<T>())
+    }
+
+    fn backend_buffer_mut<T: 'static>(&mut self) -> Option<&mut StorageBuffer<T>> {
+        if let Some(slot) = self.slot {
+            self.group.backend_buffer_mut::<T>(slot)
+        } else {
+            self.group.backend_root_buffer_mut::<T>()
+        }
+    }
+
+    fn buffer_len<T: 'static>(&self) -> Option<usize> {
+        self.host_buffer::<T>()
+            .or_else(|| self.backend_buffer::<T>())
+            .map(StorageBuffer::len)
     }
 
     fn into_host_vec<T: TensorScalar>(self) -> crate::Result<Vec<T>> {
+        let slot = self.slot.ok_or_else(|| {
+            crate::Error::runtime_state(
+                "TypedTensor::into_vec_col_major",
+                "untyped backend storage cannot be exported as host Vec",
+            )
+        })?;
         self.group
-            .into_host_vec::<T>(self.slot)
+            .into_host_vec::<T>(slot)
             .map_err(|error| crate::Error::runtime_state("TypedTensor::into_vec_col_major", error))
     }
 
@@ -984,16 +1162,29 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
             slot,
             _rank: _,
         } = self;
+        let Some(slot) = slot else {
+            return Err((
+                OwnedTensorGroup {
+                    group,
+                    slot: None,
+                    _rank: PhantomData,
+                },
+                crate::Error::runtime_state(
+                    "TypedTensor::reinterpret",
+                    "untyped backend storage cannot be reinterpreted",
+                ),
+            ));
+        };
         match group.reinterpret_descriptor::<T, U>(slot, shape, strides, offset) {
             Ok(group) => Ok(OwnedTensorGroup {
                 group,
-                slot,
+                slot: Some(slot),
                 _rank: PhantomData,
             }),
             Err((group, error)) => Err((
                 OwnedTensorGroup {
                     group,
-                    slot,
+                    slot: Some(slot),
                     _rank: PhantomData,
                 },
                 group_error("TypedTensor::reinterpret", error),
@@ -1422,6 +1613,21 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             TensorStorageRef::Host(_) => None,
             TensorStorageRef::Backend(buffer) => Some(*buffer),
         }
+    }
+
+    /// Prepare this backend view for one provider-native read binding.
+    #[doc(hidden)]
+    pub fn prepare_device_read(
+        &self,
+        op: &'static str,
+    ) -> crate::Result<Box<dyn PreparedDeviceAccess + '_>>
+    where
+        T: 'static,
+    {
+        let buffer = self
+            .backend_buffer()
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor view"))?;
+        prepare_backend_access(buffer, &self.layout, false, op)
     }
 
     /// Compute the physical element offset for a logical index.
@@ -2231,6 +2437,21 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             TensorStorageRefMut::Host(_) => None,
             TensorStorageRefMut::Backend(buffer) => Some(&**buffer),
         }
+    }
+
+    /// Prepare this backend view for one provider-native write binding.
+    #[doc(hidden)]
+    pub fn prepare_device_write(
+        &self,
+        op: &'static str,
+    ) -> crate::Result<Box<dyn PreparedDeviceAccess + '_>>
+    where
+        T: 'static,
+    {
+        let buffer = self
+            .backend_buffer()
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor view"))?;
+        prepare_backend_access(buffer, &self.layout, true, op)
     }
 
     /// Compute the physical element offset for a logical index.
@@ -3746,6 +3967,38 @@ fn tensor_buffer_len(tensor: &Tensor) -> usize {
     }
 }
 
+fn prepare_backend_access<'a, T: 'static, R: TensorRank>(
+    buffer: &'a dyn BackendStorage<T>,
+    layout: &'a TensorLayout<R>,
+    writable: bool,
+    op: &'static str,
+) -> crate::Result<Box<dyn PreparedDeviceAccess + 'a>> {
+    let domain = buffer.allocation_domain().ok_or_else(|| {
+        crate::Error::runtime_state(op, "backend buffer is missing an allocation domain")
+    })?;
+    let allocation_id = buffer.allocation_id().ok_or_else(|| {
+        crate::Error::runtime_state(op, "backend buffer is missing an allocation identity")
+    })?;
+    let byte_len = buffer
+        .len()
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    let request = DeviceAccessRequest::new(
+        domain,
+        allocation_id,
+        byte_len,
+        size_of::<T>(),
+        None,
+        layout.shape(),
+        layout.strides(),
+        layout.offset(),
+        writable,
+    );
+    buffer
+        .prepare_device_access(request)
+        .map_err(|error| crate::Error::runtime_state(op, error.to_string()))
+}
+
 fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
     match tensor {
         Tensor::F32(tensor) => TensorView::F32(typed_view_with_layout(tensor, layout)),
@@ -3762,8 +4015,12 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     layout: TensorLayout<DynRank>,
 ) -> TypedTensorView<'_, T> {
-    let buffer = if tensor.group.is_some() {
-        TensorStorageRef::Host(tensor.group_host_slice())
+    let buffer = if let Some(group) = &tensor.group {
+        if let Some(StorageBuffer::Backend(buffer)) = group.backend_buffer::<T>() {
+            TensorStorageRef::Backend(buffer.as_ref())
+        } else {
+            TensorStorageRef::Host(tensor.group_host_slice())
+        }
     } else {
         match &tensor.buffer {
             StorageBuffer::Host(data) => TensorStorageRef::Host(data),
@@ -5349,7 +5606,7 @@ fn try_typed_tensor_ones<T: TensorScalar + Clone + One + Zero, R: TensorRank>(
     })
 }
 
-fn typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
+fn typed_tensor_from_buffer_col_major<T: Send + Sync + 'static, R: TensorRank>(
     shape: impl Into<R::Shape>,
     buffer: StorageBuffer<T>,
     placement: Placement,
@@ -5357,7 +5614,7 @@ fn typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
     try_typed_tensor_from_buffer_col_major(shape, buffer, placement)
 }
 
-fn try_typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
+fn try_typed_tensor_from_buffer_col_major<T: Send + Sync + 'static, R: TensorRank>(
     shape: impl Into<R::Shape>,
     buffer: StorageBuffer<T>,
     placement: Placement,
@@ -5365,12 +5622,24 @@ fn try_typed_tensor_from_buffer_col_major<T: 'static, R: TensorRank>(
     let layout = try_compact_layout(shape, "from_buffer_col_major")?;
     let len = buffer.len();
     try_checked_shape_len(layout.shape(), len, "from_buffer_col_major")?;
-    Ok(TypedTensor {
-        buffer,
-        group: None,
-        layout,
-        placement,
-    })
+    match buffer {
+        StorageBuffer::Host(data) => Ok(TypedTensor {
+            buffer: StorageBuffer::Host(data),
+            group: None,
+            layout,
+            placement,
+        }),
+        StorageBuffer::Backend(buffer) => {
+            let group =
+                OwnedTensorGroup::from_backend_buffer_untyped(StorageBuffer::Backend(buffer))?;
+            Ok(TypedTensor {
+                buffer: StorageBuffer::Host(Vec::new()),
+                group: Some(group),
+                layout,
+                placement,
+            })
+        }
+    }
 }
 
 impl<T: TensorScalar + Zero, R: TensorRank> TypedTensor<T, R> {
@@ -5453,7 +5722,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         placement: Placement,
     ) -> crate::Result<Self>
     where
-        T: 'static,
+        T: Send + Sync + 'static,
     {
         typed_tensor_from_buffer_col_major(shape, buffer, placement)
     }
@@ -5594,14 +5863,21 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             if let Some(buffer) = group.host_buffer::<T>() {
                 return buffer;
             }
+            if let Some(buffer) = group.backend_buffer::<T>() {
+                return buffer;
+            }
         }
         &self.buffer
     }
 
     /// Return the opaque backend buffer for backend-owned tensors.
     #[doc(hidden)]
-    pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>> {
-        match &self.buffer {
+    pub fn backend_buffer(&self) -> Option<&dyn BackendStorage<T>>
+    where
+        T: 'static,
+    {
+        let buffer = self.group.as_ref()?.backend_buffer::<T>()?;
+        match buffer {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
         }
@@ -5609,22 +5885,55 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Return the mutable backend buffer for an exclusive owner borrow.
     #[doc(hidden)]
-    pub fn backend_buffer_mut(&mut self) -> Option<&mut dyn BackendStorage<T>> {
-        match &mut self.buffer {
+    pub fn backend_buffer_mut(&mut self) -> Option<&mut dyn BackendStorage<T>>
+    where
+        T: 'static,
+    {
+        let buffer = self.group.as_mut()?.backend_buffer_mut::<T>()?;
+        match buffer {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => Some(buffer.as_mut()),
         }
+    }
+
+    /// Prepare this backend tensor for one provider-native read binding.
+    #[doc(hidden)]
+    pub fn prepare_device_read(
+        &self,
+        op: &'static str,
+    ) -> crate::Result<Box<dyn PreparedDeviceAccess + '_>>
+    where
+        T: 'static,
+    {
+        let buffer = self
+            .backend_buffer()
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor"))?;
+        prepare_backend_access(buffer, &self.layout, false, op)
+    }
+
+    /// Prepare this backend tensor for one provider-native write binding.
+    #[doc(hidden)]
+    pub fn prepare_device_write(
+        &mut self,
+        op: &'static str,
+    ) -> crate::Result<Box<dyn PreparedDeviceAccess + '_>>
+    where
+        T: 'static,
+    {
+        let buffer = self
+            .backend_buffer()
+            .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor"))?;
+        prepare_backend_access(buffer, &self.layout, true, op)
     }
 
     pub(crate) fn buffer_len(&self) -> usize
     where
         T: 'static,
     {
-        if self.group.is_some() {
-            self.n_elements()
-        } else {
-            self.buffer.len()
-        }
+        self.group
+            .as_ref()
+            .and_then(|group| group.buffer_len::<T>())
+            .unwrap_or_else(|| self.buffer.len())
     }
 
     /// Return the shared-allocation domain carried by the backend buffer.
@@ -5642,7 +5951,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match &self.buffer {
+        match self
+            .group
+            .as_ref()
+            .and_then(|group| group.backend_buffer::<T>())
+            .unwrap_or(&self.buffer)
+        {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => buffer.allocation_domain(),
         }
@@ -5663,7 +5977,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match &self.buffer {
+        match self
+            .group
+            .as_ref()
+            .and_then(|group| group.backend_buffer::<T>())
+            .unwrap_or(&self.buffer)
+        {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => buffer.allocation_id(),
         }
@@ -5736,8 +6055,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let buffer = if self.group.is_some() {
-            TensorStorageRef::Host(self.group_host_slice())
+        let buffer = if let Some(group) = &self.group {
+            if let Some(StorageBuffer::Backend(buffer)) = group.backend_buffer::<T>() {
+                TensorStorageRef::Backend(buffer.as_ref())
+            } else {
+                TensorStorageRef::Host(self.group_host_slice())
+            }
         } else {
             match &self.buffer {
                 StorageBuffer::Host(data) => TensorStorageRef::Host(data),
@@ -5768,7 +6091,21 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let layout = self.layout.clone();
         let placement = self.placement.clone();
-        let buffer = if self.group.is_some() {
+        let buffer = if self
+            .group
+            .as_ref()
+            .and_then(|group| group.backend_buffer::<T>())
+            .is_some()
+        {
+            let group = self.group.as_mut().expect("backend group checked above");
+            let StorageBuffer::Backend(buffer) = group
+                .backend_buffer_mut::<T>()
+                .expect("backend group checked above")
+            else {
+                unreachable!("backend buffer changed while tensor was exclusively borrowed")
+            };
+            TensorStorageRefMut::Backend(buffer.as_mut())
+        } else if self.group.is_some() {
             TensorStorageRefMut::Host(self.group_host_slice_mut())
         } else {
             match &mut self.buffer {
@@ -5822,7 +6159,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let op = "TypedTensor::backend_region_view";
-        let StorageBuffer::Backend(buffer) = &self.buffer else {
+        let Some(StorageBuffer::Backend(buffer)) = self
+            .group
+            .as_ref()
+            .and_then(|group| group.backend_buffer::<T>())
+        else {
             return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; host tensors use \
@@ -5885,7 +6226,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: 'static,
     {
         let op = "TypedTensor::backend_region_view_mut";
-        let StorageBuffer::Backend(buffer) = &mut self.buffer else {
+        let Some(StorageBuffer::Backend(buffer)) = self
+            .group
+            .as_mut()
+            .and_then(|group| group.backend_buffer_mut::<T>())
+        else {
             return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; mutable host regions use \
@@ -6012,6 +6357,12 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let shape = self.shape().to_vec();
         if let Some(group) = self.group {
+            if group.backend_buffer::<T>().is_some() {
+                return Err(crate::Error::runtime_state(
+                    "into_vec_col_major",
+                    "backend buffers cannot be exported as host Vec",
+                ));
+            }
             return Ok((shape, group.into_host_vec::<T>()?));
         }
         match self.buffer {
@@ -6028,6 +6379,12 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// handoff; callers that need the shape should use [`Self::into_vec_col_major`].
     pub fn into_host_vec(self) -> crate::Result<Vec<T>> {
         if let Some(group) = self.group {
+            if group.backend_buffer::<T>().is_some() {
+                return Err(crate::Error::runtime_state(
+                    "into_host_vec",
+                    "backend buffers cannot be exported as host Vec",
+                ));
+            }
             return group.into_host_vec::<T>();
         }
         match self.buffer {

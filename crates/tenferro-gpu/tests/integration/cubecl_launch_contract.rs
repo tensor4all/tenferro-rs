@@ -1144,10 +1144,10 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
         download_source,
         &[
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
-            "let buffer = dispatch::cubecl_buffer(tensor, op)?;",
+            "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
             "if tensor.n_elements() == 0",
             "rt.synchronize()?;",
-            ".read_one(buffer.handle().clone())",
+            ".read_one(prepared.into_handle())",
         ],
     );
 }
@@ -1177,8 +1177,8 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         interop_ptr,
         &[
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
-            "dispatch::cubecl_buffer(tensor, op)?;",
-            ".get_resource(buffer.handle().clone())",
+            "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
+            ".get_resource(prepared.into_handle())",
         ],
     );
 
@@ -1193,8 +1193,9 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         gemm_ptr,
         &[
             "ensure_resident_on_runtime(rt, tensor, OP)?;",
-            "cubecl_buffer(tensor, OP)?;",
-            ".get_resource(buffer.handle().clone())",
+            "let prepared = prepared_tensor_access(tensor, OP)?;",
+            "let handle = prepared.into_handle();",
+            ".get_resource(handle)",
         ],
     );
 }

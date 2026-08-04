@@ -2,7 +2,10 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{AllocationDomainId, AllocationId, BackendId, DType, DynRank, TensorScalar};
+use crate::{
+    AllocationDomainId, AllocationId, BackendId, DType, DeviceAccessError, DeviceAccessRequest,
+    DynRank, PreparedDeviceAccess, TensorScalar,
+};
 
 use super::super::import_unique_root;
 use super::super::prepared::{
@@ -20,6 +23,71 @@ struct ByteAllocation {
     bytes: Mutex<Vec<u8>>,
     reads: Arc<AtomicUsize>,
     writes: Arc<AtomicUsize>,
+}
+
+#[derive(Debug)]
+struct PreparedMarker {
+    drops: Arc<AtomicUsize>,
+}
+
+impl Drop for PreparedMarker {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl PreparedDeviceAccess for PreparedMarker {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct PreparedAllocation {
+    extent: RootResourceExtent,
+    prepares: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+}
+
+unsafe impl BackendAllocation for PreparedAllocation {
+    fn root_extent(&self) -> RootResourceExtent {
+        self.extent
+    }
+
+    fn provider_kind(&self) -> ProviderKind {
+        BackendId::Cuda
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::none()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        assert_eq!(request.allocation_domain(), self.extent.key().domain());
+        assert_eq!(request.allocation_id(), self.extent.key().local());
+        assert_eq!(request.byte_len(), self.extent.byte_len());
+        assert_eq!(request.element_size(), 1);
+        assert_eq!(request.dtype(), Some(DType::Bool));
+        self.prepares.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(PreparedMarker {
+            drops: Arc::clone(&self.drops),
+        }))
+    }
 }
 
 #[derive(Debug)]
@@ -597,11 +665,11 @@ fn device_preparation_keeps_host_access_unavailable() {
         0,
     )
     .expect("device checked read");
-    let device: PreparedRead<'_, bool, DynRank> =
-        prepare_read(checked, AccessTarget::Device).expect("device prepared read");
-    assert!(device.as_slice().is_none());
-    assert!(device.iter_strided().is_none());
-    drop(device);
+    let error = match prepare_read::<bool, DynRank>(checked, AccessTarget::Device) {
+        Err(error) => error,
+        Ok(_) => panic!("host root has no device provider state"),
+    };
+    assert!(matches!(error.1, AccessError::Unsupported { .. }));
 
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
@@ -611,10 +679,38 @@ fn device_preparation_keeps_host_access_unavailable() {
         0,
     )
     .expect("device checked write");
-    let mut device: PreparedWrite<'_, bool, DynRank> =
-        prepare_write(checked, AccessTarget::Device).expect("device prepared write");
-    assert!(device.as_slice_mut().is_none());
-    assert!(device.iter_strided_mut().is_none());
+    let error = match prepare_write::<bool, DynRank>(checked, AccessTarget::Device) {
+        Err(error) => error,
+        Ok(_) => panic!("host root has no device provider state"),
+    };
+    assert!(matches!(error.1, AccessError::Unsupported { .. }));
+}
+
+#[test]
+fn device_preparation_retains_provider_state_until_checked_access_drops() {
+    let extent = RootResourceExtent::try_new(key(26), 0, 2, 1).expect("prepared extent");
+    let prepares = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let owner = import_unique_root(Box::new(PreparedAllocation {
+        extent,
+        prepares: Arc::clone(&prepares),
+        drops: Arc::clone(&drops),
+    }))
+    .expect("prepared root import");
+    let checked = CheckedRead::<DynRank>::new::<bool>(
+        owner.as_ref(),
+        owner.as_ref().span(),
+        vec![2].into(),
+        vec![1].into(),
+        0,
+    )
+    .expect("prepared checked read");
+    let prepared = prepare_read::<bool, DynRank>(checked, AccessTarget::Device)
+        .expect("provider prepared read");
+    assert_eq!(prepares.load(Ordering::Relaxed), 1);
+    assert_eq!(drops.load(Ordering::Relaxed), 0);
+    drop(prepared);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
 #[test]

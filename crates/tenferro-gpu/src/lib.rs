@@ -137,10 +137,6 @@ impl CubeclBuffer {
         &self.handle
     }
 
-    pub(crate) fn byte_len(&self) -> usize {
-        self.byte_len
-    }
-
     pub(crate) fn element_len<T: 'static>(&self) -> usize {
         let element_size = std::mem::size_of::<T>();
         debug_assert!(element_size != 0 && self.byte_len.is_multiple_of(element_size));
@@ -172,6 +168,15 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer {
 
     fn allocation_id(&self) -> Option<AllocationId> {
         Some(self.allocation_id)
+    }
+
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> std::result::Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        Ok(Box::new(crate::cubecl::dispatch::prepare_cubecl_access(
+            self, request,
+        )?))
     }
 
     fn as_any(&self) -> &dyn Any {

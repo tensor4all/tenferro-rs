@@ -9,8 +9,8 @@ use tenferro_runtime::{
     Runtime, StorageClass, TracedTensor,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendStorage, DeviceId, StorageBuffer, Tensor, TensorElementwise,
-    TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DeviceId, StorageBuffer, Tensor,
+    TensorElementwise, TypedTensor,
 };
 
 use super::*;
@@ -79,7 +79,8 @@ fn unavailable_selection_preserves_requested_id_and_discovered_records() {
 #[derive(Debug)]
 struct TestCudaBuffer {
     family: &'static str,
-    domain: Option<AllocationDomainId>,
+    domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
 #[derive(Debug)]
@@ -151,7 +152,11 @@ impl BackendStorage<f32> for TestCudaBuffer {
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
-        self.domain
+        Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -164,7 +169,8 @@ fn input(family: &'static str, ordinal: usize) -> Tensor {
         vec![1],
         StorageBuffer::Backend(Box::new(TestCudaBuffer {
             family,
-            domain: None,
+            domain: AllocationDomainId::fresh(),
+            allocation: AllocationId::from_backend_id(ordinal as u64 + 1),
         })),
         Placement {
             memory_kind: MemoryKind::Device,
@@ -228,7 +234,8 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
         vec![1],
         StorageBuffer::Backend(Box::new(TestCudaBuffer {
             family: "cubecl",
-            domain: Some(runtime.allocation_domain_id()),
+            domain: runtime.allocation_domain_id(),
+            allocation: AllocationId::from_backend_id(999),
         })),
         Placement {
             memory_kind: MemoryKind::Device,

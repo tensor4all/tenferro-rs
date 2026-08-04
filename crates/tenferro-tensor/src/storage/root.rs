@@ -3,7 +3,7 @@ use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut, Range};
 
 use crate::BackendId;
-use crate::{DType, TensorScalar};
+use crate::{DType, DeviceAccessError, DeviceAccessRequest, PreparedDeviceAccess, TensorScalar};
 
 use super::diagnostics::{
     RequestedIdentity, StorageOperation, StorageOperationContext, StorageOperationError,
@@ -57,6 +57,15 @@ pub(crate) unsafe trait BackendAllocation:
     fn capabilities(&self) -> ProviderCapabilities;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn prepare_device_access(
+        &self,
+        _request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        Err(DeviceAccessError::Unsupported {
+            backend: "unimplemented",
+        })
+    }
 
     /// Map the checked span to initialized bytes with valid `TensorScalar`
     /// representations for the requested dtype. The mapping must keep the
@@ -121,6 +130,14 @@ pub(crate) struct HostAllocation<T> {
     data: UnsafeCell<crate::StorageBuffer<T>>,
 }
 
+/// Root-bound owner for a provider buffer supplied through the backend storage
+/// boundary. The `StorageBuffer` remains physically inside this root; it is
+/// never retained by a second tensor field.
+pub(crate) struct BackendStorageAllocation<T> {
+    extent: RootResourceExtent,
+    data: UnsafeCell<crate::StorageBuffer<T>>,
+}
+
 /// Lifetime-only pin for one root resource. Host roots stay inline so the
 /// common CPU owner path does not allocate a second box merely to erase a
 /// scalar-specific host allocation. Backend roots retain their provider box.
@@ -150,6 +167,12 @@ struct HostByteWriteGuard<'a, T: TensorScalar> {
 // provider trait's `&self` receiver is not itself an access capability.
 unsafe impl<T: TensorScalar> Send for HostAllocation<T> {}
 unsafe impl<T: TensorScalar> Sync for HostAllocation<T> {}
+
+// SAFETY: the provider buffer is `Send + Sync` through `BackendStorage`; all
+// access to the `UnsafeCell` is bounded by the move-only root borrow supplied
+// by `StorageRef`/`StorageMut`.
+unsafe impl<T: Send + Sync + 'static> Send for BackendStorageAllocation<T> {}
+unsafe impl<T: Send + Sync + 'static> Sync for BackendStorageAllocation<T> {}
 
 fn host_bytes<T: TensorScalar>(data: &[T], range: Range<usize>) -> &[u8] {
     let byte_len = data
@@ -321,6 +344,73 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
     }
 }
 
+impl<T: Send + Sync + 'static> std::fmt::Debug for BackendStorageAllocation<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BackendStorageAllocation")
+            .field("extent", &self.extent)
+            .field(
+                "backend_family",
+                // SAFETY: the provider buffer is immutable through this debug
+                // borrow and its length cannot change through `&self`.
+                &unsafe {
+                    match &*self.data.get() {
+                        crate::StorageBuffer::Backend(buffer) => buffer.backend_family(),
+                        crate::StorageBuffer::Host(_) => "host",
+                    }
+                },
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+unsafe impl<T: Send + Sync + 'static> BackendAllocation for BackendStorageAllocation<T> {
+    fn root_extent(&self) -> RootResourceExtent {
+        self.extent
+    }
+
+    fn provider_kind(&self) -> ProviderKind {
+        // The provider family is diagnostic metadata. Concrete providers keep
+        // their stronger runtime/device checks at their own ingress boundary.
+        // INVARIANT: the family string is a compile-time backend identifier.
+        let family = unsafe {
+            match &*self.data.get() {
+                crate::StorageBuffer::Backend(buffer) => buffer.backend_family(),
+                crate::StorageBuffer::Host(_) => "host",
+            }
+        };
+        match family {
+            "cubecl" => ProviderKind::Cuda,
+            "cubecl-webgpu" => ProviderKind::WebGpu,
+            "host" => ProviderKind::Cpu,
+            other => ProviderKind::Other(other),
+        }
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::none()
+    }
+
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        let data = unsafe { &*self.data.get() };
+        let crate::StorageBuffer::Backend(buffer) = data else {
+            return Err(DeviceAccessError::Unsupported { backend: "host" });
+        };
+        buffer.prepare_device_access(request)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 impl<T: TensorScalar> HostAllocation<T> {
     fn host_slice_as<U: TensorScalar>(
         &self,
@@ -464,11 +554,39 @@ impl<T: TensorScalar> HostRoot for T {
 }
 
 impl RootResourcePin {
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        match self {
+            Self::Backend(root) => root.prepare_device_access(request),
+            _ => Err(DeviceAccessError::Unsupported { backend: "host" }),
+        }
+    }
+
     fn host_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         let allocation = self.as_any().downcast_ref::<HostAllocation<T>>()?;
         // SAFETY: the returned reference is bounded by the shared root borrow;
         // host buffers never resize after import.
         Some(unsafe { &*allocation.data.get() })
+    }
+
+    fn backend_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
+        let allocation = self
+            .as_any()
+            .downcast_ref::<BackendStorageAllocation<T>>()?;
+        // SAFETY: the returned reference is bounded by the shared root borrow;
+        // provider buffers are not resized after root import.
+        Some(unsafe { &*allocation.data.get() })
+    }
+
+    fn backend_buffer_mut<T: 'static>(&mut self) -> Option<&mut crate::StorageBuffer<T>> {
+        let allocation = self
+            .as_any_mut()
+            .downcast_mut::<BackendStorageAllocation<T>>()?;
+        // SAFETY: the caller holds the unique root borrow and provider buffers
+        // are not resized after root import.
+        Some(unsafe { &mut *allocation.data.get() })
     }
 
     fn root_extent(&self) -> RootResourceExtent {
@@ -630,6 +748,13 @@ fn host_byte_range(
 pub(crate) enum RootImportError {
     #[error("root-resource identity validation failed: {0}")]
     Identity(#[source] RootResourceIdentityError),
+    #[error("backend `{backend}` did not provide {field} allocation identity")]
+    MissingAllocationIdentity {
+        backend: &'static str,
+        field: &'static str,
+    },
+    #[error("backend buffer byte length overflows for element size {element_size}")]
+    ByteLengthOverflow { element_size: usize },
 }
 
 /// Import one uniquely owned provider root and create its single root claim.
@@ -657,6 +782,78 @@ pub(crate) fn import_unique_root(
             span,
         },
     })
+}
+
+/// Import one backend-owned buffer as the sole root owner for a typed tensor.
+pub(crate) fn import_backend_buffer<T: Send + Sync + 'static>(
+    buffer: crate::StorageBuffer<T>,
+) -> Result<OwnedStorage, Box<StorageOperationError<RootImportError>>> {
+    let crate::StorageBuffer::Backend(provider) = &buffer else {
+        return Err(Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Raw(ByteRange::new(0, 0)),
+            ),
+            RootImportError::MissingAllocationIdentity {
+                backend: "host",
+                field: "backend buffer",
+            },
+        )));
+    };
+    let element_size = std::mem::size_of::<T>();
+    let byte_len = provider.len().checked_mul(element_size).ok_or_else(|| {
+        Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Raw(ByteRange::new(0, usize::MAX)),
+            ),
+            RootImportError::ByteLengthOverflow { element_size },
+        ))
+    })?;
+    let domain = provider.allocation_domain().ok_or_else(|| {
+        Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Raw(ByteRange::new(0, byte_len)),
+            ),
+            RootImportError::MissingAllocationIdentity {
+                backend: provider.backend_family(),
+                field: "allocation domain",
+            },
+        ))
+    })?;
+    let allocation_id = provider.allocation_id().ok_or_else(|| {
+        Box::new(StorageOperationError::new(
+            StorageOperationContext::unresolved(
+                StorageOperation::ImportUniqueRoot,
+                RequestedIdentity::Raw(ByteRange::new(0, byte_len)),
+            ),
+            RootImportError::MissingAllocationIdentity {
+                backend: provider.backend_family(),
+                field: "allocation id",
+            },
+        ))
+    })?;
+    let key = super::identity::AllocationKey::new(domain, allocation_id);
+    let extent = RootResourceExtent::try_new(key, 0, byte_len, std::mem::align_of::<T>()).map_err(
+        |source| {
+            Box::new(StorageOperationError::new(
+                StorageOperationContext::unresolved(
+                    StorageOperation::ImportUniqueRoot,
+                    RequestedIdentity::Keyed {
+                        key,
+                        range: ByteRange::new(0, byte_len),
+                    },
+                ),
+                RootImportError::Identity(RootResourceIdentityError::Extent(source)),
+            ))
+        },
+    )?;
+    let allocation = Box::new(BackendStorageAllocation {
+        extent,
+        data: UnsafeCell::new(buffer),
+    });
+    import_unique_root(allocation)
 }
 
 /// Import one host vector as the unique root for a typed tensor owner.
@@ -743,6 +940,16 @@ impl OwnedStorage {
         self.pin.host_buffer::<T>()
     }
 
+    pub(crate) fn backend_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
+        self.pin.backend_buffer::<T>()
+    }
+
+    pub(crate) fn backend_buffer_mut<T: 'static>(
+        &mut self,
+    ) -> Option<&mut crate::StorageBuffer<T>> {
+        self.pin.backend_buffer_mut::<T>()
+    }
+
     pub(crate) fn into_host_vec<T: TensorScalar>(mut self) -> Result<Vec<T>, AccessError> {
         let allocation = self
             .pin
@@ -773,6 +980,13 @@ impl<'a> StorageRef<'a> {
 
     pub(crate) fn provider_kind(&self) -> ProviderKind {
         self.owner.pin.provider_kind()
+    }
+
+    pub(crate) fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        self.owner.pin.prepare_device_access(request)
     }
 
     pub(super) fn map_read(
@@ -835,6 +1049,13 @@ impl<'a> StorageMut<'a> {
         Ok(unsafe {
             std::mem::transmute::<ProviderWriteMapping<'_>, ProviderWriteMapping<'a>>(mapping)
         })
+    }
+
+    pub(crate) fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        self.owner.pin.prepare_device_access(request)
     }
 
     pub(super) fn host_slice_mut<T: TensorScalar>(

@@ -9,10 +9,104 @@ use crate::types::{
     Tensor, TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{
-    CapabilityAxis, CapabilityQuery, DType, TensorBackendCapability as TensorBackendCapabilityTrait,
+    CapabilityAxis, CapabilityQuery, DType, DeviceAccessError, DeviceAccessRequest,
+    PreparedDeviceAccess, TensorBackendCapability as TensorBackendCapabilityTrait,
 };
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
+
+pub(crate) struct CubeclPreparedAccess {
+    binding: TensorBinding<CubeclCudaRuntime>,
+    handle: cubecl_runtime::server::Handle,
+    offset: isize,
+    element_size: usize,
+    writable: bool,
+}
+
+impl CubeclPreparedAccess {
+    pub(crate) fn into_binding(self) -> TensorBinding<CubeclCudaRuntime> {
+        self.binding
+    }
+
+    pub(crate) fn into_array_arg(self, len: usize) -> ArrayArg<CubeclCudaRuntime> {
+        // SAFETY: the prepared provider state owns the exact root binding;
+        // callers choose only a typed logical length within that root.
+        unsafe { ArrayArg::from_raw_parts(self.handle, len) }
+    }
+
+    pub(crate) fn into_handle(self) -> cubecl_runtime::server::Handle {
+        self.handle
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn writable(&self) -> bool {
+        self.writable
+    }
+}
+
+impl std::fmt::Debug for CubeclPreparedAccess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CubeclPreparedAccess")
+            .field("offset", &self.offset)
+            .field("element_size", &self.element_size)
+            .field("writable", &self.writable)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedDeviceAccess for CubeclPreparedAccess {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+pub(crate) fn prepare_cubecl_access(
+    buffer: &CubeclBuffer,
+    request: DeviceAccessRequest<'_>,
+) -> Result<CubeclPreparedAccess, DeviceAccessError> {
+    if request.allocation_domain() != buffer.allocation_domain
+        || request.allocation_id() != buffer.allocation_id
+    {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: "prepared request does not match the CubeCL root allocation".to_owned(),
+        });
+    }
+    if request.byte_len() != buffer.byte_len {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: format!(
+                "prepared request byte length {} does not match root byte length {}",
+                request.byte_len(),
+                buffer.byte_len
+            ),
+        });
+    }
+    if request.offset() < 0 {
+        return Err(DeviceAccessError::InvalidRequest {
+            message: "CubeCL device access requires a nonnegative layout offset".to_owned(),
+        });
+    }
+    let (shape, strides) = cubecl_shape_and_strides(request.shape()).map_err(|error| {
+        DeviceAccessError::InvalidRequest {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(CubeclPreparedAccess {
+        // SAFETY: tensor-root construction already checked the descriptor
+        // bounds and the request is matched to this root's byte length.
+        binding: unsafe {
+            TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
+        },
+        handle: buffer.handle().clone(),
+        offset: request.offset(),
+        element_size: request.element_size(),
+        writable: request.writable(),
+    })
+}
 
 pub(crate) fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
@@ -150,25 +244,6 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         })
 }
 
-fn validate_cubecl_buffer_len<T: 'static>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    buffer: &CubeclBuffer,
-    op: &'static str,
-) -> crate::Result<()> {
-    let expected_len = checked_shape_product(op, tensor.shape())?;
-    let actual_len = buffer.element_len::<T>();
-    if expected_len != actual_len {
-        return Err(crate::Error::runtime_state(
-            op,
-            format!(
-                "expected shape product {expected_len} elements, actual typed count {}",
-                actual_len
-            ),
-        ));
-    }
-    Ok(())
-}
-
 fn validate_raw_unary_shapes<TIn>(
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
@@ -203,26 +278,60 @@ pub(crate) fn typed_tensor_binding<T: Clone + 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let (shape, strides) = cubecl_shape_and_strides(tensor.shape())?;
+    let prepared = tensor.prepare_device_read(op)?;
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_binding())
+}
 
-    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
-    // The checked invariant above proves the typed element count derived from
-    // `buffer.byte_len()` equals the dense
-    // element count of `tensor.shape`; `strides` is the matching dense
-    // column-major layout metadata, so kernel indexing stays within that
-    // allocation.
-    Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
-    })
+pub(crate) fn prepared_tensor_access<T: 'static>(
+    tensor: &TypedTensor<T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<CubeclPreparedAccess> {
+    tensor
+        .prepare_device_read(op)?
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map(|prepared| *prepared)
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })
+}
+
+pub(crate) fn prepared_view_access<T: 'static>(
+    view: &TypedTensorView<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<CubeclPreparedAccess> {
+    view.prepare_device_read(op)?
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map(|prepared| *prepared)
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })
+}
+
+pub(crate) fn prepared_view_mut_access<T: 'static>(
+    view: &TypedTensorViewMut<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<CubeclPreparedAccess> {
+    view.prepare_device_write(op)?
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map(|prepared| *prepared)
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })
 }
 
 pub(crate) fn typed_view_binding<T: Clone + 'static>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
-    let buffer = cubecl_view_buffer(view, op)?;
     if view.offset() != 0 || !view.is_col_major_contiguous()? {
         return Err(crate::Error::invalid_argument(
             op,
@@ -230,23 +339,14 @@ pub(crate) fn typed_view_binding<T: Clone + 'static>(
             "CUDA compact view binding requires a zero-offset column-major view",
         ));
     }
-    let expected_len = checked_shape_product(op, view.shape())?;
-    if expected_len != buffer.element_len::<T>() {
-        return Err(crate::Error::runtime_state(
-            op,
-            format!(
-                "expected view shape product {expected_len} elements, actual typed count {}",
-                buffer.element_len::<T>()
-            ),
-        ));
-    }
-    let (shape, strides) = cubecl_shape_and_strides(view.shape())?;
-
-    // SAFETY: the view layout and backing length establish a compact dense
-    // range, and the metadata is the matching column-major binding.
-    Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
-    })
+    let prepared = view.prepare_device_read(op)?;
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_binding())
 }
 
 pub(crate) fn launch_unary_bool_tensor(
@@ -517,53 +617,60 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-
-    // SAFETY: `buffer.handle()` references the CubeCL allocation for `tensor`.
-    // `validate_cubecl_buffer_len` proves the typed count derived from the
-    // provider byte length equals the dense shape
-    // product, so raw linear kernels that index `0..out.len()` cannot observe
-    // an array longer than the logical tensor allocation.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len::<T>()) })
+    let prepared = tensor.prepare_device_read(op)?;
+    let len = tensor.n_elements();
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_array_arg(len))
 }
 
 pub(crate) fn typed_view_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_view_buffer(view, op)?;
-
-    // SAFETY: `TensorLayout` validation at view construction proves the
-    // reachable logical offsets are within this backing allocation. Kernels
-    // using this raw array also receive the validated signed layout metadata
-    // because CubeCL TensorBinding cannot express signed view strides.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len::<T>()) })
+    let prepared = view.prepare_device_read(op)?;
+    let len = view.n_elements();
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_array_arg(len))
 }
 
 pub(crate) fn typed_view_mut_array_arg<T: CubeElement + Clone>(
     view: &TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_view_mut_buffer(view, op)?;
-
-    // SAFETY: `TypedTensorViewMut` construction validates both reachable
-    // offsets and no-overlap. The raw array length covers the backing
-    // allocation, while the kernel launch domain covers only the logical view.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len::<T>()) })
+    let prepared = view.prepare_device_write(op)?;
+    let len = view.n_elements();
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_array_arg(len))
 }
 
 pub(crate) fn bool_tensor_array_arg(
     tensor: &TypedTensor<bool, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
-
-    // SAFETY: CubeCL bool tensors are stored as one-byte predicate buffers by
-    // `memory::upload_bool` and `alloc_bool_output`. The validated buffer
-    // length is the logical element count consumed by raw Array<bool> kernels.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len::<bool>()) })
+    let prepared = tensor.prepare_device_read(op)?;
+    let len = tensor.n_elements();
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_array_arg(len))
 }
 
 pub(crate) fn typed_tensor_array_arg_as<T, U>(
@@ -575,8 +682,7 @@ where
     T: CubeElement + Clone,
     U: CubeElement + Clone,
 {
-    let buffer = cubecl_buffer(tensor, op)?;
-    validate_cubecl_buffer_len(tensor, buffer, op)?;
+    let prepared = tensor.prepare_device_read(op)?;
     let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
         crate::Error::invalid_argument(
             op,
@@ -584,20 +690,28 @@ where
             format!("reinterpreted CubeCL array length overflow for len {len}"),
         )
     })?;
-    let available_bytes = buffer.byte_len();
+    let available_bytes = prepared
+        .as_any()
+        .downcast_ref::<CubeclPreparedAccess>()
+        .ok_or_else(|| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?
+        .binding
+        .handle
+        .size() as usize;
     if requested_bytes > available_bytes {
         return Err(crate::Error::runtime_state(op, format!(
                 "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
             )));
     }
 
-    // SAFETY: `validate_cubecl_buffer_len` first proves the typed tensor shape
-    // matches the backing allocation. The checked byte-size invariant then
-    // proves the requested representation view stays within the same
-    // allocation. Kernels using this helper are responsible for using a
-    // representation-compatible scalar view, for example complex values as
-    // their real and imaginary scalar parts.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), len) })
+    let prepared = prepared
+        .into_any()
+        .downcast::<CubeclPreparedAccess>()
+        .map_err(|_| {
+            crate::Error::runtime_state(op, "prepared access belongs to another GPU provider")
+        })?;
+    Ok(prepared.into_array_arg(len))
 }
 
 pub(crate) fn launch_unary<TIn, TOut>(

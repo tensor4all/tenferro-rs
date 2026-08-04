@@ -102,7 +102,7 @@ use crate::{
 
 mod capability;
 mod device;
-mod dispatch;
+pub(crate) mod dispatch;
 mod error;
 mod event_domain;
 mod exec_session;
