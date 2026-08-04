@@ -3,7 +3,7 @@
 ```json
 {
   "schema": "tenferro.storage-static-rank-codegen.v1",
-  "candidate_commit": "e114555b25848bf51682c69b091461884f9d301b",
+  "candidate_commit": "385a04db9a8cf5547784f0d756e9a7065b3d4efc",
   "command": "cargo rustc -p tenferro-tensor --bench element_access --release -- --emit=asm",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6",
   "target": "x86_64-unknown-linux-gnu",
