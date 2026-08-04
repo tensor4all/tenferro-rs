@@ -9,7 +9,8 @@ use tenferro_runtime::{
     Runtime, StorageClass, TracedTensor,
 };
 use tenferro_tensor::{
-    BackendStorage, DeviceId, StorageBuffer, Tensor, TensorElementwise, TypedTensor,
+    AllocationDomainId, BackendStorage, DeviceId, StorageBuffer, Tensor, TensorElementwise,
+    TypedTensor,
 };
 
 use super::*;
@@ -78,6 +79,7 @@ fn unavailable_selection_preserves_requested_id_and_discovered_records() {
 #[derive(Debug)]
 struct TestCudaBuffer {
     family: &'static str,
+    domain: Option<AllocationDomainId>,
 }
 
 #[derive(Debug)]
@@ -148,6 +150,10 @@ impl BackendStorage<f32> for TestCudaBuffer {
         1
     }
 
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.domain
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -156,7 +162,10 @@ impl BackendStorage<f32> for TestCudaBuffer {
 fn input(family: &'static str, ordinal: usize) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Arc::new(TestCudaBuffer { family })),
+        StorageBuffer::Backend(Arc::new(TestCudaBuffer {
+            family,
+            domain: None,
+        })),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -178,15 +187,18 @@ fn cuda_registration_ingress_rejects_forged_family_and_foreign_inputs() {
 
     assert!(!cuda_input_tensor(
         &TensorRead::from_tensor(&forged_family),
-        3
+        3,
+        AllocationDomainId::fresh(),
     ));
     assert!(!cuda_input_tensor(
         &TensorRead::from_tensor(&foreign_family),
-        3
+        3,
+        AllocationDomainId::fresh(),
     ));
     assert!(!cuda_input_tensor(
         &TensorRead::from_tensor(&foreign_device),
-        3
+        4,
+        AllocationDomainId::fresh(),
     ));
 }
 
@@ -200,7 +212,11 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).expect("host tensor");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");
 
-    assert!(cuda_input_tensor(&TensorRead::from_tensor(&input), 0));
+    assert!(cuda_input_tensor(
+        &TensorRead::from_tensor(&input),
+        0,
+        runtime.allocation_domain_id()
+    ));
 
     let Tensor::F32(typed) = &input else {
         unreachable!("uploaded f32 tensor")
@@ -222,7 +238,11 @@ fn cuda_registration_ingress_accepts_backend_created_tensor() {
     )
     .expect("relabeled CUDA tensor")
     .into();
-    assert!(!cuda_input_tensor(&TensorRead::from_tensor(&relabeled), 1));
+    assert!(!cuda_input_tensor(
+        &TensorRead::from_tensor(&relabeled),
+        1,
+        runtime.allocation_domain_id()
+    ));
 }
 
 #[test]
@@ -511,13 +531,13 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     let runtime = backend.runtime().clone();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host input");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");
+    let input_for_first = upload_tensor(&runtime, &host).expect("CUDA upload");
     let driver = CudaEventDomainDriver::new(runtime.clone());
     let domain = test_event_domain("native");
     let run = driver.begin_run(domain).expect("CUDA event-domain run");
 
     // A run may cross scheduler worker threads. Its captured CubeCL stream must
     // remain stable rather than following each worker's thread-local stream.
-    let input_for_first = input.clone();
     let (mut run, mut backend, first_output, first_completion, first_launches) =
         std::thread::spawn(move || {
             let mut run = run;

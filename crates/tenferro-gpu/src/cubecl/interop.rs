@@ -12,7 +12,7 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
-use crate::{TensorRank, TypedTensor};
+use crate::{TensorRank, TensorScalar, TypedTensor};
 
 use super::{dispatch, CudaRuntime};
 
@@ -197,7 +197,12 @@ where
     let handle = rt.client().create_from_slice(T::as_bytes(&data));
     dispatch::typed_from_cubecl(
         shape,
-        crate::CubeclBuffer::new(handle, len, rt.device_ordinal()),
+        crate::CubeclBuffer::new(
+            handle,
+            len,
+            rt.device_ordinal(),
+            Some(rt.allocation_domain_id()),
+        ),
         rt.device_ordinal(),
     )
 }
@@ -214,7 +219,7 @@ pub fn download_typed_tensor<T>(
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone + 'static,
+    T: CubeElement + TensorScalar + Clone + 'static,
 {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;

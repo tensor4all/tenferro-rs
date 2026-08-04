@@ -32,6 +32,13 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
     }
 }
 
+#[cube(launch_unchecked)]
+pub fn copy_bool_kernel(out: &mut Array<u8>, input: &Array<u8>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS];
+    }
+}
+
 /// In-place scale by a device-resident single-element factor:
 /// `out[i] *= factor[0]`. Used by the dot-general accumulation path for the
 /// degenerate `out = beta * out` case (zero-sized contraction).

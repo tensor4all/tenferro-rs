@@ -80,7 +80,7 @@ fn launch_materialization<T>(
     op: &'static str,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
 {
     if plan.len == 0 {
         return Ok(());
@@ -242,7 +242,7 @@ fn transpose_typed<T>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
 {
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
     ensure_resident_on_runtime(backend.runtime(), input, TRANSPOSE_OP)?;
@@ -269,7 +269,7 @@ fn materialize_typed<T, R>(
     view: &TypedTensorView<'_, T, R>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
     let len = view

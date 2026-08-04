@@ -10,6 +10,7 @@ use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
 use cudarc::driver::result::DriverError;
 use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
+use tenferro_tensor::AllocationDomainId;
 
 use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId};
 
@@ -83,6 +84,7 @@ struct CudaRuntimeState {
     device_ordinal: usize,
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
+    allocation_domain: AllocationDomainId,
 }
 
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
@@ -194,6 +196,7 @@ impl CudaRuntime {
                 device_ordinal,
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
+                allocation_domain: AllocationDomainId::fresh(),
             }),
         })
     }
@@ -231,6 +234,10 @@ impl CudaRuntime {
     /// ```
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
         self.inner.identity.clone()
+    }
+
+    pub(crate) fn allocation_domain_id(&self) -> AllocationDomainId {
+        self.inner.allocation_domain
     }
 
     #[doc(hidden)]

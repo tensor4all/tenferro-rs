@@ -38,8 +38,22 @@ struct DotGeneralPlan {
     k: usize,
 }
 
-struct PreparedOperand<T> {
-    tensor: TypedTensor<T>,
+enum PreparedTensor<'a, T> {
+    Borrowed(&'a TypedTensor<T>),
+    Owned(Box<TypedTensor<T>>),
+}
+
+impl<T> PreparedTensor<'_, T> {
+    fn as_ref(&self) -> &TypedTensor<T> {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Owned(tensor) => tensor,
+        }
+    }
+}
+
+struct PreparedOperand<'a, T> {
+    tensor: PreparedTensor<'a, T>,
     shape: Vec<usize>,
     strides: Vec<usize>,
 }
@@ -342,18 +356,18 @@ where
     Ok(output)
 }
 
-fn prepare_lhs_operand<T>(
+fn prepare_lhs_operand<'a, T>(
     backend: &WebGpuBackend,
-    input: &TypedTensor<T>,
+    input: &'a TypedTensor<T>,
     plan: &DotGeneralPlan,
-) -> crate::Result<PreparedOperand<T>>
+) -> crate::Result<PreparedOperand<'a, T>>
 where
     T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.lhs_cubek_strides {
         Some(strides) => {
             return Ok(PreparedOperand {
-                tensor: input.clone(),
+                tensor: PreparedTensor::Borrowed(input),
                 shape: plan.lhs_cubek_shape.clone(),
                 strides: strides.clone(),
             });
@@ -361,24 +375,24 @@ where
         None => pack_lhs_operand(backend, input, plan)?,
     };
     Ok(PreparedOperand {
-        tensor,
+        tensor: PreparedTensor::Owned(Box::new(tensor)),
         shape: plan.lhs_cubek_shape.clone(),
         strides: dense_layout_strides(&plan.lhs_cubek_shape)?,
     })
 }
 
-fn prepare_rhs_operand<T>(
+fn prepare_rhs_operand<'a, T>(
     backend: &WebGpuBackend,
-    input: &TypedTensor<T>,
+    input: &'a TypedTensor<T>,
     plan: &DotGeneralPlan,
-) -> crate::Result<PreparedOperand<T>>
+) -> crate::Result<PreparedOperand<'a, T>>
 where
     T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.rhs_cubek_strides {
         Some(strides) => {
             return Ok(PreparedOperand {
-                tensor: input.clone(),
+                tensor: PreparedTensor::Borrowed(input),
                 shape: plan.rhs_cubek_shape.clone(),
                 strides: strides.clone(),
             });
@@ -386,7 +400,7 @@ where
         None => pack_rhs_operand(backend, input, plan)?,
     };
     Ok(PreparedOperand {
-        tensor,
+        tensor: PreparedTensor::Owned(Box::new(tensor)),
         shape: plan.rhs_cubek_shape.clone(),
         strides: dense_layout_strides(&plan.rhs_cubek_shape)?,
     })
@@ -417,11 +431,21 @@ fn dot_general_f32(
 
     let dtype = f32::as_type_native_unchecked().storage_type();
     let lhs_binding = InputBinding::new(
-        typed_tensor_binding_with_layout(&lhs.tensor, &lhs.shape, &lhs.strides, DOT_GENERAL_OP)?,
+        typed_tensor_binding_with_layout(
+            lhs.tensor.as_ref(),
+            &lhs.shape,
+            &lhs.strides,
+            DOT_GENERAL_OP,
+        )?,
         dtype,
     );
     let rhs_binding = InputBinding::new(
-        typed_tensor_binding_with_layout(&rhs.tensor, &rhs.shape, &rhs.strides, DOT_GENERAL_OP)?,
+        typed_tensor_binding_with_layout(
+            rhs.tensor.as_ref(),
+            &rhs.shape,
+            &rhs.strides,
+            DOT_GENERAL_OP,
+        )?,
         dtype,
     );
     let output_binding = typed_tensor_binding_with_layout(
@@ -472,11 +496,21 @@ fn dot_general_c32(
 
     let dtype = Complex32::as_type_native_unchecked().storage_type();
     let lhs_binding = InputBinding::new(
-        typed_tensor_binding_with_layout(&lhs.tensor, &lhs.shape, &lhs.strides, DOT_GENERAL_OP)?,
+        typed_tensor_binding_with_layout(
+            lhs.tensor.as_ref(),
+            &lhs.shape,
+            &lhs.strides,
+            DOT_GENERAL_OP,
+        )?,
         dtype,
     );
     let rhs_binding = InputBinding::new(
-        typed_tensor_binding_with_layout(&rhs.tensor, &rhs.shape, &rhs.strides, DOT_GENERAL_OP)?,
+        typed_tensor_binding_with_layout(
+            rhs.tensor.as_ref(),
+            &rhs.shape,
+            &rhs.strides,
+            DOT_GENERAL_OP,
+        )?,
         dtype,
     );
     let output_binding = typed_tensor_binding_with_layout(
