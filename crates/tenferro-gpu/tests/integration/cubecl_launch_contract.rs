@@ -1169,7 +1169,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     );
     let interop_ptr = source_section(
         &interop_source,
-        "pub fn with_typed_device_ptr<T: 'static, R>(",
+        "pub fn with_typed_device_ptr<T: 'static>(",
         "/// Upload host data into a dense GPU tensor",
     );
     assert_ordered_needles(
@@ -1207,7 +1207,7 @@ fn cubecl_workspace_pointer_is_scoped_to_owner_borrow() {
         "workspace owners must not expose an unscoped raw pointer accessor"
     );
     assert!(
-        interop_source.contains("pub fn with_ptr<R>(&self, f: impl FnOnce(*mut c_void) -> R) -> R"),
+        interop_source.contains("pub fn with_ptr(&self, f: impl FnOnce(*mut c_void))"),
         "workspace pointers must be borrowed through a scoped closure"
     );
 }
@@ -1221,7 +1221,7 @@ fn cubecl_stream_pointer_is_scoped_to_runtime_borrow() {
     );
     let stream_source = source_section(
         &interop_source,
-        "pub fn with_raw_cuda_stream<R>(",
+        "pub fn with_raw_cuda_stream(",
         "/// Return the launch cube count",
     );
     assert_ordered_needles(
