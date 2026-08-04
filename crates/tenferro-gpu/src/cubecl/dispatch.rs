@@ -41,8 +41,14 @@ impl CubeclPreparedAccess {
         self.handle
     }
 
-    pub(crate) fn byte_len(&self) -> usize {
-        self.handle.size() as usize
+    pub(crate) fn byte_len(&self, op: &'static str) -> crate::Result<usize> {
+        usize::try_from(self.handle.size()).map_err(|_| {
+            crate::Error::invalid_argument(
+                op,
+                "buffer_size",
+                "CubeCL buffer size exceeds the host usize range",
+            )
+        })
     }
 }
 
@@ -616,7 +622,7 @@ where
             format!("reinterpreted CubeCL array length overflow for len {len}"),
         )
     })?;
-    let available_bytes = prepared.byte_len();
+    let available_bytes = prepared.byte_len(op)?;
     if requested_bytes > available_bytes {
         return Err(crate::Error::runtime_state(op, format!(
                 "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"

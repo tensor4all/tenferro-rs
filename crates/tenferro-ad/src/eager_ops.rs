@@ -550,6 +550,8 @@ impl EagerTensor {
         let op = StdTensorOp::Transpose {
             perm: perm.to_vec(),
         };
+        // INVARIANT: the result must own a group independent of `self`; the
+        // explicit duplicate is the ownership boundary before making a view.
         let base = self.to_tensor()?;
         let value = TensorValue::from_tensor(base)
             .transpose_view(perm)
@@ -586,6 +588,8 @@ impl EagerTensor {
         let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
         };
+        // INVARIANT: a returned eager tensor cannot borrow `self`'s group, so
+        // the explicit duplicate precedes metadata-only view construction.
         let base = self.to_tensor()?;
         if let Ok(value) = TensorValue::from_tensor(base).reshape_view(shape) {
             return Self::nary_value_op(&[self], op, value);
@@ -621,6 +625,9 @@ impl EagerTensor {
     /// `AxisOutOfBounds`/`InvalidArgument` when starts, limits, or strides are
     /// invalid, or a typed backend/runtime-state error while creating the view.
     pub fn slice(&self, config: SliceConfig) -> Result<Self> {
+        // INVARIANT: the result must retain an independent owner while the
+        // input handle remains live; this is an explicit duplicate, not an
+        // implicit backend transfer.
         let base = self.to_tensor()?;
         let value = TensorValue::from_tensor(base)
             .slice_view(&config)
@@ -657,6 +664,8 @@ impl EagerTensor {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
         };
+        // INVARIANT: output descriptors cannot borrow the input's move-only
+        // allocation group, so this explicit duplicate owns the view's root.
         let base = self.to_tensor()?;
         let value = TensorValue::from_tensor(base)
             .broadcast_in_dim_view(shape, dims)

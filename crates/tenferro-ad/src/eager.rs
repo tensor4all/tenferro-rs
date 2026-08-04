@@ -367,6 +367,22 @@ pub(crate) struct EagerGraphExecution {
 ///
 /// The guard borrows the record's allocation group. It never owns a tensor and
 /// cannot be converted into a mutable view.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let value = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
+///     ctx,
+/// )?;
+/// let view = value.value()?;
+/// assert_eq!(view.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct ValueGuard<'a> {
     view: TensorView<'a>,
@@ -434,6 +450,24 @@ impl<'a> ValueGuard<'a> {
 }
 
 /// Read-only retained gradient value.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
+///     ctx,
+/// )?;
+/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let _gradients = loss.backward()?;
+/// let gradient = x.grad()?.expect("tracked leaf has a gradient");
+/// assert_eq!(gradient.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
 #[derive(Clone, Debug)]
 pub struct GradientValue {
     record: Arc<AdValueRecord>,
@@ -519,6 +553,23 @@ impl GradientValue {
 }
 
 /// Move-only accumulated gradient bundle backed by one allocation group.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
+///     ctx,
+/// )?;
+/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let gradients = loss.backward()?;
+/// assert!(!gradients.is_empty());
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Gradients {
     group: AllocationGroup,
@@ -582,6 +633,25 @@ impl Gradients {
 }
 
 /// Error returned when a value cannot be consumed without changing its owner.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, IntoValueError, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let value = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
+///     ctx,
+/// )?;
+/// let _shared = value.clone();
+/// assert!(matches!(
+///     value.into_value(),
+///     Err(IntoValueError::NotUnique(_))
+/// ));
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
 #[derive(Debug)]
 pub enum IntoValueError<H> {
     /// Another eager handle, tape record, or checkpoint retains the value.
@@ -3256,6 +3326,8 @@ impl EagerTensor {
     /// Returns [`IntoValueError::NotUnique`] when another handle retains the
     /// value, or [`IntoValueError::Extract`] when structural group extraction
     /// fails because the allocation is aliased or its descriptor is invalid.
+    // INVARIANT: the error variants return the unchanged eager handle so a
+    // caller can retry ownership extraction without an implicit copy.
     #[allow(clippy::result_large_err)]
     pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
         if Arc::strong_count(&self._record) != 1 {

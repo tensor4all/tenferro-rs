@@ -171,6 +171,9 @@ fn cuda_input_tensor(
     device_ordinal: usize,
     expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
+    // INVARIANT: TensorRead::backend_family reports the root ProviderKind
+    // (`cuda`); the CubeCL buffer's internal `cubecl` label is only a private
+    // implementation detail and is not used for runtime registration.
     cuda_input_placement(input.placement(), device_ordinal)
         && input.backend_family() == Some("cuda")
         && input.allocation_domain() == Some(expected_domain)

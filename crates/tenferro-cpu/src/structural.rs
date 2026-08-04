@@ -780,6 +780,9 @@ pub fn typed_reshape<T: Clone + TensorScalar + 'static>(
     if tensor.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error("reshape"));
     }
+    // INVARIANT: `typed_reshape` returns an independently owned tensor while
+    // the borrowed input remains live; sharing its move-only root would violate
+    // the single-owner contract, so this explicit host duplicate is required.
     let mut output = TypedTensor::from_vec_col_major(shape.to_vec(), tensor.host_data()?.to_vec())?;
     output.set_placement(tensor.placement().clone());
     Ok(output)

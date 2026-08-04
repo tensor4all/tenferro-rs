@@ -436,7 +436,8 @@ impl CutensorHandle {
         Ok(workspace_size)
     }
 
-    // cuTENSOR's C ABI mirrors this argument list; keep the FFI boundary explicit.
+    // INVARIANT: cuTENSOR's C ABI fixes this argument list; keeping it
+    // explicit preserves the provider call order at the unsafe boundary.
     #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn contract(
         &self,
@@ -545,7 +546,8 @@ pub(crate) struct OperationDescriptor {
 }
 
 impl OperationDescriptor {
-    // The descriptor arguments map one-for-one to cuTENSOR's C descriptor API.
+    // INVARIANT: these arguments map one-for-one to cuTENSOR's C descriptor
+    // API; a parameter object would obscure the FFI order.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_contraction_with_ops(
         handle: &CutensorHandle,
@@ -590,7 +592,8 @@ impl OperationDescriptor {
         })
     }
 
-    // The descriptor arguments map one-for-one to cuTENSOR's C descriptor API.
+    // INVARIANT: these arguments map one-for-one to cuTENSOR's C descriptor
+    // API; a parameter object would obscure the FFI order.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_permutation(
         handle: &CutensorHandle,
