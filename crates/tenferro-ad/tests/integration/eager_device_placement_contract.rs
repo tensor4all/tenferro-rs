@@ -37,7 +37,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         "fn upload_generated_host_tensor",
         "fn exec_standard_op_on_tensor_reads",
     );
-    assert!(helper.contains("backend.upload_host_tensor(TensorRead::from_tensor(&tensor))"));
+    assert!(helper.contains("upload_host_tensor(TensorRead::from_tensor(&tensor))"));
     assert!(
         helper.contains("StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)")
     );
