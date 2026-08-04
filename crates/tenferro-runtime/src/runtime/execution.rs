@@ -71,6 +71,11 @@ pub struct ExecutionInputs {
 
 impl ExecutionInputs {
     /// Construct a package from already-owned tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when a tensor binding cannot be
+    /// registered in the allocation group.
     pub fn new(tensors: Vec<Tensor>) -> Result<Self> {
         let (group, bindings) = AllocationGroup::from_tensors(tensors).map_err(|error| {
             Error::runtime_state(

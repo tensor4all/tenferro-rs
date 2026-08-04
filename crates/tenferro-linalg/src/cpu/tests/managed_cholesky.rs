@@ -9,7 +9,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
     HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
-    TensorRead, TypedTensor,
+    TensorRead, TensorScalar, TypedTensor,
 };
 
 use super::with_cpu_linalg;
@@ -142,7 +142,7 @@ impl FakeDomain {
         AllocationId::from_backend_id(self.next_allocation.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub(super) fn tensor<T: Copy + Send + Sync + 'static>(
+    pub(super) fn tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
@@ -150,7 +150,7 @@ impl FakeDomain {
         self.tensor_with_domain(shape, values, Some(self.id), false, MemoryKind::Managed)
     }
 
-    fn tensor_with_domain<T: Copy + Send + Sync + 'static>(
+    fn tensor_with_domain<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,

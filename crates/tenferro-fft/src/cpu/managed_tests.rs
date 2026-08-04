@@ -8,7 +8,7 @@ use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
     HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
-    StorageBuffer, Tensor, TypedTensor,
+    StorageBuffer, Tensor, TensorScalar, TypedTensor,
 };
 
 use crate::{FftNorm, TensorFftExt};
@@ -99,7 +99,7 @@ impl FakeDomain {
         })
     }
 
-    fn tensor<T: Copy + Send + Sync + 'static>(
+    fn tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
