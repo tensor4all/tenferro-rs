@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Make `python3` resolve to a 3.11+ interpreter (issue #1606).
 # shellcheck source=scripts/lib/python.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
 
@@ -35,7 +36,7 @@ gh_pr_checks() {
 }
 
 classify_checks() {
-  py -c '
+  python3 -c '
 import json
 import re
 import sys

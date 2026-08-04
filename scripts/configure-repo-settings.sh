@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Make `python3` resolve to a 3.11+ interpreter (issue #1606).
 # shellcheck source=scripts/lib/python.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
 
@@ -37,7 +38,7 @@ resolve_settings_path() {
 }
 
 json_get() {
-  py - "$1" "$2" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import json
 import sys
 
@@ -53,7 +54,7 @@ PY
 }
 
 json_get_optional() {
-  py - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" <<'PY'
 import json
 import sys
 
@@ -72,7 +73,7 @@ PY
 }
 
 json_field() {
-  py - "$1" "$2" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import json
 import sys
 
@@ -86,7 +87,7 @@ print(data)
 PY
 }
 build_branch_protection_payload() {
-  py - "$1" <<'PY'
+  python3 - "$1" <<'PY'
 import json
 import sys
 

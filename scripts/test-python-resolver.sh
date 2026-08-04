@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for scripts/lib/python.sh (issue #1606).
 #
-# Each case builds a PATH containing only the interpreters it wants visible, so
-# the resolution order is exercised rather than whatever this machine happens
+# Each case builds a PATH exposing only the tools it wants visible, so the
+# behaviour under test is exercised rather than whatever this machine happens
 # to have installed.
 set -uo pipefail
 
@@ -21,22 +21,12 @@ fail() {
   failures=$((failures + 1))
 }
 
-# Resolve in a subshell with a controlled PATH; echo the resolved command.
-resolve_with() {
-  env -i HOME="$HOME" PATH="$1" ${2:+PYTHON="$2"} bash -c "
-    set -u
-    . '$LIB'
-    tenferro_resolve_python || exit 1
-    printf '%s' \"\${TENFERRO_PYTHON[*]}\"
-  " 2>/dev/null
-}
-
-resolved_version() {
-  env -i HOME="$HOME" PATH="$1" ${2:+PYTHON="$2"} bash -c "
-    set -u
-    . '$LIB'
-    py -c 'import sys; print(\"%d.%d\" % sys.version_info[:2])'
-  " 2>/dev/null
+# Source the lib with a controlled environment and run `script` afterwards.
+in_env() {
+  local path="$1" python_override="$2" script="$3"
+  env -i HOME="$HOME" PATH="$path" ${python_override:+PYTHON="$python_override"} \
+    bash -c ". '$LIB'
+$script" 2>&1
 }
 
 link_stub() {
@@ -45,83 +35,70 @@ link_stub() {
   ln -sf "$target" "$dir/$name"
 }
 
-modern_python="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || true)"
 uv_bin="$(command -v uv || true)"
-system_python3="$(PATH="$BASE_PATH" command -v python3 || true)"
+modern_python="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || true)"
+pinned="$(tr -d '[:space:]' <"$ROOT_DIR/.python-version")"
 
-# --- 1. an explicit $PYTHON override wins ---------------------------------
+# --- 1. uv supplies the pinned interpreter --------------------------------
+if [ -n "$uv_bin" ]; then
+  link_stub uv "$uv_bin" uvonly
+  got="$(in_env "$STUB_DIR/uvonly:$BASE_PATH" "" \
+    'python3 -c "import sys; print(\"%d.%d\" % sys.version_info[:2])"')"
+  if [ "$got" = "$pinned" ]; then
+    pass "python3 resolves to the pinned interpreter ($pinned)"
+  else
+    fail "python3 resolves to the pinned interpreter" "got '$got', wanted '$pinned'"
+  fi
+
+  # The property the PATH shim exists for: a CHILD process sees it too, which
+  # is what `scripts/ci/run_profile.py`'s `shell=True` commands depend on.
+  got="$(in_env "$STUB_DIR/uvonly:$BASE_PATH" "" \
+    'python3 -c "import subprocess,sys; print(subprocess.run([\"bash\",\"-c\",\"python3 -c \\\"import sys;print(sys.version_info[0],sys.version_info[1])\\\"\"],capture_output=True,text=True).stdout.strip())"')"
+  case "$got" in
+    "${pinned%%.*} ${pinned#*.}") pass "the shim survives into child processes" ;;
+    *) fail "the shim survives into child processes" "child reported '$got'" ;;
+  esac
+else
+  printf 'skip uv cases: uv is not installed\n'
+fi
+
+# --- 2. an explicit $PYTHON override wins ---------------------------------
 if [ -n "$modern_python" ]; then
-  got="$(resolve_with "$BASE_PATH" "$modern_python")"
+  got="$(in_env "$BASE_PATH" "$modern_python" \
+    'python3 -c "import sys; print(sys.executable)"')"
+  # The shim forwards to the override, so `sys.executable` is that interpreter.
   if [ "$got" = "$modern_python" ]; then
     pass "PYTHON override is honoured"
   else
-    fail "PYTHON override is honoured" "resolved '$got', wanted '$modern_python'"
+    fail "PYTHON override is honoured" "sys.executable='$got', wanted '$modern_python'"
   fi
-
-  # --- 2. a versioned interpreter on PATH ---------------------------------
-  link_stub "$(basename "$modern_python")" "$modern_python" versioned
-  got="$(resolve_with "$STUB_DIR/versioned:$BASE_PATH")"
-  if [ "$got" = "$(basename "$modern_python")" ]; then
-    pass "pythonX.Y on PATH is preferred"
-  else
-    fail "pythonX.Y on PATH is preferred" "resolved '$got'"
-  fi
-
-  got="$(resolved_version "$STUB_DIR/versioned:$BASE_PATH")"
-  case "$got" in
-    3.1[1-9] | 3.[2-9][0-9] | [4-9].*) pass "resolved interpreter is 3.11+ ($got)" ;;
-    *) fail "resolved interpreter is 3.11+" "reported '$got'" ;;
-  esac
 else
-  printf 'skip python3.11+ cases: no versioned interpreter on PATH\n'
+  printf 'skip PYTHON override case: no versioned interpreter on PATH\n'
 fi
 
-# --- 3. uv fallback when no suitable interpreter exists --------------------
-if [ -n "$uv_bin" ] && [ -n "$system_python3" ]; then
-  link_stub uv "$uv_bin" uvonly
-  sys_major_minor="$("$system_python3" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-  case "$sys_major_minor" in
-    3.9 | 3.10 | 3.[0-8] | 2.*)
-      got="$(resolve_with "$STUB_DIR/uvonly:$BASE_PATH")"
-      case "$got" in
-        uv\ run*) pass "uv fallback is used when python3 is too old" ;;
-        *) fail "uv fallback is used when python3 is too old" "resolved '$got'" ;;
-      esac
-      got="$(resolved_version "$STUB_DIR/uvonly:$BASE_PATH")"
-      case "$got" in
-        3.1[1-9] | 3.[2-9][0-9]) pass "uv fallback yields 3.11+ ($got)" ;;
-        *) fail "uv fallback yields 3.11+" "reported '$got'" ;;
-      esac
-      ;;
-    *)
-      printf 'skip uv fallback: system python3 is already %s\n' "$sys_major_minor"
-      ;;
-  esac
-else
-  printf 'skip uv fallback: uv or python3 unavailable\n'
-fi
-
-# --- 4. neither: fail with a message naming the requirement ----------------
+# --- 3. an override that is too old is rejected loudly --------------------
+system_python3="$(PATH="$BASE_PATH" command -v python3 || true)"
 if [ -n "$system_python3" ]; then
-  sys_major_minor="$("$system_python3" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-  case "$sys_major_minor" in
+  sys_version="$("$system_python3" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  case "$sys_version" in
     3.9 | 3.10 | 3.[0-8] | 2.*)
-      # BASE_PATH has the too-old python3 and no uv.
-      message="$(env -i HOME="$HOME" PATH="$BASE_PATH" bash -c "
-        set -u
-        . '$LIB'
-        tenferro_resolve_python
-      " 2>&1)"
-      status=$?
-      if [ "$status" -ne 0 ] && printf '%s' "$message" | grep -q "3.11+"; then
-        pass "missing interpreter fails with an explanatory message"
+      message="$(in_env "$BASE_PATH" "$system_python3" 'true')"
+      if printf '%s' "$message" | grep -q "older than"; then
+        pass "a too-old PYTHON override is rejected"
       else
-        fail "missing interpreter fails with an explanatory message" \
-          "status=$status message=$message"
+        fail "a too-old PYTHON override is rejected" "message='$message'"
+      fi
+
+      # --- 4. no uv and no override: name uv in the error ------------------
+      message="$(in_env "$BASE_PATH" "" 'true')"
+      if printf '%s' "$message" | grep -q "uv is required"; then
+        pass "missing uv fails with an explanatory message"
+      else
+        fail "missing uv fails with an explanatory message" "message='$message'"
       fi
       ;;
     *)
-      printf 'skip missing-interpreter case: system python3 is %s\n' "$sys_major_minor"
+      printf 'skip too-old cases: system python3 is %s\n' "$sys_version"
       ;;
   esac
 fi

@@ -173,7 +173,15 @@ class LocalGateTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp_dir.name)
         (self.repo / "scripts" / "ci").mkdir(parents=True)
+        (self.repo / "scripts" / "lib").mkdir(parents=True)
         shutil.copy2(ROOT / "scripts" / "check-pr-fast.sh", self.repo / "scripts")
+        # `check-pr-fast.sh` sources the interpreter resolver (issue #1606), so
+        # the fixture repository needs it too.
+        shutil.copy2(
+            ROOT / "scripts" / "lib" / "python.sh",
+            self.repo / "scripts" / "lib",
+        )
+        shutil.copy2(ROOT / ".python-version", self.repo)
         shutil.copy2(
             ROOT / "scripts" / "ci" / "change_policy.py",
             self.repo / "scripts" / "ci",

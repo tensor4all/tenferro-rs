@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Make `python3` resolve to a 3.11+ interpreter (issue #1606).
 # shellcheck source=scripts/lib/python.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
 
@@ -39,7 +40,7 @@ resolve_settings_path() {
 }
 
 json_get() {
-  py - "$1" "$2" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 import json
 import sys
 
@@ -55,7 +56,7 @@ PY
 }
 
 json_get_optional() {
-  py - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" <<'PY'
 import json
 import sys
 
@@ -120,7 +121,7 @@ REPO_JSON="$(gh api "repos/$REPO")"
 PROTECTION_JSON="$(gh_api_optional "repos/$REPO/branches/$DEFAULT_BRANCH/protection")"
 PAGES_JSON="$(gh_api_optional "repos/$REPO/pages")"
 
-py - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$PAGES_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" "$EXPECTED_PAGES_ENABLED" "$EXPECTED_PAGES_BUILD_TYPE" <<'PY'
+python3 - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$PAGES_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" "$EXPECTED_PAGES_ENABLED" "$EXPECTED_PAGES_BUILD_TYPE" <<'PY'
 import json
 import sys
 

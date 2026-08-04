@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Make `python3` resolve to a 3.11+ interpreter (issue #1606).
 # shellcheck source=scripts/lib/python.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
 
@@ -16,4 +17,4 @@ fi
 
 echo "serving $SITE_DIR at http://127.0.0.1:$PORT"
 cd "$SITE_DIR"
-py -m http.server "$PORT"
+python3 -m http.server "$PORT"

@@ -307,18 +307,22 @@ may be enabled for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
 
 The repository's helper scripts need **Python 3.11 or newer** (`enum.StrEnum` in
 `scripts/ci/change_policy.py`, `tomllib` in the doc and API consistency checks).
-Shell entry points resolve an interpreter through `scripts/lib/python.sh`
-instead of calling `python3` directly, in this order: `$PYTHON`, then
-`python3.13`/`python3.12`/`python3.11` on `PATH`, then `python3` when it is
-already new enough, then `uv run` with a managed 3.12.
+That interpreter comes from [`uv`](https://docs.astral.sh/uv/), pinned by
+`.python-version`, so contributors and CI execute the same version instead of
+whatever each machine ships — the macOS default `python3` is 3.9 and cannot run
+these scripts at all.
 
-`uv` is a convenience, not a prerequisite. If your `python3` is older than 3.11
-— the default on macOS — either install a newer interpreter, install
-[`uv`](https://docs.astral.sh/uv/) and let the scripts use it automatically, or
-point `PYTHON` at a suitable interpreter. A script that invokes Python must
-source the resolver and call `py` rather than `python3`, so the requirement
-stays in one place (issue #1606). `bash scripts/test-python-resolver.sh` covers
-the resolution order.
+`uv` is therefore a prerequisite for the shell entry points. Sourcing
+`scripts/lib/python.sh` puts a `python3` shim on `PATH` that forwards to the
+pinned interpreter, so scripts keep calling `python3` unchanged and the
+interpreter survives into child processes (`scripts/ci/run_profile.py` runs its
+profile commands through the shell). A script that invokes Python should source
+that library rather than resolving an interpreter itself.
+
+If you cannot install uv, set `PYTHON` to a 3.11+ interpreter; it is accepted
+only if it is new enough. `bash scripts/test-python-resolver.sh` covers the
+pinned interpreter, the child-process propagation, the override, and both
+failure messages (issue #1606).
 
 ## Build Commands
 

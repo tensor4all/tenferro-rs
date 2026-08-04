@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Make `python3` resolve to a 3.11+ interpreter (issue #1606).
 # shellcheck source=scripts/lib/python.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
 
@@ -60,7 +61,7 @@ ensure_body_file() {
         printf -- '  - `%s`\n' "$command"
       done
     fi
-    printf -- '- `py scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
+    printf -- '- `python3 scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
     printf '\n## Documentation\n\n'
     printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api/index.md`, and public rustdoc for consistency.\n'
   } >"$BODY_FILE"
@@ -87,7 +88,7 @@ run_required_checks() {
     fast_gate_args+=(--test "$command")
   done
   bash scripts/check-pr-fast.sh "${fast_gate_args[@]}"
-  py scripts/repository-rules-review.py \
+  python3 scripts/repository-rules-review.py \
     --base "origin/${BASE_BRANCH}" \
     --head HEAD \
     --output-json /tmp/repository-rules-review.json
