@@ -1361,6 +1361,52 @@ def test_sensitive_diff_ignores_an_expression_continuation() -> None:
         assert mod.sensitive_diff_finding(diff) is None, continuation
 
 
+def test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion() -> None:
+    """An unrelated addition elsewhere in the file is not a valid anchor.
+
+    Aggregating additions and deletions per FILE removed a deletion-only hunk
+    from the set as soon as any other hunk added a line, so `filter_findings`
+    dropped a real block about removed validation or a `// SAFETY:` comment.
+    """
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1,2 +1,1 @@",
+            " keep",
+            "-// SAFETY: checked above",
+            "@@ -20,1 +19,2 @@",
+            " ctx",
+            "+let extra = 1;",
+        ]
+    )
+    assert mod.files_with_unanchorable_deletions(diff) == {"a.rs"}
+
+
+def test_sensitive_diff_ignores_a_field_access_continuation() -> None:
+    """A dotted member expression is not a credential value.
+
+    `.` in the bare class let `let api_key =` continued by `settings.api_key;`
+    read as a leaked secret, so credential-LOADING code still could not pass
+    the required gate.
+    """
+    mod = load_module()
+    for continuation in ("+    settings.api_key;", "+    self.token;"):
+        diff = "\n".join(
+            [
+                "diff --git a/src/x.rs b/src/x.rs",
+                "--- a/src/x.rs",
+                "+++ b/src/x.rs",
+                "@@ -1,2 +1,2 @@",
+                f" {KEYNAME} =",
+                continuation,
+            ]
+        )
+        assert mod.sensitive_diff_finding(diff) is None, continuation
+
+
 def test_sensitive_diff_blocks_a_bare_continuation_value() -> None:
     """The continuation value need not be quoted."""
     mod = load_module()
@@ -1451,6 +1497,8 @@ def main() -> int:
         test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file,
         test_files_with_unanchorable_deletions_skips_replacement_edits,
         test_sensitive_diff_ignores_an_expression_continuation,
+        test_sensitive_diff_ignores_a_field_access_continuation,
+        test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion,
         test_sensitive_diff_blocks_a_bare_continuation_value,
         test_sensitive_diff_ignores_an_ordinary_bare_continuation,
         test_sensitive_diff_blocks_a_value_on_a_continuation_line,

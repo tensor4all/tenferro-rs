@@ -196,3 +196,29 @@ Three findings, each reproduced against the pre-fix script first.
 Coverage: `test_sensitive_diff_ignores_an_expression_continuation`,
 `test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file`, and
 `test_files_with_unanchorable_deletions_skips_replacement_edits`.
+
+## Review Follow-ups, Round 2 (Codex on PR #1604)
+
+Two findings, both reproduced against `f1c2cd37` first.
+
+- **P1 — field accesses still read as credential values.** Narrowing the bare
+  continuation class to `[A-Za-z0-9._~+/=-]` excluded call and path syntax but
+  kept `.`, so `let api_key =` continued by `settings.api_key;` still matched
+  and credential-LOADING code still could not pass the required gate. `.` is
+  now out of the class. The cost is the unquoted-JWT continuation shape; a
+  quoted JWT still matches the quoted alternatives and the `Bearer` form is
+  covered by `SECRET_VALUE_PATTERNS`, whereas a dotted bare token on a
+  continuation line is far more often a field access. Blocking valid code on
+  the required gate is the worse of the two errors.
+- **P2 — mixed-hunk deletions lost the exception.** Additions and deletions
+  were aggregated per FILE, so an unrelated addition anywhere in the file
+  removed a deletion-only hunk from the set and `filter_findings` dropped the
+  real block. The unit of "nothing to anchor to" is the HUNK: a file now
+  qualifies when at least one hunk removes lines and adds none. This keeps
+  round 1's narrowing intact — a pure replacement edit has both in the same
+  hunk, so it still does not qualify.
+
+Coverage: `test_sensitive_diff_ignores_a_field_access_continuation` and
+`test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion`, alongside
+the existing replacement-edit and whole-file-deletion cases which pin that the
+per-hunk rule did not widen the exception back out.

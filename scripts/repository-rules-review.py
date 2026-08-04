@@ -85,13 +85,18 @@ OPEN_SECRET_ASSIGNMENT = re.compile(
 # bare tokens here cannot fire on ordinary continuations.
 #
 # The bare alternative is restricted to the characters a credential literal is
-# actually made of (base64/hex/JWT alphabets plus the URL-safe punctuation).
-# An unrestricted `[^\s#]+` also matched an EXPRESSION, so
+# actually made of. An unrestricted `[^\s#]+` also matched an EXPRESSION, so
 # `let api_key =` continued by `std::env::var("API_KEY")?;` was reported as a
 # leaked credential and a valid credential-LOADING change could not pass the
 # required gate. Call, path, and index syntax (`(`, `)`, `::`, `?`, `[`, `"`)
 # is outside the class, so such continuations no longer match.
-BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,}"
+#
+# `.` is excluded too, which costs the unquoted-JWT continuation shape (a
+# quoted one still matches the alternatives above, and the `Bearer` form is
+# covered by SECRET_VALUE_PATTERNS). A dotted token is far more often a FIELD
+# ACCESS — `let api_key =` continued by `settings.api_key;` — and blocking
+# credential-loading code on the required gate is the worse error of the two.
+BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9_~+/=-]{7,}"
 STANDALONE_VALUE = re.compile(
     r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|"""
     + BARE_SECRET_VALUE
@@ -542,28 +547,42 @@ def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
 
 
 def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
-    """Files this diff removes lines from without adding any.
+    """Files containing at least one hunk that removes lines and adds none.
 
     A finding about a deletion has no new-file line to point at, so the model
     is obliged to return ``line: null`` and `filter_findings` must keep the
-    block. That obligation only holds when the diff gives it nothing to anchor
-    to: a replacement edit adds the lines that took the deleted ones' place, so
-    a real finding about that edit can and should name one of them. Requiring
-    "no added lines" keeps the anti-generalization filter in force for ordinary
-    modified files instead of disabling it for any patch that happens to remove
-    a line.
+    block. That obligation holds exactly where the diff gives it nothing to
+    anchor to, and the unit of "nothing to anchor to" is the HUNK, not the
+    file:
+
+    * a replacement edit adds the lines that took the deleted ones' place, so
+      a real finding about it can and should name one of them — judging this
+      per file would disable the anti-generalization filter for any patch that
+      happens to remove a line;
+    * but an unrelated addition elsewhere in the same file is not a valid
+      anchor for a deletion-only hunk — judging this per file would drop a
+      real block about validation or a ``// SAFETY:`` comment removed in a
+      mixed-hunk diff.
 
     Keyed by the new-side path, falling back to the old-side path when the file
     is deleted outright (``+++ /dev/null``) — that is the path a finding about
     the removal names, and without the fallback a whole-file deletion was
     omitted from the very set that exists to retain it.
     """
-    deleted: set[str] = set()
-    added: set[str] = set()
+    result: set[str] = set()
     current_file: str | None = None
     old_file: str | None = None
+    hunk_deleted = False
+    hunk_added = False
+
+    def close_hunk() -> None:
+        if current_file and hunk_deleted and not hunk_added:
+            result.add(current_file)
+
     for line in diff_text.splitlines():
         if line.startswith("--- "):
+            close_hunk()
+            hunk_deleted = hunk_added = False
             raw = line.removeprefix("--- a/").removeprefix("--- ")
             old_file = None if raw == "/dev/null" else raw
             continue
@@ -571,13 +590,18 @@ def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
             raw = line.removeprefix("+++ b/").removeprefix("+++ ")
             current_file = old_file if raw == "/dev/null" else raw
             continue
-        if current_file is None or line.startswith("@@"):
+        if line.startswith("@@"):
+            close_hunk()
+            hunk_deleted = hunk_added = False
+            continue
+        if current_file is None:
             continue
         if line.startswith("-") and not line.startswith("---"):
-            deleted.add(current_file)
+            hunk_deleted = True
         elif line.startswith("+") and not line.startswith("+++"):
-            added.add(current_file)
-    return deleted - added
+            hunk_added = True
+    close_hunk()
+    return result
 
 
 def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
