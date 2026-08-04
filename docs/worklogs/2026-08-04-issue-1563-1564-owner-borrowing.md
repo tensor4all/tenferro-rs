@@ -22,27 +22,40 @@ current P7 slice. P8 and all later phases remain deferred.
   explicit Cargo test target. The exact command passed with four tests:
   `cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda`.
   Hardware-dependent cases remain guarded by `gpu_available()`.
-- Fresh checks passed: `cargo fmt --all -- --check`,
-  `cargo check --workspace --quiet`, tensor CI-parity clippy, CUDA GPU clippy,
+- Fresh checks passed on the source candidate: `cargo fmt --all -- --check`,
+  `cargo check --workspace --quiet`, workspace CI-parity clippy, extension
+  clippy for tropical/sparse/TBLIS, `python3 scripts/check-public-error-docs.py`,
   `cargo test -p tenferro-tensor --lib` (258),
   `cargo test -p tenferro-tensor --test storage_reinterpret` (11),
+  `cargo test -p tenferro-tensor --doc` (321),
+  `cargo test -p tenferro-runtime --test integration --quiet` (122),
+  `cargo test -p tenferro-runtime --doc --quiet` (410),
+  `cargo check -p tenferro-gpu --features cuda --quiet`,
   `cargo test -p tenferro-gpu --features cuda --lib` (86 passed, 116 ignored),
   `cargo test -p tenferro-gpu --features cuda --test integration` (70),
+  `cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda`
+  (4), `cargo test -p tenferro-gpu --features cuda --doc` (32),
+  `cargo test -p tenferro-gpu --features cuda --test integration
+  cubecl_launch_contract` (37),
   `cargo test -p tenferro-ad --features cuda --quiet`
-  (396 passed, 1 ignored across the unit and trybuild targets),
-  `cargo test -p tenferro-runtime --test integration --quiet` (122),
+  (535 passed, 1 ignored across its targets),
   `cargo check -p tenferro-linalg --features cuda --quiet`,
   `cargo test -p tenferro-linalg --features cuda --test integration --quiet`
-  (129 passed, 18 ignored),
-  `python3 scripts/check-storage-ownership-contracts.py`, and
-  `python3 scripts/check-storage-design-docs.py`.
-- Candidate commit `ce0ec2a7ab118af932a4efdfa22d561e61b342aa` is clean. The
+  (129 passed, 18 ignored), `python3 scripts/check-storage-design-docs.py`,
+  and the exact `check-pr-fast.sh --coverage-reviewed` gate (including all
+  workspace/extension clippy profiles and the focused tensor test).
+- The source candidate `92368257db3f2cc301ddf1db881252c61e5d544b` is clean. The
   exact ownership runner passed all 20 active obligations and wrote
   `/tmp/tenferro-storage-ownership-receipt-p7.json`; the checker accepted that
   receipt with `terminal: false` because P8 and later deferred rows remain.
   This is not a parent Issue #1555 closure claim.
 
 ## Scope and authority
+
+The existing P7 design/spec/plan are the approved design authority for this
+continuation; the user instruction explicitly authorizes completing that
+selected root/prepared CUDA cutover while leaving P8 out of scope. No behavior
+outside that approved boundary was introduced.
 
 This checkpoint starts only the selected P7/P8 migration boundary after the
 completed P1, P2, P4, P5, and P6 work. Parent issue #1555 and child issues
