@@ -279,7 +279,7 @@ fn cubecl_handle_from_backend<T: 'static>(
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     buffer
         .as_any()
-        .downcast_ref::<CubeclBuffer<T>>()
+        .downcast_ref::<CubeclBuffer>()
         .map(|buffer| buffer.handle().clone())
         .ok_or_else(|| {
             crate::Error::runtime_state(

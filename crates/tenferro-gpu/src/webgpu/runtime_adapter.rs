@@ -287,7 +287,7 @@ fn webgpu_view_has_owner<T: 'static>(
     view.backend_buffer().is_some_and(|buffer| {
         buffer
             .as_any()
-            .downcast_ref::<WebGpuBuffer<T>>()
+            .downcast_ref::<WebGpuBuffer>()
             .is_some_and(|buffer| {
                 buffer.device_ordinal() == device_ordinal
                     && buffer.allocation_domain() == Some(allocation_domain)

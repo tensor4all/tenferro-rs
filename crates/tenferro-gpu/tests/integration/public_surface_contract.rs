@@ -332,6 +332,24 @@ fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
 }
 
 #[test]
+fn provider_buffer_owners_are_scalar_independent_and_not_cloneable() {
+    let cubecl_lib = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (name, source) in [("CubeCL", cubecl_lib), ("WebGPU", webgpu_mod)] {
+        assert!(
+            !source.contains("struct CubeclBuffer<T>")
+                && !source.contains("struct WebGpuBuffer<T>"),
+            "{name} provider owner must not be typed by scalar"
+        );
+        assert!(
+            !source.contains("impl Clone for CubeclBuffer")
+                && !source.contains("impl Clone for WebGpuBuffer"),
+            "{name} provider owner must not expose a shallow clone"
+        );
+    }
+}
+
+#[test]
 fn cubecl_copy_into_checks_borrowed_backend_identity() {
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
     let copy_body = cubecl_mod

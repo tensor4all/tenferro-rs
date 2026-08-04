@@ -198,7 +198,7 @@ where
     })?;
     let buffer = buffer
         .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
+        .downcast_ref::<WebGpuBuffer>()
         .ok_or_else(|| {
             crate::Error::runtime_state(
                 op,

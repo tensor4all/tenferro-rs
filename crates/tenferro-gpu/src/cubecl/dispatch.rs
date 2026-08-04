@@ -47,7 +47,7 @@ where
 pub(crate) fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<&'a CubeclBuffer<T>> {
+) -> crate::Result<&'a CubeclBuffer> {
     match tensor.buffer() {
         StorageBuffer::Host(_) => Err(crate::Error::runtime_state(
             op,
@@ -56,7 +56,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
         )),
         StorageBuffer::Backend(buffer) => buffer
             .as_any()
-            .downcast_ref::<CubeclBuffer<T>>()
+            .downcast_ref::<CubeclBuffer>()
             .ok_or_else(|| {
                 crate::Error::runtime_state(
                     op,
@@ -72,7 +72,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
 pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
     view: &'a TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<&'a CubeclBuffer<T>> {
+) -> crate::Result<&'a CubeclBuffer> {
     let buffer = view.backend_buffer().ok_or_else(|| {
         crate::Error::runtime_state(
             op,
@@ -82,7 +82,7 @@ pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
     })?;
     buffer
         .as_any()
-        .downcast_ref::<CubeclBuffer<T>>()
+        .downcast_ref::<CubeclBuffer>()
         .ok_or_else(|| {
             crate::Error::runtime_state(
                 op,
@@ -97,7 +97,7 @@ pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
 pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
     view: &'a TypedTensorViewMut<'_, T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<&'a CubeclBuffer<T>> {
+) -> crate::Result<&'a CubeclBuffer> {
     let buffer = view.backend_buffer().ok_or_else(|| {
         crate::Error::runtime_state(
             op,
@@ -107,7 +107,7 @@ pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
     })?;
     buffer
         .as_any()
-        .downcast_ref::<CubeclBuffer<T>>()
+        .downcast_ref::<CubeclBuffer>()
         .ok_or_else(|| {
             crate::Error::runtime_state(
                 op,
@@ -152,7 +152,7 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
 
 fn validate_cubecl_buffer_len<T>(
     tensor: &TypedTensor<T, impl TensorRank>,
-    buffer: &CubeclBuffer<T>,
+    buffer: &CubeclBuffer,
     op: &'static str,
 ) -> crate::Result<()> {
     let expected_len = checked_shape_product(op, tensor.shape())?;
@@ -401,8 +401,8 @@ pub(crate) fn ensure_view_mut_resident_on_runtime<T: 'static>(
     ensure_placement_resident_on_runtime(rt, view.placement(), op)
 }
 
-fn ensure_allocation_domain<T>(
-    buffer: &CubeclBuffer<T>,
+fn ensure_allocation_domain(
+    buffer: &CubeclBuffer,
     rt: &CudaRuntime,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -457,7 +457,7 @@ fn ensure_placement_resident_on_runtime(
 
 pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
     shape: Vec<usize>,
-    buffer: CubeclBuffer<T>,
+    buffer: CubeclBuffer,
     device_ordinal: usize,
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(
