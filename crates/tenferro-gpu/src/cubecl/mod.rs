@@ -1140,7 +1140,7 @@ impl CudaBackend {
             shape,
             StorageBuffer::Backend(Box::new(crate::CubeclBuffer::new(
                 handle,
-                len,
+                bytes,
                 self.runtime().device_ordinal(),
                 self.runtime().allocation_domain_id(),
             ))),

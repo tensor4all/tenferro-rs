@@ -115,12 +115,12 @@ fn input_parts<T: Send + Sync + 'static>(
     validate_compact_column_major(tensor, op)?;
     let buffer = webgpu_buffer(tensor, op)?;
     let expected = checked_shape_product(op, tensor.shape())?;
-    if buffer.element_len() != expected {
+    if buffer.element_len::<T>() != expected {
         return Err(Error::runtime_state(
             op,
             format!(
                 "WebGPU allocation has {} elements but shape requires {expected}",
-                buffer.element_len()
+                buffer.element_len::<T>()
             ),
         ));
     }
@@ -244,6 +244,13 @@ fn finish<T: Send + Sync + 'static>(
             "WebGPU output completion requires unique raw-handle ownership",
         ));
     }
-    let buffer = WebGpuBuffer::new_for_runtime(session.runtime(), handle, len, op)?;
+    let buffer = WebGpuBuffer::new_for_runtime(
+        session.runtime(),
+        handle,
+        usize::try_from(expected_bytes).map_err(|_| {
+            Error::invalid_argument(op, "shape", "WebGPU output byte length exceeds usize")
+        })?,
+        op,
+    )?;
     typed_from_webgpu(shape, buffer, session.runtime())
 }

@@ -439,7 +439,7 @@ where
     let destination_buffer = cubecl_view_mut_buffer(dst, op)?;
     if !src.is_col_major_contiguous()?
         || src.offset() != 0
-        || source_buffer.element_len() != src.n_elements()
+        || source_buffer.element_len::<T>() != src.n_elements()
     {
         return Err(crate::Error::invalid_argument(
             op,
@@ -734,7 +734,7 @@ fn resolve_device_region<T: 'static>(
     offset: isize,
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand> {
-    validate_view_region(buffer, shape, strides, offset, op)?;
+    validate_view_region::<T>(buffer, shape, strides, offset, op)?;
     let offset = usize::try_from(offset).map_err(|_| {
         Error::invalid_argument(
             op,
@@ -762,7 +762,7 @@ fn resolve_device_region<T: 'static>(
     })
 }
 
-fn validate_view_region(
+fn validate_view_region<T: 'static>(
     buffer: &CubeclBuffer,
     shape: &[usize],
     strides: &[isize],
@@ -795,14 +795,14 @@ fn validate_view_region(
             format!("view region reaches negative element offset {min_offset}"),
         ));
     }
-    let len = buffer.element_len() as i128;
+    let len = buffer.element_len::<T>() as i128;
     if max_offset >= len {
         return Err(Error::invalid_argument(
             op,
             "layout",
             format!(
                 "view region reaches element offset {max_offset} but the device buffer holds only {} elements",
-                buffer.element_len()
+                buffer.element_len::<T>()
             ),
         ));
     }

@@ -45,7 +45,7 @@ pub use runtime_adapter::{
 /// trait objects; dtype is carried by the borrowed tensor descriptor.
 pub(crate) struct WebGpuBuffer {
     handle: cubecl_runtime::server::Handle,
-    len: usize,
+    byte_len: usize,
     device_ordinal: usize,
     managed: Option<Arc<cubecl_runtime::storage::ManagedResource<cubecl_wgpu::WgpuResource>>>,
     domain: Option<Arc<apple::AppleDomainState>>,
@@ -59,7 +59,7 @@ static NEXT_WEBGPU_ALLOCATION_ID: std::sync::atomic::AtomicU64 =
 impl std::fmt::Debug for WebGpuBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebGpuBuffer")
-            .field("len", &self.len)
+            .field("byte_len", &self.byte_len)
             .field("device_ordinal", &self.device_ordinal)
             .field("allocation_domain", &self.allocation_domain)
             .field("allocation_id", &self.allocation_id)
@@ -70,13 +70,13 @@ impl std::fmt::Debug for WebGpuBuffer {
 impl WebGpuBuffer {
     fn new(
         handle: cubecl_runtime::server::Handle,
-        len: usize,
+        byte_len: usize,
         device_ordinal: usize,
         allocation_domain: AllocationDomainId,
     ) -> Self {
         Self {
             handle,
-            len,
+            byte_len,
             device_ordinal,
             managed: None,
             domain: None,
@@ -90,13 +90,13 @@ impl WebGpuBuffer {
     fn new_for_runtime(
         rt: &WebGpuRuntime,
         handle: cubecl_runtime::server::Handle,
-        len: usize,
+        byte_len: usize,
         op: &'static str,
     ) -> crate::Result<Self> {
         let Some(domain) = rt.allocation_domain() else {
             return Ok(Self::new(
                 handle,
-                len,
+                byte_len,
                 rt.device_ordinal(),
                 rt.allocation_domain_id(),
             ));
@@ -108,7 +108,7 @@ impl WebGpuBuffer {
         let allocation_id = AllocationId::from_backend_id(managed.resource().allocation_id());
         Ok(Self {
             handle,
-            len,
+            byte_len,
             device_ordinal: rt.device_ordinal(),
             managed: Some(Arc::new(managed)),
             domain: Some(Arc::clone(domain)),
@@ -125,8 +125,10 @@ impl WebGpuBuffer {
         self.allocation_domain
     }
 
-    fn element_len(&self) -> usize {
-        self.len
+    fn element_len<T: 'static>(&self) -> usize {
+        let element_size = core::mem::size_of::<T>();
+        debug_assert!(element_size != 0 && self.byte_len.is_multiple_of(element_size));
+        self.byte_len / element_size
     }
 
     fn device_ordinal(&self) -> usize {
@@ -226,7 +228,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer {
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.element_len::<T>()
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
@@ -242,7 +244,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer {
             backend: "cubecl-webgpu",
         })?;
         let bytes = managed.resource().map_read().map_err(host_access_error)?;
-        validate_typed_read_mapping::<T>(&bytes, self.len)?;
+        validate_typed_read_mapping::<T>(&bytes, self.element_len::<T>())?;
         Ok(HostReadGuard::new(TypedMappedRead {
             bytes,
             marker: std::marker::PhantomData,
@@ -254,8 +256,9 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer {
             backend: "cubecl-webgpu",
         })?;
         let mut bytes = managed.resource().map_write().map_err(host_access_error)?;
-        validate_typed_mapping_len::<T>(bytes.len(), self.len)?;
-        Ok(HostWriteGuard::new(self.len, move |source: &[T]| {
+        let len = self.element_len::<T>();
+        validate_typed_mapping_len::<T>(bytes.len(), len)?;
+        Ok(HostWriteGuard::new(len, move |source: &[T]| {
             let byte_len = source
                 .len()
                 .checked_mul(core::mem::size_of::<T>())
@@ -336,18 +339,18 @@ fn comptime_sequence<T: CubeType + Clone>(values: &[T]) -> Sequence<T> {
     out
 }
 
-fn validate_webgpu_buffer_len<T>(
+fn validate_webgpu_buffer_len<T: 'static>(
     tensor: &TypedTensor<T>,
     buffer: &WebGpuBuffer,
     op: &'static str,
 ) -> crate::Result<()> {
     let expected_len = checked_shape_product(op, tensor.shape())?;
-    let actual_len = buffer.element_len();
+    let actual_len = buffer.element_len::<T>();
     if expected_len != actual_len {
         return Err(Error::runtime_state(
             op,
             format!(
-                "expected shape product {expected_len} elements, actual WebGpuBuffer::len {actual_len}"
+                "expected shape product {expected_len} elements, actual typed count {actual_len}"
             ),
         ));
     }
@@ -391,12 +394,12 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
     let buffer = webgpu_buffer(tensor, op)?;
     validate_webgpu_buffer_len(tensor, buffer, op)?;
     let layout_len = checked_shape_product(op, shape)?;
-    if layout_len != buffer.element_len() {
+    if layout_len != buffer.element_len::<T>() {
         return Err(Error::runtime_state(
             op,
             format!(
                 "WebGPU tensor binding layout covers {layout_len} elements, backing buffer has {}",
-                buffer.element_len()
+                buffer.element_len::<T>()
             ),
         ));
     }
@@ -526,7 +529,7 @@ fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
         )
     })?;
     let handle = rt.client().empty(bytes);
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, len, op)?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, bytes, op)?;
     typed_from_webgpu(shape.to_vec(), buffer, rt)
 }
 

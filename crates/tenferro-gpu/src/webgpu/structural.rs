@@ -242,7 +242,7 @@ where
     // SAFETY: TypedTensorView construction proves every reachable signed
     // offset is inside the backing allocation. The kernel receives that same
     // validated layout metadata and indexes only logical output elements.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len::<T>()) })
 }
 
 fn transpose_typed<T>(

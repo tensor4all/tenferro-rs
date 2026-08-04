@@ -25,13 +25,13 @@ fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
     let first = WebGpuBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
-        1,
+        4,
         0,
         domain,
     );
     let second = WebGpuBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
-        1,
+        4,
         0,
         domain,
     );

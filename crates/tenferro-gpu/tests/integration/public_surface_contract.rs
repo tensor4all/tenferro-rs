@@ -354,6 +354,22 @@ fn provider_buffer_owners_are_scalar_independent_and_not_cloneable() {
 }
 
 #[test]
+fn provider_buffer_owners_store_bytes_and_derive_typed_lengths() {
+    let cubecl_lib = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (name, source) in [("CubeCL", cubecl_lib), ("WebGPU", webgpu_mod)] {
+        assert!(
+            source.contains("byte_len: usize"),
+            "{name} provider owner must identify physical storage in bytes"
+        );
+        assert!(
+            source.contains("fn element_len<T: 'static>(&self)"),
+            "{name} typed views must derive element counts from the borrowed scalar"
+        );
+    }
+}
+
+#[test]
 fn cubecl_copy_into_checks_borrowed_backend_identity() {
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
     let copy_body = cubecl_mod
