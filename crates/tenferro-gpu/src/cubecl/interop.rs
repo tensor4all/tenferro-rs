@@ -40,9 +40,12 @@ impl DeviceByteBuffer {
         }
     }
 
-    /// Return the CUDA device pointer for this workspace.
-    pub fn ptr(&self) -> *mut c_void {
-        self.ptr
+    /// Borrow the CUDA device pointer for the duration of `f`.
+    ///
+    /// The pointer is only exposed while this owner is borrowed, so callers
+    /// cannot obtain an unscoped pointer from the workspace handle.
+    pub fn with_ptr<R>(&self, f: impl FnOnce(*mut c_void) -> R) -> R {
+        f(self.ptr)
     }
 
     /// Return whether this workspace owns a live CubeCL allocation.

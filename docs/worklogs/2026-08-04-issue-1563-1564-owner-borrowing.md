@@ -44,6 +44,9 @@ follow Rust borrowing.
 - The top-level `device_ptr(&CudaRuntime, &Tensor)` escape hatch is no longer
   exported. Crate-internal tests use the existing typed interop helper; the
   linalg-facing interop surface remains a separately tracked migration item.
+- `DeviceByteBuffer::ptr()` is no longer a public accessor; workspace callers
+  borrow its pointer through `with_ptr`, while the owning linalg workspace
+  retains the allocation for the complete operation.
 
 ## Files and durable contract
 
@@ -73,10 +76,10 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 35 passed.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
-- Full GPU integration reached 89/90; the sole failure is the pre-existing
-  `session_contract` trybuild fixture drift for removed CUDA symbols (the
-  compiler now emits a similar-name help line), unrelated to allocation-domain
-  changes and intentionally not blessed here.
+- Full GPU integration reached 90/91; the sole failing test is the pre-existing
+  `session_contract` trybuild check, with two fixture mismatches for removed CUDA
+  symbols (the compiler now emits similar-name help lines), unrelated to
+  allocation-domain changes and intentionally not blessed here.
 
 This is a migration checkpoint, not P7/P8 completion: concrete provider root,
 claim, prepared-access, and hardware evidence obligations remain for the

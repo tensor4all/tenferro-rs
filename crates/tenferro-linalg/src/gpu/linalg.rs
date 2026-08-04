@@ -179,7 +179,8 @@ impl Workspace {
     }
 
     fn from_device(owner: DeviceByteBuffer) -> Self {
-        let ptr = owner.ptr();
+        let mut ptr = std::ptr::null_mut();
+        owner.with_ptr(|device_ptr| ptr = device_ptr);
         Self { _owner: owner, ptr }
     }
 }
