@@ -144,7 +144,7 @@ tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
 tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu
 tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor
+                              tenferro-tensor, tenferro-cpu
 ```
 
 Additional internal dependencies:
