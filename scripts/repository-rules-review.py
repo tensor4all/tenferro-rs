@@ -106,7 +106,52 @@ OPEN_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"[ \t]*[:=][ \t]*$"
 )
 # A value standing alone on its own line, as the continuation of the above.
-STANDALONE_VALUE = re.compile(r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}')[ \t]*[,;]?[ \t]*$""")
+# The value may be a bare token: `API_KEY =` followed by an unquoted secret.
+# `awaiting_value` is only set for credential-named assignments, so accepting
+# bare tokens here cannot fire on ordinary continuations.
+#
+# The bare alternative is restricted to the characters a credential literal is
+# actually made of. An unrestricted `[^\s#]+` also matched an EXPRESSION, so
+# `let api_key =` continued by `std::env::var("API_KEY")?;` was reported as a
+# leaked credential and a valid credential-LOADING change could not pass the
+# required gate. Call, path, and index syntax (`(`, `)`, `::`, `?`, `[`, `"`)
+# is outside the class, so such continuations no longer match.
+#
+# `.` is excluded too, which costs the unquoted-JWT continuation shape (a
+# quoted one still matches the alternatives above, and the `Bearer` form is
+# covered by SECRET_VALUE_PATTERNS). A dotted token is far more often a FIELD
+# ACCESS — `let api_key =` continued by `settings.api_key;` — and blocking
+# credential-loading code on the required gate is the worse error of the two.
+#
+# Length and word-shape carry the rest of the discrimination, because a plain
+# IDENTIFIER is spelled from the same alphabet as a credential:
+# `let api_key =` continued by `configured_token;` or `ENV_API_KEY;` is
+# ordinary code with no secret in the diff.
+#   * 20 characters is the floor the file already uses for a bare credential
+#     (`github_pat_…{20,}`, `gh[pousr]_…{20,}`, `sk-…{20,}`); the reported
+#     identifiers are 16 and 11.
+#   * a snake_case / SCREAMING_SNAKE_CASE token is an identifier by
+#     convention, while base64/hex credentials mix case and digits, so
+#     `IDENTIFIER_WORD_SHAPE` rejects the former even past the length floor.
+# A long single-word identifier with no underscore remains a residual false
+# positive; it is waivable, whereas the reverse error would upload a secret.
+BARE_SECRET_VALUE = r"[A-Za-z0-9][A-Za-z0-9_~+/=-]{19,}"
+IDENTIFIER_WORD_SHAPE = re.compile(
+    r"^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$"
+)
+STANDALONE_VALUE = re.compile(
+    r"""^[ \t]*(?P<value>"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|"""
+    + BARE_SECRET_VALUE
+    + r""")[ \t]*[,;]?[ \t]*$"""
+)
+
+
+def is_standalone_secret_value(body: str) -> bool:
+    """Whether a continuation line carries a credential value rather than code."""
+    match = STANDALONE_VALUE.match(body)
+    if not match:
+        return False
+    return not IDENTIFIER_WORD_SHAPE.match(match.group("value"))
 # A quote opened on this line and closed on a later one hides the value from
 # any single-line pattern, so treat the opening alone as disqualifying.
 UNTERMINATED_SECRET_ASSIGNMENT = re.compile(
@@ -570,6 +615,77 @@ def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
     return result
 
 
+def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
+    """Files containing at least one hunk that removes lines and adds none.
+
+    A finding about a deletion has no new-file line to point at, so the model
+    is obliged to return ``line: null`` and `filter_findings` must keep the
+    block. That obligation holds exactly where the diff gives it nothing to
+    anchor to, and the unit of "nothing to anchor to" is the HUNK, not the
+    file:
+
+    * a replacement edit adds the lines that took the deleted ones' place, so
+      a real finding about it can and should name one of them — judging this
+      per file would disable the anti-generalization filter for any patch that
+      happens to remove a line;
+    * but an unrelated addition elsewhere in the same file is not a valid
+      anchor for a deletion-only hunk — judging this per file would drop a
+      real block about validation or a ``// SAFETY:`` comment removed in a
+      mixed-hunk diff.
+
+    Keyed by the new-side path, falling back to the old-side path when the file
+    is deleted outright (``+++ /dev/null``) — that is the path a finding about
+    the removal names, and without the fallback a whole-file deletion was
+    omitted from the very set that exists to retain it.
+
+    File headers are only read OUTSIDE a hunk. Inside one, ``--- validation``
+    is the deletion of a source line reading ``-- validation``, not an
+    old-file header; treating it as a header reset the hunk flags and lost the
+    file. ``diff --git`` returns the parser to the header state.
+    """
+    result: set[str] = set()
+    current_file: str | None = None
+    old_file: str | None = None
+    in_hunk = False
+    hunk_deleted = False
+    hunk_added = False
+
+    def close_hunk() -> None:
+        if current_file and hunk_deleted and not hunk_added:
+            result.add(current_file)
+
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git"):
+            close_hunk()
+            in_hunk = False
+            hunk_deleted = hunk_added = False
+            current_file = old_file = None
+            continue
+        if line.startswith("@@"):
+            close_hunk()
+            in_hunk = True
+            hunk_deleted = hunk_added = False
+            continue
+        if not in_hunk:
+            if line.startswith("--- "):
+                raw = line.removeprefix("--- a/").removeprefix("--- ")
+                old_file = None if raw == "/dev/null" else raw
+                continue
+            if line.startswith("+++ "):
+                raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+                current_file = old_file if raw == "/dev/null" else raw
+                continue
+            continue
+        if current_file is None:
+            continue
+        if line.startswith("-"):
+            hunk_deleted = True
+        elif line.startswith("+"):
+            hunk_added = True
+    close_hunk()
+    return result
+
+
 def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
     """Map each file to its added ``(new_line_number, text)`` pairs."""
     result: dict[str, list[tuple[int, str]]] = {}
@@ -900,7 +1016,7 @@ def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
 
         if is_added and contains_sensitive_text(body):
             return current_file, new_line
-        if is_added and awaiting_value and STANDALONE_VALUE.match(body):
+        if is_added and awaiting_value and is_standalone_secret_value(body):
             return current_file, new_line
 
         opener = OPEN_SECRET_ASSIGNMENT.search(body)
@@ -1057,8 +1173,19 @@ def filter_findings(
     added_lines: dict[str, set[int]],
     *,
     allow_global: bool = True,
+    files_with_deletions: set[str] | None = None,
 ) -> list[Finding]:
+    """Keep only findings anchored to something this diff actually changed.
+
+    A file-level `block` is normally dropped, because an unanchored block is
+    usually the model generalising about the file rather than about the diff.
+    The exception is a violation introduced by *deleting* required validation,
+    coverage, or a safety comment: there is no new-file line to point at, so
+    the model must return `line: null`, and dropping it would let a
+    deletion-only diff pass the gate.
+    """
     allowed_files = set(files)
+    deletions = files_with_deletions or set()
     kept: list[Finding] = []
     for finding in findings:
         if not finding.file:
@@ -1067,7 +1194,11 @@ def filter_findings(
             continue
         if finding.file and finding.file not in allowed_files:
             continue
-        if finding.line is None and finding.severity == "block":
+        if (
+            finding.line is None
+            and finding.severity == "block"
+            and finding.file not in deletions
+        ):
             continue
         if finding.line is not None:
             if finding.line not in added_lines.get(finding.file, set()):
@@ -2490,6 +2621,7 @@ def main(argv: list[str] | None = None) -> int:
     diff_text = unified_diff(args.base, args.head, worktree=args.worktree)
     added_lines = added_lines_by_file(diff_text)
     added_text = added_lines_with_text(diff_text)
+    deleted_from = files_with_unanchorable_deletions(diff_text)
     section_names = select_rule_sections(files, added_text)
     rules_text = build_rules_payload(section_names)
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -2591,7 +2723,20 @@ def main(argv: list[str] | None = None) -> int:
                     f"{type(exc).__name__}: {exc}",
                     file=sys.stderr,
                 )
-                findings.append(llm_response_error_finding(exc))
+                # A transport failure at the cumulative deadline is the budget
+                # running out, not an unusable model. Reporting it as a block
+                # would fail the gate for exactly the case the budget exists
+                # to degrade gracefully.
+                if isinstance(exc, TRANSPORT_ERRORS) and (
+                    time.monotonic() >= llm_deadline
+                ):
+                    findings.append(
+                        budget_exhausted_finding(
+                            reviewed, len(chunks), args.budget_seconds
+                        )
+                    )
+                else:
+                    findings.append(llm_response_error_finding(exc))
                 break
             print(
                 f"LLM chunk {index}/{len(chunks)}: {len(chunk)} chars, "
@@ -2607,6 +2752,7 @@ def main(argv: list[str] | None = None) -> int:
             files,
             added_lines,
             allow_global=False,
+            files_with_deletions=deleted_from,
         )
         llm_elapsed = time.monotonic() - llm_started
         llm_summary = summarize_llm_review(

@@ -167,3 +167,93 @@ invocations now pass `-c core.quotePath=false`.
 - `CONTENT_TRIGGERS` is a heuristic keyed on source text. It will miss a rule
   signal expressed differently and will occasionally supply a section that
   turns out to be irrelevant, costing tokens rather than correctness.
+
+## Review Follow-ups (Codex on PR #1604)
+
+Three findings, each reproduced against the pre-fix script first.
+
+- **P1 — expression continuations blocked the gate.** The new bare
+  continuation alternative `[^\s"'#][^\s#]{7,}` matched a whole EXPRESSION,
+  so `let api_key =` continued by `std::env::var("API_KEY")?;` was reported as
+  a leaked credential and a valid credential-LOADING change could not pass the
+  required review-bot gate. The alternative is now `BARE_SECRET_VALUE`,
+  restricted to the characters a credential literal is made of
+  (`[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,}` — base64/hex/JWT alphabets plus URL-safe
+  punctuation). Call, path and index syntax falls outside the class. The
+  motivating unquoted-secret case and JWT-shaped values still match.
+- **P2 — a fully deleted file was omitted.** `+++ /dev/null` cleared
+  `current_file`, so a whole-file deletion never entered the set that exists to
+  retain unanchored blocks about deletions. The parser now falls back to the
+  old-side path from the preceding `--- a/...` header — the path a finding
+  about the removal names.
+- **P2 — the exception was too wide.** Any patch removing even one line put
+  the file in the set, which disabled the anti-generalization filter for most
+  modified files. The rule is now "removes lines and adds none": a replacement
+  edit supplies the lines that took the deleted ones' place, so a real finding
+  about it can and should name one of them. The helper is renamed
+  `files_with_unanchorable_deletions` to state that condition.
+
+Coverage: `test_sensitive_diff_ignores_an_expression_continuation`,
+`test_files_with_unanchorable_deletions_keeps_a_fully_deleted_file`, and
+`test_files_with_unanchorable_deletions_skips_replacement_edits`.
+
+## Review Follow-ups, Round 2 (Codex on PR #1604)
+
+Two findings, both reproduced against `f1c2cd37` first.
+
+- **P1 — field accesses still read as credential values.** Narrowing the bare
+  continuation class to `[A-Za-z0-9._~+/=-]` excluded call and path syntax but
+  kept `.`, so `let api_key =` continued by `settings.api_key;` still matched
+  and credential-LOADING code still could not pass the required gate. `.` is
+  now out of the class. The cost is the unquoted-JWT continuation shape; a
+  quoted JWT still matches the quoted alternatives and the `Bearer` form is
+  covered by `SECRET_VALUE_PATTERNS`, whereas a dotted bare token on a
+  continuation line is far more often a field access. Blocking valid code on
+  the required gate is the worse of the two errors.
+- **P2 — mixed-hunk deletions lost the exception.** Additions and deletions
+  were aggregated per FILE, so an unrelated addition anywhere in the file
+  removed a deletion-only hunk from the set and `filter_findings` dropped the
+  real block. The unit of "nothing to anchor to" is the HUNK: a file now
+  qualifies when at least one hunk removes lines and adds none. This keeps
+  round 1's narrowing intact — a pure replacement edit has both in the same
+  hunk, so it still does not qualify.
+
+Coverage: `test_sensitive_diff_ignores_a_field_access_continuation` and
+`test_files_with_unanchorable_deletions_keeps_a_mixed_hunk_deletion`, alongside
+the existing replacement-edit and whole-file-deletion cases which pin that the
+per-hunk rule did not widen the exception back out.
+
+## Review Follow-ups, Round 3 (Codex on PR #1604)
+
+Both reproduced against `f1c2cd37` first.
+
+- **P1 — plain identifiers still read as bare secret literals.** After the
+  expression and field-access narrowings, the class still accepted every
+  identifier-only continuation of eight or more characters, so `let api_key =`
+  followed by `configured_token;` or `ENV_API_KEY;` blocked the required gate
+  with no credential in the diff. An identifier is spelled from the same
+  alphabet as a credential, so shape alone cannot separate them; two further
+  discriminators do:
+  * the bare floor rises from 8 to **20** characters — the threshold this file
+    already uses for bare credentials (`github_pat_…{20,}`, `gh[pousr]_…{20,}`,
+    `sk-…{20,}`). The reported identifiers are 16 and 11.
+  * `IDENTIFIER_WORD_SHAPE` rejects snake_case / SCREAMING_SNAKE_CASE past the
+    floor, since that is an identifier convention base64/hex credentials do not
+    follow. This covers `configured_authentication_token` (31).
+  `is_standalone_secret_value` composes the two so the call site reads as one
+  decision. Residual: a long single-word identifier with no underscore still
+  trips; it is waivable, whereas the reverse error would upload a secret.
+- **P2 — diff body lines mistaken for file headers.** Deleting a source line
+  reading `-- validation` produces the body line `--- validation`, which the
+  parser read as an old-file header: it closed the hunk, reset the flags and
+  cleared the path, so a deletion-only hunk returned nothing (measured:
+  `set()` instead of `{"a.rs"}`) and the unanchored block was discarded after
+  all. Header parsing now happens only OUTSIDE a hunk — `@@` enters the hunk
+  state and `diff --git` returns to the header state — which fixes the `+++`
+  twin at the same time.
+
+Coverage: `test_sensitive_diff_ignores_an_identifier_continuation`,
+`test_is_standalone_secret_value_keeps_credential_shapes` (positive control for
+the shapes the guard exists for), and
+`test_files_with_unanchorable_deletions_reads_headers_outside_hunks`. The
+round-1/2 replacement-edit, whole-file-deletion and mixed-hunk tests still pass.
