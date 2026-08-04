@@ -1153,21 +1153,13 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
 }
 
 #[test]
-fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
+fn cubecl_raw_device_pointer_paths_are_not_public() {
     let memory_source = cubecl_source("memory.rs");
-    let memory_ptr = source_section(
-        &memory_source,
-        "pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {",
-        "fn upload_typed<",
-    );
-    assert_ordered_needles(
-        "memory::device_ptr",
-        memory_ptr,
-        &[
-            "ensure_tensor_resident_on_runtime(rt, tensor, \"device_ptr\")?;",
-            "let handle = cubecl_handle(tensor)?;",
-            ".get_resource(handle)",
-        ],
+    assert!(
+        !memory_source.contains("pub fn device_ptr")
+            && !gpu_source(&["lib.rs"]).contains("device_ptr,")
+            && !gpu_source(&["cubecl", "mod.rs"]).contains("device_ptr,"),
+        "the unscoped CUDA device pointer must not be re-exported from the public crate root"
     );
 
     let interop_source = cubecl_source("interop.rs");

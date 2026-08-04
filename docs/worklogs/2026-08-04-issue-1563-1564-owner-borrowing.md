@@ -38,6 +38,9 @@ follow Rust borrowing.
   cloneable handle were removed or rewritten because the safe owner API now
   prevents that construction; borrowed identity checks remain at provider
   boundaries.
+- The top-level `device_ptr(&CudaRuntime, &Tensor)` escape hatch is no longer
+  exported. Crate-internal tests use the existing typed interop helper; the
+  linalg-facing interop surface remains a separately tracked migration item.
 
 ## Files and durable contract
 
@@ -63,6 +66,7 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --no-run` — passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --lib domain_and_distinguish_allocations` — 2 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
+- `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 35 passed.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
 - Full GPU integration reached 89/90; the sole failure is the pre-existing
   `session_contract` trybuild fixture drift for removed CUDA symbols (the
