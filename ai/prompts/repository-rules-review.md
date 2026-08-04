@@ -40,6 +40,13 @@ You review pull-request diffs for consistency with tenferro repository rules.
   diff.
 - If your own detail says the code is acceptable, already justified, or not a
   violation, omit the finding instead of returning it as `block`.
+- A rule deviation that the diff itself discloses as intentional (in a
+  worklog, design doc, or code comment) is still a finding. Report it at
+  severity `warn` and start the detail with `disclosed-in-worklog:` so a
+  maintainer decides whether to waive it. Disclosure is not an exemption.
+  Only the changed paths, the routed rules, and the unified diff reach you;
+  a pull-request description is not part of the payload, so a disclosure made
+  only there is invisible here and must not be assumed.
 
 ## Severity
 

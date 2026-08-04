@@ -1018,8 +1018,14 @@ diff-scoped review bot.
 
 ### Doc Examples
 
+- Every public type, trait, and function must include minimal but sufficient
+  usage examples in its doc comments (`/// # Examples`). `#[doc(hidden)]`
+  items are exempt.
 - Doc examples (`/// # Examples`) must NOT use `ignore` or `no_run` attributes.
 - Every example must compile AND run as a doctest.
+- An example must demonstrate real usage. Examples consisting only of path or
+  assignment statements (for example `let _method = Type::method;`) satisfy
+  the doctest gate without documenting anything and are not acceptable.
 - Use `compile_fail` only for examples that intentionally demonstrate compile errors.
 - If an example cannot run as a doctest, refactor it until it can.
 - When a canonical public API changes from infallible or panicking to
@@ -1048,6 +1054,17 @@ diff-scoped review bot.
   also be under `# Deferred errors`. Keep the audit enabled without `clippy`
   or source-level allowlists; add the concrete documentation at the API source
   instead.
+
+## PR Content Hygiene
+
+- Do not include AI-generated analysis, task, or verification reports as
+  standalone files in PRs. Durable session records belong in
+  `docs/worklogs/`; everything else stays out of the repository.
+- Do not commit new top-level directories or dot-directories without an
+  explicit maintainer decision recorded in the PR.
+- User-facing guides must not pin commit hashes in setup instructions
+  (for example `git checkout <hash>`); reference branches, tags, or released
+  versions instead.
 
 ## Generic Over Scalar Type
 

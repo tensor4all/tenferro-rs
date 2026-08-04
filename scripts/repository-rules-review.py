@@ -28,7 +28,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "REPOSITORY_RULES.md"
 PROMPT_PATH = ROOT / "ai" / "prompts" / "repository-rules-review.md"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 DEFAULT_MODEL = "deepseek-v4-pro"
 DEFAULT_API_URL = "https://api.deepseek.com/chat/completions"
 MAX_DIFF_CHARS = 60_000
@@ -37,7 +37,33 @@ MAX_FINDINGS_PER_CHUNK = 8
 HUNK_HEADER = re.compile(
     r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$"
 )
-MAX_ROUTED_SECTION_LINES = 100
+# Inline `#[cfg(test)] mod ... { ... }` blocks are exempt only for genuinely
+# tiny leaf modules (Unit Test Organization).
+INLINE_TEST_EXEMPT_FILE_LINES = 150
+INLINE_TEST_EXEMPT_BLOCK_LINES = 60
+# Section routed for changed paths that match no other trigger or that live
+# outside the established top-level directories.
+FALLBACK_SECTION = "PR Content Hygiene"
+KNOWN_TOP_LEVEL_DIRS = frozenset(
+    {
+        "crates",
+        "docs",
+        "scripts",
+        "ext",
+        "samples",
+        "benches",
+        "benchmarks",
+        "ai",
+        "src",
+        "tests",
+        ".github",
+        ".claude",
+        ".agents",
+        ".opencode",
+        ".kimi",
+        ".cargo",
+    }
+)
 RUNTIME_AD_FORBIDDEN = re.compile(
     r"\b(ADRule|EagerRuntime|EagerTensor|autodiff|chainrules|tidu)\b"
 )
@@ -277,6 +303,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
                 "Public Surface Drift",
                 "Documentation Policy",
                 "Naming Style",
+                "PR Content Hygiene",
             }
         ),
     ),
@@ -287,6 +314,13 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
                 "File Organization",
                 "Public API Convention",
                 "Generic Over Scalar Type",
+                # Inline `#[cfg(test)]` violations happen in normal src
+                # files, so the unit-test rule must load for every Rust
+                # change, not only for tests paths.
+                "Unit Test Organization",
+                # The doc-example mandate applies to Rust public items, not
+                # only to Markdown changes.
+                "Documentation Policy",
             }
         ),
     ),
@@ -492,9 +526,20 @@ def select_rule_sections(
     """
     selected = set(ALWAYS_SECTIONS)
     for path in files:
+        matched = False
         for pattern, section_names in SECTION_TRIGGERS:
             if pattern.search(path):
                 selected.update(section_names)
+                matched = True
+        # Paths outside every routed area or outside the established
+        # top-level directories (for example `.superpowers/` or a new
+        # `new-crate/src/lib.rs`) must load the PR-content rules even when
+        # another trigger such as `.rs$` already matched.
+        top_level = path.split("/", 1)[0] if "/" in path else None
+        if not matched or (
+            top_level is not None and top_level not in KNOWN_TOP_LEVEL_DIRS
+        ):
+            selected.add(FALLBACK_SECTION)
 
     if added:
         for entries in added.values():
@@ -1393,6 +1438,85 @@ def strip_code_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
     return "".join(result), in_block_comment
 
 
+def strip_code_comments_and_literals(
+    line: str, state: tuple[bool, bool, int | None]
+) -> tuple[str, tuple[bool, bool, int | None]]:
+    """Drop comments AND string/char literal contents, for brace counting.
+
+    A brace inside a literal is not structural: `let expected = "}";` inside an
+    inline test module ended the block at that line, so a test added below fell
+    outside the computed span and evaded the audit entirely. Only the scanners
+    that COUNT braces use this; `scan_runtime_boundary_text` keeps
+    `strip_code_comments`, because a forbidden symbol appearing inside a string
+    is still worth reporting there.
+
+    `state` is `(in_block_comment, in_string, raw_hashes)`; `raw_hashes` is the
+    `#` count of an open raw string (`r#"..."#`), or `None` when not in one.
+    Rust normal strings and raw strings may span lines, hence the carried state.
+    """
+    in_block_comment, in_string, raw_hashes = state
+    result: list[str] = []
+    index = 0
+    length = len(line)
+    while index < length:
+        if in_block_comment:
+            end = line.find("*/", index)
+            if end == -1:
+                return "".join(result), (True, False, None)
+            index = end + 2
+            in_block_comment = False
+            continue
+        if raw_hashes is not None:
+            closer = '"' + "#" * raw_hashes
+            end = line.find(closer, index)
+            if end == -1:
+                return "".join(result), (False, False, raw_hashes)
+            index = end + len(closer)
+            raw_hashes = None
+            continue
+        if in_string:
+            index, in_string = _scan_string_body(line, index)
+            continue
+        if line.startswith("/*", index):
+            in_block_comment = True
+            index += 2
+            continue
+        if line.startswith("//", index):
+            break
+        raw = RAW_STRING_OPEN.match(line, index)
+        if raw:
+            raw_hashes = len(raw.group(1))
+            index = raw.end()
+            continue
+        if line[index] == '"':
+            index, in_string = _scan_string_body(line, index + 1)
+            continue
+        if line[index] == "'":
+            # `'a` is a lifetime, `'x'` a char literal. Only the literal hides
+            # braces, and only it has a closing quote on the same line.
+            char = CHAR_LITERAL.match(line, index)
+            if char:
+                index = char.end()
+            else:
+                index += 1
+            continue
+        result.append(line[index])
+        index += 1
+    return "".join(result), (in_block_comment, in_string, raw_hashes)
+
+
+def _scan_string_body(line: str, index: int) -> tuple[int, bool]:
+    """Consume a normal string from `index`; return (next index, still open)."""
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] == '"':
+            return index + 1, False
+        index += 1
+    return index, True
+
+
 def scan_runtime_boundary_text(
     path: str,
     text: str,
@@ -1445,14 +1569,918 @@ def runtime_ad_boundary_violations(
     return violations
 
 
+RUST_TEST_PATH = re.compile(r"(^|/)tests(/|\.rs$)|_tests\.rs$|(^|/)benches/|(^|/)examples/")
+INLINE_TEST_MOD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# `union` belongs here with the other public type forms: a public union is as
+# much a documented public type as a struct or enum, and omitting it let one
+# slip past the doc-example audit entirely.
+PUB_ITEM = re.compile(
+    r"^\s*pub\s+(?:async\s+|unsafe\s+|const\s+|extern\s+\"[^\"]*\"\s+)*"
+    r"(fn|struct|enum|union|trait|type)\s+([A-Za-z_]\w*)"
+)
+AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
+RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+# `r"..."`, `r#"..."#`, `br"..."` — the byte/raw prefixes rustc accepts.
+RAW_STRING_OPEN = re.compile(r'(?:b?r)(#*)"')
+# `'x'`, `'\\n'`, `'\\u{1F600}'` — a lifetime has no closing quote.
+CHAR_LITERAL = re.compile(r"'(?:\\\\(?:u\\{[0-9a-fA-F]{1,6}\\}|x[0-9a-fA-F]{2}|.)|[^\\\\'])'")
+CFG_ATTR = re.compile(r"^#\[cfg\((.*)\)\]\s*$")
+CFG_PREDICATE_CALL = re.compile(r"^(all|any|not)\s*\((.*)\)$", re.DOTALL)
+
+
+def split_cfg_operands(expression: str) -> list[str]:
+    """Split a cfg operand list on commas that are not inside parens or strings."""
+    operands: list[str] = []
+    depth = 0
+    in_string = False
+    current: list[str] = []
+    for char in expression:
+        if in_string:
+            current.append(char)
+            if char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            current.append(char)
+        elif char == "(":
+            depth += 1
+            current.append(char)
+        elif char == ")":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            operands.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        operands.append(tail)
+    return [operand for operand in operands if operand]
+
+
+def cfg_expression_enables_test(expression: str, *, negated: bool = False) -> bool:
+    """True when `test` appears in a POSITIVE position of a cfg expression.
+
+    The cfg grammar nests, so polarity has to be tracked structurally rather
+    than by deleting a literal `not(test)` substring: in
+    `not(any(test, feature = "cuda"))` the item is compiled when `test` is
+    *off*, yet a bare `test` token is still present. Each enclosing `not`
+    flips polarity, so a `test` operand under an odd number of them does not
+    gate the item on tests.
+    """
+    expression = expression.strip()
+    if not expression:
+        return False
+    call = CFG_PREDICATE_CALL.match(expression)
+    if call:
+        name, inner = call.group(1), call.group(2)
+        if name == "not":
+            return cfg_expression_enables_test(inner, negated=not negated)
+        return any(
+            cfg_expression_enables_test(operand, negated=negated)
+            for operand in split_cfg_operands(inner)
+        )
+    # A leaf: a bare identifier (`test`, `unix`) or a `key = "value"` predicate.
+    return expression == "test" and not negated
+
+
+def is_cfg_test_attr(line: str) -> bool:
+    """True for cfg attributes that compile the item *because* tests are on.
+
+    Recognizes `#[cfg(test)]`, `#[cfg(all(test, ...))]`, and
+    `#[cfg(all(..., test))]`. Attributes where every `test` operand sits under
+    an odd number of `not`s — `#[cfg(not(test))]`,
+    `#[cfg(not(any(test, feature = "cuda")))]` — describe production-only items
+    and are not test gates.
+    """
+    match = CFG_ATTR.match(line)
+    if not match:
+        return False
+    return cfg_expression_enables_test(match.group(1))
+
+
+# A doc-example line that binds or names a path without calling anything.
+VACUOUS_EXAMPLE_LINE = re.compile(
+    r"^(?:let\s+_\w*\s*(?::[^=]{0,120})?=\s*)?[A-Za-z_][\w:<>]*;$"
+)
+# Boilerplate lines that neither prove nor disprove real usage. Comment-only
+# lines belong here too: prose above `let _method = Widget::spin;` does not
+# turn the binding into real API usage, and leaving comments in the classified
+# set let an assignment-only example escape the audit entirely.
+VACUOUS_IGNORE_LINE = re.compile(r"^(?:use\s|#|//)")
+# A rustdoc fence with no info string is Rust; an info string is a
+# comma/space-separated attribute list, and rustdoc only treats it as code when
+# every token is a Rust attribute. A ```text / ```bash / ```toml block is
+# prose or another language's syntax, not a doctest, so classifying its
+# contents as a vacuous EXAMPLE was a false positive on ordinary docs.
+RUST_FENCE_ATTRS = frozenset(
+    {
+        "rust",
+        "ignore",
+        "no_run",
+        "should_panic",
+        "compile_fail",
+        "edition2015",
+        "edition2018",
+        "edition2021",
+        "edition2024",
+        "standalone_crate",
+    }
+)
+
+
+def is_rust_doc_fence(info: str) -> bool:
+    """Whether a rustdoc fence info string opens a Rust doctest."""
+    tokens = [token for token in re.split(r"[,\s]+", info.strip()) if token]
+    if not tokens:
+        return True
+    return all(
+        token in RUST_FENCE_ATTRS or token.startswith("ignore-") for token in tokens
+    )
+
+
+CRATE_CARGO_TOML = re.compile(r"^crates/(tenferro-[\w-]+)/Cargo\.toml$")
+# TOML permits any spacing around `=`, so `{workspace=true,optional=true}` is
+# as valid as the expanded form. Matching the literal `optional = true` string
+# recorded compact optional entries as production diagram edges.
+OPTIONAL_TRUE = re.compile(r"\boptional\s*=\s*true\b")
+DEPENDENCY_DIAGRAM_DOC = "docs/architecture/tenferro-crates.md"
+# Edges to these targets are documented in the "Additional internal
+# dependencies" prose of the architecture doc rather than in the diagram
+# block, so the diagram-sync check skips them.
+DIAGRAM_PROSE_TARGETS = frozenset(
+    {"tenferro-core-ops", "tenferro-internal-extension-macros"}
+)
+
+
+def changed_file_text(path: str, *, ref: str | None, worktree: bool) -> str | None:
+    try:
+        return runtime_boundary_text(path, ref=ref, worktree=worktree)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        # Deleted or unreadable at this ref; nothing to scan.
+        return None
+
+
+def read_attribute(lines: list[str], start: int) -> tuple[str, int]:
+    """Join a possibly multiline `#[...]` attribute into one string.
+
+    Returns the whitespace-normalized attribute text and the 0-based index of
+    its last line.
+    """
+    text = lines[start].strip()
+    end = start
+    while (
+        text.count("[") > text.count("]") or text.count("(") > text.count(")")
+    ) and end + 1 < len(lines):
+        end += 1
+        text += " " + lines[end].strip()
+    return text, end
+
+
+def rust_inline_test_blocks(text: str) -> list[tuple[int, int]]:
+    """Return 1-based (start, end) line spans of inline `#[cfg(test)] mod` blocks."""
+    lines = text.splitlines()
+    total = len(lines)
+    blocks: list[tuple[int, int]] = []
+    index = 0
+    while index < total:
+        stripped = lines[index].strip()
+        if stripped.startswith("#[cfg("):
+            attr_text, attr_end = read_attribute(lines, index)
+        else:
+            attr_text, attr_end = stripped, index
+        if is_cfg_test_attr(attr_text):
+            probe = attr_end + 1
+            while probe < total:
+                probe_stripped = lines[probe].strip()
+                if not probe_stripped:
+                    probe += 1
+                elif probe_stripped.startswith("#["):
+                    _, probe = read_attribute(lines, probe)
+                    probe += 1
+                else:
+                    break
+            if probe < total and INLINE_TEST_MOD.match(lines[probe].strip()):
+                depth = 0
+                end = total - 1
+                scan_state: tuple[bool, bool, int | None] = (False, False, None)
+                for cursor in range(probe, total):
+                    code, scan_state = strip_code_comments_and_literals(
+                        lines[cursor], scan_state
+                    )
+                    depth += code.count("{") - code.count("}")
+                    if cursor >= probe and depth <= 0:
+                        end = cursor
+                        break
+                blocks.append((index + 1, end + 1))
+                index = end
+        index += 1
+    return blocks
+
+
+def inline_test_block_line_total(text: str | None) -> int:
+    """Total number of lines this file spends on inline `#[cfg(test)]` blocks."""
+    if text is None:
+        return 0
+    return sum(end - start + 1 for start, end in rust_inline_test_blocks(text))
+
+
+def inline_test_module_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    base: str | None = None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    """Report inline `#[cfg(test)]` blocks this diff adds to or grows.
+
+    Growth is judged against the BASE revision, not from the presence of a
+    touched line: extraction work that shrinks an oversized block while still
+    editing a line inside what remains is progress toward the rule, and
+    warning about it would penalize exactly the cleanup the rule asks for.
+    Blocks cannot be matched one-to-one across revisions (they move, split and
+    merge), so the comparison is the file's net inline-test line count.
+    """
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs") or RUST_TEST_PATH.search(path):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        grew = True
+        if base is not None:
+            base_total = inline_test_block_line_total(
+                changed_file_text(path, ref=base, worktree=False)
+            )
+            grew = inline_test_block_line_total(text) > base_total
+        file_lines = len(text.splitlines())
+        for start, end in rust_inline_test_blocks(text):
+            block_lines = end - start + 1
+            if not any(start <= line <= end for line in touched):
+                continue
+            # A file whose inline-test total did not grow is mid-extraction, so
+            # an edit inside a surviving block is progress, not a violation.
+            # A block whose OPENER is itself an added line is new, though, and
+            # a PR that shrinks one block while adding another can lower the
+            # total while still introducing a fresh violation — judge that
+            # block on its own rather than letting the file-level total hide it.
+            if not grew and start not in touched:
+                continue
+            if (
+                file_lines < INLINE_TEST_EXEMPT_FILE_LINES
+                and block_lines <= INLINE_TEST_EXEMPT_BLOCK_LINES
+            ):
+                continue
+            findings.append(
+                Finding(
+                    id="inline-test-module",
+                    severity="warn",
+                    rule_section="Unit Test Organization",
+                    file=path,
+                    line=start,
+                    summary=(
+                        "Inline #[cfg(test)] module added or grown in a "
+                        "non-tiny production file"
+                    ),
+                    detail=(
+                        f"{path}:{start} carries an inline test block of "
+                        f"~{block_lines} lines in a {file_lines}-line file. "
+                        "Unit Test Organization requires module-local "
+                        "src/<module>/tests/*.rs files with only "
+                        "`#[cfg(test)] mod tests;` left in the source."
+                    ),
+                )
+            )
+    return findings
+
+
+def rust_private_mod_spans(text: str) -> list[tuple[int, int]]:
+    """Return 1-based line spans of inline modules that are not plain-`pub`.
+
+    Items inside `mod x { ... }` or `pub(crate) mod x { ... }` are not part of
+    the public API even when declared `pub` (the sealed-trait pattern), so the
+    doc-example mandate does not apply to them.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    spans: list[tuple[int, int]] = []
+    for index, raw in enumerate(lines):
+        stripped = raw.strip()
+        match = RUST_MOD_OPEN.match(stripped)
+        if not match:
+            continue
+        if stripped.startswith("pub ") and not stripped.startswith("pub("):
+            continue
+        depth = 0
+        end = total - 1
+        scan_state: tuple[bool, bool, int | None] = (False, False, None)
+        for cursor in range(index, total):
+            code, scan_state = strip_code_comments_and_literals(
+                lines[cursor], scan_state
+            )
+            depth += code.count("{") - code.count("}")
+            if cursor >= index and depth <= 0:
+                end = cursor
+                break
+        spans.append((index + 1, end + 1))
+    return spans
+
+
+def doc_block_above(lines: list[str], item_index: int) -> tuple[bool, bool]:
+    """Return (has_examples, is_doc_hidden) for the doc/attr block above an item."""
+    has_examples = False
+    hidden = False
+    cursor = item_index - 1
+    while cursor >= 0:
+        stripped = lines[cursor].strip()
+        if stripped.startswith("///"):
+            if "# Examples" in stripped:
+                has_examples = True
+        elif stripped.startswith("#["):
+            if "doc(hidden)" in stripped:
+                hidden = True
+        elif stripped.startswith("//"):
+            # Plain comments may sit between the doc block and the item.
+            pass
+        elif stripped.endswith("]") or stripped.endswith(")]"):
+            # Continuation tail of a multi-line attribute.
+            pass
+        else:
+            break
+        cursor -= 1
+    return has_examples, hidden
+
+
+MOD_DECLARATION = re.compile(
+    r"^\s*(pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;"
+)
+
+
+def pub_use_exports(text: str, name: str) -> set[str] | str | None:
+    """Item names a declaring file re-exports from module `name` via `pub use`.
+
+    Returns None when no plain `pub use` references the module, the string
+    "all" for glob or whole-module re-exports, and otherwise the set of
+    re-exported source item names.
+    """
+    exports: set[str] = set()
+    found = False
+    for match in re.finditer(r"^\s*pub\s+use\s+([^;]+);", text, re.M):
+        clause = re.sub(r"\s+", " ", match.group(1)).strip()
+        clause = re.sub(r"^(crate::|self::|super::)+", "", clause)
+        if not re.match(re.escape(name) + r"(::|$)", clause):
+            continue
+        found = True
+        rest = clause[len(name) :]
+        if not rest.startswith("::"):
+            return "all"
+        rest = rest[2:].strip()
+        if rest == "*":
+            return "all"
+        if rest.startswith("{"):
+            for part in rest.strip("{} ").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if part == "*" or "::" in part:
+                    return "all"
+                exports.add(part.split(" as ")[0].strip())
+        else:
+            exports.add(rest.split(" as ")[0].strip())
+    if not found:
+        return None
+    return exports
+
+
+def module_public_item_filter(
+    path: str,
+    *,
+    ref: str | None,
+    worktree: bool,
+    max_depth: int = 12,
+) -> tuple[bool, set[str] | None]:
+    """Follow out-of-line `mod` declarations toward the crate root.
+
+    Returns (reachable, item_filter). A `pub fn` in a file declared by a
+    non-`pub` `mod foo;` is not part of the crate's public API unless the
+    declaring file re-exports it via a plain `pub use`; a selective re-export
+    yields an item-name filter. When a declaration cannot be located
+    (macro-generated or `#[path]`-mapped modules), assume public so real gaps
+    are not hidden.
+    """
+    item_filter: set[str] | None = None
+    current = Path(path)
+    for _ in range(max_depth):
+        name = current.stem
+        if name in ("lib", "main"):
+            return True, item_filter
+        parent = current.parent
+        if name == "mod":
+            name = parent.name
+            parent = parent.parent
+        candidates = [parent / "mod.rs", parent.with_suffix(".rs")]
+        if parent.name == "src":
+            candidates = [parent / "lib.rs", parent / "main.rs"]
+        declaration = None
+        declaring_file = None
+        for candidate in candidates:
+            text = changed_file_text(
+                candidate.as_posix(), ref=ref, worktree=worktree
+            )
+            if text is None:
+                continue
+            for line in text.splitlines():
+                match = MOD_DECLARATION.match(line)
+                if match and match.group(2) == name:
+                    declaration = match
+                    declaring_file = candidate
+                    break
+            if declaration:
+                break
+        if declaration is None:
+            return True, item_filter
+        visibility = declaration.group(1) or ""
+        if not visibility.startswith("pub") or visibility.startswith("pub("):
+            # A private module can still expose items via a plain `pub use`
+            # re-export in the declaring file; a selective re-export exposes
+            # only the named items.
+            declaring_text = changed_file_text(
+                declaring_file.as_posix(), ref=ref, worktree=worktree
+            )
+            exports = (
+                pub_use_exports(declaring_text, name)
+                if declaring_text is not None
+                else None
+            )
+            if exports is None:
+                return False, None
+            if exports != "all" and item_filter is None:
+                item_filter = set(exports)
+        current = declaring_file
+    return True, item_filter
+
+
+def module_publicly_reachable(
+    path: str,
+    *,
+    ref: str | None,
+    worktree: bool,
+    max_depth: int = 12,
+) -> bool:
+    reachable, _ = module_public_item_filter(
+        path, ref=ref, worktree=worktree, max_depth=max_depth
+    )
+    return reachable
+
+
+def missing_doc_example_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs") or RUST_TEST_PATH.search(path):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        reachable, item_filter = module_public_item_filter(
+            path, ref=ref, worktree=worktree
+        )
+        if not reachable:
+            continue
+        lines = text.splitlines()
+        skip_spans = rust_inline_test_blocks(text) + rust_private_mod_spans(text)
+        missing: list[str] = []
+        first_line: int | None = None
+        for line_no in sorted(touched):
+            if line_no > len(lines):
+                continue
+            match = PUB_ITEM.match(lines[line_no - 1])
+            if not match:
+                continue
+            if any(start <= line_no <= end for start, end in skip_spans):
+                continue
+            if item_filter is not None and match.group(2) not in item_filter:
+                # The declaring module re-exports selectively and this item
+                # is not part of the public surface.
+                continue
+            has_examples, hidden = doc_block_above(lines, line_no - 1)
+            if has_examples or hidden:
+                continue
+            missing.append(f"{match.group(1)} {match.group(2)} (line {line_no})")
+            if first_line is None:
+                first_line = line_no
+        if missing:
+            shown = ", ".join(missing[:10])
+            extra = f", +{len(missing) - 10} more" if len(missing) > 10 else ""
+            findings.append(
+                Finding(
+                    id="missing-doc-examples",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=path,
+                    line=first_line,
+                    summary=(
+                        "New public items lack the mandatory /// # Examples "
+                        "doctest"
+                    ),
+                    detail=(
+                        f"{path} adds public items without a `# Examples` "
+                        f"doc section: {shown}{extra}. Every public type, "
+                        "trait, and function must include a runnable doc "
+                        "example."
+                    ),
+                )
+            )
+    return findings
+
+
+def vacuous_doc_example_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+    added_lines: dict[str, set[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not path.endswith(".rs"):
+            continue
+        touched = added_lines.get(path)
+        if not touched:
+            continue
+        text = changed_file_text(path, ref=ref, worktree=worktree)
+        if text is None:
+            continue
+        lines = text.splitlines()
+        in_fence = False
+        fence_is_rust = True
+        fence_start = 0
+        fence_code: list[str] = []
+        reported: list[int] = []
+        for line_no, raw in enumerate(lines, start=1):
+            stripped = raw.strip()
+            if not stripped.startswith("///"):
+                in_fence = False
+                fence_code = []
+                continue
+            body = stripped[3:].strip()
+            if body.startswith("```"):
+                if in_fence:
+                    code = [
+                        item
+                        for item in fence_code
+                        if item and not VACUOUS_IGNORE_LINE.match(item)
+                    ]
+                    fenced_span = range(fence_start, line_no + 1)
+                    if (
+                        fence_is_rust
+                        and code
+                        and all(VACUOUS_EXAMPLE_LINE.match(item) for item in code)
+                        and any(line in touched for line in fenced_span)
+                    ):
+                        reported.append(fence_start)
+                    in_fence = False
+                    fence_code = []
+                else:
+                    in_fence = True
+                    fence_is_rust = is_rust_doc_fence(body[3:])
+                    fence_start = line_no
+            elif in_fence:
+                fence_code.append(body)
+        for start in reported:
+            findings.append(
+                Finding(
+                    id="vacuous-doc-example",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=path,
+                    line=start,
+                    summary="Doc example demonstrates no usage",
+                    detail=(
+                        f"{path}:{start} contains a doc example consisting "
+                        "only of path/assignment statements (no calls). It "
+                        "satisfies the doctest gate without showing how to "
+                        "use the API; replace it with a real usage example."
+                    ),
+                )
+            )
+    return findings
+
+
+def ai_report_file_findings(
+    files: list[str],
+    *,
+    ref: str | None = None,
+    worktree: bool = False,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in sorted(files):
+        if not AI_REPORT_PATH.search(path):
+            continue
+        if path.startswith("docs/worklogs/"):
+            continue
+        if changed_file_text(path, ref=ref, worktree=worktree) is None:
+            # The change deletes the report file; that is the remediation,
+            # not a violation.
+            continue
+        findings.append(
+            Finding(
+                id="ai-report-file",
+                severity="warn",
+                rule_section="PR Content Hygiene",
+                file=path,
+                line=None,
+                summary="Standalone AI-generated report file in the PR",
+                detail=(
+                    f"{path} looks like an AI-generated analysis or task "
+                    "report committed as a standalone file. Fold durable "
+                    "content into docs/worklogs/ and drop the report file."
+                ),
+            )
+        )
+    return findings
+
+
+# `[target.'cfg(unix)'.dependencies]` is an ordinary production dependency
+# table for that target. Matching the section name exactly ignored it, so a
+# real production edge read as absent — a matching diagram edge was reported
+# stale, and a missing one passed. The target spec may be quoted (and then may
+# itself contain dots), so strip it before classifying the section.
+# `[target.<spec>.dev-dependencies]` keeps falling through, exactly like the
+# plain `[dev-dependencies]` table.
+TARGET_TABLE_PREFIX = re.compile(r"^target\.(?:'[^']*'|\"[^\"]*\"|[^.]+)\.")
+
+
+def parse_cargo_tenferro_dependencies(text: str) -> set[str]:
+    deps: set[str] = set()
+    section = ""
+    table_name: str | None = None
+    table_optional = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        header = re.match(r"^\[(.+)\]$", line)
+        if header:
+            if table_name and not table_optional:
+                deps.add(table_name)
+            table_name = None
+            table_optional = False
+            section = TARGET_TABLE_PREFIX.sub("", header.group(1))
+            table = re.match(r"^dependencies\.(tenferro-[\w-]+)$", section)
+            if table:
+                table_name = table.group(1)
+            continue
+        if section == "dependencies":
+            entry = re.match(r"^(tenferro-[\w-]+)(?:\.[\w-]+)?\s*=", line)
+            if entry and not OPTIONAL_TRUE.search(line):
+                deps.add(entry.group(1))
+        elif table_name is not None and OPTIONAL_TRUE.match(line):
+            table_optional = True
+    if table_name and not table_optional:
+        deps.add(table_name)
+    return deps
+
+
+def parse_dependency_diagram(doc_text: str) -> dict[str, set[str]] | None:
+    heading = doc_text.find("Dependency Direction")
+    if heading == -1:
+        return None
+    fence_start = doc_text.find("```", heading)
+    if fence_start == -1:
+        return None
+    fence_end = doc_text.find("```", fence_start + 3)
+    if fence_end == -1:
+        return None
+    block = doc_text[fence_start:fence_end].splitlines()[1:]
+    edges: dict[str, set[str]] = {}
+    current: str | None = None
+    for raw in block:
+        entry = re.match(r"^(tenferro-[\w-]+)\s*(?:->\s*(.*))?$", raw)
+        if entry:
+            current = entry.group(1)
+            edges.setdefault(current, set())
+            targets = entry.group(2) or ""
+        elif raw.startswith((" ", "\t")) and current is not None:
+            targets = raw.strip().removeprefix("->").strip()
+        else:
+            current = None
+            continue
+        for target in targets.split(","):
+            target = target.strip()
+            if target.startswith("tenferro-"):
+                edges[current].add(target)
+    return edges
+
+
+def list_crate_manifests(*, ref: str | None, worktree: bool) -> list[str]:
+    if worktree:
+        return sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "crates").glob("tenferro-*/Cargo.toml")
+        )
+    output = run_git(["ls-tree", "-r", "--name-only", ref or "HEAD", "--", "crates"])
+    return sorted(path for path in output.splitlines() if CRATE_CARGO_TOML.match(path))
+
+
+def dependency_diagram_findings(
+    files: list[str],
+    *,
+    ref: str | None,
+    worktree: bool,
+) -> list[Finding]:
+    changed_manifests = [path for path in files if CRATE_CARGO_TOML.match(path)]
+    doc_changed = DEPENDENCY_DIAGRAM_DOC in files
+    if not changed_manifests and not doc_changed:
+        return []
+    doc_text = changed_file_text(DEPENDENCY_DIAGRAM_DOC, ref=ref, worktree=worktree)
+    if doc_text is None:
+        return []
+    diagram = parse_dependency_diagram(doc_text)
+    if diagram is None:
+        return []
+    # A diagram-only change must be validated against every crate manifest,
+    # not only the manifests touched by the same PR.
+    manifests = set(changed_manifests)
+    findings: list[Finding] = []
+    if doc_changed:
+        all_manifests = list_crate_manifests(ref=ref, worktree=worktree)
+        manifests.update(all_manifests)
+        # Enumerating the manifests only covers `manifest_crates - diagram`.
+        # The opposite direction — a diagram node with no manifest at all —
+        # never enters the loop below, so an invented or long-stale crate
+        # entry passed the audit. Compare it only here, where the enumeration
+        # makes the crate set authoritative; with just the PR's own manifests
+        # every untouched crate would look invented.
+        manifest_crates = {
+            match.group(1)
+            for match in (CRATE_CARGO_TOML.match(path) for path in all_manifests)
+            if match
+        }
+        # Sources only. A node that appears solely as an edge TARGET may
+        # legitimately be a prose-documented crate or a non-crate box, so
+        # judging those needs its own rule; a source line asserts "this crate
+        # exists and depends on ...", which a missing manifest contradicts.
+        for crate in sorted(set(diagram) - manifest_crates - DIAGRAM_PROSE_TARGETS):
+            findings.append(
+                Finding(
+                    id="dependency-diagram-drift",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=DEPENDENCY_DIAGRAM_DOC,
+                    line=None,
+                    summary=f"Dependency diagram names {crate}, which has no manifest",
+                    detail=(
+                        f"The Dependency Direction diagram in "
+                        f"{DEPENDENCY_DIAGRAM_DOC} references {crate}, but no "
+                        f"crates/{crate}/Cargo.toml exists at this revision. "
+                        "Remove the invented or stale entry, or add the crate, "
+                        "in the same PR (Diagram Consistency)."
+                    ),
+                )
+            )
+    for path in sorted(manifests):
+        crate_match = CRATE_CARGO_TOML.match(path)
+        if not crate_match:
+            continue
+        crate = crate_match.group(1)
+        cargo_text = changed_file_text(path, ref=ref, worktree=worktree)
+        if cargo_text is None:
+            if crate in diagram:
+                findings.append(
+                    Finding(
+                        id="dependency-diagram-drift",
+                        severity="warn",
+                        rule_section="Documentation Policy",
+                        file=DEPENDENCY_DIAGRAM_DOC,
+                        line=None,
+                        summary=(
+                            f"Deleted crate {crate} still has a dependency "
+                            "diagram entry"
+                        ),
+                        detail=(
+                            f"{path} is removed by this change but "
+                            f"{DEPENDENCY_DIAGRAM_DOC} still lists {crate} in "
+                            "the Dependency Direction diagram. Remove the "
+                            "stale entry in the same PR (Diagram "
+                            "Consistency)."
+                        ),
+                    )
+                )
+            continue
+        cargo_deps = {
+            dep
+            for dep in parse_cargo_tenferro_dependencies(cargo_text)
+            if dep not in DIAGRAM_PROSE_TARGETS
+        }
+        diagram_deps = {
+            dep
+            for dep in diagram.get(crate, set())
+            if dep not in DIAGRAM_PROSE_TARGETS
+        }
+        if crate not in diagram:
+            # A crate absent from the diagram block is acceptable only when
+            # the architecture doc covers it elsewhere (for example the
+            # internal-crate prose and layer diagram); a genuinely new crate
+            # must be added to the doc even when it has no tenferro
+            # dependencies.
+            if cargo_deps or crate not in doc_text:
+                findings.append(
+                    Finding(
+                        id="dependency-diagram-drift",
+                        severity="warn",
+                        rule_section="Documentation Policy",
+                        file=DEPENDENCY_DIAGRAM_DOC,
+                        line=None,
+                        summary=f"{crate} is missing from the dependency diagram",
+                        detail=(
+                            f"{path} exists but {DEPENDENCY_DIAGRAM_DOC} has "
+                            f"no diagram entry for {crate}"
+                            + (
+                                " and does not mention the crate anywhere"
+                                if crate not in doc_text
+                                else ""
+                            )
+                            + ". Diagram Consistency requires the diagram to "
+                            "match the implementation in the same PR."
+                        ),
+                    )
+                )
+            continue
+        missing = sorted(cargo_deps - diagram_deps)
+        stale = sorted(diagram_deps - cargo_deps)
+        if missing or stale:
+            parts = []
+            if missing:
+                parts.append(f"missing from the diagram: {', '.join(missing)}")
+            if stale:
+                parts.append(f"stale in the diagram: {', '.join(stale)}")
+            findings.append(
+                Finding(
+                    id="dependency-diagram-drift",
+                    severity="warn",
+                    rule_section="Documentation Policy",
+                    file=DEPENDENCY_DIAGRAM_DOC,
+                    line=None,
+                    summary=f"Dependency diagram is out of sync for {crate}",
+                    detail=(
+                        f"{crate} production dependencies disagree with the "
+                        f"Dependency Direction diagram in "
+                        f"{DEPENDENCY_DIAGRAM_DOC}: {'; '.join(parts)}. "
+                        "Update the diagram in the same PR (Diagram "
+                        "Consistency)."
+                    ),
+                )
+            )
+    return findings
+
+
 def deterministic_checks(
     files: list[str],
     *,
     head: str | None = None,
+    base: str | None = None,
     worktree: bool = False,
     added_lines: dict[str, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
+    findings.extend(ai_report_file_findings(files, ref=head, worktree=worktree))
+    if added_lines is not None:
+        findings.extend(
+            inline_test_module_findings(
+                files,
+                ref=head,
+                base=base,
+                worktree=worktree,
+                added_lines=added_lines,
+            )
+        )
+        findings.extend(
+            missing_doc_example_findings(
+                files, ref=head, worktree=worktree, added_lines=added_lines
+            )
+        )
+        findings.extend(
+            vacuous_doc_example_findings(
+                files, ref=head, worktree=worktree, added_lines=added_lines
+            )
+        )
+    findings.extend(
+        dependency_diagram_findings(files, ref=head, worktree=worktree)
+    )
     runtime_touched = any(path.startswith("crates/tenferro-runtime/") for path in files)
     if runtime_touched:
         violations = runtime_ad_boundary_violations(
@@ -1564,6 +2592,7 @@ def main(argv: list[str] | None = None) -> int:
     findings = deterministic_checks(
         files,
         head=args.head,
+        base=args.base,
         worktree=args.worktree,
         added_lines=added_lines,
     )
