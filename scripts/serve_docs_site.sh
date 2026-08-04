@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=scripts/lib/python.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/python.sh"
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SITE_DIR="${1:-$ROOT_DIR/target/docs-site}"
 PORT="${PORT:-8000}"
@@ -13,4 +16,4 @@ fi
 
 echo "serving $SITE_DIR at http://127.0.0.1:$PORT"
 cd "$SITE_DIR"
-python3 -m http.server "$PORT"
+py -m http.server "$PORT"
