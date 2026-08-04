@@ -44,6 +44,7 @@ ACTIVE_IDS = frozenset(
         "p9-submission",
         "p6-reinterpret",
         "p6-reinterpret-rank-policy",
+        "p7-cuda",
     }
 )
 DEFERRED_CORRECTIONS: dict[str, str] = {}
@@ -684,8 +685,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         revised = base_manifest.replace("revision = 3", "revision = 4", 1)
         revised = _replace_once(
             revised,
-            'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-cuda-provider"',
-            'gates = ["G3"]\nartifact = { id = "artifact-cuda-provider"',
+            'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-webgpu-metal-provider"',
+            'gates = ["G3"]\nartifact = { id = "artifact-webgpu-metal-provider"',
         )
         temporary, root, base, _ = _git_repository(
             base_manifest, _fixture_files(base_manifest)
@@ -852,6 +853,11 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             manifest,
             "p6-reinterpret-rank-policy",
             '{ kind = "deferred", activation_unit = "P6", promotion = { mode = "activate-in-place" } }',
+        )
+        manifest = _replace_row_state(
+            manifest,
+            "p7-cuda",
+            '{ kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }',
         )
         files = _fixture_files(manifest)
         result = _run_checker(manifest, files=files, extra=("--diagnostics-json",))
