@@ -299,4 +299,3 @@ git commit -m "docs(storage): bind p5 verification evidence"
 Report P5 completion and stop. The next phase requires an explicit selection;
 the overall #1555 goal remains active until P13-B independently audits and
 closes it.
-

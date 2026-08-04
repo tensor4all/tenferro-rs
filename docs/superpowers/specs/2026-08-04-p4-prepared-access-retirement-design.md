@@ -1,6 +1,6 @@
 # P4 Prepared Access and Retirement Design
 
-Date: 2026-08-04  
+Date: 2026-08-04<br>
 Authority: #1555, #1560, `docs/design/storage-ownership-contracts.md`
 
 ## Scope and non-goals

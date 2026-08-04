@@ -1,6 +1,6 @@
 # P5 AllocationGroup and N-Way Disjoint Views Design
 
-Date: 2026-08-04  
+Date: 2026-08-04<br>
 Authority: #1555, #1561, `docs/design/storage-ownership-contracts.md` (G2/G5),
 and `scripts/storage-ownership-contracts.toml`
 
