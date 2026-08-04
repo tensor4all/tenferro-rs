@@ -1,3 +1,5 @@
+// INVARIANT: CubeCL's kernel DSL intentionally emits equal-expression forms
+// that are simplified by the device compiler, not by host-side Clippy.
 #![allow(clippy::eq_op)]
 
 use cubecl::prelude::*;

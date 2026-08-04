@@ -17,6 +17,8 @@
 
 //! Shared reduction launch routines.
 
+// INVARIANT: CubeCL's kernel DSL lowers modulo checks differently from host
+// Rust; the reduction dimensions were validated before launch.
 #![allow(clippy::manual_is_multiple_of)]
 
 use cubecl::prelude::*;

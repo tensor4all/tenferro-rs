@@ -1516,6 +1516,10 @@ fn backend_storage_identity<T: 'static>(buffer: &dyn crate::BackendStorage<T>) -
         domain: buffer.allocation_domain(),
         allocation: buffer.allocation_id(),
         family: buffer.backend_family(),
+        // INVARIANT: every backend buffer is borrowed from the single Box-owned
+        // root allocation; the data pointer of this trait object is stable for
+        // that owner and is used only as a fallback when provider identity is
+        // unavailable.
         object: buffer as *const dyn crate::BackendStorage<T> as *const () as usize,
     }
 }

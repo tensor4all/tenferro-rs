@@ -709,6 +709,8 @@ impl<'i, 'a, T: TensorScalar, R: TensorRank> Iterator for PreparedStridedIterMut
 
 impl<'a, T: TensorScalar, R: TensorRank> PreparedStridedRead<'a, T, R> {
     pub(crate) fn iter_strided(&self) -> PreparedStridedIter<'_, 'a, T, R> {
+        // INVARIANT: one coordinate buffer is allocated per prepared iterator,
+        // not per element; rank is bounded by the validated tensor layout.
         PreparedStridedIter {
             access: &self.access,
             plan: &self.plan,
@@ -721,6 +723,8 @@ impl<'a, T: TensorScalar, R: TensorRank> PreparedStridedRead<'a, T, R> {
 
 impl<'a, T: TensorScalar, R: TensorRank> PreparedStridedWrite<'a, T, R> {
     pub(crate) fn iter_strided_mut<'i>(&'i mut self) -> PreparedStridedIterMut<'i, 'a, T, R> {
+        // INVARIANT: one coordinate buffer is allocated per prepared iterator,
+        // not per element; rank is bounded by the validated tensor layout.
         PreparedStridedIterMut {
             access: &mut self.access,
             plan: &self.plan,

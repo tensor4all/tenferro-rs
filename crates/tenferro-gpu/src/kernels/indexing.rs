@@ -1,3 +1,5 @@
+// INVARIANT: CubeCL's kernel DSL lowers scalar modulo checks differently
+// from host Rust; these expressions are bounded by validated launch shapes.
 #![allow(clippy::manual_is_multiple_of)]
 
 use cubecl::prelude::*;

@@ -7,6 +7,8 @@
 
 // CubeCL's kernel DSL uses operator tokens and typed launch indices that
 // Clippy cannot model as ordinary host Rust expressions.
+// INVARIANT: these reductions are compiled by CubeCL's device DSL; its
+// operator/cast forms are intentional and bounded by validated launch shapes.
 #![allow(clippy::assign_op_pattern, clippy::unnecessary_cast)]
 
 use cubecl::prelude::*;
