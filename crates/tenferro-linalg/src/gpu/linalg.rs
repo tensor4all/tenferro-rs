@@ -15,8 +15,8 @@ use super::ffi::cusolver::{
 use super::kernels as cubecl_linalg;
 use tenferro_gpu::cuda_interop::{
     alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
-    ensure_typed_tensor_resident, flush_cubecl_client, raw_cuda_stream, typed_tensor_array_arg,
-    typed_tensor_binding, upload_device_bytes, with_cubecl_client,
+    ensure_typed_tensor_resident, flush_cubecl_client, typed_tensor_array_arg,
+    typed_tensor_binding, upload_device_bytes, with_cubecl_client, with_raw_cuda_stream,
     with_typed_device_ptr as interop_with_typed_device_ptr, CudaExtensionCacheGuard,
     DeviceByteBuffer,
 };
@@ -1924,7 +1924,7 @@ where
 }
 
 fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
-    raw_cuda_stream(rt, op).map(|stream| stream as usize as CudaStream)
+    with_raw_cuda_stream(rt, op, |stream| stream as usize as CudaStream)
 }
 
 fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {

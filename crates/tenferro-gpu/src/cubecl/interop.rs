@@ -86,14 +86,23 @@ pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-/// Return the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
+/// Borrow the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
+///
+/// The stream is passed only to `f`; callers must not retain the raw handle
+/// after the callback returns.
 /// # Errors
 ///
 /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
 /// stream, or [`crate::Error::RuntimeState`] when its server is unavailable.
-pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str) -> crate::Result<u64> {
-    rt.raw_cuda_stream()
-        .map_err(|err| crate::Error::backend_source(op, err))
+pub fn with_raw_cuda_stream<R>(
+    rt: &CudaRuntime,
+    op: &'static str,
+    f: impl FnOnce(u64) -> R,
+) -> crate::Result<R> {
+    let stream = rt
+        .raw_cuda_stream()
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    Ok(f(stream))
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
