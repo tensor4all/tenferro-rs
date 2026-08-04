@@ -210,7 +210,7 @@ class RunProfileTests(unittest.TestCase):
             ci_config_job,
         )
         self.assertIn(
-            'PROMOTION_BASE_SHA="${STORAGE_OWNERSHIP_PROMOTION_BASE}"',
+            'PROMOTION_BASE_SHA="${STORAGE_OWNERSHIP_PROMOTION_BASE:-${BASE_SHA}}"',
             ci_config_job,
         )
         self.assertIn(
