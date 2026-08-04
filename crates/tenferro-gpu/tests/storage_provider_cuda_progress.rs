@@ -1,3 +1,3 @@
 #![cfg(feature = "cuda")]
 
-include!("storage_provider.rs");
+include!("support/storage_provider.rs");
