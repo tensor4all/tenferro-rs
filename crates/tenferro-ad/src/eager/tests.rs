@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
 use std::sync::{
@@ -9,7 +10,7 @@ use std::time::Duration;
 
 use crate::context::AdContext;
 use computegraph::graph::{Graph, GraphBuilder};
-use computegraph::{OperationRole, ValueRef};
+use computegraph::{OperationRole, ValueKey, ValueRef};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
@@ -20,8 +21,8 @@ use tenferro_runtime::{
     Error, ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
     GraphCompiler, Runtime,
 };
-use tenferro_tensor::Tensor;
 use tenferro_tensor::TypedTensorView;
+use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
 use tenferro_tensor::{DType, DotGeneralConfig, TensorElementwise};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
@@ -38,6 +39,30 @@ use super::{
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerOpProfileEntry,
     EagerRuntime, EagerTensor,
 };
+
+#[test]
+fn gradients_take_grad_preserves_group_error_source() {
+    let (group, bindings) = AllocationGroup::from_tensors(Vec::new()).unwrap();
+    assert!(bindings.is_empty());
+    let missing = DescriptorSlot::from_index(0).unwrap();
+    let key = ValueKey::Input(TensorInputKey::User { id: 991 });
+    let mut gradients = super::Gradients {
+        group,
+        slots: HashMap::from([(key.clone(), missing)]),
+    };
+
+    let error = gradients.take_grad(&key).unwrap_err();
+    let mut current: &(dyn std::error::Error + 'static) = &error;
+    let mut found = false;
+    while let Some(source) = current.source() {
+        if source.downcast_ref::<GroupError>().is_some() {
+            found = true;
+            break;
+        }
+        current = source;
+    }
+    assert!(found, "group error was not retained as an error source");
+}
 
 fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>> {
     let mut builder = GraphBuilder::<StdTensorOp>::new();

@@ -517,7 +517,7 @@ impl GradientValue {
         self.record
             .value("GradientValue::as_slice")
             .map_err(|error| {
-                tenferro_tensor::Error::runtime_state("GradientValue::as_slice", error.to_string())
+                tenferro_tensor::Error::runtime_state_source("GradientValue::as_slice", error)
             })?
             .as_slice()
     }
@@ -534,10 +534,10 @@ impl GradientValue {
             .record
             .value("GradientValue::to_tensor")
             .map_err(|error| {
-                Error::runtime_state(
+                Error::runtime_state_source(
                     "GradientValue::to_tensor",
                     ErrorPhase::Execution,
-                    error.to_string(),
+                    error,
                 )
             })?;
         match value.duplicate_host_tensor() {
@@ -580,11 +580,7 @@ impl Gradients {
     fn from_tensors(tensors: HashMap<ValueKey<StdTensorOp>, Tensor>) -> Result<Self> {
         let (keys, values): (Vec<_>, Vec<_>) = tensors.into_iter().unzip();
         let (group, bindings) = AllocationGroup::from_tensors(values).map_err(|error| {
-            Error::runtime_state(
-                "Gradients::from_tensors",
-                ErrorPhase::Execution,
-                error.to_string(),
-            )
+            Error::runtime_state_source("Gradients::from_tensors", ErrorPhase::Execution, error)
         })?;
         let slots = keys.into_iter().zip(bindings).collect();
         Ok(Self { group, slots })
@@ -625,7 +621,7 @@ impl Gradients {
             return Ok(None);
         };
         let tensor = self.group.take_tensor(slot).map_err(|error| {
-            tenferro_tensor::Error::runtime_state("Gradients::take_grad", error.to_string())
+            tenferro_tensor::Error::runtime_state_source("Gradients::take_grad", error)
         })?;
         self.slots.remove(key);
         Ok(Some(tensor))
@@ -707,7 +703,7 @@ impl AdValueRecord {
         let dtype = tensor.dtype();
         let shape = tensor.shape().to_vec();
         let (group, bindings) = AllocationGroup::from_tensors(vec![tensor])
-            .map_err(|error| Error::runtime_state(op, ErrorPhase::Execution, error.to_string()))?;
+            .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
         let slot = bindings.first().copied().ok_or_else(|| {
             Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
         })?;
@@ -719,7 +715,7 @@ impl AdValueRecord {
             .container
             .group
             .read_views(std::slice::from_ref(&self.slot))
-            .map_err(|error| Error::runtime_state(op, ErrorPhase::Execution, error.to_string()))?;
+            .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
         reads.pop().ok_or_else(|| {
             Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
         })
@@ -2824,11 +2820,7 @@ fn validate_same_runtime(
 
 fn copy_value_for_runtime(ctx: &EagerRuntime, value: &RetainedValue) -> Result<Tensor> {
     let read = value.tensor_read().map_err(|error| {
-        Error::runtime_state(
-            "copy_value_for_runtime",
-            ErrorPhase::Execution,
-            error.to_string(),
-        )
+        Error::runtime_state_source("copy_value_for_runtime", ErrorPhase::Execution, error)
     })?;
     ctx.with_execution_session(|session| session.to_contiguous_read(read))?
         .map_err(Error::from)
@@ -3299,6 +3291,22 @@ impl EagerTensor {
     /// Returns [`Error::RuntimeState`] when the retained value or execution
     /// session is unavailable, or a typed host/backend error when the value
     /// cannot be materialized as a contiguous tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let value = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
+    ///     ctx,
+    /// )?;
+    /// let duplicate = value.duplicate_value()?;
+    /// assert_eq!(duplicate.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     pub fn duplicate_value(&self) -> Result<Tensor> {
         let value = self.value()?;
         match value.duplicate_host_tensor() {
@@ -3329,6 +3337,24 @@ impl EagerTensor {
     /// Returns [`IntoValueError::NotUnique`] when another handle retains the
     /// value, or [`IntoValueError::Extract`] when structural group extraction
     /// fails because the allocation is aliased or its descriptor is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let value = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
+    ///     ctx,
+    /// )?;
+    /// let owner = value
+    ///     .into_value()
+    ///     .expect("a uniquely owned value should be extractable");
+    /// assert_eq!(owner.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
         if Arc::strong_count(&self._record) != 1 {
             return Err(IntoValueError::NotUnique(self));
@@ -3845,10 +3871,10 @@ impl EagerTensor {
                 Ok(tensor) => tensor,
                 Err(IntoValueError::NotUnique(handle)) => handle.duplicate_value()?,
                 Err(IntoValueError::Extract { error, .. }) => {
-                    return Err(Error::runtime_state(
+                    return Err(Error::runtime_state_source(
                         "EagerTensor::backward",
                         ErrorPhase::Execution,
-                        error.to_string(),
+                        error,
                     ));
                 }
             };
