@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-uv-python
       - name: Classify change
         id: policy
         env:
@@ -49,6 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - uses: ./.github/actions/setup-uv-python
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
@@ -77,6 +80,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-uv-python
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
@@ -130,6 +135,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
+      - uses: ./.github/actions/setup-uv-python
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
       - uses: Swatinem/rust-cache@v2
@@ -176,6 +183,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - uses: ./.github/actions/setup-uv-python
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
@@ -210,6 +219,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
+      - uses: ./.github/actions/setup-uv-python
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
@@ -248,6 +259,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-uv-python
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
       - uses: actions/setup-go@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         with:

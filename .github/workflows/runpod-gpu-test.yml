@@ -131,6 +131,7 @@ jobs:
       - name: Checkout trusted CI policy
         uses: actions/checkout@v5
 
+      - uses: ./.github/actions/setup-uv-python
       - name: Check actor and PR source are allowed
         id: resolve_ref
         env:
@@ -310,6 +311,7 @@ jobs:
     steps:
       - name: Checkout trusted RunPod helpers
         uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-uv-python
       - name: Validate GPU IDs and CUDA versions against live OpenAPI
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}

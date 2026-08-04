@@ -1,0 +1,17 @@
+name: Set up the uv-pinned Python
+description: >-
+  Install uv and put the interpreter pinned by .python-version on PATH for the
+  rest of the job, so workflow steps run the same Python as local scripts
+  (issue #1606).
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+      with:
+        # The interpreter itself is pinned by .python-version; this pins the
+        # tool that fetches it.
+        version: "0.11.18"
+    - name: Put the pinned interpreter on PATH
+      shell: bash
+      run: bash scripts/ci/setup-python-shim.sh

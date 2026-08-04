@@ -77,3 +77,35 @@ interpreter. Wiring it (plus `astral-sh/setup-uv`) into the ~23 checkout points
 across six workflow files is a separate change: workflow edits cannot be
 validated locally, and it should land where a red CI run is expected and
 reviewable rather than riding along with this one.
+
+## CI adoption (follow-up PR)
+
+`.github/actions/setup-uv-python` installs uv (pinned to 0.11.18) and runs
+`scripts/ci/setup-python-shim.sh`, which appends the shim directory to
+`$GITHUB_PATH` so every later step in the job uses the interpreter pinned by
+`.python-version`. One step is added after the checkout of each job that runs
+the repository's Python tooling, carrying that checkout's own `if:` condition so
+a skipped job stays skipped:
+
+- `ci.yml` — policy, fmt, clippy, test-inject-blas, coverage, docs-site,
+  ci-config
+- `ci-pr-workspace-tests.yml` — changes, ci-fork, ci-maintainer, ext-samples
+- `review_bot.yml` — review-bot, review-bot-no-llm, review-bot-waived
+- `runpod-gpu-test.yml` — authorize, runpod-contract
+
+**Not** added to the GPU pod-side steps in `CI_gpu.yml` and the rest of
+`runpod-gpu-test.yml`. Those `python3` calls are not this repository's tooling —
+they parse CUDA manifests, run the pod smoke test, and `pip download` inside a
+container — and pinning them to a uv-managed interpreter would change unrelated
+behaviour on the pod for no benefit.
+
+Security note: the two `pull_request_target` / `workflow_run` workflows check
+out the TRUSTED base or default-branch revision (both say so in a comment and
+treat PR contents as data only), so `uses: ./.github/actions/setup-uv-python`
+resolves to trusted content rather than PR-controlled code. That is the reason
+the composite action is safe to reference by path in those jobs.
+
+Verified with `actionlint` (clean), plus `run_profile.py ci-config` — which runs
+`test_workflow_contracts.py`, the tests that pin workflow text — and
+`run_profile.py docs`. Workflow behaviour itself can only be confirmed by the
+hosted run on this PR.

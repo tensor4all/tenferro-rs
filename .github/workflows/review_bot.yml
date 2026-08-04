@@ -43,6 +43,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: ./.github/actions/setup-uv-python
       - name: Fetch PR head for diff only
         id: refs
         run: |
@@ -222,6 +223,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-uv-python
       - name: Fetch PR head for diff only
         id: refs
         run: |
@@ -389,6 +391,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: ./.github/actions/setup-uv-python
       - name: Fetch PR head for diff only
         id: refs
         run: |
