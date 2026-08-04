@@ -3,6 +3,10 @@ use tenferro_tensor::{Rank, Tensor, TypedTensor, TypedTensorView};
 
 const INDEX_COUNT: usize = 4096;
 
+/// # Panics
+///
+/// Panics if the benchmark is called with a non-compact or non-host tensor;
+/// the probe is intentionally restricted to the validated benchmark fixture.
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2>>) -> f64 {
@@ -15,6 +19,10 @@ pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2
         .sum()
 }
 
+/// # Panics
+///
+/// Panics if the benchmark is called with a non-host tensor; the probe is
+/// intentionally restricted to the validated benchmark fixture.
 #[inline(never)]
 #[no_mangle]
 pub extern "C" fn tensor_static_rank_write_probe(tensor: &mut TypedTensor<f64, Rank<2>>) {

@@ -3362,6 +3362,11 @@ impl EagerTensor {
     /// This is the preferred borrowed input boundary for executor calls. It
     /// preserves the option to replace eager storage with non-contiguous views
     /// without forcing callers through [`value`](Self::value).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a validated eager value record becomes unavailable, which
+    /// indicates an internal invariant violation.
     pub fn tensor_read(&self) -> TensorRead<'_> {
         self._record
             .value

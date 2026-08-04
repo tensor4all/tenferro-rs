@@ -63,6 +63,12 @@ impl RetainedValue {
     }
 
     /// Move an owned compact tensor into a retained group-backed handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the validated compact tensor cannot produce its valid
+    /// allocation-group descriptor, which indicates an internal invariant
+    /// violation.
     pub fn from_tensor(tensor: Tensor) -> Self {
         // A compact tensor always has a valid descriptor, so this conversion
         // cannot fail after the tensor owner has been constructed.
