@@ -27,6 +27,7 @@ def load_module():
 # to review such a PR is a maintainer waiver. Short names keep the interpolated
 # span below the 12-character threshold the quoted-credential pattern uses.
 PAT = "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123"
+PW = "correct " + "horse " + "battery " + "staple"
 AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
 SK = "sk-" + "0123456789abcdef0123456789abcdef"
 VALUE = "abcdefghij" + "klmnopqrst"
@@ -1059,6 +1060,138 @@ def test_api_key_error_finding_blocks_and_names_the_secret() -> None:
     assert "DEEPSEEK_API_KEY" in finding.summary
 
 
+def test_run_git_disables_pathname_quoting() -> None:
+    """git C-quotes non-ASCII paths by default, and the quoted form matches none."""
+    mod = load_module()
+    import subprocess
+
+    captured = {}
+    original = subprocess.run
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return original(["true"], capture_output=True, text=True)
+
+    subprocess.run = fake_run
+    try:
+        mod.run_git(["diff", "--name-only"])
+    finally:
+        subprocess.run = original
+    assert captured["args"][:3] == ["git", "-c", "core.quotePath=false"]
+
+
+def test_contains_sensitive_text_flags_passphrase_with_spaces() -> None:
+    mod = load_module()
+    assert mod.contains_sensitive_text(f'password = "{PW}"')
+
+
+def test_redact_sensitive_text_masks_whole_quoted_value() -> None:
+    mod = load_module()
+    redacted = mod.redact_sensitive_text(f'password = "{PW}"')
+    assert "horse" not in redacted and "battery" not in redacted
+    assert redacted == "password = [REDACTED_SECRET]"
+
+
+def test_contains_sensitive_text_flags_unterminated_quote() -> None:
+    mod = load_module()
+    assert mod.contains_sensitive_text('secret = "opens here')
+
+
+def test_metadata_names_are_not_credentials() -> None:
+    """Allowing spaces in values means the name must carry the discrimination."""
+    mod = load_module()
+    assert not mod.is_credential_name("token_type")
+    assert not mod.is_credential_name("secret_name")
+    assert not mod.is_credential_name("private_key_path")
+    assert mod.is_credential_name("api_token")
+    assert mod.is_credential_name("password")
+    assert not mod.contains_sensitive_text(
+        'token_type: "WebGPU event token from another queue"'
+    )
+    assert not mod.redact_sensitive_text(
+        'token_type: "an ordinary description"'
+    ).count("[REDACTED_SECRET]")
+
+
+def test_select_rule_sections_routes_on_changed_content() -> None:
+    mod = load_module()
+    path = "crates/tenferro-runtime/src/lib.rs"
+    assert "Unsafe Code Boundary" not in mod.select_rule_sections([path])
+    added = {path: [(10, "    unsafe { ptr.read() }")]}
+    assert "Unsafe Code Boundary" in mod.select_rule_sections([path], added)
+
+
+def test_content_triggers_name_only_documented_sections() -> None:
+    mod = load_module()
+    documented = set(mod.parse_repository_rules_sections())
+    for _pattern, names in mod.CONTENT_TRIGGERS:
+        assert set(names) <= documented, names
+
+
+def test_content_triggers_never_select_human_only_sections() -> None:
+    mod = load_module()
+    path = "crates/tenferro-runtime/src/lib.rs"
+    added = {path: [(1, "unsafe { }"), (2, "rayon::join(|| (), || ())")]}
+    assert set(mod.select_rule_sections([path], added)).isdisjoint(
+        mod.HUMAN_ONLY_SECTIONS
+    )
+
+
+def test_budget_is_smaller_than_the_workflow_timeout() -> None:
+    """The script must finish before the job is killed, or no report is posted."""
+    mod = load_module()
+    workflow = (mod.ROOT / ".github" / "workflows" / "review_bot.yml").read_text()
+    minutes = [
+        int(line.split(":")[1].strip())
+        for line in workflow.splitlines()
+        if line.strip().startswith("timeout-minutes:")
+    ]
+    assert minutes, "review_bot.yml lost its job timeout"
+    assert mod.DEFAULT_BUDGET_SECONDS < min(minutes) * 60
+
+
+def test_call_deepseek_does_not_retry_past_the_deadline() -> None:
+    import socket
+    import urllib.request
+
+    mod = load_module()
+    calls = {"n": 0}
+
+    def always_timeout(request, timeout=None):
+        calls["n"] += 1
+        raise socket.timeout("nope")
+
+    original_urlopen = urllib.request.urlopen
+    original_sleep = mod.time.sleep
+    urllib.request.urlopen = always_timeout
+    mod.time.sleep = lambda _seconds: None
+    try:
+        mod.call_deepseek(
+            api_key="k",
+            model="m",
+            api_url="https://example.invalid",
+            system_prompt="s",
+            user_content="u",
+            timeout=1.0,
+            deadline=mod.time.monotonic(),
+        )
+    except mod.TRANSPORT_ERRORS:
+        pass
+    else:
+        raise AssertionError("expected the timeout to propagate")
+    finally:
+        urllib.request.urlopen = original_urlopen
+        mod.time.sleep = original_sleep
+    assert calls["n"] == 1
+
+
+def test_budget_exhausted_finding_warns_without_blocking() -> None:
+    mod = load_module()
+    finding = mod.budget_exhausted_finding(2, 5)
+    assert finding.severity == "warn"
+    assert "2 of 5" in finding.detail
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1101,6 +1234,17 @@ def main() -> int:
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
+        test_run_git_disables_pathname_quoting,
+        test_contains_sensitive_text_flags_passphrase_with_spaces,
+        test_redact_sensitive_text_masks_whole_quoted_value,
+        test_contains_sensitive_text_flags_unterminated_quote,
+        test_metadata_names_are_not_credentials,
+        test_select_rule_sections_routes_on_changed_content,
+        test_content_triggers_name_only_documented_sections,
+        test_content_triggers_never_select_human_only_sections,
+        test_budget_is_smaller_than_the_workflow_timeout,
+        test_call_deepseek_does_not_retry_past_the_deadline,
+        test_budget_exhausted_finding_warns_without_blocking,
         test_contains_sensitive_text_flags_typed_declaration,
         test_redact_sensitive_text_masks_typed_declaration,
         test_typed_declaration_guard_keeps_env_lookups_quiet,
