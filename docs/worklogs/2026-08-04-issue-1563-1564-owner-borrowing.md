@@ -80,6 +80,9 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --lib --quiet` — 93 passed, 117 ignored.
 - `cargo test -p tenferro-gpu --features cuda --test integration --quiet` — 68 passed on the available NVIDIA A100.
 - `cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda_progress --quiet` — 2 passed on the available NVIDIA A100.
+- `cargo check -p tenferro-linalg --features cuda --quiet` and `cargo test -p tenferro-linalg --features cuda --test integration --no-run --quiet` — passed after making solve RHS duplication explicit.
+- `cargo test -p tenferro-linalg --features cuda --test integration --quiet` — 129 passed, 18 ignored.
+- `cargo test -p tenferro-linalg --features cuda --test integration -- --ignored` — 18 passed on the available NVIDIA A100.
 - `python3 scripts/run-storage-ownership-contracts.py --receipt-out /tmp/tenferro-storage-ownership-receipt.json --diagnostics-json` — all 19 currently active P0/P1/P2/P3/P4/P5/P6/P9 obligations passed; P7/P8 remain deferred.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 37 passed, including the scoped workspace and stream-pointer contracts.
