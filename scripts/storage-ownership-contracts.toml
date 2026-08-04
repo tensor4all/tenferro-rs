@@ -1,7 +1,7 @@
 schema = "tenferro.storage-ownership-contracts.v2"
 
 [registry]
-revision = 3
+revision = 4
 
 [[registry.gates]]
 id = "G1"
@@ -342,8 +342,8 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p7-cuda"
 unit = "P7"
 gates = ["G1", "G3", "G5"]
-artifact = { id = "artifact-cuda-provider", kind = "hardware-test", path = "crates/tenferro-cuda/tests/storage_provider.rs" }
-command = { id = "cmd-cuda-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-cuda", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-cuda-provider" }
+artifact = { id = "artifact-cuda-provider", kind = "hardware-test", path = "crates/tenferro-gpu/tests/storage_provider_cuda.rs" }
+command = { id = "cmd-cuda-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-gpu", "--features", "cuda", "--test", "storage_provider_cuda"], cwd = ".", path_args = [], artifact_id = "artifact-cuda-provider" }
 state = { kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 
@@ -351,8 +351,8 @@ rationale = "The obligation is one immutable artifact-command contract owned by 
 id = "p8-webgpu-metal"
 unit = "P8"
 gates = ["G1", "G3", "G5"]
-artifact = { id = "artifact-webgpu-metal-provider", kind = "hardware-test", path = "crates/tenferro-wgpu/tests/storage_provider.rs" }
-command = { id = "cmd-webgpu-metal-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-wgpu", "--test", "storage_provider"], cwd = ".", path_args = [], artifact_id = "artifact-webgpu-metal-provider" }
+artifact = { id = "artifact-webgpu-metal-provider", kind = "hardware-test", path = "crates/tenferro-gpu/tests/storage_provider_webgpu.rs" }
+command = { id = "cmd-webgpu-metal-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-gpu", "--features", "webgpu", "--test", "storage_provider_webgpu"], cwd = ".", path_args = [], artifact_id = "artifact-webgpu-metal-provider" }
 state = { kind = "deferred", activation_unit = "P8", promotion = { mode = "activate-in-place" } }
 rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
 

@@ -76,6 +76,14 @@ required-features = ["cuda"]
 name = "integration"
 path = "tests/integration.rs"
 
+[[test]]
+name = "storage_provider_cuda_progress"
+path = "tests/storage_provider_cuda_progress.rs"
+
+[[test]]
+name = "storage_provider_webgpu_progress"
+path = "tests/storage_provider_webgpu_progress.rs"
+
 [[bench]]
 name = "cutensor_plan_cache"
 path = "benches/cutensor_plan_cache.rs"
