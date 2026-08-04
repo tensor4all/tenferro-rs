@@ -220,7 +220,7 @@ impl TropicalArgmaxStep {
 /// assert_eq!(result.argmax.len(), 1);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TropicalEinsumResult {
     /// Tropical output tensor in the requested output subscript order.
     pub output: Tensor,
