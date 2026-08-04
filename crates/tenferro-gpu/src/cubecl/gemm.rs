@@ -878,7 +878,7 @@ where
         ReadOperand::View(view) => {
             ensure_view_resident_on_runtime(rt, view, OP)?;
             let buffer = cubecl_view_buffer(view, OP)?;
-            resolve_device_region(rt, buffer, view.shape(), view.strides(), view.offset())
+            resolve_device_region::<T>(rt, buffer, view.shape(), view.strides(), view.offset())
         }
     }
 }
@@ -900,7 +900,7 @@ where
         WriteOperand::View(view) => {
             ensure_view_mut_resident_on_runtime(rt, view, OP)?;
             let buffer = cubecl_view_mut_buffer(view, OP)?;
-            resolve_device_region(rt, buffer, view.shape(), view.strides(), view.offset())
+            resolve_device_region::<T>(rt, buffer, view.shape(), view.strides(), view.offset())
         }
     }
 }
@@ -911,7 +911,7 @@ where
 /// byte address.
 fn resolve_device_region<T: 'static>(
     rt: &CudaRuntime,
-    buffer: &CubeclBuffer<T>,
+    buffer: &CubeclBuffer,
     shape: &[usize],
     strides: &[isize],
     offset: isize,

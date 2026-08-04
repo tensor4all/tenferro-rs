@@ -88,22 +88,22 @@ pub(crate) mod types {
     pub use tenferro_tensor::types::*;
 }
 
-/// CubeCL-managed GPU buffer stored behind tensor backend-buffer trait objects.
+/// Scalar-independent CubeCL allocation stored behind tensor backend-buffer
+/// trait objects; dtype is carried by the borrowed tensor descriptor.
 #[cfg(feature = "cuda")]
-pub(crate) struct CubeclBuffer<T> {
+pub(crate) struct CubeclBuffer {
     handle: cubecl_runtime::server::Handle,
     len: usize,
     device_ordinal: usize,
     allocation_domain: Option<AllocationDomainId>,
     allocation_id: AllocationId,
-    pub(crate) _marker: std::marker::PhantomData<T>,
 }
 
 #[cfg(feature = "cuda")]
 static NEXT_CUDA_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(feature = "cuda")]
-impl<T> std::fmt::Debug for CubeclBuffer<T> {
+impl std::fmt::Debug for CubeclBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
             .field("len", &self.len)
@@ -115,7 +115,7 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
 }
 
 #[cfg(feature = "cuda")]
-impl<T> CubeclBuffer<T> {
+impl CubeclBuffer {
     pub(crate) fn new(
         handle: cubecl_runtime::server::Handle,
         len: usize,
@@ -130,7 +130,6 @@ impl<T> CubeclBuffer<T> {
             allocation_id: AllocationId::from_backend_id(
                 NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
-            _marker: std::marker::PhantomData,
         }
     }
 
@@ -152,7 +151,7 @@ impl<T> CubeclBuffer<T> {
 }
 
 #[cfg(feature = "cuda")]
-impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer {
     fn backend_family(&self) -> &'static str {
         "cubecl"
     }

@@ -41,8 +41,9 @@ pub use runtime_adapter::{
     webgpu_runtime_engine_registration_with_id, webgpu_runtime_hardware_class,
 };
 
-/// CubeCL-managed WebGPU buffer stored behind tensor backend-buffer trait objects.
-pub(crate) struct WebGpuBuffer<T> {
+/// Scalar-independent WebGPU allocation stored behind tensor backend-buffer
+/// trait objects; dtype is carried by the borrowed tensor descriptor.
+pub(crate) struct WebGpuBuffer {
     handle: cubecl_runtime::server::Handle,
     len: usize,
     device_ordinal: usize,
@@ -50,13 +51,12 @@ pub(crate) struct WebGpuBuffer<T> {
     domain: Option<Arc<apple::AppleDomainState>>,
     allocation_domain: Option<AllocationDomainId>,
     allocation_id: AllocationId,
-    _marker: std::marker::PhantomData<T>,
 }
 
 static NEXT_WEBGPU_ALLOCATION_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
-impl<T> std::fmt::Debug for WebGpuBuffer<T> {
+impl std::fmt::Debug for WebGpuBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebGpuBuffer")
             .field("len", &self.len)
@@ -67,7 +67,7 @@ impl<T> std::fmt::Debug for WebGpuBuffer<T> {
     }
 }
 
-impl<T> WebGpuBuffer<T> {
+impl WebGpuBuffer {
     fn new(
         handle: cubecl_runtime::server::Handle,
         len: usize,
@@ -84,7 +84,6 @@ impl<T> WebGpuBuffer<T> {
             allocation_id: AllocationId::from_backend_id(
                 NEXT_WEBGPU_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
-            _marker: std::marker::PhantomData,
         }
     }
 
@@ -115,7 +114,6 @@ impl<T> WebGpuBuffer<T> {
             domain: Some(Arc::clone(domain)),
             allocation_domain: Some(domain.id),
             allocation_id,
-            _marker: std::marker::PhantomData,
         })
     }
 
@@ -222,7 +220,7 @@ fn validate_typed_read_mapping<T: 'static>(
     Ok(())
 }
 
-impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer {
     fn backend_family(&self) -> &'static str {
         "cubecl-webgpu"
     }
@@ -241,7 +239,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer<T> {
 
     fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
         let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
-            backend: self.backend_family(),
+            backend: "cubecl-webgpu",
         })?;
         let bytes = managed.resource().map_read().map_err(host_access_error)?;
         validate_typed_read_mapping::<T>(&bytes, self.len)?;
@@ -253,7 +251,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for WebGpuBuffer<T> {
 
     fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
-            backend: self.backend_family(),
+            backend: "cubecl-webgpu",
         })?;
         let mut bytes = managed.resource().map_write().map_err(host_access_error)?;
         validate_typed_mapping_len::<T>(bytes.len(), self.len)?;
@@ -285,7 +283,7 @@ fn webgpu_handle_from_backend<T: 'static>(
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     buffer
         .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
+        .downcast_ref::<WebGpuBuffer>()
         .map(|buffer| buffer.handle().clone())
         .ok_or_else(|| {
             crate::Error::runtime_state(
@@ -340,7 +338,7 @@ fn comptime_sequence<T: CubeType + Clone>(values: &[T]) -> Sequence<T> {
 
 fn validate_webgpu_buffer_len<T>(
     tensor: &TypedTensor<T>,
-    buffer: &WebGpuBuffer<T>,
+    buffer: &WebGpuBuffer,
     op: &'static str,
 ) -> crate::Result<()> {
     let expected_len = checked_shape_product(op, tensor.shape())?;
@@ -359,7 +357,7 @@ fn validate_webgpu_buffer_len<T>(
 fn webgpu_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T>,
     op: &'static str,
-) -> crate::Result<&'a WebGpuBuffer<T>> {
+) -> crate::Result<&'a WebGpuBuffer> {
     match tensor.buffer() {
         StorageBuffer::Host(_) => Err(Error::runtime_state(
             op,
@@ -368,7 +366,7 @@ fn webgpu_buffer<'a, T: 'static>(
         )),
         StorageBuffer::Backend(buffer) => buffer
             .as_any()
-            .downcast_ref::<WebGpuBuffer<T>>()
+            .downcast_ref::<WebGpuBuffer>()
             .ok_or_else(|| {
                 Error::runtime_state(
                     op,
@@ -513,7 +511,7 @@ fn ensure_placement_resident_on_runtime(
 
 pub(super) fn typed_from_webgpu<T: Send + Sync + 'static>(
     shape: Vec<usize>,
-    buffer: WebGpuBuffer<T>,
+    buffer: WebGpuBuffer,
     rt: &WebGpuRuntime,
 ) -> crate::Result<TypedTensor<T>> {
     TypedTensor::from_buffer_col_major(

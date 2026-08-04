@@ -463,7 +463,7 @@ where
     // with swapped strides that may select a slower plan.
     let (output_extents, output_strides, output_modes) =
         physical_output_descriptor(op, dst.shape(), dst.strides())?;
-    let input_res = resolve_device_region(
+    let input_res = resolve_device_region::<T>(
         backend.runtime(),
         source_buffer,
         src.shape(),
@@ -471,7 +471,7 @@ where
         src.offset(),
         op,
     )?;
-    let output_res = resolve_device_region(
+    let output_res = resolve_device_region::<T>(
         backend.runtime(),
         destination_buffer,
         dst.shape(),
@@ -706,7 +706,7 @@ where
 {
     ensure_view_resident_on_runtime(rt, view, op)?;
     let buffer = cubecl_view_buffer(view, op)?;
-    resolve_device_region(rt, buffer, view.shape(), view.strides(), view.offset(), op)
+    resolve_device_region::<T>(rt, buffer, view.shape(), view.strides(), view.offset(), op)
 }
 
 fn typed_device_ptr<T, R>(
@@ -728,7 +728,7 @@ where
 
 fn resolve_device_region<T: 'static>(
     rt: &CudaRuntime,
-    buffer: &CubeclBuffer<T>,
+    buffer: &CubeclBuffer,
     shape: &[usize],
     strides: &[isize],
     offset: isize,
@@ -762,8 +762,8 @@ fn resolve_device_region<T: 'static>(
     })
 }
 
-fn validate_view_region<T>(
-    buffer: &CubeclBuffer<T>,
+fn validate_view_region(
+    buffer: &CubeclBuffer,
     shape: &[usize],
     strides: &[isize],
     offset: isize,

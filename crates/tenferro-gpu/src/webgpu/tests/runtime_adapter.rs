@@ -23,13 +23,13 @@ use crate::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 #[test]
 fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
-    let first = WebGpuBuffer::<f32>::new(
+    let first = WebGpuBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
         1,
         0,
         domain,
     );
-    let second = WebGpuBuffer::<f32>::new(
+    let second = WebGpuBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
         1,
         0,
@@ -38,7 +38,10 @@ fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
 
     assert_eq!(first.allocation_domain(), Some(domain));
     assert_eq!(second.allocation_domain(), Some(domain));
-    assert_ne!(first.allocation_id(), second.allocation_id());
+    assert_ne!(
+        <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&first),
+        <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&second)
+    );
 }
 
 #[derive(Debug)]

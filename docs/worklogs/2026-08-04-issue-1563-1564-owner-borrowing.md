@@ -25,6 +25,9 @@ follow Rust borrowing.
 - CUDA and WebGPU providers construct owned backend buffers directly. CUDA
   view binding validates the borrowed view without constructing a temporary
   tensor by cloning the allocation owner.
+- The concrete `CubeclBuffer` and `WebGpuBuffer` owners are scalar-independent;
+  dtype appears only in the `BackendStorage<T>` implementation and borrowed
+  tensor/view descriptor, not in the owning provider resource type.
 - Runtime and CPU/FFT/linalg managed-buffer test providers now use mutable
   mapping receivers and allocate a fresh same-domain output where an old test
   path previously aliased an owner.
