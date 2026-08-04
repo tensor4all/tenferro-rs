@@ -58,7 +58,7 @@ SECRET_NAME = (
 #   const API_KEY: &str = "....";     let api_key: String = "...".into();
 # Matching only `name <sep> value` redacts the type and leaves the literal, so
 # allow a short annotation before the separator that precedes the value.
-SECRET_ANNOTATION = r"(?:\s*:[^=\n]{0,40})?"
+SECRET_ANNOTATION = r"(?:[ \t]*:[^=\n]{0,40})?"
 # The value alternatives are ordered quoted-first so a quoted secret is
 # consumed whole. Putting the bare-token alternative first would stop at the
 # first space inside a quoted passphrase and upload the remainder. (Spelling
@@ -66,7 +66,7 @@ SECRET_ANNOTATION = r"(?:\s*:[^=\n]{0,40})?"
 SECRET_VALUE = r"""(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s#]+)"""
 SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(?P<name>" + SECRET_NAME + r")(?P<sep>" + SECRET_ANNOTATION
-    + r"\s*[:=]\s*)(?P<value>" + SECRET_VALUE + r")"
+    + r"[ \t]*[:=][ \t]*)(?P<value>" + SECRET_VALUE + r")"
 )
 # Quoted credentials may legitimately contain spaces (a diceware passphrase is
 # prose by construction), so the value shape cannot be the discriminator.
@@ -74,6 +74,13 @@ QUOTED_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"\s*[:=]\s*"
     r"""(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}')"""
 )
+# An assignment whose value has not started yet on this line: the credential
+# lands on the following line, where no credential-shaped name is in sight.
+OPEN_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"[ \t]*[:=][ \t]*$"
+)
+# A value standing alone on its own line, as the continuation of the above.
+STANDALONE_VALUE = re.compile(r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}')[ \t]*[,;]?[ \t]*$""")
 # A quote opened on this line and closed on a later one hides the value from
 # any single-line pattern, so treat the opening alone as disqualifying.
 UNTERMINATED_SECRET_ASSIGNMENT = re.compile(
@@ -810,24 +817,52 @@ def added_diff_text(diff_text: str) -> str:
 
 
 def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
+    """Locate the first added line that must not be uploaded.
+
+    Lines are examined in diff order rather than per file, because a credential
+    can be split across two: the assignment stays unchanged on a context line
+    and only the value line is replaced. Checking added lines in isolation sees
+    a bare string literal with no credential-shaped name anywhere on it.
+    """
     current_file: str | None = None
-    new_line: int | None = None
+    new_line = 0
+    # Set when the previous surviving line opened an assignment whose value has
+    # not appeared yet, so the next line's literal is that value.
+    awaiting_value = False
+
     for line in diff_text.splitlines():
         if line.startswith("+++ "):
-            raw_path = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = None if raw_path == "/dev/null" else raw_path
+            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+            current_file = None if raw == "/dev/null" else raw
+            awaiting_value = False
             continue
         if line.startswith("@@"):
-            match = re.search(r"\+(\d+)(?:,\d+)?", line)
-            new_line = int(match.group(1)) if match else None
+            match = re.search(r"\+(\d+)", line)
+            new_line = int(match.group(1)) if match else 0
+            awaiting_value = False
             continue
-        if current_file is None or new_line is None:
+        if current_file is None:
             continue
-        if line.startswith("+") and not line.startswith("+++"):
-            if contains_sensitive_text(line[1:]):
-                return current_file, new_line
+
+        if line.startswith("-") and not line.startswith("---"):
+            # A deleted line neither survives nor breaks the continuation.
+            continue
+        if not (line.startswith("+") or line.startswith(" ")):
+            continue
+
+        body = line[1:]
+        is_added = line.startswith("+") and not line.startswith("+++")
+
+        if is_added and contains_sensitive_text(body):
+            return current_file, new_line
+        if is_added and awaiting_value and STANDALONE_VALUE.match(body):
+            return current_file, new_line
+
+        opener = OPEN_SECRET_ASSIGNMENT.search(body)
+        awaiting_value = bool(opener) and is_credential_name(opener.group("name"))
+        if is_added:
             new_line += 1
-        elif line.startswith(" "):
+        else:
             new_line += 1
     return None
 
