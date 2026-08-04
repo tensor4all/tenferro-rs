@@ -330,7 +330,7 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.0, 4.0, 6.0],
         TOL,
     );
@@ -482,7 +482,7 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
         .backward()
         .unwrap();
     assert_eq!(
-        f64_data(tracked.grad().unwrap().unwrap().as_ref()),
+        f64_data(&tracked.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.5, 2.5]
     );
 }
@@ -702,7 +702,7 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[0.0, 30.0, 30.0],
         TOL,
     );
@@ -720,7 +720,8 @@ fn eager_x_squared_gradient_matches_finite_difference() {
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
 
-    let grad_data = f64_data(grad.as_ref());
+    let grad_tensor = grad.to_tensor().unwrap();
+    let grad_data = f64_data(&grad_tensor);
     let expected: Vec<f64> = (0..x_data.len())
         .map(|index| {
             finite_diff_scalar(
@@ -754,7 +755,7 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
             )
         })
         .collect();
-    assert_close_slice(f64_data(grad.as_ref()), &expected, FD_TOL);
+    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &expected, FD_TOL);
 }
 
 #[test]
@@ -768,7 +769,7 @@ fn eager_repeated_backward_accumulates_across_calls() {
     let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.0, 4.0, 6.0],
         TOL,
     );
@@ -776,7 +777,7 @@ fn eager_repeated_backward_accumulates_across_calls() {
     let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[4.0, 8.0, 12.0],
         TOL,
     );
@@ -806,8 +807,10 @@ fn eager_matmul_gradients_match_finite_difference() {
 
     let grad_a = a.grad().unwrap().unwrap();
     let grad_b = b.grad().unwrap().unwrap();
-    let grad_a_data = f64_data(grad_a.as_ref());
-    let grad_b_data = f64_data(grad_b.as_ref());
+    let grad_a_tensor = grad_a.to_tensor().unwrap();
+    let grad_b_tensor = grad_b.to_tensor().unwrap();
+    let grad_a_data = f64_data(&grad_a_tensor);
+    let grad_b_data = f64_data(&grad_b_tensor);
 
     let expected_a: Vec<f64> = (0..a_data.len())
         .map(|index| finite_diff_lhs(eager_matmul_sum, &a_data, &b_data, index))
@@ -832,7 +835,7 @@ fn eager_exp_gradient_matches_primal() {
 
     let grad = x.grad().unwrap().unwrap();
     let expected = vec![1.0, 1.0_f64.exp(), 2.0_f64.exp()];
-    assert_close_slice(f64_data(grad.as_ref()), &expected, TOL);
+    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &expected, TOL);
 }
 
 #[test]
@@ -846,7 +849,7 @@ fn eager_fan_out_accumulates_gradient() {
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(grad.as_ref()), &[2.0, 2.0, 2.0], TOL);
+    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[2.0, 2.0, 2.0], TOL);
 }
 
 #[test]
@@ -870,7 +873,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
 
     assert!(x.grad().unwrap().is_none());
     assert_close_slice(
-        f64_data(y.grad().unwrap().unwrap().as_ref()),
+        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[1.0, 2.0, 3.0],
         TOL,
     );
@@ -879,12 +882,12 @@ fn eager_clear_grad_resets_only_one_leaf() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.0, 4.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(y.grad().unwrap().unwrap().as_ref()),
+        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[1.0, 2.0, 3.0],
         TOL,
     );
@@ -916,12 +919,12 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[4.0, 5.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(y.grad().unwrap().unwrap().as_ref()),
+        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[1.0, 2.0, 3.0],
         TOL,
     );
@@ -944,7 +947,7 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
     let loss_x = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss_x.backward().unwrap();
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.0, 4.0, 6.0],
         TOL,
     );
@@ -953,12 +956,12 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
     let _ = loss_y.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[2.0, 4.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(y.grad().unwrap().unwrap().as_ref()),
+        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[8.0, 10.0, 12.0],
         TOL,
     );
@@ -1020,7 +1023,7 @@ fn eager_detach_cuts_one_gradient_path() {
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(grad.as_ref()), &[1.0, 2.0, 3.0], TOL);
+    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[1.0, 2.0, 3.0], TOL);
     assert!(detached.grad().unwrap().is_none());
 }
 
@@ -1120,7 +1123,7 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
     let loss = transposed.reduce_sum(Some(&[0, 1])).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(grad.as_ref()), &[1.0; 6], TOL);
+    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[1.0; 6], TOL);
 }
 
 #[test]

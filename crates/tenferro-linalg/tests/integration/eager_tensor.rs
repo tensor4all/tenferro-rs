@@ -178,7 +178,7 @@ fn svd_vector_observable_backward_grad_is_finite() {
     loss.backward().unwrap();
 
     let grad = a.grad().unwrap().unwrap();
-    assert_finite_f64_tensor(grad.as_ref());
+    assert_finite_f64_tensor(&grad.to_tensor().unwrap());
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
 
     assert_eq!(grad.shape(), &[2, 2, 2]);
     assert_close_slice(
-        f64_data(grad.as_ref()),
+        f64_data(&grad.to_tensor().unwrap()),
         &[-1.0, -0.5, -1.0, -0.5, -2.0 / 3.0, -0.4, -2.0 / 3.0, -0.4],
         1.0e-12,
     );
@@ -364,7 +364,7 @@ fn eigh_vector_observable_backward_grad_is_finite() {
     loss.backward().unwrap();
 
     let grad = a.grad().unwrap().unwrap();
-    assert_finite_f64_tensor(grad.as_ref());
+    assert_finite_f64_tensor(&grad.to_tensor().unwrap());
 }
 
 #[test]

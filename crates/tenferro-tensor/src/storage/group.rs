@@ -1250,6 +1250,37 @@ impl AllocationGroup {
             .map_err(ExtractError::from)
     }
 
+    /// Extract one uniquely-owned descriptor while retaining all other group
+    /// descriptors in place.
+    ///
+    /// This is structural: aliased allocations return a typed error and the
+    /// group remains unchanged.
+    #[allow(clippy::result_large_err)]
+    pub fn take_tensor(&mut self, slot: DescriptorSlot) -> Result<crate::Tensor, GroupError> {
+        let (_, descriptor) = self.resolve_descriptor(slot)?;
+        let descriptor = descriptor.clone();
+        let dtype = descriptor.dtype;
+        let layout = descriptor.layout.clone();
+        let placement = descriptor.placement.clone();
+        let owner = self
+            .try_extract(slot)
+            .map_err(|error| GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            })?;
+        let mut extracted = Self::new();
+        extracted.allocations.push(Some(owner));
+        let mut descriptor = descriptor.clone();
+        descriptor.allocation = AllocationSlot(0);
+        extracted.descriptors.push(Some(descriptor));
+        Ok(tensor_from_group(
+            extracted,
+            DescriptorSlot(0),
+            dtype,
+            layout,
+            placement,
+        ))
+    }
+
     // INVARIANT: extraction failure returns the unchanged group because the
     // caller must retain ownership when a descriptor cannot be detached.
     #[allow(clippy::result_large_err)]

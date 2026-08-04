@@ -106,7 +106,7 @@ fn take_block_backward_accumulates_to_source() {
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
-        f64_data(x.grad().unwrap().unwrap().as_ref()),
+        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[0.0, 0.0, 0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0, 2.0, 0.0, 4.0],
         TOL,
     );

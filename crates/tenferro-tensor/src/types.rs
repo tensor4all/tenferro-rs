@@ -4549,7 +4549,7 @@ impl<'a> TensorView<'a> {
     ///
     /// Backend buffers and non-contiguous views return an explicit error. No
     /// download or materialization is performed.
-    pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&[T]> {
+    pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&'a [T]> {
         if self.dtype() != T::dtype() {
             return Err(crate::Error::validation(
                 "TensorView::as_slice",

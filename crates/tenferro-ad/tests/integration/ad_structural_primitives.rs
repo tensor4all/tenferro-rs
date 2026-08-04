@@ -126,8 +126,14 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
         max_part + min_part
     };
 
-    assert_close(f64_data(&grad_x), &finite_diff_unary(loss_for_x, &x_data));
-    assert_close(f64_data(&grad_y), &finite_diff_unary(loss_for_y, &y_data));
+    assert_close(
+        f64_data(&grad_x.to_tensor().unwrap()),
+        &finite_diff_unary(loss_for_x, &x_data),
+    );
+    assert_close(
+        f64_data(&grad_y.to_tensor().unwrap()),
+        &finite_diff_unary(loss_for_y, &y_data),
+    );
 }
 
 #[test]
@@ -189,11 +195,11 @@ fn eager_select_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(on_true.grad().unwrap().unwrap().as_ref()),
+        f64_data(&on_true.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(loss_for_true, &true_data),
     );
     assert_close(
-        f64_data(on_false.grad().unwrap().unwrap().as_ref()),
+        f64_data(&on_false.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(loss_for_false, &false_data),
     );
 }
@@ -247,18 +253,18 @@ fn eager_clamp_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(input.grad().unwrap().unwrap().as_ref()),
+        f64_data(&input.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(|xs| loss_with(xs, &lower_data, &upper_data), &input_data),
     );
     assert_close(
-        f64_data(lower.grad().unwrap().unwrap().as_ref()),
+        f64_data(&lower.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(
             |lows| loss_with(&input_data, lows, &upper_data),
             &lower_data,
         ),
     );
     assert_close(
-        f64_data(upper.grad().unwrap().unwrap().as_ref()),
+        f64_data(&upper.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(
             |highs| loss_with(&input_data, &lower_data, highs),
             &upper_data,
@@ -297,7 +303,7 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
     let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), &[2, 3]);
     assert_close(
-        f64_data(&grad),
+        f64_data(&grad.to_tensor().unwrap()),
         &finite_diff_unary(loss_for_input, &input_data),
     );
 }
@@ -346,7 +352,7 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
     let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), input_shape.as_slice());
     assert_close(
-        f64_data(&grad),
+        f64_data(&grad.to_tensor().unwrap()),
         &finite_diff_unary(loss_for_input, &input_data),
     );
 }
@@ -420,15 +426,15 @@ fn eager_concatenate_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(left.grad().unwrap().unwrap().as_ref()),
+        f64_data(&left.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(loss_for_left, &left_data),
     );
     assert_close(
-        f64_data(middle.grad().unwrap().unwrap().as_ref()),
+        f64_data(&middle.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(loss_for_middle, &middle_data),
     );
     assert_close(
-        f64_data(right.grad().unwrap().unwrap().as_ref()),
+        f64_data(&right.grad().unwrap().unwrap().to_tensor().unwrap()),
         &finite_diff_unary(loss_for_right, &right_data),
     );
 }

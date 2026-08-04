@@ -241,8 +241,14 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
 
     assert_eq!(grad_a.shape(), &[2, 3]);
     assert_eq!(grad_b.shape(), &[3, 2]);
-    assert_eq!(f64_data(grad_a.as_ref()), &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]);
-    assert_eq!(f64_data(grad_b.as_ref()), &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]);
+    assert_eq!(
+        f64_data(&grad_a.to_tensor().unwrap()),
+        &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
+    );
+    assert_eq!(
+        f64_data(&grad_b.to_tensor().unwrap()),
+        &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
+    );
 }
 
 #[test]
@@ -263,11 +269,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
-        f64_data(a.grad().unwrap().unwrap().as_ref()),
+        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().unwrap().as_ref()),
+        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 
@@ -275,11 +281,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
-        f64_data(a.grad().unwrap().unwrap().as_ref()),
+        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[10.0, 10.0, 14.0, 14.0, 18.0, 18.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().unwrap().as_ref()),
+        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[6.0, 14.0, 22.0, 6.0, 14.0, 22.0]
     );
 }
@@ -312,11 +318,11 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let _ = loss.backward().unwrap();
 
     assert_eq!(
-        f64_data(a.grad().unwrap().unwrap().as_ref()),
+        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(b.grad().unwrap().unwrap().as_ref()),
+        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 }

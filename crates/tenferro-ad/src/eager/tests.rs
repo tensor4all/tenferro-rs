@@ -1186,6 +1186,24 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
 }
 
 #[test]
+fn eager_gradients_bundle_borrows_and_extracts_one_owner() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
+    let mut gradients = loss.backward().unwrap();
+
+    let view = gradients.grad(&x.key).unwrap();
+    assert_eq!(view.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    let extracted = gradients.take_grad(&x.key).unwrap().unwrap();
+    assert_eq!(extracted.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert!(gradients.grad(&x.key).is_none());
+}
+
+#[test]
 fn eager_retention_exposes_borrowed_values_and_explicit_duplication() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::from_tensor_in(

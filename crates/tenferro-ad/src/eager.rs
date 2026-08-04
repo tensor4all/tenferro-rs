@@ -36,7 +36,7 @@ use tenferro_runtime::{
 use tenferro_tensor::TypedTensor;
 use tenferro_tensor::{
     AllocationGroup, CacheStats, DType, DescriptorSlot, GroupError, IntoShapeVec, Tensor,
-    TensorBackend, TensorElementwise, TensorRead, TensorScalar, TensorValue, TensorView,
+    TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
 };
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 
@@ -59,8 +59,8 @@ use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
 
 use crate::AdContext;
 
-pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
-pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
+pub(crate) type GradSlot = Arc<Mutex<Option<Arc<AdValueRecord>>>>;
+pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<AdValueRecord>>>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct EagerTrace;
@@ -372,7 +372,7 @@ pub struct ValueGuard<'a> {
     view: TensorView<'a>,
 }
 
-impl ValueGuard<'_> {
+impl<'a> ValueGuard<'a> {
     /// Return the scalar dtype of the retained value.
     pub fn dtype(&self) -> DType {
         self.view.dtype()
@@ -392,7 +392,7 @@ impl ValueGuard<'_> {
     ///
     /// Backend-resident values return the backend's typed host-access error;
     /// this method does not download storage implicitly.
-    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
+    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&'a [T]> {
         self.view.as_slice()
     }
 
@@ -423,6 +423,125 @@ impl ValueGuard<'_> {
                 view.as_slice()?.to_vec(),
             ),
         }
+    }
+}
+
+/// Read-only retained gradient value.
+#[derive(Clone, Debug)]
+pub struct GradientValue {
+    record: Arc<AdValueRecord>,
+    ctx: Arc<EagerRuntime>,
+}
+
+impl GradientValue {
+    /// Return the scalar dtype of the gradient.
+    pub fn dtype(&self) -> DType {
+        self.record.dtype()
+    }
+
+    /// Return the logical shape of the gradient.
+    pub fn shape(&self) -> &[usize] {
+        self.record.shape()
+    }
+
+    /// Borrow the gradient's value guard.
+    pub fn value(&self) -> Result<ValueGuard<'_>> {
+        self.record.value("GradientValue::value")
+    }
+
+    /// Borrow the gradient as a dtype-erased read target.
+    pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
+        self.record.tensor_read("GradientValue::tensor_read")
+    }
+
+    /// Borrow a compact host slice without downloading backend storage.
+    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
+        self.record
+            .value("GradientValue::as_slice")
+            .map_err(|error| {
+                tenferro_tensor::Error::runtime_state("GradientValue::as_slice", error.to_string())
+            })?
+            .as_slice()
+    }
+
+    /// Explicitly copy a host-resident gradient into a standalone tensor.
+    pub fn to_tensor(&self) -> Result<Tensor> {
+        let value = self
+            .record
+            .value("GradientValue::to_tensor")
+            .map_err(|error| {
+                Error::runtime_state(
+                    "GradientValue::to_tensor",
+                    ErrorPhase::Execution,
+                    error.to_string(),
+                )
+            })?;
+        match value.duplicate_host_tensor() {
+            Ok(tensor) => Ok(tensor),
+            Err(_) => {
+                let read = self.record.tensor_read("GradientValue::to_tensor")?;
+                self.ctx
+                    .with_execution_session(|session| session.to_contiguous_read(read))?
+                    .map_err(Error::from)
+            }
+        }
+    }
+}
+
+/// Move-only accumulated gradient bundle backed by one allocation group.
+#[derive(Debug)]
+pub struct Gradients {
+    group: AllocationGroup,
+    slots: HashMap<ValueKey<StdTensorOp>, DescriptorSlot>,
+}
+
+impl Gradients {
+    fn from_tensors(tensors: HashMap<ValueKey<StdTensorOp>, Tensor>) -> Result<Self> {
+        let (keys, values): (Vec<_>, Vec<_>) = tensors.into_iter().unzip();
+        let (group, bindings) = AllocationGroup::from_tensors(values).map_err(|error| {
+            Error::runtime_state(
+                "Gradients::from_tensors",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+        let slots = keys.into_iter().zip(bindings).collect();
+        Ok(Self { group, slots })
+    }
+
+    /// Return the number of retained gradient descriptors.
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Return whether no gradient was produced.
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// Borrow one gradient view by its local value key.
+    pub fn grad(&self, key: &ValueKey<StdTensorOp>) -> Option<TensorView<'_>> {
+        let slot = self.slots.get(key).copied()?;
+        let mut reads = self.group.read_views(std::slice::from_ref(&slot)).ok()?;
+        match reads.pop()? {
+            TensorRead::View(view) => Some(view),
+            TensorRead::Tensor(_) => None,
+        }
+    }
+
+    /// Consume one gradient owner while leaving the bundle unchanged on failure.
+    pub fn take_grad(
+        &mut self,
+        key: &ValueKey<StdTensorOp>,
+    ) -> tenferro_tensor::Result<Option<Tensor>> {
+        let Some(&slot) = self.slots.get(key) else {
+            return Ok(None);
+        };
+        let tensor = self.group.take_tensor(slot).map_err(|error| {
+            tenferro_tensor::Error::runtime_state("Gradients::take_grad", error.to_string())
+        })?;
+        self.slots.remove(key);
+        Ok(Some(tensor))
     }
 }
 
@@ -2071,7 +2190,7 @@ impl EagerRuntime {
 
     fn store_grads(
         &self,
-        cotangents: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+        cotangents: &HashMap<ValueKey<StdTensorOp>, Tensor>,
         backend: &mut EagerBackend,
     ) -> Result<()> {
         let mut updates = Vec::new();
@@ -2084,7 +2203,7 @@ impl EagerRuntime {
                 };
 
                 if let Some(incoming) = cotangents.get(key) {
-                    updates.push((slot, Arc::clone(incoming)));
+                    updates.push((slot, incoming));
                 }
 
                 true
@@ -2100,8 +2219,20 @@ impl EagerRuntime {
                 )
             })?;
             let next = match current.as_ref() {
-                Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
-                None => incoming,
+                Some(existing) => {
+                    let existing_read = existing.tensor_read("EagerRuntime::store_grads")?;
+                    let incoming_read = TensorRead::from_tensor(incoming);
+                    let tensor = backend
+                        .with_backend_session(|session| {
+                            session.add_read(existing_read, incoming_read)
+                        })
+                        .map_err(Error::from)?;
+                    AdValueRecord::from_tensor(tensor, "EagerRuntime::store_grads")?
+                }
+                None => AdValueRecord::from_tensor(
+                    incoming.duplicate().map_err(Error::from)?,
+                    "EagerRuntime::store_grads",
+                )?,
             };
             *current = Some(next);
         }
@@ -3264,7 +3395,7 @@ impl EagerTensor {
     ///
     /// Returns [`Error::RuntimeState`] if the gradient slot is poisoned or no
     /// longer available.
-    pub fn grad(&self) -> Result<Option<Arc<Tensor>>> {
+    pub fn grad(&self) -> Result<Option<GradientValue>> {
         self.grad_slot
             .lock()
             .map_err(|_| {
@@ -3274,7 +3405,12 @@ impl EagerTensor {
                     "lock poisoned",
                 )
             })
-            .map(|slot| slot.clone())
+            .map(|slot| {
+                slot.as_ref().map(|record| GradientValue {
+                    record: Arc::clone(record),
+                    ctx: Arc::clone(&self.ctx),
+                })
+            })
     }
 
     /// Clear the accumulated gradient stored for this tensor.
@@ -3516,17 +3652,17 @@ impl EagerTensor {
     /// Returns [`Error::NonScalarGrad`] when this output is not scalar,
     /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
     /// or a typed validation/backend/runtime-state error during the reverse pass.
-    pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+    pub fn backward(&self) -> Result<Gradients> {
         if !self.shape().is_empty() {
             return Err(Error::NonScalarGrad {
                 shape: self.shape().to_vec(),
             });
         }
 
-        let value = self.materialized_arc()?;
+        let value = self.to_tensor()?;
         let seed = {
             let mut backend = self.ctx.lock_backend()?;
-            Arc::new(one_like_tensor(value.as_ref(), &mut *backend)?)
+            Arc::new(one_like_tensor(&value, &mut *backend)?)
         };
         self.backward_from_seed(seed)
     }
@@ -3565,10 +3701,7 @@ impl EagerTensor {
     /// eager runtime, [`Error::Validation`] when its shape or dtype is not a
     /// valid seed, [`Error::UnsupportedAdRule`] for an unavailable reverse
     /// rule, or a typed backend/runtime-state error during execution.
-    pub fn backward_with(
-        &self,
-        cotangent: &EagerTensor,
-    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+    pub fn backward_with(&self, cotangent: &EagerTensor) -> Result<Gradients> {
         if !self.same_context(cotangent) {
             return Err(Error::ContextMismatch {
                 lhs: self.ctx_id(),
@@ -3576,13 +3709,10 @@ impl EagerTensor {
             });
         }
         validate_seed_tensor("backward", self, cotangent)?;
-        self.backward_from_seed(cotangent.materialized_arc()?)
+        self.backward_from_seed(Arc::new(cotangent.to_tensor()?))
     }
 
-    fn backward_from_seed(
-        &self,
-        seed: Arc<Tensor>,
-    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+    fn backward_from_seed(&self, seed: Arc<Tensor>) -> Result<Gradients> {
         let cotangent = EagerTensor::new_result_arc(
             Arc::clone(&self.ctx),
             eager_val_key(),
@@ -3617,11 +3747,22 @@ impl EagerTensor {
             let Some(grad) = self.ctx.vjp_optional(self, &wrt, &cotangent)? else {
                 continue;
             };
-            cotangents.insert(key, grad.materialized_arc()?);
+            let tensor = match grad.into_value() {
+                Ok(tensor) => tensor,
+                Err(IntoValueError::NotUnique(handle)) => handle.duplicate_value()?,
+                Err(IntoValueError::Extract { error, .. }) => {
+                    return Err(Error::runtime_state(
+                        "EagerTensor::backward",
+                        ErrorPhase::Execution,
+                        error.to_string(),
+                    ));
+                }
+            };
+            cotangents.insert(key, tensor);
         }
         let mut backend = self.ctx.lock_backend()?;
         self.ctx.store_grads(&cotangents, &mut backend)?;
-        Ok(cotangents)
+        Gradients::from_tensors(cotangents)
     }
 }
 
