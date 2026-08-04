@@ -1258,6 +1258,68 @@ def test_redactor_does_not_consume_a_deletion_marker_as_the_value() -> None:
     assert mod.redact_sensitive_text(text).splitlines()[1] == '-    "old";'
 
 
+def test_filter_findings_keeps_file_level_block_for_deletions() -> None:
+    """A deletion-only violation has no new-file line the model can anchor to."""
+    mod = load_module()
+    block = mod.Finding("x", "block", "S", "a.rs", None, "removed validation", "d")
+    assert mod.filter_findings([block], ["a.rs"], {}) == []
+    kept = mod.filter_findings([block], ["a.rs"], {}, files_with_deletions={"a.rs"})
+    assert kept == [block]
+
+
+def test_files_with_deleted_lines_reads_the_new_side_path() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1,2 +1,1 @@",
+            " keep",
+            "-gone",
+            "diff --git a/b.rs b/b.rs",
+            "--- a/b.rs",
+            "+++ b/b.rs",
+            "@@ -1,1 +1,2 @@",
+            " keep",
+            "+added",
+        ]
+    )
+    assert mod.files_with_deleted_lines(diff) == {"a.rs"}
+
+
+def test_sensitive_diff_blocks_a_bare_continuation_value() -> None:
+    """The continuation value need not be quoted."""
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            f" {KEYNAME} =",
+            "-old",
+            "+abcdefghijklmnopqrstuvwx",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is not None
+
+
+def test_sensitive_diff_ignores_an_ordinary_bare_continuation() -> None:
+    mod = load_module()
+    diff = "\n".join(
+        [
+            "diff --git a/src/x.rs b/src/x.rs",
+            "--- a/src/x.rs",
+            "+++ b/src/x.rs",
+            "@@ -1,2 +1,2 @@",
+            " let total =",
+            "+    compute_sum(values)",
+        ]
+    )
+    assert mod.sensitive_diff_finding(diff) is None
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -1311,6 +1373,10 @@ def main() -> int:
         test_budget_is_smaller_than_the_workflow_timeout,
         test_call_deepseek_does_not_retry_past_the_deadline,
         test_budget_exhausted_finding_warns_without_blocking,
+        test_filter_findings_keeps_file_level_block_for_deletions,
+        test_files_with_deleted_lines_reads_the_new_side_path,
+        test_sensitive_diff_blocks_a_bare_continuation_value,
+        test_sensitive_diff_ignores_an_ordinary_bare_continuation,
         test_sensitive_diff_blocks_a_value_on_a_continuation_line,
         test_sensitive_diff_ignores_an_ordinary_continuation_value,
         test_sensitive_diff_ignores_an_unchanged_continuation_value,

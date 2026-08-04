@@ -80,7 +80,12 @@ OPEN_SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(?P<name>" + SECRET_NAME + r")" + SECRET_ANNOTATION + r"[ \t]*[:=][ \t]*$"
 )
 # A value standing alone on its own line, as the continuation of the above.
-STANDALONE_VALUE = re.compile(r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}')[ \t]*[,;]?[ \t]*$""")
+# The value may be a bare token: `API_KEY =` followed by an unquoted secret.
+# `awaiting_value` is only set for credential-named assignments, so accepting
+# bare tokens here cannot fire on ordinary continuations.
+STANDALONE_VALUE = re.compile(
+    r"""^[ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|[^\s"'#][^\s#]{7,})[ \t]*[,;]?[ \t]*$"""
+)
 # A quote opened on this line and closed on a later one hides the value from
 # any single-line pattern, so treat the opening alone as disqualifying.
 UNTERMINATED_SECRET_ASSIGNMENT = re.compile(
@@ -522,6 +527,22 @@ def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
         elif line.startswith(" "):
             new_line += 1
 
+    return result
+
+
+def files_with_deleted_lines(diff_text: str) -> set[str]:
+    """Files this diff removes lines from, keyed by their new-side path."""
+    result: set[str] = set()
+    current_file: str | None = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
+            current_file = None if raw == "/dev/null" else raw
+            continue
+        if line.startswith("--- ") or line.startswith("@@"):
+            continue
+        if current_file and line.startswith("-") and not line.startswith("---"):
+            result.add(current_file)
     return result
 
 
@@ -1012,8 +1033,19 @@ def filter_findings(
     added_lines: dict[str, set[int]],
     *,
     allow_global: bool = True,
+    files_with_deletions: set[str] | None = None,
 ) -> list[Finding]:
+    """Keep only findings anchored to something this diff actually changed.
+
+    A file-level `block` is normally dropped, because an unanchored block is
+    usually the model generalising about the file rather than about the diff.
+    The exception is a violation introduced by *deleting* required validation,
+    coverage, or a safety comment: there is no new-file line to point at, so
+    the model must return `line: null`, and dropping it would let a
+    deletion-only diff pass the gate.
+    """
     allowed_files = set(files)
+    deletions = files_with_deletions or set()
     kept: list[Finding] = []
     for finding in findings:
         if not finding.file:
@@ -1022,7 +1054,11 @@ def filter_findings(
             continue
         if finding.file and finding.file not in allowed_files:
             continue
-        if finding.line is None and finding.severity == "block":
+        if (
+            finding.line is None
+            and finding.severity == "block"
+            and finding.file not in deletions
+        ):
             continue
         if finding.line is not None:
             if finding.line not in added_lines.get(finding.file, set()):
@@ -1462,6 +1498,7 @@ def main(argv: list[str] | None = None) -> int:
     diff_text = unified_diff(args.base, args.head, worktree=args.worktree)
     added_lines = added_lines_by_file(diff_text)
     added_text = added_lines_with_text(diff_text)
+    deleted_from = files_with_deleted_lines(diff_text)
     section_names = select_rule_sections(files, added_text)
     rules_text = build_rules_payload(section_names)
     system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -1562,7 +1599,20 @@ def main(argv: list[str] | None = None) -> int:
                     f"{type(exc).__name__}: {exc}",
                     file=sys.stderr,
                 )
-                findings.append(llm_response_error_finding(exc))
+                # A transport failure at the cumulative deadline is the budget
+                # running out, not an unusable model. Reporting it as a block
+                # would fail the gate for exactly the case the budget exists
+                # to degrade gracefully.
+                if isinstance(exc, TRANSPORT_ERRORS) and (
+                    time.monotonic() >= llm_deadline
+                ):
+                    findings.append(
+                        budget_exhausted_finding(
+                            reviewed, len(chunks), args.budget_seconds
+                        )
+                    )
+                else:
+                    findings.append(llm_response_error_finding(exc))
                 break
             print(
                 f"LLM chunk {index}/{len(chunks)}: {len(chunk)} chars, "
@@ -1578,6 +1628,7 @@ def main(argv: list[str] | None = None) -> int:
             files,
             added_lines,
             allow_global=False,
+            files_with_deletions=deleted_from,
         )
         llm_elapsed = time.monotonic() - llm_started
         llm_summary = summarize_llm_review(
