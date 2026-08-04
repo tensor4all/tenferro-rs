@@ -680,8 +680,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                     temporary.cleanup()
 
     def test_contract_revision_may_change_only_deferred_identity(self) -> None:
-        base_manifest = _manifest_text().replace("revision = 3", "revision = 2", 1)
-        revised = base_manifest.replace("revision = 2", "revision = 3", 1)
+        base_manifest = _manifest_text().replace("revision = 4", "revision = 3", 1)
+        revised = base_manifest.replace("revision = 3", "revision = 4", 1)
         revised = _replace_once(
             revised,
             'gates = ["G1", "G3", "G5"]\nartifact = { id = "artifact-cuda-provider"',
@@ -748,11 +748,11 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             temporary.cleanup()
 
     def test_contract_revision_must_be_single_step_and_cannot_promote(self) -> None:
-        base_manifest = _manifest_text().replace("revision = 3", "revision = 2", 1)
-        for revision in (2, 4):
+        base_manifest = _manifest_text().replace("revision = 4", "revision = 3", 1)
+        for revision in (3, 5):
             with self.subTest(revision=revision):
                 candidate = base_manifest.replace(
-                    "revision = 2", f"revision = {revision}", 1
+                    "revision = 3", f"revision = {revision}", 1
                 )
                 candidate = _replace_once(
                     candidate,
@@ -787,15 +787,15 @@ class StorageOwnershipV2Tests(unittest.TestCase):
                     _assert_error(
                         self,
                         result,
-                        "E_PROMOTION_REGISTRY" if revision == 4 else "E_PROMOTION_IDENTITY",
-                        {"component": "revision"} if revision == 4 else {"obligation_id": "p7-cuda"},
+                        "E_PROMOTION_REGISTRY" if revision == 5 else "E_PROMOTION_IDENTITY",
+                        {"component": "revision"} if revision == 5 else {"obligation_id": "p7-cuda"},
                     )
                 finally:
                     temporary.cleanup()
 
         promoted = _manifest_text()
         base_manifest = _replace_row_state(
-            promoted.replace("revision = 3", "revision = 2", 1),
+            promoted.replace("revision = 4", "revision = 3", 1),
             "p0-control-plane",
             '{ kind = "deferred", activation_unit = "P0", promotion = { mode = "activate-in-place" } }',
         )
