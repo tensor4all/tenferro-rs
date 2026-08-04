@@ -78,6 +78,8 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --no-run` — passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --lib domain_and_distinguish_allocations` — 2 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --lib --quiet` — 93 passed, 117 ignored.
+- `cargo test -p tenferro-gpu --features cuda --test integration --quiet` — 68 passed on the available NVIDIA A100.
+- `cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda_progress --quiet` — 2 passed on the available NVIDIA A100.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 37 passed, including the scoped workspace and stream-pointer contracts.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
