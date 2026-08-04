@@ -89,6 +89,7 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-ad --features cuda --quiet` — 333 passed, 1 ignored; the two CUDA eager AD tests now pass after routing backend-owned copies through the runtime session.
 - `cargo test -p tenferro-ad --features cuda --test integration -- --ignored` — the CUDA f32 fusion chain passed on the available NVIDIA A100.
 - After the AD fix, exact `HEAD` `b5fc7d472de34f793456d25edd3fe37e90e905e3` passed `cargo check --workspace --quiet`, both storage design/ledger checkers, the 24-case v2 contract suite, and the active ownership runner (19 obligations; receipt `/tmp/tenferro-storage-ownership-receipt-b5fc7d47.json`).
+- The current P7/P8 boundary audit still finds three required cutover items: backend `TypedTensor` constructors retain `StorageBuffer::Backend` as the physical owner instead of the root/claim group, `PreparedDeviceToken` remains a zero-sized placeholder rather than provider-prepared state, and WebGPU FFT interop still returns raw `Handle` values. These are implementation gaps, not candidates for compatibility shims or premature deferred-row activation.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.
 - Full GPU integration reached 92/93; the sole failing test is the pre-existing
   `session_contract` trybuild check, with two fixture mismatches for removed CUDA
