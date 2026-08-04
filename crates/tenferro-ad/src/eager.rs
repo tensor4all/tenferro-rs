@@ -395,8 +395,8 @@ impl<'a> ValueGuard<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when
-    /// `T` does not match the view dtype, [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]
+    /// Returns [`tenferro_tensor::ValidationError::DTypeMismatch`] when
+    /// `T` does not match the view dtype, [`tenferro_tensor::ValidationError::NonContiguousViewAsSlice`]
     /// for a non-contiguous view, or [`tenferro_tensor::Error::HostAccess`]
     /// when backend storage cannot be mapped as a host slice.
     pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&'a [T]> {
@@ -476,7 +476,7 @@ impl GradientValue {
     /// # Errors
     ///
     /// Returns [`Error::RuntimeState`] when the retained value is unavailable,
-    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// [`tenferro_tensor::ValidationError::DTypeMismatch`] when `T` does
     /// not match the gradient dtype, or [`tenferro_tensor::Error::HostAccess`]
     /// when backend storage cannot be mapped as a host slice.
     pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
