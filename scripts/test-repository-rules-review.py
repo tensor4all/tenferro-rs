@@ -854,6 +854,1020 @@ def test_format_report_omits_llm_summary_when_absent() -> None:
     assert "LLM review:" not in report
 
 
+INLINE_TEST_SOURCE = "\n".join(
+    ["fn production() {}"]
+    + [f"fn helper_{i}() {{}}" for i in range(160)]
+    + [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    #[test]",
+        "    fn works() {",
+        "        assert!(true);",
+        "    }",
+        "}",
+    ]
+)
+
+
+def test_inline_test_module_findings_ignores_a_shrinking_block() -> None:
+    """Extraction work that shrinks an oversized block must not warn.
+
+    The check read only the head revision, so any edit inside what remained of
+    a block classified the change as "added or grown" — penalizing exactly the
+    cleanup the rule asks for.
+    """
+    mod = load_module()
+    bigger = "\n".join(
+        ["fn production() {}"]
+        + [f"fn helper_{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {"]
+        + [f"    // case {i}" for i in range(40)]
+        + ["}"]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/error.rs": INLINE_TEST_SOURCE},
+        base_mapping={"crates/x/src/error.rs": bigger},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert findings == []
+
+
+def test_inline_test_module_findings_still_flags_real_growth() -> None:
+    """A block that is larger than at base still warns."""
+    mod = load_module()
+    smaller = "\n".join(
+        ["fn production() {}"] + [f"fn helper_{i}() {{}}" for i in range(160)]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/error.rs": INLINE_TEST_SOURCE},
+        base_mapping={"crates/x/src/error.rs": smaller},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+
+
+def test_dependency_diagram_findings_rejects_a_crate_without_a_manifest() -> None:
+    """A diagram node with no manifest never entered the manifest loop.
+
+    Enumerating the manifests only covers `manifest_crates - diagram`; the
+    opposite direction let an invented or long-stale crate entry pass.
+    """
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "tenferro-phantom          -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(["[dependencies]", "tenferro-runtime.workspace = true"])
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    mod.list_crate_manifests = lambda *, ref, worktree: [
+        "crates/tenferro-fft/Cargo.toml"
+    ]
+    findings = mod.dependency_diagram_findings(
+        [mod.DEPENDENCY_DIAGRAM_DOC],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-phantom" in findings[0].summary
+
+
+def test_prompt_does_not_promise_pr_text_disclosure() -> None:
+    """The payload carries paths, routed rules and the diff — never the PR body.
+
+    Listing `PR text` as a disclosure source asked the model for a
+    classification it has no way to make.
+    """
+    mod = load_module()
+    prompt = mod.PROMPT_PATH.read_text(encoding="utf-8")
+    assert "disclosed-in-worklog:" in prompt
+    assert "PR text" not in prompt
+
+
+def test_inline_test_module_findings_flags_a_new_block_during_extraction() -> None:
+    """A shrink elsewhere must not hide a newly added block.
+
+    The file-wide total can fall while a PR adds a fresh oversized inline
+    module, so the net-size exemption is applied per block: a block whose
+    OPENER is itself an added line is judged on its own.
+    """
+    mod = load_module()
+    base = "\n".join(
+        ["fn p() {}"]
+        + [f"fn h{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {"]
+        + [f"    // c{i}" for i in range(60)]
+        + ["}"]
+    )
+    head = "\n".join(
+        ["fn p() {}"]
+        + [f"fn h{i}() {{}}" for i in range(160)]
+        + ["#[cfg(test)]", "mod tests {", "    // c0", "}"]
+        + ["#[cfg(test)]", "mod more {"]
+        + [f"    // n{i}" for i in range(30)]
+        + ["}"]
+    )
+    _with_fake_text(
+        mod,
+        {"crates/x/src/a.rs": head},
+        base_mapping={"crates/x/src/a.rs": base},
+    )
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/a.rs"],
+        ref="HEAD",
+        base="origin/main",
+        worktree=False,
+        added_lines={"crates/x/src/a.rs": set(range(163, 200))},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+    assert findings[0].line == 166
+
+
+def test_is_rust_doc_fence_accepts_only_rust_attributes() -> None:
+    mod = load_module()
+    assert mod.is_rust_doc_fence("")
+    assert mod.is_rust_doc_fence("rust")
+    assert mod.is_rust_doc_fence("rust,no_run")
+    assert mod.is_rust_doc_fence("ignore")
+    assert not mod.is_rust_doc_fence("text")
+    assert not mod.is_rust_doc_fence("bash")
+    assert not mod.is_rust_doc_fence("toml")
+
+
+def test_vacuous_doc_example_findings_skips_non_rust_fences() -> None:
+    """A ```text grammar block is prose, not a doctest.
+
+    Treating every fence as a doctest reported `vacuous-doc-example` on
+    ordinary syntax documentation.
+    """
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "/// Grammar:",
+            "///",
+            "/// ```text",
+            "/// Widget;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": doc})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {4}},
+    )
+    assert findings == []
+
+
+def test_parse_cargo_tenferro_dependencies_reads_target_tables() -> None:
+    """`[target.'cfg(unix)'.dependencies]` is a real production dependency.
+
+    Matching the section name exactly ignored it, so a matching diagram edge
+    was reported stale and a missing one passed.
+    """
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "[target.'cfg(unix)'.dependencies]",
+            "tenferro-cpu.workspace = true",
+            "[target.'cfg(windows)'.dependencies.tenferro-gpu]",
+            "workspace = true",
+            "[target.'cfg(unix)'.dev-dependencies]",
+            "tenferro-fft.workspace = true",
+            "[target.'cfg(unix)'.dependencies.tenferro-ad]",
+            "workspace = true",
+            "optional = true",
+        ]
+    )
+    assert mod.parse_cargo_tenferro_dependencies(cargo) == {
+        "tenferro-runtime",
+        "tenferro-cpu",
+        "tenferro-gpu",
+    }
+
+
+def test_pub_item_matches_a_public_union() -> None:
+    """A public union is a documented public type like a struct or enum."""
+    mod = load_module()
+    match = mod.PUB_ITEM.match("pub union Slot { a: u32 }")
+    assert match is not None
+    assert match.group(2) == "Slot"
+
+
+def test_rust_inline_test_blocks_ignores_braces_in_literals() -> None:
+    """A brace inside a literal is not structural.
+
+    `let expected = "}";` ended the detected block at that line, so a test
+    added below fell outside the span and evaded the audit entirely.
+    """
+    mod = load_module()
+    src = "\n".join(
+        [
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn a() {",
+            '        let expected = "}";',
+            "    }",
+            "    #[test]",
+            "    fn b() { assert!(true); }",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(src) == [(1, 9)]
+
+
+def test_rust_inline_test_blocks_handles_literal_edge_cases() -> None:
+    """Char literals, raw strings, escapes and multi-line strings.
+
+    Lifetimes (`&'a str`) must NOT be read as an unterminated char literal.
+    """
+    mod = load_module()
+    cases = [
+        (["    let c = '}';", "    let d = '{';"], 5),
+        (["    fn f<'a>(x: &'a str) -> &'a str { x }"], 4),
+        (['    let s = r#"} { "#;'], 4),
+        ([r'    let s = "a\"} b";'], 4),
+        (['    let s = "start', '        } still string";'], 5),
+    ]
+    for body, expected_end in cases:
+        src = "\n".join(["#[cfg(test)]", "mod tests {"] + body + ["}"])
+        assert mod.rust_inline_test_blocks(src) == [(1, expected_end)], body
+
+
+def test_rust_inline_test_blocks_reports_span() -> None:
+    mod = load_module()
+    blocks = mod.rust_inline_test_blocks(INLINE_TEST_SOURCE)
+    assert len(blocks) == 1
+    start, end = blocks[0]
+    assert start == 162
+    assert end == 168
+
+
+def test_rust_inline_test_blocks_ignores_mod_declaration() -> None:
+    mod = load_module()
+    text = "fn production() {}\n#[cfg(test)]\nmod tests;\n"
+    assert mod.rust_inline_test_blocks(text) == []
+
+
+def _with_fake_text(mod, mapping, base_mapping=None):
+    """Stub `changed_file_text`; `base_mapping` serves any ref other than HEAD."""
+
+    def fake(path, *, ref, worktree):
+        if base_mapping is not None and ref != "HEAD":
+            return base_mapping.get(path)
+        return mapping.get(path)
+
+    mod.changed_file_text = fake
+
+
+def test_inline_test_module_findings_flags_grown_block() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/error.rs": INLINE_TEST_SOURCE})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {165}},
+    )
+    assert [item.id for item in findings] == ["inline-test-module"]
+    assert findings[0].severity == "warn"
+    assert findings[0].rule_section == "Unit Test Organization"
+    assert findings[0].line == 162
+
+
+def test_inline_test_module_findings_exempts_tiny_leaf_module() -> None:
+    mod = load_module()
+    tiny = "\n".join(
+        [
+            "fn leaf() {}",
+            "#[cfg(test)]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/leaf.rs": tiny})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/leaf.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/leaf.rs": {4}},
+    )
+    assert findings == []
+
+
+def test_inline_test_module_findings_skips_untouched_block() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/error.rs": INLINE_TEST_SOURCE})
+    findings = mod.inline_test_module_findings(
+        ["crates/x/src/error.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/error.rs": {1}},
+    )
+    assert findings == []
+
+
+DOC_EXAMPLE_SOURCE = "\n".join(
+    [
+        "/// Summary.",
+        "///",
+        "/// # Examples",
+        "///",
+        "/// ```",
+        "/// documented::call();",
+        "/// ```",
+        "pub fn documented() {}",
+        "",
+        "/// Only errors.",
+        "///",
+        "/// # Errors",
+        "///",
+        "/// Never.",
+        "pub fn undocumented() {}",
+        "",
+        "#[doc(hidden)]",
+        "pub fn hidden_hook() {}",
+        "",
+        "mod private {",
+        "    pub trait Sealed {}",
+        "}",
+    ]
+)
+
+
+def test_missing_doc_example_findings_flags_only_real_gaps() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/lib.rs": DOC_EXAMPLE_SOURCE})
+    total = len(DOC_EXAMPLE_SOURCE.splitlines())
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": set(range(1, total + 1))},
+    )
+    assert len(findings) == 1
+    assert findings[0].id == "missing-doc-examples"
+    assert "fn undocumented" in findings[0].detail
+    assert "hidden_hook" not in findings[0].detail
+    assert "Sealed" not in findings[0].detail
+    assert "fn documented" not in findings[0].detail
+
+
+def test_missing_doc_example_findings_ignores_unchanged_items() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {"crates/x/src/lib.rs": DOC_EXAMPLE_SOURCE})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {1}},
+    )
+    assert findings == []
+
+
+def test_vacuous_doc_example_findings_flags_path_only_example() -> None:
+    mod = load_module()
+    vacuous = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// let _method = Widget::spin;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": vacuous})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {5}},
+    )
+    assert [item.id for item in findings] == ["vacuous-doc-example"]
+
+
+def test_vacuous_doc_example_findings_ignores_comment_lines() -> None:
+    """Prose in a comment does not turn an assignment into real API usage.
+
+    A comment line stayed in the classified set, so the `all(...)` condition
+    failed and an assignment-only example escaped the audit entirely.
+    """
+    mod = load_module()
+    vacuous = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// // Obtain the method",
+            "/// let _method = Widget::spin;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": vacuous})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {6}},
+    )
+    assert [item.id for item in findings] == ["vacuous-doc-example"]
+
+
+def test_vacuous_doc_example_findings_accepts_comment_only_example() -> None:
+    """An example that is nothing but comments has no classified code left."""
+    mod = load_module()
+    comments_only = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// // See the integration tests for a runnable example.",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": comments_only})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {4}},
+    )
+    assert findings == []
+
+
+def test_vacuous_doc_example_findings_accepts_real_usage() -> None:
+    mod = load_module()
+    real = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// let widget = Widget::new();",
+            "/// assert!(widget.spin().is_ok());",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": real})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {5}},
+    )
+    assert findings == []
+
+
+def test_ai_report_file_findings_flags_reports_outside_worklogs() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            ".superpowers/sdd/task-1-report.md": "report",
+            "notes/session-report.md": "report",
+            "docs/worklogs/2026-08-01-task-report.md": "worklog",
+            "crates/x/src/lib.rs": "code",
+        },
+    )
+    findings = mod.ai_report_file_findings(
+        [
+            ".superpowers/sdd/task-1-report.md",
+            "notes/session-report.md",
+            "docs/worklogs/2026-08-01-task-report.md",
+            "crates/x/src/lib.rs",
+        ],
+        ref="HEAD",
+        worktree=False,
+    )
+    flagged = sorted(item.file for item in findings)
+    assert flagged == [
+        ".superpowers/sdd/task-1-report.md",
+        "notes/session-report.md",
+    ]
+    assert all(item.rule_section == "PR Content Hygiene" for item in findings)
+
+
+def test_parse_cargo_tenferro_dependencies_skips_optional_and_dev() -> None:
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[package]",
+            'name = "tenferro-demo"',
+            "",
+            "[dependencies]",
+            "tenferro-tensor.workspace = true",
+            'tenferro-runtime = { workspace = true }',
+            'tenferro-ad = { workspace = true, optional = true }',
+            "serde.workspace = true",
+            "",
+            "[dependencies.tenferro-cpu]",
+            "workspace = true",
+            "",
+            "[dependencies.tenferro-gpu]",
+            "workspace = true",
+            "optional = true",
+            "",
+            "[dev-dependencies]",
+            "tenferro-fft.workspace = true",
+        ]
+    )
+    deps = mod.parse_cargo_tenferro_dependencies(cargo)
+    assert deps == {"tenferro-tensor", "tenferro-runtime", "tenferro-cpu"}
+
+
+def test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax() -> None:
+    """TOML allows any spacing around `=`; compact optional entries are optional.
+
+    Matching the literal `optional = true` string recorded
+    `{workspace=true,optional=true}` as a production edge, which then produced
+    a false `dependency-diagram-drift` warning.
+    """
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-ad={workspace=true,optional=true}",
+            "tenferro-gpu.optional=true",
+            "tenferro-runtime = { workspace = true }",
+            "",
+            "[dependencies.tenferro-cpu]",
+            "workspace = true",
+            "optional=true",
+        ]
+    )
+    assert mod.parse_cargo_tenferro_dependencies(cargo) == {"tenferro-runtime"}
+
+
+def test_parse_dependency_diagram_handles_continuation_lines() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops",
+            "tenferro-runtime          -> tenferro-tensor,",
+            "                              tenferro-internal-ops",
+            "tenferro-internal-cpu-kernels",
+            "                           -> tenferro-tensor",
+            "```",
+        ]
+    )
+    edges = mod.parse_dependency_diagram(doc)
+    assert edges is not None
+    assert edges["tenferro-tensor"] == {"tenferro-tensor-core", "tenferro-core-ops"}
+    assert edges["tenferro-runtime"] == {"tenferro-tensor", "tenferro-internal-ops"}
+    assert edges["tenferro-internal-cpu-kernels"] == {"tenferro-tensor"}
+
+
+def test_dependency_diagram_findings_reports_missing_edge() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-fft/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-cpu" in findings[0].detail
+
+
+def test_dependency_diagram_findings_accepts_matching_edges() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime, tenferro-cpu",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+            "tenferro-core-ops.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-fft/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_select_rule_sections_routes_unit_test_rules_for_src_rust() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-cpu/src/lib.rs"])
+    assert "Unit Test Organization" in sections
+    assert "Documentation Policy" in sections
+
+
+def test_select_rule_sections_falls_back_for_unrouted_paths() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections([".superpowers/sdd/plan.md"])
+    assert mod.FALLBACK_SECTION in sections
+
+
+def test_pr_content_hygiene_section_is_parseable() -> None:
+    mod = load_module()
+    sections = mod.parse_repository_rules_sections()
+    assert "PR Content Hygiene" in sections
+    assert "AI-generated" in sections["PR Content Hygiene"]
+
+
+def test_ai_report_file_findings_skips_deleted_reports() -> None:
+    mod = load_module()
+    _with_fake_text(mod, {})
+    findings = mod.ai_report_file_findings(
+        [".superpowers/sdd/task-1-report.md"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_rust_inline_test_blocks_recognizes_cfg_all_test() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            '#[cfg(all(test, feature = "cuda"))]',
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 6)]
+
+
+def test_rust_inline_test_blocks_ignores_cfg_not_test() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "#[cfg(not(test))]",
+            "mod production {",
+            "    fn run() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == []
+
+
+def test_dependency_diagram_findings_checks_all_crates_on_doc_only_change() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-runtime.workspace = true",
+            "tenferro-cpu.workspace = true",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-fft/Cargo.toml": cargo,
+        },
+    )
+    mod.list_crate_manifests = lambda *, ref, worktree: [
+        "crates/tenferro-fft/Cargo.toml"
+    ]
+    findings = mod.dependency_diagram_findings(
+        [mod.DEPENDENCY_DIAGRAM_DOC],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-cpu" in findings[0].detail
+
+
+def test_is_cfg_test_attr_matches_any_operand_order() -> None:
+    mod = load_module()
+    assert mod.is_cfg_test_attr("#[cfg(test)]")
+    assert mod.is_cfg_test_attr('#[cfg(all(test, feature = "cuda"))]')
+    assert mod.is_cfg_test_attr('#[cfg(all(feature = "cuda", test))]')
+    assert not mod.is_cfg_test_attr("#[cfg(not(test))]")
+    assert not mod.is_cfg_test_attr('#[cfg(all(feature = "cuda", not(test)))]')
+    assert not mod.is_cfg_test_attr('#[cfg(feature = "test-utils")]')
+
+
+def test_is_cfg_test_attr_tracks_nested_not_polarity() -> None:
+    """A `test` operand nested under `not` gates the item OFF during tests.
+
+    Deleting a literal `not(test)` substring left the inner token behind, so a
+    production-only module read as an inline test module and the audit fired a
+    false positive whenever that module changed.
+    """
+    mod = load_module()
+    assert not mod.is_cfg_test_attr('#[cfg(not(any(test, feature = "cuda")))]')
+    assert not mod.is_cfg_test_attr('#[cfg(not(all(test, feature = "cuda")))]')
+    assert not mod.is_cfg_test_attr('#[cfg(all(unix, not(any(test, feature = "x"))))]')
+    # Even nesting restores positive polarity.
+    assert mod.is_cfg_test_attr("#[cfg(not(not(test)))]")
+    # A positive operand elsewhere still gates on tests.
+    assert mod.is_cfg_test_attr('#[cfg(any(test, feature = "cuda"))]')
+
+
+def test_rust_inline_test_blocks_recognizes_trailing_test_operand() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            '#[cfg(all(feature = "cuda", test))]',
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 6)]
+
+
+def test_module_publicly_reachable_respects_private_parent_declaration() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/cubecl/memory.rs": "pub fn helper() {}",
+            "crates/x/src/cubecl/mod.rs": "mod memory;\npub fn api() {}",
+            "crates/x/src/lib.rs": "pub mod cubecl;",
+        },
+    )
+    assert not mod.module_publicly_reachable(
+        "crates/x/src/cubecl/memory.rs", ref="HEAD", worktree=False
+    )
+    assert mod.module_publicly_reachable(
+        "crates/x/src/cubecl/mod.rs", ref="HEAD", worktree=False
+    )
+
+
+def test_missing_doc_example_findings_skips_privately_declared_module() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/cubecl/memory.rs": "pub fn helper() {}",
+            "crates/x/src/cubecl/mod.rs": "mod memory;",
+            "crates/x/src/lib.rs": "pub mod cubecl;",
+        },
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/cubecl/memory.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/cubecl/memory.rs": {1}},
+    )
+    assert findings == []
+
+
+def test_dependency_diagram_findings_reports_deleted_crate_entry() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-foo              -> tenferro-runtime",
+            "```",
+        ]
+    )
+    _with_fake_text(mod, {mod.DEPENDENCY_DIAGRAM_DOC: doc})
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-foo/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "Deleted crate" in findings[0].summary
+
+
+def test_rust_inline_test_blocks_handles_multiline_cfg_attribute() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "fn production() {}",
+            "#[cfg(all(",
+            '    feature = "cuda",',
+            "    test",
+            "))]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(2, 9)]
+
+
+def test_rust_inline_test_blocks_skips_multiline_non_cfg_attribute() -> None:
+    mod = load_module()
+    text = "\n".join(
+        [
+            "#[cfg(test)]",
+            "#[allow(",
+            "    dead_code",
+            ")]",
+            "mod tests {",
+            "    #[test]",
+            "    fn works() {}",
+            "}",
+        ]
+    )
+    assert mod.rust_inline_test_blocks(text) == [(1, 8)]
+
+
+def test_module_publicly_reachable_follows_pub_use_reexport() -> None:
+    mod = load_module()
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": "pub fn helper() {}",
+            "crates/x/src/lib.rs": "mod concrete;\npub use concrete::helper;",
+        },
+    )
+    assert mod.module_publicly_reachable(
+        "crates/x/src/concrete.rs", ref="HEAD", worktree=False
+    )
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": "pub fn helper() {}",
+            "crates/x/src/lib.rs": "mod concrete;",
+        },
+    )
+    assert not mod.module_publicly_reachable(
+        "crates/x/src/concrete.rs", ref="HEAD", worktree=False
+    )
+
+
+def test_select_rule_sections_routes_hygiene_for_unknown_top_level_rust() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["new-crate/src/lib.rs"])
+    assert mod.FALLBACK_SECTION in sections
+    sections = mod.select_rule_sections([".audit/check.rs"])
+    assert mod.FALLBACK_SECTION in sections
+    sections = mod.select_rule_sections(["crates/tenferro-cpu/src/lib.rs"])
+    assert mod.FALLBACK_SECTION not in sections
+
+
+def test_dependency_diagram_findings_reports_new_leaf_crate() -> None:
+    mod = load_module()
+    doc = "\n".join(
+        [
+            "## IV. Dependency Direction",
+            "",
+            "```text",
+            "tenferro-fft              -> tenferro-runtime",
+            "```",
+            "",
+            "Additional internal dependencies: `tenferro-core-ops` prose.",
+        ]
+    )
+    leaf_cargo = "[dependencies]\nserde.workspace = true\n"
+    _with_fake_text(
+        mod,
+        {
+            mod.DEPENDENCY_DIAGRAM_DOC: doc,
+            "crates/tenferro-newleaf/Cargo.toml": leaf_cargo,
+            "crates/tenferro-core-ops/Cargo.toml": leaf_cargo,
+        },
+    )
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-newleaf/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert [item.id for item in findings] == ["dependency-diagram-drift"]
+    assert "tenferro-newleaf" in findings[0].summary
+    findings = mod.dependency_diagram_findings(
+        ["crates/tenferro-core-ops/Cargo.toml"],
+        ref="HEAD",
+        worktree=False,
+    )
+    assert findings == []
+
+
+def test_pub_use_exports_parses_selective_and_glob_forms() -> None:
+    mod = load_module()
+    assert mod.pub_use_exports("pub use concrete::{einsum, plan as p};", "concrete") == {
+        "einsum",
+        "plan",
+    }
+    assert mod.pub_use_exports("pub use concrete::*;", "concrete") == "all"
+    assert mod.pub_use_exports("pub use concrete::single;", "concrete") == {"single"}
+    assert mod.pub_use_exports("pub use other::thing;", "concrete") is None
+    assert (
+        mod.pub_use_exports("pub use concrete::{\n    a,\n    b,\n};", "concrete")
+        == {"a", "b"}
+    )
+
+
+def test_missing_doc_example_findings_respects_selective_reexport() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub fn exported() {}",
+            "",
+            "pub fn internal_only() {}",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": source,
+            "crates/x/src/lib.rs": "mod concrete;\npub use concrete::{exported};",
+        },
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/concrete.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/concrete.rs": {1, 3}},
+    )
+    assert len(findings) == 1
+    assert "exported" in findings[0].detail
+    assert "internal_only" not in findings[0].detail
 def test_transport_errors_cover_every_below_json_failure() -> None:
     """socket.timeout only aliases TimeoutError from Python 3.10 on."""
     import http.client
@@ -1300,6 +2314,54 @@ def main() -> int:
         test_summarize_llm_review_computes_dropped_count,
         test_format_report_includes_llm_summary_line,
         test_format_report_omits_llm_summary_when_absent,
+        test_rust_inline_test_blocks_reports_span,
+        test_rust_inline_test_blocks_ignores_braces_in_literals,
+        test_rust_inline_test_blocks_handles_literal_edge_cases,
+        test_rust_inline_test_blocks_ignores_mod_declaration,
+        test_inline_test_module_findings_flags_grown_block,
+        test_inline_test_module_findings_ignores_a_shrinking_block,
+        test_inline_test_module_findings_still_flags_real_growth,
+        test_inline_test_module_findings_flags_a_new_block_during_extraction,
+        test_is_rust_doc_fence_accepts_only_rust_attributes,
+        test_vacuous_doc_example_findings_skips_non_rust_fences,
+        test_parse_cargo_tenferro_dependencies_reads_target_tables,
+        test_pub_item_matches_a_public_union,
+        test_dependency_diagram_findings_rejects_a_crate_without_a_manifest,
+        test_prompt_does_not_promise_pr_text_disclosure,
+        test_inline_test_module_findings_exempts_tiny_leaf_module,
+        test_inline_test_module_findings_skips_untouched_block,
+        test_missing_doc_example_findings_flags_only_real_gaps,
+        test_missing_doc_example_findings_ignores_unchanged_items,
+        test_vacuous_doc_example_findings_flags_path_only_example,
+        test_vacuous_doc_example_findings_ignores_comment_lines,
+        test_vacuous_doc_example_findings_accepts_comment_only_example,
+        test_vacuous_doc_example_findings_accepts_real_usage,
+        test_ai_report_file_findings_flags_reports_outside_worklogs,
+        test_parse_cargo_tenferro_dependencies_skips_optional_and_dev,
+        test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax,
+        test_parse_dependency_diagram_handles_continuation_lines,
+        test_dependency_diagram_findings_reports_missing_edge,
+        test_dependency_diagram_findings_accepts_matching_edges,
+        test_select_rule_sections_routes_unit_test_rules_for_src_rust,
+        test_select_rule_sections_falls_back_for_unrouted_paths,
+        test_pr_content_hygiene_section_is_parseable,
+        test_ai_report_file_findings_skips_deleted_reports,
+        test_rust_inline_test_blocks_recognizes_cfg_all_test,
+        test_rust_inline_test_blocks_ignores_cfg_not_test,
+        test_dependency_diagram_findings_checks_all_crates_on_doc_only_change,
+        test_is_cfg_test_attr_matches_any_operand_order,
+        test_is_cfg_test_attr_tracks_nested_not_polarity,
+        test_rust_inline_test_blocks_recognizes_trailing_test_operand,
+        test_module_publicly_reachable_respects_private_parent_declaration,
+        test_missing_doc_example_findings_skips_privately_declared_module,
+        test_dependency_diagram_findings_reports_deleted_crate_entry,
+        test_rust_inline_test_blocks_handles_multiline_cfg_attribute,
+        test_rust_inline_test_blocks_skips_multiline_non_cfg_attribute,
+        test_module_publicly_reachable_follows_pub_use_reexport,
+        test_select_rule_sections_routes_hygiene_for_unknown_top_level_rust,
+        test_dependency_diagram_findings_reports_new_leaf_crate,
+        test_pub_use_exports_parses_selective_and_glob_forms,
+        test_missing_doc_example_findings_respects_selective_reexport,
         test_run_git_disables_pathname_quoting,
         test_contains_sensitive_text_flags_passphrase_with_spaces,
         test_redact_sensitive_text_masks_whole_quoted_value,
