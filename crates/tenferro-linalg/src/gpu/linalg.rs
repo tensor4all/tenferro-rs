@@ -26,8 +26,8 @@ use tenferro_gpu::cuda_interop::{
 use tenferro_gpu::{download_tensor, CudaExecSession, CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
-    ValidationError,
+    DType, Error, Tensor, TensorElementwise, TensorRead, TensorReduction, TensorScalar,
+    TensorStructural, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -425,7 +425,10 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
             Some(b.shape().to_vec()),
         )
     } else {
-        (b.clone(), None)
+        (
+            backend.to_contiguous_read(TensorRead::from_tensor(b))?,
+            None,
+        )
     };
 
     let factors = lu_factor(backend, a)?;
@@ -473,7 +476,10 @@ pub(super) fn lu_solve_prepared(
             Some(b.shape().to_vec()),
         )
     } else {
-        (b.clone(), None)
+        (
+            backend.to_contiguous_read(TensorRead::from_tensor(b))?,
+            None,
+        )
     };
 
     validate_nonsingular_gpu(backend, packed_lu)?;
@@ -2010,7 +2016,7 @@ fn download_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone,
+    T: CubeElement + TensorScalar + Clone,
 {
     sync_stream(rt, op)?;
     download_typed_tensor(rt, tensor, op)
