@@ -94,3 +94,32 @@ judgment.
 - `missing-doc-examples` treats a trait-level example as satisfying the
   mandate for the trait item; per-method gaps inside traits remain LLM-only
   (issue #1575 tracks the current backlog).
+
+## Review Follow-ups (Codex on PR #1582)
+
+Three P2 findings, each reproduced against the pre-fix script before changing
+it:
+
+- **cfg polarity** — `is_cfg_test_attr` deleted a literal `not(test)`
+  substring, so `#[cfg(not(any(test, feature = "cuda")))]` still matched the
+  bare `test` token and a production-only module read as an inline test
+  module (false positive on every change to it). Replaced with
+  `cfg_expression_enables_test`, a structural walk of the nested
+  `all`/`any`/`not` grammar that tracks polarity; `test` under an odd number
+  of `not`s no longer counts as a test gate.
+- **compact optional dependencies** — the inline-entry check matched the
+  literal string `optional = true`, so the equally valid
+  `tenferro-ad={workspace=true,optional=true}` was recorded as a production
+  edge and produced a false `dependency-diagram-drift` warning. Both the
+  inline and `[dependencies.x]` table paths now use one whitespace-independent
+  `OPTIONAL_TRUE` pattern.
+- **comments in vacuous examples** — a comment line stayed in the classified
+  set, so `all(VACUOUS_EXAMPLE_LINE...)` failed and an assignment-only doc
+  example with a comment above it escaped the audit (false negative).
+  `VACUOUS_IGNORE_LINE` now also skips `//` lines; an example that is nothing
+  but comments still reports nothing, because no classified code remains.
+
+Coverage: `test_is_cfg_test_attr_tracks_nested_not_polarity`,
+`test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax`,
+`test_vacuous_doc_example_findings_ignores_comment_lines`, and
+`test_vacuous_doc_example_findings_accepts_comment_only_example`.

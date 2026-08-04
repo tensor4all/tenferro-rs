@@ -1405,28 +1405,96 @@ PUB_ITEM = re.compile(
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
 CFG_ATTR = re.compile(r"^#\[cfg\((.*)\)\]\s*$")
-CFG_NOT_TEST = re.compile(r"not\s*\(\s*test\s*\)")
+CFG_PREDICATE_CALL = re.compile(r"^(all|any|not)\s*\((.*)\)$", re.DOTALL)
+
+
+def split_cfg_operands(expression: str) -> list[str]:
+    """Split a cfg operand list on commas that are not inside parens or strings."""
+    operands: list[str] = []
+    depth = 0
+    in_string = False
+    current: list[str] = []
+    for char in expression:
+        if in_string:
+            current.append(char)
+            if char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            current.append(char)
+        elif char == "(":
+            depth += 1
+            current.append(char)
+        elif char == ")":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            operands.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        operands.append(tail)
+    return [operand for operand in operands if operand]
+
+
+def cfg_expression_enables_test(expression: str, *, negated: bool = False) -> bool:
+    """True when `test` appears in a POSITIVE position of a cfg expression.
+
+    The cfg grammar nests, so polarity has to be tracked structurally rather
+    than by deleting a literal `not(test)` substring: in
+    `not(any(test, feature = "cuda"))` the item is compiled when `test` is
+    *off*, yet a bare `test` token is still present. Each enclosing `not`
+    flips polarity, so a `test` operand under an odd number of them does not
+    gate the item on tests.
+    """
+    expression = expression.strip()
+    if not expression:
+        return False
+    call = CFG_PREDICATE_CALL.match(expression)
+    if call:
+        name, inner = call.group(1), call.group(2)
+        if name == "not":
+            return cfg_expression_enables_test(inner, negated=not negated)
+        return any(
+            cfg_expression_enables_test(operand, negated=negated)
+            for operand in split_cfg_operands(inner)
+        )
+    # A leaf: a bare identifier (`test`, `unix`) or a `key = "value"` predicate.
+    return expression == "test" and not negated
 
 
 def is_cfg_test_attr(line: str) -> bool:
-    """True for cfg attributes gated on `test` in any operand position.
+    """True for cfg attributes that compile the item *because* tests are on.
 
     Recognizes `#[cfg(test)]`, `#[cfg(all(test, ...))]`, and
-    `#[cfg(all(..., test))]` while ignoring `not(test)` operands.
+    `#[cfg(all(..., test))]`. Attributes where every `test` operand sits under
+    an odd number of `not`s — `#[cfg(not(test))]`,
+    `#[cfg(not(any(test, feature = "cuda")))]` — describe production-only items
+    and are not test gates.
     """
     match = CFG_ATTR.match(line)
     if not match:
         return False
-    expression = CFG_NOT_TEST.sub("", match.group(1))
-    expression = re.sub(r'"[^"]*"', "", expression)
-    return bool(re.search(r"\btest\b", expression))
+    return cfg_expression_enables_test(match.group(1))
+
+
 # A doc-example line that binds or names a path without calling anything.
 VACUOUS_EXAMPLE_LINE = re.compile(
     r"^(?:let\s+_\w*\s*(?::[^=]{0,120})?=\s*)?[A-Za-z_][\w:<>]*;$"
 )
-# Boilerplate lines that neither prove nor disprove real usage.
-VACUOUS_IGNORE_LINE = re.compile(r"^(?:use\s|#)")
+# Boilerplate lines that neither prove nor disprove real usage. Comment-only
+# lines belong here too: prose above `let _method = Widget::spin;` does not
+# turn the binding into real API usage, and leaving comments in the classified
+# set let an assignment-only example escape the audit entirely.
+VACUOUS_IGNORE_LINE = re.compile(r"^(?:use\s|#|//)")
 CRATE_CARGO_TOML = re.compile(r"^crates/(tenferro-[\w-]+)/Cargo\.toml$")
+# TOML permits any spacing around `=`, so `{workspace=true,optional=true}` is
+# as valid as the expanded form. Matching the literal `optional = true` string
+# recorded compact optional entries as production diagram edges.
+OPTIONAL_TRUE = re.compile(r"\boptional\s*=\s*true\b")
 DEPENDENCY_DIAGRAM_DOC = "docs/architecture/tenferro-crates.md"
 # Edges to these targets are documented in the "Additional internal
 # dependencies" prose of the architecture doc rather than in the diagram
@@ -1923,9 +1991,9 @@ def parse_cargo_tenferro_dependencies(text: str) -> set[str]:
             continue
         if section == "dependencies":
             entry = re.match(r"^(tenferro-[\w-]+)(?:\.[\w-]+)?\s*=", line)
-            if entry and "optional = true" not in line:
+            if entry and not OPTIONAL_TRUE.search(line):
                 deps.add(entry.group(1))
-        elif table_name is not None and re.match(r"^optional\s*=\s*true", line):
+        elif table_name is not None and OPTIONAL_TRUE.match(line):
             table_optional = True
     if table_name and not table_optional:
         deps.add(table_name)

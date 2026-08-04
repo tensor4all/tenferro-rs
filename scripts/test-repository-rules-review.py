@@ -1021,6 +1021,58 @@ def test_vacuous_doc_example_findings_flags_path_only_example() -> None:
     assert [item.id for item in findings] == ["vacuous-doc-example"]
 
 
+def test_vacuous_doc_example_findings_ignores_comment_lines() -> None:
+    """Prose in a comment does not turn an assignment into real API usage.
+
+    A comment line stayed in the classified set, so the `all(...)` condition
+    failed and an assignment-only example escaped the audit entirely.
+    """
+    mod = load_module()
+    vacuous = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// use crate::Widget;",
+            "/// // Obtain the method",
+            "/// let _method = Widget::spin;",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": vacuous})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {6}},
+    )
+    assert [item.id for item in findings] == ["vacuous-doc-example"]
+
+
+def test_vacuous_doc_example_findings_accepts_comment_only_example() -> None:
+    """An example that is nothing but comments has no classified code left."""
+    mod = load_module()
+    comments_only = "\n".join(
+        [
+            "/// # Examples",
+            "///",
+            "/// ```rust",
+            "/// // See the integration tests for a runnable example.",
+            "/// ```",
+            "pub fn spin() {}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": comments_only})
+    findings = mod.vacuous_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {4}},
+    )
+    assert findings == []
+
+
 def test_vacuous_doc_example_findings_accepts_real_usage() -> None:
     mod = load_module()
     real = "\n".join(
@@ -1100,6 +1152,29 @@ def test_parse_cargo_tenferro_dependencies_skips_optional_and_dev() -> None:
     )
     deps = mod.parse_cargo_tenferro_dependencies(cargo)
     assert deps == {"tenferro-tensor", "tenferro-runtime", "tenferro-cpu"}
+
+
+def test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax() -> None:
+    """TOML allows any spacing around `=`; compact optional entries are optional.
+
+    Matching the literal `optional = true` string recorded
+    `{workspace=true,optional=true}` as a production edge, which then produced
+    a false `dependency-diagram-drift` warning.
+    """
+    mod = load_module()
+    cargo = "\n".join(
+        [
+            "[dependencies]",
+            "tenferro-ad={workspace=true,optional=true}",
+            "tenferro-gpu.optional=true",
+            "tenferro-runtime = { workspace = true }",
+            "",
+            "[dependencies.tenferro-cpu]",
+            "workspace = true",
+            "optional=true",
+        ]
+    )
+    assert mod.parse_cargo_tenferro_dependencies(cargo) == {"tenferro-runtime"}
 
 
 def test_parse_dependency_diagram_handles_continuation_lines() -> None:
@@ -1296,6 +1371,23 @@ def test_is_cfg_test_attr_matches_any_operand_order() -> None:
     assert not mod.is_cfg_test_attr("#[cfg(not(test))]")
     assert not mod.is_cfg_test_attr('#[cfg(all(feature = "cuda", not(test)))]')
     assert not mod.is_cfg_test_attr('#[cfg(feature = "test-utils")]')
+
+
+def test_is_cfg_test_attr_tracks_nested_not_polarity() -> None:
+    """A `test` operand nested under `not` gates the item OFF during tests.
+
+    Deleting a literal `not(test)` substring left the inner token behind, so a
+    production-only module read as an inline test module and the audit fired a
+    false positive whenever that module changed.
+    """
+    mod = load_module()
+    assert not mod.is_cfg_test_attr('#[cfg(not(any(test, feature = "cuda")))]')
+    assert not mod.is_cfg_test_attr('#[cfg(not(all(test, feature = "cuda")))]')
+    assert not mod.is_cfg_test_attr('#[cfg(all(unix, not(any(test, feature = "x"))))]')
+    # Even nesting restores positive polarity.
+    assert mod.is_cfg_test_attr("#[cfg(not(not(test)))]")
+    # A positive operand elsewhere still gates on tests.
+    assert mod.is_cfg_test_attr('#[cfg(any(test, feature = "cuda"))]')
 
 
 def test_rust_inline_test_blocks_recognizes_trailing_test_operand() -> None:
@@ -1971,9 +2063,12 @@ def main() -> int:
         test_missing_doc_example_findings_flags_only_real_gaps,
         test_missing_doc_example_findings_ignores_unchanged_items,
         test_vacuous_doc_example_findings_flags_path_only_example,
+        test_vacuous_doc_example_findings_ignores_comment_lines,
+        test_vacuous_doc_example_findings_accepts_comment_only_example,
         test_vacuous_doc_example_findings_accepts_real_usage,
         test_ai_report_file_findings_flags_reports_outside_worklogs,
         test_parse_cargo_tenferro_dependencies_skips_optional_and_dev,
+        test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax,
         test_parse_dependency_diagram_handles_continuation_lines,
         test_dependency_diagram_findings_reports_missing_edge,
         test_dependency_diagram_findings_accepts_matching_edges,
@@ -1985,6 +2080,7 @@ def main() -> int:
         test_rust_inline_test_blocks_ignores_cfg_not_test,
         test_dependency_diagram_findings_checks_all_crates_on_doc_only_change,
         test_is_cfg_test_attr_matches_any_operand_order,
+        test_is_cfg_test_attr_tracks_nested_not_polarity,
         test_rust_inline_test_blocks_recognizes_trailing_test_operand,
         test_module_publicly_reachable_respects_private_parent_declaration,
         test_missing_doc_example_findings_skips_privately_declared_module,
