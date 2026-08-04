@@ -46,6 +46,16 @@ ACTIVE_IDS = frozenset(
         "p6-reinterpret-rank-policy",
         "p7-cuda",
         "p8-webgpu-metal",
+        "p10-api-normalization",
+        "p10-element-hot-path-structure",
+        "p10-storage-traversal-performance",
+        "p10-static-rank-codegen",
+        "p13-freeze",
+        "p11-hardware",
+        "p12-documentation",
+        "p12-element-access-guide",
+        "p12-element-access-examples",
+        "p13-closure",
     }
 )
 DEFERRED_CORRECTIONS: dict[str, str] = {}
@@ -275,6 +285,20 @@ def _runner_files() -> dict[str, str]:
             ROOT / "crates/tenferro-tensor/tests/storage_api_parity.rs"
         ).read_text(encoding="utf-8"),
     })
+    # New evidence commands are covered by their own checker tests.  Keep this
+    # receipt test focused on argv/identity by making those command targets
+    # successful no-op probes in the temporary repository.
+    for path in (
+        "scripts/check-storage-element-hot-path.py",
+        "scripts/verify-storage-traversal-performance.py",
+        "scripts/check-storage-static-rank-codegen.py",
+        "scripts/check-storage-contract-freeze.py",
+        "scripts/check-storage-hardware-matrix.py",
+        "scripts/check-storage-docs.py",
+        "scripts/check-storage-element-access-docs.py",
+        "scripts/check-storage-redesign-closure.py",
+    ):
+        files[path] = "raise SystemExit(0)\n"
     return files
 
 
@@ -479,7 +503,9 @@ class StorageOwnershipV2Tests(unittest.TestCase):
 
     def test_active_and_deferred_artifacts_have_honest_filesystem_state(self) -> None:
         deferred = _deferred_rows()
-        self.assertTrue(deferred)
+        if not deferred:
+            self.assertFalse(deferred)
+            return
         for row in deferred:
             self.assertFalse((ROOT / row["artifact"]["path"]).exists(), row["id"])
 
@@ -683,6 +709,21 @@ class StorageOwnershipV2Tests(unittest.TestCase):
 
     def test_contract_revision_may_change_only_deferred_identity(self) -> None:
         base_manifest = _manifest_text().replace("revision = 4", "revision = 3", 1)
+        deferred_state = {
+            "p10-api-normalization": "P10",
+            "p13-freeze": "P13-A",
+            "p11-hardware": "P11",
+            "p12-documentation": "P12",
+            "p12-element-access-guide": "P12",
+            "p12-element-access-examples": "P12",
+            "p13-closure": "P13-B",
+        }
+        for obligation_id, unit in deferred_state.items():
+            base_manifest = _replace_row_state(
+                base_manifest,
+                obligation_id,
+                f'{{ kind = "deferred", activation_unit = "{unit}", promotion = {{ mode = "activate-in-place" }} }}',
+            )
         revised = base_manifest.replace("revision = 3", "revision = 4", 1)
         revised = _replace_once(
             revised,
@@ -840,8 +881,34 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             temporary.cleanup()
 
     def test_partial_cutover_cohort_is_rejected(self) -> None:
+        manifest = _manifest_text()
+        for obligation_id in (
+            "p10-api-normalization",
+            "p10-element-hot-path-structure",
+            "p10-storage-traversal-performance",
+            "p10-static-rank-codegen",
+            "p13-freeze",
+            "p11-hardware",
+            "p12-documentation",
+            "p12-element-access-guide",
+            "p12-element-access-examples",
+            "p13-closure",
+        ):
+            unit = {
+                "p13-freeze": "P13-A",
+                "p11-hardware": "P11",
+                "p12-documentation": "P12",
+                "p12-element-access-guide": "P12",
+                "p12-element-access-examples": "P12",
+                "p13-closure": "P13-B",
+            }.get(obligation_id, "P10")
+            manifest = _replace_row_state(
+                manifest,
+                obligation_id,
+                f'{{ kind = "deferred", activation_unit = "{unit}", promotion = {{ mode = "activate-in-place" }} }}',
+            )
         manifest = _replace_row_state(
-            _manifest_text(),
+            manifest,
             "p9-submission",
             '{ kind = "deferred", activation_unit = "P9", promotion = { mode = "activate-in-place" } }',
         )
@@ -907,7 +974,7 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             self.assertEqual(cargo_argv, rows[last_id]["command"]["argv"][1:])
             checked = _checker_with_receipt(root, base, receipt_path)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-            self.assertEqual(json.loads(checked.stdout), {"terminal": False})
+            self.assertEqual(json.loads(checked.stdout), {"terminal": True})
         finally:
             temporary.cleanup()
 
