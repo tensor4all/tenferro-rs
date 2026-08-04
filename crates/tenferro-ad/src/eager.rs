@@ -3315,6 +3315,9 @@ impl EagerTensor {
         }
     }
 
+    // INVARIANT: the error variants return the unchanged eager handle so a
+    // caller can retry ownership extraction without an implicit copy.
+    #[allow(clippy::result_large_err)]
     /// Consume this handle and structurally extract its retained allocation.
     ///
     /// A shared handle is returned unchanged as [`IntoValueError::NotUnique`].
@@ -3326,9 +3329,6 @@ impl EagerTensor {
     /// Returns [`IntoValueError::NotUnique`] when another handle retains the
     /// value, or [`IntoValueError::Extract`] when structural group extraction
     /// fails because the allocation is aliased or its descriptor is invalid.
-    // INVARIANT: the error variants return the unchanged eager handle so a
-    // caller can retry ownership extraction without an implicit copy.
-    #[allow(clippy::result_large_err)]
     pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
         if Arc::strong_count(&self._record) != 1 {
             return Err(IntoValueError::NotUnique(self));
