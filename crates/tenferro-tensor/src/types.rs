@@ -3830,6 +3830,39 @@ impl TensorValue {
         })
     }
 
+    /// Move the value's sole physical owner into an allocation group.
+    ///
+    /// This is used by retention containers to preserve metadata-only views
+    /// without copying. A shared value is returned unchanged so callers can
+    /// choose an explicit duplicate/materialization path.
+    #[doc(hidden)]
+    pub fn try_into_group_parts(
+        self,
+    ) -> std::result::Result<(AllocationGroup, DescriptorSlot, DType, Vec<usize>), Self> {
+        let Self { owner, layout } = self;
+        let owner = match Arc::try_unwrap(owner) {
+            Ok(owner) => owner,
+            Err(owner) => return Err(Self { owner, layout }),
+        };
+        let TensorOwnerRecord { tensor } = owner;
+        let dtype = tensor.dtype();
+        let shape = layout.shape().to_vec();
+        let strides = layout.strides().to_vec();
+        let offset = layout.offset();
+        let placement = tensor.placement().clone();
+        let (group, slot) = tensor.into_group_parts();
+        match group.update_descriptor_layout(slot, shape, strides, offset) {
+            Ok(group) => Ok((group, slot, dtype, layout.shape().to_vec())),
+            Err((group, _error)) => {
+                let tensor = tensor_from_group(group, slot, dtype, layout.clone(), placement);
+                Err(Self {
+                    owner: Arc::new(TensorOwnerRecord { tensor }),
+                    layout,
+                })
+            }
+        }
+    }
+
     /// Consume an unshared compact value and return its physical owner.
     ///
     /// # Errors
@@ -4084,6 +4117,20 @@ fn prepare_backend_access<'a, T: 'static, R: TensorRank>(
     buffer
         .prepare_device_access(request)
         .map_err(|error| crate::Error::runtime_state(op, error.to_string()))
+}
+
+fn cast_view_slice<S: 'static, T: TensorScalar>(source: &[S]) -> crate::Result<&[T]> {
+    if size_of::<S>() != size_of::<T>() || align_of::<S>() != align_of::<T>() {
+        return Err(crate::Error::invalid_argument(
+            "TensorView::as_slice",
+            "dtype",
+            "matching dtypes must have identical scalar layout",
+        ));
+    }
+    // SAFETY: the dtype check above is exhaustive over the sealed scalar set;
+    // equal size/alignment preserve the element boundaries and the source
+    // slice remains borrowed for the returned lifetime.
+    Ok(unsafe { std::slice::from_raw_parts(source.as_ptr().cast::<T>(), source.len()) })
 }
 
 fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
@@ -4495,6 +4542,31 @@ impl<'a> TensorView<'a> {
             Self::Bool(t) => t.shape(),
             Self::C32(t) => t.shape(),
             Self::C64(t) => t.shape(),
+        }
+    }
+
+    /// Borrow a contiguous host slice when the requested scalar matches this view's dtype.
+    ///
+    /// Backend buffers and non-contiguous views return an explicit error. No
+    /// download or materialization is performed.
+    pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&[T]> {
+        if self.dtype() != T::dtype() {
+            return Err(crate::Error::validation(
+                "TensorView::as_slice",
+                ValidationError::DTypeMismatch {
+                    expected: crate::core_dtype(T::dtype()),
+                    actual: crate::core_dtype(self.dtype()),
+                },
+            ));
+        }
+        match self {
+            Self::F32(view) => cast_view_slice(view.as_slice()?),
+            Self::F64(view) => cast_view_slice(view.as_slice()?),
+            Self::I32(view) => cast_view_slice(view.as_slice()?),
+            Self::I64(view) => cast_view_slice(view.as_slice()?),
+            Self::Bool(view) => cast_view_slice(view.as_slice()?),
+            Self::C32(view) => cast_view_slice(view.as_slice()?),
+            Self::C64(view) => cast_view_slice(view.as_slice()?),
         }
     }
 

@@ -46,6 +46,7 @@ mod transform_cache;
 pub use context::{AdContext, AdContextBuilder, AdContextCacheStats};
 pub use eager::{
     CpuPlacementBoundEager, EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor,
+    IntoValueError, ValueGuard,
 };
 pub use shape_packing::EagerSliceBuilder;
 pub(crate) use tenferro_runtime::{extension_cache, scalar_semantics};

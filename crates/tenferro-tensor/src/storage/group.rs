@@ -813,6 +813,44 @@ impl AllocationGroup {
         Ok(DescriptorSlot(slot))
     }
 
+    /// Replace one uniquely-owned descriptor's logical layout while retaining
+    /// its scalar representation and allocation root.
+    // INVARIANT: the dynamic dtype dispatch below selects the sealed scalar
+    // pair before the existing descriptor validator runs.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn update_descriptor_layout(
+        mut self,
+        slot: DescriptorSlot,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+        offset: isize,
+    ) -> Result<Self, (Self, GroupError)> {
+        let dtype = match self.resolve_descriptor(slot) {
+            Ok((_, descriptor)) => descriptor.dtype,
+            Err(error) => return Err((self, error)),
+        };
+        if let Some(Some(descriptor)) = self.descriptors.get_mut(slot.index()) {
+            // A metadata-only read view may be non-injective (for example a
+            // broadcast). Mutable access revalidates injectivity when asked.
+            descriptor.write_injective = false;
+        }
+        match dtype {
+            DType::F32 => self.reinterpret_descriptor::<f32, f32>(slot, shape, strides, offset),
+            DType::F64 => self.reinterpret_descriptor::<f64, f64>(slot, shape, strides, offset),
+            DType::I32 => self.reinterpret_descriptor::<i32, i32>(slot, shape, strides, offset),
+            DType::I64 => self.reinterpret_descriptor::<i64, i64>(slot, shape, strides, offset),
+            DType::Bool => self.reinterpret_descriptor::<bool, bool>(slot, shape, strides, offset),
+            DType::C32 => self
+                .reinterpret_descriptor::<num_complex::Complex32, num_complex::Complex32>(
+                    slot, shape, strides, offset,
+                ),
+            DType::C64 => self
+                .reinterpret_descriptor::<num_complex::Complex64, num_complex::Complex64>(
+                    slot, shape, strides, offset,
+                ),
+        }
+    }
+
     /// Replace one uniquely-owned descriptor with a sealed representation
     /// reinterpretation while retaining the same allocation root.
     ///

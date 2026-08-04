@@ -34,11 +34,11 @@ use tenferro_runtime::{
 };
 #[cfg(test)]
 use tenferro_tensor::TypedTensor;
-use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
-    CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
-    TensorScalar, TensorValue,
+    AllocationGroup, CacheStats, DType, DescriptorSlot, GroupError, IntoShapeVec, Tensor,
+    TensorBackend, TensorElementwise, TensorRead, TensorScalar, TensorValue, TensorView,
 };
+use tenferro_tensor::{BackendSession, BackendSessionHost};
 
 use crate::eager_backend::{
     cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_runtime_for_backend, EagerBackend,
@@ -363,6 +363,163 @@ pub(crate) struct EagerGraphExecution {
     pub(crate) outputs: Vec<Arc<Tensor>>,
 }
 
+/// A read-only value view retained by an eager tensor record.
+///
+/// The guard borrows the record's allocation group. It never owns a tensor and
+/// cannot be converted into a mutable view.
+#[derive(Debug)]
+pub struct ValueGuard<'a> {
+    view: TensorView<'a>,
+}
+
+impl ValueGuard<'_> {
+    /// Return the scalar dtype of the retained value.
+    pub fn dtype(&self) -> DType {
+        self.view.dtype()
+    }
+
+    /// Return the logical shape of the retained value.
+    pub fn shape(&self) -> &[usize] {
+        self.view.shape()
+    }
+
+    /// Borrow the dtype-erased tensor view.
+    pub fn as_tensor_view(&self) -> &TensorView<'_> {
+        &self.view
+    }
+
+    /// Borrow compact host bytes through the tensor's explicit scalar type.
+    ///
+    /// Backend-resident values return the backend's typed host-access error;
+    /// this method does not download storage implicitly.
+    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
+        self.view.as_slice()
+    }
+
+    fn duplicate_host_tensor(&self) -> tenferro_tensor::Result<Tensor> {
+        match &self.view {
+            TensorView::F32(view) => {
+                <f32 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::F64(view) => {
+                <f64 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::I32(view) => {
+                <i32 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::I64(view) => {
+                <i64 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::Bool(view) => <bool as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+            TensorView::C32(view) => <num_complex::Complex32 as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+            TensorView::C64(view) => <num_complex::Complex64 as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+        }
+    }
+}
+
+/// Error returned when a value cannot be consumed without changing its owner.
+#[derive(Debug)]
+pub enum IntoValueError<H> {
+    /// Another eager handle, tape record, or checkpoint retains the value.
+    NotUnique(H),
+    /// Group extraction failed after the handle was uniquely acquired.
+    Extract { value: H, error: GroupError },
+}
+
+impl<H> std::fmt::Display for IntoValueError<H> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotUnique(_) => formatter.write_str("eager value is retained by another handle"),
+            Self::Extract { error, .. } => {
+                write!(formatter, "eager value extraction failed: {error}")
+            }
+        }
+    }
+}
+
+impl<H: std::fmt::Debug + Send + Sync + 'static> std::error::Error for IntoValueError<H> {}
+
+/// One direct retention container owns the physical allocation group.
+#[derive(Debug)]
+struct RetentionContainer {
+    group: AllocationGroup,
+}
+
+/// Read-only descriptor record used by eager handles and the AD registries.
+#[derive(Debug)]
+pub(crate) struct AdValueRecord {
+    container: Arc<RetentionContainer>,
+    slot: DescriptorSlot,
+    dtype: DType,
+    shape: Box<[usize]>,
+}
+
+impl AdValueRecord {
+    fn from_group(
+        group: AllocationGroup,
+        slot: DescriptorSlot,
+        dtype: DType,
+        shape: Vec<usize>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            container: Arc::new(RetentionContainer { group }),
+            slot,
+            dtype,
+            shape: shape.into_boxed_slice(),
+        })
+    }
+
+    fn from_tensor(tensor: Tensor, op: &'static str) -> Result<Arc<Self>> {
+        let dtype = tensor.dtype();
+        let shape = tensor.shape().to_vec();
+        let (group, bindings) = AllocationGroup::from_tensors(vec![tensor])
+            .map_err(|error| Error::runtime_state(op, ErrorPhase::Execution, error.to_string()))?;
+        let slot = bindings.first().copied().ok_or_else(|| {
+            Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
+        })?;
+        Ok(Self::from_group(group, slot, dtype, shape))
+    }
+
+    fn tensor_read(&self, op: &'static str) -> Result<TensorRead<'_>> {
+        let mut reads = self
+            .container
+            .group
+            .read_views(std::slice::from_ref(&self.slot))
+            .map_err(|error| Error::runtime_state(op, ErrorPhase::Execution, error.to_string()))?;
+        reads.pop().ok_or_else(|| {
+            Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
+        })
+    }
+
+    fn value(&self, op: &'static str) -> Result<ValueGuard<'_>> {
+        match self.tensor_read(op)? {
+            TensorRead::View(view) => Ok(ValueGuard { view }),
+            TensorRead::Tensor(_) => Err(Error::runtime_state(
+                op,
+                ErrorPhase::Execution,
+                "allocation-group value did not produce a borrowed descriptor view",
+            )),
+        }
+    }
+
+    fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+}
+
 /// Placement-selected CPU view of one [`EagerRuntime`].
 ///
 /// The view snapshots the runtime's CPU coordinator/provider bundle and the
@@ -544,7 +701,6 @@ pub struct EagerRuntime {
     semantic_extension_rules: SemanticExtensionRuleSet,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
-    value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
     /// S2: prepared derivative programs keyed by semantic structure, wrt input,
     /// and concrete bound input metadata. Avoids re-running freeze+AD
@@ -600,14 +756,6 @@ impl fmt::Debug for EagerRuntime {
             }
             Err(_) => {
                 debug.field("value_records_len", &"<locked>");
-            }
-        }
-        match self.value_ptr_records.try_lock() {
-            Ok(records) => {
-                debug.field("value_ptr_records_len", &records.len());
-            }
-            Err(_) => {
-                debug.field("value_ptr_records_len", &"<locked>");
             }
         }
         match self.ad_transform_cache.stats() {
@@ -691,18 +839,6 @@ impl EagerRuntime {
         })
     }
 
-    fn lock_value_ptr_records(
-        &self,
-    ) -> Result<MutexGuard<'_, HashMap<usize, Weak<EagerTensorRecord>>>> {
-        self.value_ptr_records.lock().map_err(|_| {
-            Error::runtime_state(
-                "eager_value_pointer_registry",
-                ErrorPhase::Execution,
-                "lock poisoned",
-            )
-        })
-    }
-
     fn from_backend(backend: EagerBackend) -> Result<Self> {
         Self::from_backend_with_rules_and_cache(
             backend,
@@ -727,7 +863,6 @@ impl EagerRuntime {
             semantic_extension_rules,
             grad_slots: Mutex::new(HashMap::new()),
             value_records: Mutex::new(HashMap::new()),
-            value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
             prepared_derivative_cache: Mutex::new(PreparedDerivativeCache::default()),
         })
@@ -1529,26 +1664,6 @@ impl EagerRuntime {
     ) -> Result<()> {
         self.lock_value_records()?
             .insert(key.clone(), Arc::downgrade(record));
-        self.try_register_value_record_ptr(record)?;
-        Ok(())
-    }
-
-    pub(crate) fn try_register_value_record_ptr(
-        &self,
-        record: &Arc<EagerTensorRecord>,
-    ) -> Result<()> {
-        let tensor_ptr = match record.value.as_tensor() {
-            Some(tensor) => Some(tensor_ptr_ref(tensor)),
-            None => record
-                .materialized_cache
-                .get()
-                .map(|tensor| tensor_ptr_ref(tensor)),
-        };
-        let Some(tensor_ptr) = tensor_ptr else {
-            return Ok(());
-        };
-        self.lock_value_ptr_records()?
-            .insert(tensor_ptr, Arc::downgrade(record));
         Ok(())
     }
 
@@ -2491,10 +2606,6 @@ fn copy_tensor_for_runtime(ctx: &EagerRuntime, tensor: &Tensor) -> Result<Tensor
     .map_err(Error::from)
 }
 
-fn tensor_ptr_ref(tensor: &Tensor) -> usize {
-    tensor as *const Tensor as usize
-}
-
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
     if primal.dtype() != seed.dtype() {
         return Err(
@@ -2536,8 +2647,6 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor {
-    pub(crate) value: Arc<TensorValue>,
-    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
     pub(crate) key: ValueKey<StdTensorOp>,
     pub(crate) trace: Option<EagerTrace>,
     pub(crate) semantic_trace: Option<TracedTensor>,
@@ -2549,8 +2658,7 @@ pub struct EagerTensor {
 }
 
 pub(crate) struct EagerTensorRecord {
-    value: Arc<TensorValue>,
-    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
+    value: Arc<AdValueRecord>,
     key: ValueKey<StdTensorOp>,
     trace: Option<EagerTrace>,
     semantic_trace: Option<TracedTensor>,
@@ -2566,7 +2674,7 @@ struct EagerTensorParts {
     requires_grad: bool,
     trace: Option<EagerTrace>,
     semantic_trace: Option<TracedTensor>,
-    value: Arc<TensorValue>,
+    value: Arc<AdValueRecord>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     register_value: bool,
 }
@@ -2667,13 +2775,14 @@ impl EagerTensor {
                 Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
             })?;
         let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
+        let value = AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_leaf")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace: None,
             semantic_trace: Some(semantic_trace),
-            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
+            value,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             register_value: true,
         })
@@ -2708,13 +2817,14 @@ impl EagerTensor {
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
+        let value = AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
+            value,
             metadata_scopes,
             register_value: true,
         })
@@ -2730,13 +2840,15 @@ impl EagerTensor {
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
+        let value =
+            AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_unregistered_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
+            value,
             metadata_scopes,
             register_value: false,
         })
@@ -2751,13 +2863,20 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let value = match value.try_into_group_parts() {
+            Ok((group, slot, dtype, shape)) => AdValueRecord::from_group(group, slot, dtype, shape),
+            Err(value) => {
+                let owned_tensor = ctx.materialize_value(&value)?;
+                AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_result_value")?
+            }
+        };
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(value),
+            value,
             metadata_scopes,
             register_value: true,
         })
@@ -2778,10 +2897,8 @@ impl EagerTensor {
         if requires_grad {
             ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
-        let materialized_cache = Arc::new(OnceLock::new());
         let record = Arc::new(EagerTensorRecord {
             value: Arc::clone(&value),
-            materialized_cache: Arc::clone(&materialized_cache),
             key: key.clone(),
             trace: trace.clone(),
             semantic_trace: semantic_trace.clone(),
@@ -2795,8 +2912,6 @@ impl EagerTensor {
         }
 
         Ok(Self {
-            value,
-            materialized_cache,
             key,
             trace,
             semantic_trace,
@@ -2809,13 +2924,14 @@ impl EagerTensor {
     }
 
     pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Result<Self> {
-        Ok(Self::new_untracked_value_result(
-            ctx,
-            TensorValue::from_tensor(tensor),
-        ))
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_untracked_result")?;
+        Ok(Self::new_untracked_value_record(ctx, value, None))
     }
 
-    pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue) -> Self {
+    pub(crate) fn new_untracked_value_result(
+        ctx: Arc<EagerRuntime>,
+        value: TensorValue,
+    ) -> Result<Self> {
         Self::new_untracked_value_result_with_semantic_trace(ctx, value, None)
     }
 
@@ -2823,14 +2939,26 @@ impl EagerTensor {
         ctx: Arc<EagerRuntime>,
         value: TensorValue,
         semantic_trace: Option<TracedTensor>,
+    ) -> Result<Self> {
+        let value = match value.try_into_group_parts() {
+            Ok((group, slot, dtype, shape)) => AdValueRecord::from_group(group, slot, dtype, shape),
+            Err(value) => {
+                let owned_tensor = ctx.materialize_value(&value)?;
+                AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_untracked_value_result")?
+            }
+        };
+        Ok(Self::new_untracked_value_record(ctx, value, semantic_trace))
+    }
+
+    fn new_untracked_value_record(
+        ctx: Arc<EagerRuntime>,
+        value: Arc<AdValueRecord>,
+        semantic_trace: Option<TracedTensor>,
     ) -> Self {
-        let value = Arc::new(value);
-        let materialized_cache = Arc::new(OnceLock::new());
         let key = eager_val_key();
         let grad_slot = Arc::new(Mutex::new(None));
         let record = Arc::new(EagerTensorRecord {
-            value: Arc::clone(&value),
-            materialized_cache: Arc::clone(&materialized_cache),
+            value,
             key: key.clone(),
             trace: None,
             semantic_trace: semantic_trace.clone(),
@@ -2840,8 +2968,6 @@ impl EagerTensor {
             ctx: Arc::clone(&ctx),
         });
         Self {
-            value,
-            materialized_cache,
             key,
             trace: None,
             semantic_trace,
@@ -2855,8 +2981,6 @@ impl EagerTensor {
 
     pub(crate) fn from_record(record: Arc<EagerTensorRecord>) -> Self {
         Self {
-            value: Arc::clone(&record.value),
-            materialized_cache: Arc::clone(&record.materialized_cache),
             key: record.key.clone(),
             trace: record.trace.clone(),
             semantic_trace: record.semantic_trace.clone(),
@@ -2888,13 +3012,13 @@ impl EagerTensor {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn detach(&self) -> Self {
-        let semantic_trace = self.value.as_tensor().and_then(|tensor| {
-            let tensor = tensor.duplicate().ok()?;
-            TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(tensor)).ok()
-        });
-        Self::new_untracked_value_result_with_semantic_trace(
+        let semantic_trace = self
+            .duplicate_value()
+            .ok()
+            .and_then(|tensor| TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(tensor)).ok());
+        Self::new_untracked_value_record(
             self.ctx.clone(),
-            self.value.as_ref().clone(),
+            Arc::clone(&self._record.value),
             semantic_trace,
         )
     }
@@ -2948,16 +3072,132 @@ impl EagerTensor {
         self.materialized_arc()
     }
 
+    /// Borrow the retained value without creating an owner or copy.
+    pub fn value(&self) -> Result<ValueGuard<'_>> {
+        self._record.value.value("EagerTensor::value")
+    }
+
+    /// Explicitly duplicate this value into a fresh standalone allocation.
+    pub fn duplicate_value(&self) -> Result<Tensor> {
+        let value = self.value()?;
+        match value.duplicate_host_tensor() {
+            Ok(tensor) => Ok(tensor),
+            Err(_) => {
+                let read = self
+                    ._record
+                    .value
+                    .tensor_read("EagerTensor::duplicate_value")?;
+                self.ctx
+                    .with_execution_session(|session| session.to_contiguous_read(read))?
+                    .map_err(Error::from)
+            }
+        }
+    }
+
+    /// Consume this handle and structurally extract its retained allocation.
+    ///
+    /// A shared handle is returned unchanged as [`IntoValueError::NotUnique`].
+    /// Group extraction failures return the unchanged handle and typed group
+    /// error; no copy or fallback materialization is attempted.
+    #[allow(clippy::result_large_err)]
+    pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
+        if Arc::strong_count(&self._record) != 1 {
+            return Err(IntoValueError::NotUnique(self));
+        }
+        let Self { _record, .. } = self;
+        let record = match Arc::try_unwrap(_record) {
+            Ok(record) => record,
+            Err(record) => return Err(IntoValueError::NotUnique(Self::from_record(record))),
+        };
+        let EagerTensorRecord {
+            value,
+            key,
+            trace,
+            semantic_trace,
+            requires_grad,
+            grad_slot,
+            metadata_scopes,
+            ctx,
+        } = record;
+        let value = match Arc::try_unwrap(value) {
+            Ok(value) => value,
+            Err(value) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value,
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                return Err(IntoValueError::NotUnique(Self::from_record(record)));
+            }
+        };
+        let AdValueRecord {
+            container,
+            slot,
+            dtype,
+            shape,
+        } = value;
+        let container = match Arc::try_unwrap(container) {
+            Ok(container) => container,
+            Err(container) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value: Arc::new(AdValueRecord {
+                        container,
+                        slot,
+                        dtype,
+                        shape,
+                    }),
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                return Err(IntoValueError::NotUnique(Self::from_record(record)));
+            }
+        };
+        match container.group.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((group, error)) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value: Arc::new(AdValueRecord {
+                        container: Arc::new(RetentionContainer { group }),
+                        slot,
+                        dtype,
+                        shape,
+                    }),
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                Err(IntoValueError::Extract {
+                    value: Self::from_record(record),
+                    error,
+                })
+            }
+        }
+    }
+
     /// Return this tensor's scalar dtype without materializing through
     /// [`materialized`](Self::materialized).
     pub fn dtype(&self) -> DType {
-        self.value.dtype()
+        self._record.value.dtype()
     }
 
     /// Return this tensor's logical shape without materializing through
     /// [`materialized`](Self::materialized).
     pub fn shape(&self) -> &[usize] {
-        self.value.shape()
+        self._record.value.shape()
     }
 
     /// Borrow this tensor value as a [`TensorRead`].
@@ -2966,7 +3206,10 @@ impl EagerTensor {
     /// preserves the option to replace eager storage with non-contiguous views
     /// without forcing callers through [`materialized`](Self::materialized).
     pub fn tensor_read(&self) -> TensorRead<'_> {
-        self.value.tensor_read()
+        self._record
+            .value
+            .tensor_read("EagerTensor::tensor_read")
+            .expect("validated eager value record")
     }
 
     /// Materialize this eager tensor as an owned [`Tensor`].
@@ -2980,33 +3223,16 @@ impl EagerTensor {
     /// Returns [`Error::RuntimeState`] if backend state is unavailable, or a
     /// typed tensor backend error when contiguous materialization fails.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        self.ctx.materialize_value(self.value.as_ref())
+        self.duplicate_value()
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
-        if self.value.as_tensor().is_some() {
-            let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
-            self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(materialized);
-        }
-        if let Some(tensor) = self.materialized_cache.get() {
-            self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(Arc::clone(tensor));
-        }
-
-        let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
-        let _ = self.materialized_cache.set(Arc::clone(&materialized));
-        self.ctx.try_register_value_record_ptr(&self._record)?;
-        Ok(self
-            .materialized_cache
-            .get()
-            .map(Arc::clone)
-            .unwrap_or(materialized))
+        Ok(Arc::new(self.duplicate_value()?))
     }
 
     #[cfg(test)]
     pub(crate) fn materialized_cache_is_initialized(&self) -> bool {
-        self.materialized_cache.get().is_some()
+        false
     }
 
     /// Return the accumulated gradient currently stored for this tensor.

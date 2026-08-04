@@ -549,8 +549,8 @@ impl EagerTensor {
         let op = StdTensorOp::Transpose {
             perm: perm.to_vec(),
         };
-        let value = self
-            .value
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .transpose_view(perm)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], op, value)
@@ -585,7 +585,8 @@ impl EagerTensor {
         let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
         };
-        if let Ok(value) = self.value.reshape_view(shape) {
+        let base = self.to_tensor()?;
+        if let Ok(value) = TensorValue::from_tensor(base).reshape_view(shape) {
             return Self::nary_value_op(&[self], op, value);
         }
         self.unary_op(op)
@@ -619,8 +620,8 @@ impl EagerTensor {
     /// `AxisOutOfBounds`/`InvalidArgument` when starts, limits, or strides are
     /// invalid, or a typed backend/runtime-state error while creating the view.
     pub fn slice(&self, config: SliceConfig) -> Result<Self> {
-        let value = self
-            .value
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .slice_view(&config)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], StdTensorOp::Slice(config), value)
@@ -655,8 +656,8 @@ impl EagerTensor {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
         };
-        let value = self
-            .value
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .broadcast_in_dim_view(shape, dims)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], op, value)
@@ -1133,7 +1134,7 @@ impl EagerTensor {
         }
 
         if !eager_grad_recording_enabled() {
-            return Ok(Self::new_untracked_value_result(ctx, value));
+            return Self::new_untracked_value_result(ctx, value);
         }
 
         let output_ref = &value;

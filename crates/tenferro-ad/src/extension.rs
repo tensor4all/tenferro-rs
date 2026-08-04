@@ -35,13 +35,16 @@ pub use tenferro_runtime::extension::{
 /// let value = TensorValue::from_tensor(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 /// );
-/// let eager = adopt_untracked_eager_value(ctx, value);
+/// let eager = adopt_untracked_eager_value(ctx, value)?;
 /// assert_eq!(eager.shape(), &[1]);
 /// assert!(!eager.tracks_grad());
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 #[must_use]
-pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -> EagerTensor {
+pub fn adopt_untracked_eager_value(
+    ctx: Arc<EagerRuntime>,
+    value: TensorValue,
+) -> Result<EagerTensor> {
     EagerTensor::new_untracked_value_result(ctx, value)
 }
 

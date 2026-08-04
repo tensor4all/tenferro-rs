@@ -130,11 +130,11 @@
 - Gradients/checkpoints retain descriptor records and extract a standalone owner only structurally.
 - Scoped borrowed execution is synchronous to retirement, read-only, and rejected before admission for asynchronous CUDA/WebGPU/Metal providers.
 
-- [ ] **Step 1: Add failing AD retention/copy-accounting tests.**
+- [x] **Step 1: Add failing AD retention/copy-accounting tests.**
 
   Assert that cloning eager handles, recording checkpoints, retaining tape values, and creating real/complex aliases do not increment allocation or copy counters. Assert that `duplicate_value()` does increment explicit-copy counters and returns a fresh allocation identity. Add CPU forward/backward numerical checks and the asynchronous-provider rejection path.
 
-- [ ] **Step 2: Replace `Arc<Tensor>` and lazy materialization cache surfaces.**
+- [ ] **Step 2: Replace `Arc<Tensor>` and lazy materialization cache surfaces. *(Group-backed eager records/borrowed `ValueGuard` landed; compatibility owner-returning and gradient paths remain.)***
 
   Remove `TensorValue { Arc<TensorOwnerRecord> }`, `Arc<OnceLock<Arc<Tensor>>>`, `materialized() -> Arc<Tensor>`, `materialized_arc()`, `Completed(Vec<Tensor>)`, and `GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>`. Use direct group-backed records and borrowed value guards; classify operation outputs, checkpoint recomputation, explicit duplication, and transfers separately.
 

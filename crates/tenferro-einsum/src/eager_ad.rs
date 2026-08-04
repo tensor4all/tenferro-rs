@@ -778,7 +778,9 @@ fn backend_broadcast_multiply_untracked(
         )
     })??;
 
-    Ok(value.map(|value| adopt_untracked_eager_value(runtime.clone(), value)))
+    value
+        .map(|value| adopt_untracked_eager_value(runtime.clone(), value))
+        .transpose()
 }
 
 fn eval_shape_exprs(
