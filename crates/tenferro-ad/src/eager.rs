@@ -1365,10 +1365,12 @@ impl EagerRuntime {
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
-        if let Some(tensor) = value.as_tensor() {
+        if let Some(tensor) = value
+            .as_tensor()
+            .filter(|tensor| !tensor.is_backend_buffer())
+        {
             return tensor.duplicate().map_err(Error::from);
         }
-
         let mut backend = self.lock_backend()?;
         backend
             .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
@@ -2258,7 +2260,7 @@ fn semantic_eager_vjp_optional(
                 "semantic eager VJP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.duplicate()?);
+        *slot = Some(copy_tensor_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2266,7 +2268,7 @@ fn semantic_eager_vjp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(cotangent_tensor.as_ref().duplicate()?);
+    *slot = Some(copy_tensor_for_runtime(ctx, cotangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2407,7 +2409,7 @@ fn semantic_eager_jvp_optional(
                 "semantic eager JVP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.duplicate()?);
+        *slot = Some(copy_tensor_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2415,7 +2417,7 @@ fn semantic_eager_jvp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(tangent_tensor.as_ref().duplicate()?);
+    *slot = Some(copy_tensor_for_runtime(ctx, tangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2472,11 +2474,21 @@ fn validate_same_runtime(
     Ok(())
 }
 
-fn owned_tensor_from_arc(tensor: Arc<Tensor>) -> Result<Tensor> {
+fn owned_tensor_from_arc(ctx: &EagerRuntime, tensor: Arc<Tensor>) -> Result<Tensor> {
     match Arc::try_unwrap(tensor) {
         Ok(tensor) => Ok(tensor),
-        Err(tensor) => tensor.as_ref().duplicate().map_err(Error::from),
+        Err(tensor) => copy_tensor_for_runtime(ctx, tensor.as_ref()),
     }
+}
+
+fn copy_tensor_for_runtime(ctx: &EagerRuntime, tensor: &Tensor) -> Result<Tensor> {
+    if !tensor.is_backend_buffer() {
+        return tensor.duplicate().map_err(Error::from);
+    }
+    ctx.with_execution_session(|session| {
+        session.to_contiguous_read(TensorRead::from_tensor(tensor))
+    })?
+    .map_err(Error::from)
 }
 
 fn tensor_ptr_ref(tensor: &Tensor) -> usize {
@@ -2654,13 +2666,14 @@ impl EagerTensor {
                 .map_err(|err| {
                 Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
             })?;
+        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace: None,
             semantic_trace: Some(semantic_trace),
-            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             register_value: true,
         })
@@ -2694,13 +2707,14 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
             metadata_scopes,
             register_value: true,
         })
@@ -2715,13 +2729,14 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor(owned_tensor_from_arc(tensor)?)),
+            value: Arc::new(TensorValue::from_tensor(owned_tensor)),
             metadata_scopes,
             register_value: false,
         })
@@ -2969,9 +2984,10 @@ impl EagerTensor {
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
-        if let Some(tensor) = self.value.as_tensor() {
+        if self.value.as_tensor().is_some() {
+            let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
             self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(Arc::new(tensor.duplicate()?));
+            return Ok(materialized);
         }
         if let Some(tensor) = self.materialized_cache.get() {
             self.ctx.try_register_value_record_ptr(&self._record)?;

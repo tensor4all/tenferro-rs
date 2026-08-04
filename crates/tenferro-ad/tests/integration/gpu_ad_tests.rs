@@ -139,9 +139,10 @@ fn test_gpu_matmul_vjp() {
         ],
     );
 
-    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone()).unwrap();
-    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone()).unwrap();
-    let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone()).unwrap();
+    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.duplicate().unwrap()).unwrap();
+    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.duplicate().unwrap()).unwrap();
+    let cotangent_cpu =
+        TracedTensor::from_tensor_concrete_shape(cotangent_host.duplicate().unwrap()).unwrap();
     let cpu_engine = cpu_runtime();
     let y_cpu = matmul(&a_cpu, &b_cpu);
     let grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
