@@ -97,12 +97,83 @@ These checks passed on the current worktree immediately before this handoff:
 The full workspace and P7 artifact command have not yet been run for this
 checkpoint. Do not claim Issue #1555 closure from these focused checks.
 
+## Post-checkpoint scope and quality review (2026-08-04)
+
+A proportionality, scope, and implementation-quality review of commit
+ef0c90addd1a73e9758bc188d32eea58d211fd67 produced the corrections below.
+They are mandatory parts of the remaining P7 cutover, not optional
+cleanup.
+
+Remove disproportionate defenses:
+
+1. `prepare_cubecl_access` in crates/tenferro-gpu/src/cubecl/dispatch.rs
+   re-validates the request allocation domain, allocation id, and byte
+   length against the same buffer that produced those values. Both call
+   paths build the request from that buffer instance, and
+   `DeviceAccessRequest::new` is `pub(crate)`, so these checks can only
+   fire if trusted internal code forges its own output. This is the
+   banned repeated-validation pattern and contradicts the G-contract
+   rule that prepare/bind accepts no replacement key/range/provider
+   values. Stop carrying re-checkable identity in the request, or stop
+   re-verifying it in the provider; keep one source of truth.
+2. `CubeclPreparedAccess` retains `writable`, `offset`, and
+   `element_size` fields that no launch path reads (`writable()` is
+   `#[allow(dead_code)]`; GEMM/permutation re-derive offsets from the
+   view). Write authority is the Rust borrow, not a runtime flag.
+   Delete the dead state.
+3. `DeviceAccessRequest.dtype` is never consumed by a provider (only
+   asserted in one storage unit test). Delete the field, and keep the
+   offset non-negativity check in one layer only.
+
+Collapse duplicated machinery during the cutover:
+
+4. Two device-preparation seams exist. The storage-root path
+   (`PreparedRead::Device`/`PreparedWrite::Device` `provider_state` in
+   storage/prepared.rs) builds provider state with empty shape/strides
+   and offset 0, and no launch path consumes that state; only unit
+   tests exercise it. All real CUDA launches use the view/tensor
+   `prepare_device_read`/`prepare_device_write` seam in types.rs.
+   Finish with exactly one provider-neutral prepared hierarchy; a
+   degenerate empty-shape `TensorBinding` must not survive anywhere a
+   consumer could bind it.
+5. `CubeclPreparedAccess` clones the provider handle twice (inside
+   `binding` plus the separate `handle` field); every consumer discards
+   one clone. Retain one representation per prepared access.
+
+Implementation-quality notes for the cutover:
+
+6. The view/tensor seam prepares per launch: each helper allocates a
+   `Box<dyn PreparedDeviceAccess>`, clones the handle twice, and
+   downcasts with a repeated stringly error. Dispatch carries eight
+   near-identical downcast helpers. When unifying the seams, prepare
+   once per checked access and consolidate the downcast into one
+   helper so small-kernel dispatch latency does not regress.
+7. The new transitional error branches in types.rs ("untyped backend
+   storage has no typed descriptor" and friends) are removed by the
+   cutover rather than tested; do not add tests for them.
+
+Reconfirmed correct; do not "fix" these:
+
+- No cryptographic, nonce, attestation, quarantine, retry, or recovery
+  machinery exists on the branch (grep hits are `FnOnce` false
+  positives).
+- Mandatory allocation domain/id at backend root import implements the
+  identity design; it is not an extra defense.
+- The byte-capacity check in `typed_tensor_array_arg_as` validates a
+  caller-chosen length; it is a genuine boundary check and stays.
+- Checked arithmetic, structured storage errors, non-consuming failure
+  returns, and the counter-based retention tests are sound; unsafe
+  blocks follow the established `HostAllocation` discipline with
+  accurate SAFETY comments.
+
 ## Exact next work
 
 1. Re-read this handoff, AGENTS.md, REPOSITORY_RULES.md, the parent issue,
    and #1563 before editing.
 2. Keep the implementation minimal: remove the untyped backend fallback and
    finish the single root/group owner cutover; do not add new defense layers.
+   Apply every correction in "Post-checkpoint scope and quality review" as
+   part of this step.
 3. Add the required CUDA artifact only after the cutover is complete:
 
        cargo test -p tenferro-gpu --features cuda --test storage_provider_cuda
