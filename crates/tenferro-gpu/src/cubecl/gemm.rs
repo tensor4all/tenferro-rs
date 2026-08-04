@@ -950,14 +950,14 @@ fn resolve_device_region<T: 'static>(
                     Error::invalid_argument(OP, "layout", "view element span overflows usize")
                 })?;
         }
-        if max_offset >= buffer.element_len() {
+        if max_offset >= buffer.element_len::<T>() {
             return Err(Error::invalid_argument(
                 OP,
                 "layout",
                 format!(
                     "view region reaches element offset {max_offset} but the device \
                      buffer holds only {} elements",
-                    buffer.element_len()
+                    buffer.element_len::<T>()
                 ),
             ));
         }

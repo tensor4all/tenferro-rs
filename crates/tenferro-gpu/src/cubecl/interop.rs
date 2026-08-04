@@ -193,11 +193,16 @@ pub fn upload_typed_tensor<T>(
 where
     T: CubeElement + Clone + Send + Sync + 'static,
 {
-    let len = data.len();
+    let byte_len = T::as_bytes(&data).len();
     let handle = rt.client().create_from_slice(T::as_bytes(&data));
     dispatch::typed_from_cubecl(
         shape,
-        crate::CubeclBuffer::new(handle, len, rt.device_ordinal(), rt.allocation_domain_id()),
+        crate::CubeclBuffer::new(
+            handle,
+            byte_len,
+            rt.device_ordinal(),
+            rt.allocation_domain_id(),
+        ),
         rt.device_ordinal(),
     )
 }

@@ -31,6 +31,9 @@ follow Rust borrowing.
 - Provider owners now require a non-optional `AllocationDomainId`; the public
   metadata trait still reports `Some(id)`, while Apple managed-resource state
   remains a separate optional endpoint marker rather than an identity fallback.
+- Provider owners now retain physical `byte_len`; typed element counts are
+  derived only at borrowed tensor/view boundaries. Allocation constructors
+  pass provider byte sizes, including complex and bool representations.
 - Runtime and CPU/FFT/linalg managed-buffer test providers now use mutable
   mapping receivers and allocate a fresh same-domain output where an old test
   path previously aliased an owner.
@@ -63,8 +66,10 @@ not an alternate tensor ownership path.
 - `cargo test -p tenferro-tensor --lib` — 256 passed.
 - `cargo test -p tenferro-runtime --test integration` — 122 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — passed after updating the owner-borrowing contract assertions.
+- `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 21 passed, including the byte-length owner contract.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --no-run` — passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --lib domain_and_distinguish_allocations` — 2 passed.
+- `cargo test -p tenferro-gpu --features cuda,webgpu --lib --quiet` — 93 passed, 117 ignored.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration public_surface_contract` — 20 passed.
 - `cargo test -p tenferro-gpu --features cuda,webgpu --test integration cubecl_launch_contract` — 35 passed.
 - The owner source contract rejects `Option<AllocationDomainId>` in both provider owner structs.

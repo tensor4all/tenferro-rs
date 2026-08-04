@@ -93,7 +93,7 @@ pub(crate) mod types {
 #[cfg(feature = "cuda")]
 pub(crate) struct CubeclBuffer {
     handle: cubecl_runtime::server::Handle,
-    len: usize,
+    byte_len: usize,
     device_ordinal: usize,
     allocation_domain: AllocationDomainId,
     allocation_id: AllocationId,
@@ -106,7 +106,7 @@ static NEXT_CUDA_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic
 impl std::fmt::Debug for CubeclBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
-            .field("len", &self.len)
+            .field("byte_len", &self.byte_len)
             .field("device_ordinal", &self.device_ordinal)
             .field("allocation_domain", &self.allocation_domain)
             .field("allocation_id", &self.allocation_id)
@@ -118,13 +118,13 @@ impl std::fmt::Debug for CubeclBuffer {
 impl CubeclBuffer {
     pub(crate) fn new(
         handle: cubecl_runtime::server::Handle,
-        len: usize,
+        byte_len: usize,
         device_ordinal: usize,
         allocation_domain: AllocationDomainId,
     ) -> Self {
         Self {
             handle,
-            len,
+            byte_len,
             device_ordinal,
             allocation_domain,
             allocation_id: AllocationId::from_backend_id(
@@ -137,8 +137,14 @@ impl CubeclBuffer {
         &self.handle
     }
 
-    pub(crate) fn element_len(&self) -> usize {
-        self.len
+    pub(crate) fn byte_len(&self) -> usize {
+        self.byte_len
+    }
+
+    pub(crate) fn element_len<T: 'static>(&self) -> usize {
+        let element_size = std::mem::size_of::<T>();
+        debug_assert!(element_size != 0 && self.byte_len.is_multiple_of(element_size));
+        self.byte_len / element_size
     }
 
     pub(crate) fn device_ordinal(&self) -> usize {
@@ -157,7 +163,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer {
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.element_len::<T>()
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {

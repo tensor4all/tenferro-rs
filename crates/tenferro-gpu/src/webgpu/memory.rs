@@ -86,7 +86,7 @@ pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
 
     let byte_len = T::as_bytes(host_data).len();
     let handle = rt.client().create_from_slice(T::as_bytes(host_data));
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, byte_len, "webgpu_upload")?;
     let tensor = typed_from_webgpu(typed.shape().to_vec(), buffer, rt)?;
     rt.record_upload(byte_len);
     Ok(tensor)
@@ -146,7 +146,7 @@ fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<T
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
     let handle = rt.client().create_from_slice(&bytes);
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, bytes.len(), "webgpu_upload")?;
     rt.record_upload(bytes.len());
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),

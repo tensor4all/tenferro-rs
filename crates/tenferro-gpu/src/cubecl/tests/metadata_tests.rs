@@ -20,13 +20,13 @@ fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
     let domain = AllocationDomainId::fresh();
     let first = CubeclBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
-        1,
+        4,
         0,
         domain,
     );
     let second = CubeclBuffer::new(
         cubecl::server::Handle::new(StreamId::current(), 4),
-        1,
+        4,
         0,
         domain,
     );
@@ -285,7 +285,12 @@ fn cubecl_tensor_with_len(
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        StorageBuffer::Backend(Box::new(CubeclBuffer::new(handle, len, 0, domain))),
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(
+            handle,
+            len * std::mem::size_of::<f32>(),
+            0,
+            domain,
+        ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
