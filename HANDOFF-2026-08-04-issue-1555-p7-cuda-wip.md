@@ -197,3 +197,7 @@ The handoff file is part of the checkpoint commit. On restart, inspect git
 status first; the branch should be clean after the checkpoint commit, and its
 remote tracking branch should be
 origin/codex/issue-1558-task3-root-kernel.
+
+Record every new checkpoint, status, or blocker section at the top of this
+file, immediately below the title and date header (newest first). Do not
+append new sections at the bottom.
