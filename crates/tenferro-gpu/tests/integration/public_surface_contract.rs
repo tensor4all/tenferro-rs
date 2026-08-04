@@ -65,7 +65,8 @@ fn cuda_prepared_access_has_one_provider_handle_and_no_dead_request_metadata() {
 #[test]
 fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     use tenferro_gpu::{
-        cuda_runtime_engine_registration, CudaBackend, CudaDeviceError, CudaDeviceId, CudaRuntime,
+        cuda::cuda_runtime_engine_registration, cuda::CudaBackend, cuda::CudaDeviceError,
+        cuda::CudaDeviceId, cuda::CudaRuntime,
     };
     use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
 
@@ -137,8 +138,12 @@ fn cubecl_implementation_module_is_not_public_api() {
         "CubeCL backend buffer representation must not be public API"
     );
     assert!(
-        lib_rs.contains("pub mod cuda_interop"),
-        "sibling-crate CUDA bridge should be the only explicit low-level public module"
+        lib_rs.contains("pub mod cuda"),
+        "CUDA provider namespace should be the explicit low-level public module"
+    );
+    assert!(
+        !lib_rs.contains("pub mod cuda_interop"),
+        "the legacy flat CUDA interop module must not remain public"
     );
 
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");

@@ -61,7 +61,7 @@ fn traced_graph_construction_uses_shared_input_map_merge_helpers() {
     assert!(!shape_packing_source.contains("metadata_scopes.as_slice()"));
 
     let checkpoint_source = include_str!("../checkpoint.rs");
-    assert!(checkpoint_source.contains("pub old_inputs: Arc<HashMap"));
+    assert!(checkpoint_source.contains("pub old_inputs: Arc<RetainedInputMap>"));
     assert!(!checkpoint_source.contains("old_inputs: node.old_inputs.clone()"));
 }
 

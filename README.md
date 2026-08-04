@@ -281,6 +281,11 @@ PyTorch/JAX users can also jump in through the
 
 Selected deep dives:
 
+- [Storage ownership](https://tensor4all.org/tenferro-rs/storage-ownership.html)
+  — one physical owner, borrowed views, explicit copies/transfers, and prepared
+  access boundaries.
+- [Views and slicing](https://tensor4all.org/tenferro-rs/guides/views-and-slicing.html)
+  — static-rank views, mutable disjointness, and explicit `duplicate()`.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html)
   — explicit CPU, CUDA, and experimental WebGPU control; tensors never move
   between devices silently.

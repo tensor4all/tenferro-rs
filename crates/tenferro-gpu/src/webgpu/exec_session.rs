@@ -182,8 +182,8 @@ delegate!(TensorBuffer {
 });
 
 delegate!(TensorDeviceTransfer {
-    fn download_to_host(tensor: &Tensor) -> crate::Result<Tensor>;
-    fn upload_host_tensor(tensor: &Tensor) -> crate::Result<Tensor>;
+    fn download_to_host(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn upload_host_tensor(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 });
 
 macro_rules! delegate_cached {

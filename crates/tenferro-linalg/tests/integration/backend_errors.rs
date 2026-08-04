@@ -212,7 +212,24 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     impl TensorFusion for DefaultOnlyLinalgBackend {}
     impl TensorBuffer for DefaultOnlyLinalgBackend {}
-    impl TensorDeviceTransfer for DefaultOnlyLinalgBackend {}
+    impl TensorDeviceTransfer for DefaultOnlyLinalgBackend {
+        fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+            Err(Error::unsupported(
+                "DefaultOnlyLinalgBackend::download_to_host",
+                "test backend does not transfer tensors",
+            ))
+        }
+
+        fn upload_host_tensor(
+            &mut self,
+            _tensor: TensorRead<'_>,
+        ) -> tenferro_tensor::Result<Tensor> {
+            Err(Error::unsupported(
+                "DefaultOnlyLinalgBackend::upload_host_tensor",
+                "test backend does not transfer tensors",
+            ))
+        }
+    }
     impl BackendCachedDot for DefaultOnlyLinalgBackend {}
     impl BackendSessionHost for DefaultOnlyLinalgBackend {}
     impl TensorBackend for DefaultOnlyLinalgBackend {}

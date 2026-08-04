@@ -1,7 +1,30 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView};
+use tenferro_tensor::{Rank, Tensor, TypedTensor, TypedTensorView};
 
 const INDEX_COUNT: usize = 4096;
+
+#[inline(never)]
+#[no_mangle]
+pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2>>) -> f64 {
+    tensor
+        .as_view()
+        .as_slice()
+        .expect("the probe uses a compact host tensor")
+        .iter()
+        .copied()
+        .sum()
+}
+
+#[inline(never)]
+#[no_mangle]
+pub extern "C" fn tensor_static_rank_write_probe(tensor: &mut TypedTensor<f64, Rank<2>>) {
+    for value in tensor
+        .host_data_mut()
+        .expect("the probe uses a host tensor")
+    {
+        *value *= 2.0;
+    }
+}
 
 fn typed_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64> {
     let len = shape.iter().product();
@@ -321,6 +344,13 @@ fn bench_linear_iteration(c: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
+    });
+
+    group.bench_function("empty", |b| {
+        b.iter(|| {
+            let values: &[f64] = &[];
+            black_box(values.iter().copied().sum::<f64>())
+        });
     });
 
     group.finish();

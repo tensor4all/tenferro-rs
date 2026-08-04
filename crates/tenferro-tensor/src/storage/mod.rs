@@ -1,34 +1,36 @@
-// INVARIANT: these private P2 contracts are staged vocabulary; Task 3 will
-// consume them after its phase gate, so dead-code linting is intentionally
-// scoped to these modules rather than hidden behind compatibility machinery.
-#[allow(dead_code)]
+// INVARIANT: storage validation and provider-lifecycle helpers are exercised
+// through feature-gated provider bindings and in-crate contract tests.
+#![allow(dead_code)]
+
 mod diagnostics;
-#[allow(dead_code)]
 mod group;
-#[allow(dead_code)]
 mod identity;
-#[allow(dead_code)]
 mod prepared;
-#[allow(dead_code)]
-mod retirement;
-#[allow(dead_code)]
 mod root;
-#[allow(dead_code)]
 mod span;
 
 pub use group::{AllocationGroup, DescriptorSlot, GroupError};
 pub(crate) use group::{GroupReadView, GroupWriteView};
+
+#[doc(hidden)]
+pub use identity::{AllocationKey, RootResourceId};
+#[doc(hidden)]
+pub use prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
+#[doc(hidden)]
+pub use root::{BackendAllocation, ProviderCapabilities, ProviderKind};
+#[doc(hidden)]
+pub use span::{RootBoundSpan, RootResourceExtent, SpanValidationError};
 
 #[cfg(test)]
 pub(crate) use diagnostics::{
     RequestedIdentity, StorageOperation, StorageOperationContext, StorageOperationError,
 };
 #[cfg(test)]
-pub(crate) use identity::{AllocationKey, RootResourceIdentity};
+pub(crate) use identity::RootResourceIdentity;
 #[cfg(test)]
-pub(crate) use root::{import_unique_root, BackendAllocation, ProviderCapabilities, ProviderKind};
+pub(crate) use root::import_unique_root;
 #[cfg(test)]
-pub(crate) use span::{ByteRange, RootBoundSpan, RootResourceExtent, SpanValidationError};
+pub(crate) use span::ByteRange;
 
 #[cfg(test)]
 mod tests;

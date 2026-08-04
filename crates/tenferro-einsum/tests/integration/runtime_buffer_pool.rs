@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
@@ -23,7 +21,7 @@ fn traced_input(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::
     trace
         .input_with_default(
             ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-            Arc::new(tensor.duplicate().unwrap()),
+            tensor.duplicate().unwrap(),
         )
         .unwrap()
 }

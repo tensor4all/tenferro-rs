@@ -30,8 +30,8 @@ plugins at runtime. See [XLA and PJRT](xla.md).
 
 | Boundary | What happens |
 | --- | --- |
-| CPU tensor to CUDA backend | Upload first with `tenferro_gpu::upload_tensor` |
-| CPU tensor to WebGPU backend | Upload first with `tenferro_gpu::upload_webgpu_tensor` |
+| CPU tensor to CUDA backend | Upload first with `tenferro_gpu::cuda::upload_tensor` |
+| CPU tensor to WebGPU backend | Upload first with `tenferro_gpu::webgpu::upload_webgpu_tensor` |
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
 | WebGPU tensor to WebGPU backend | Runs on WebGPU for supported op/dtype combinations |
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
@@ -72,7 +72,9 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
-use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::{
+    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
+};
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -221,7 +223,7 @@ On macOS, `AppleContext` owns a host-visible Metal allocation domain and paired
 CPU and WebGPU backend handles. Creation is explicit:
 
 ```rust
-use tenferro_gpu::AppleContext;
+use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

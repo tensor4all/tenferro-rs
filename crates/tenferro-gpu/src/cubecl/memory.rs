@@ -17,7 +17,7 @@ use crate::types::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{upload_tensor, CudaRuntime};
+/// use tenferro_gpu::{cuda::upload_tensor, cuda::CudaRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _upload: fn(&CudaRuntime, &Tensor) -> Result<Tensor> = upload_tensor;
@@ -46,7 +46,7 @@ pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor>
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{download_tensor, CudaRuntime};
+/// use tenferro_gpu::{cuda::download_tensor, cuda::CudaRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _download: fn(&CudaRuntime, &Tensor) -> Result<Tensor> = download_tensor;

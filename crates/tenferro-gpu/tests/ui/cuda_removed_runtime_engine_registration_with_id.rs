@@ -1,4 +1,4 @@
-use tenferro_gpu::cuda_runtime_engine_registration_with_id;
+use tenferro_gpu::cuda::cuda_runtime_engine_registration_with_id;
 
 fn main() {
     let _ = cuda_runtime_engine_registration_with_id;

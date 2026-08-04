@@ -6,29 +6,34 @@ use crate::{AllocationDomainId, AllocationId};
 use super::span::{RootBoundSpan, RootResourceExtent, SpanValidationError};
 
 /// Domain-qualified diagnostic identity. It is not an ownership proof.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct AllocationKey {
+pub struct AllocationKey {
     domain: AllocationDomainId,
     local: AllocationId,
 }
 
 impl AllocationKey {
-    pub(crate) const fn new(domain: AllocationDomainId, local: AllocationId) -> Self {
+    #[doc(hidden)]
+    pub const fn new(domain: AllocationDomainId, local: AllocationId) -> Self {
         Self { domain, local }
     }
 
-    pub(crate) const fn domain(self) -> AllocationDomainId {
+    #[doc(hidden)]
+    pub const fn domain(self) -> AllocationDomainId {
         self.domain
     }
 
-    pub(crate) const fn local(self) -> AllocationId {
+    #[doc(hidden)]
+    pub const fn local(self) -> AllocationId {
         self.local
     }
 }
 
 /// Private non-reused provenance for one provider root.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct RootResourceId(NonZeroU64);
+pub struct RootResourceId(NonZeroU64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RootResourceIdError {

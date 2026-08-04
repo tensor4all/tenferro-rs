@@ -405,30 +405,40 @@ fn bindings_freeze_separately_and_reject_foreign_or_duplicate_inputs() {
     let spec = ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]);
     let mut builder = SemanticProgramBuilder::new();
     let input = builder.input(spec.clone()).unwrap();
-    let key = builder.bind_input(input, Arc::clone(&tensor)).unwrap();
+    let key = builder
+        .bind_input(input, tensor.as_ref().duplicate().unwrap())
+        .unwrap();
 
     assert!(matches!(
-        builder.bind_input(input, Arc::clone(&tensor)),
+        builder.bind_input(input, tensor.as_ref().duplicate().unwrap()),
         Err(ProgramBuildError::DuplicateBinding)
     ));
 
     let mut foreign_builder = SemanticProgramBuilder::new();
     let foreign_input = foreign_builder.input(spec).unwrap();
     let foreign_key = foreign_builder
-        .bind_input(foreign_input, Arc::clone(&tensor))
+        .bind_input(foreign_input, tensor.as_ref().duplicate().unwrap())
         .unwrap();
     assert!(matches!(
-        builder.bind_input(foreign_input, Arc::clone(&tensor)),
+        builder.bind_input(foreign_input, tensor.as_ref().duplicate().unwrap()),
         Err(ProgramBuildError::ForeignValue)
     ));
 
     let frozen = builder.finish(&[input]).unwrap();
     assert_eq!(frozen.bindings.len(), 1);
     assert!(!frozen.bindings.is_empty());
-    assert!(std::ptr::eq(
-        frozen.bindings.get(key).unwrap(),
-        tensor.as_ref()
-    ));
+    assert_eq!(
+        frozen
+            .bindings
+            .get(key)
+            .unwrap()
+            .tensor_read()
+            .unwrap()
+            .tensor_view()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[1.0, 2.0]
+    );
     assert!(frozen.bindings.get(foreign_key).is_none());
     assert_eq!(frozen.bindings.iter().count(), 1);
     assert_eq!(format!("{key:?}"), "BindingKey(<opaque>)");
@@ -485,7 +495,9 @@ fn finish_reports_binding_finalization_without_publishing_structure() {
     let wrong_dtype = Arc::new(Tensor::F32(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap(),
     ));
-    builder.bind_input(input, wrong_dtype).unwrap();
+    builder
+        .bind_input(input, wrong_dtype.as_ref().duplicate().unwrap())
+        .unwrap();
 
     let result = builder.finish(&[input]);
     assert!(matches!(
@@ -507,14 +519,24 @@ fn inputs_may_be_declared_between_operations_without_confusing_bindings() {
     let tensor = Arc::new(Tensor::F64(
         TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
     ));
-    let key = builder.bind_input(second, Arc::clone(&tensor)).unwrap();
+    let key = builder
+        .bind_input(second, tensor.as_ref().duplicate().unwrap())
+        .unwrap();
 
     let frozen = builder.finish(&[output, second]).unwrap();
     assert_eq!(frozen.program.inputs(), &[first, second]);
-    assert!(std::ptr::eq(
-        frozen.bindings.get(key).unwrap(),
-        tensor.as_ref()
-    ));
+    assert_eq!(
+        frozen
+            .bindings
+            .get(key)
+            .unwrap()
+            .tensor_read()
+            .unwrap()
+            .tensor_view()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[3.0, 4.0]
+    );
 }
 
 #[test]
@@ -527,7 +549,9 @@ fn import_preserves_ordered_duplicate_roots_structure_binding_and_provenance() {
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
         .unwrap();
     let y = source.add_op(CoreSemanticOp::Neg, &[x]).unwrap()[0];
-    let source_key = source.bind_input(x, Arc::clone(&tensor)).unwrap();
+    let source_key = source
+        .bind_input(x, tensor.as_ref().duplicate().unwrap())
+        .unwrap();
     let source = source.finish(&[y, x]).unwrap();
 
     let mut destination = SemanticProgramBuilder::new();
@@ -688,7 +712,9 @@ fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
             let tensor = Arc::new(Tensor::F64(
                 TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
             ));
-            builder.bind_input(input, tensor).unwrap();
+            builder
+                .bind_input(input, tensor.as_ref().duplicate().unwrap())
+                .unwrap();
         }
         let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
         builder.finish(&[output]).unwrap()
@@ -966,7 +992,7 @@ fn semantic_transform_is_object_safe_and_identity_preserves_unused_bindings() {
         TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap(),
     ));
     builder
-        .bind_input(unused_bound, Arc::clone(&tensor))
+        .bind_input(unused_bound, tensor.as_ref().duplicate().unwrap())
         .unwrap();
     let output = builder.add_op(CoreSemanticOp::Neg, &[used]).unwrap()[0];
     let input = builder.finish(&[output]).unwrap();
@@ -975,10 +1001,20 @@ fn semantic_transform_is_object_safe_and_identity_preserves_unused_bindings() {
         super::transform::apply_semantic_transform(&input, transform.as_ref()).unwrap();
     assert!(input.program.semantic_eq(transformed.program.as_ref()));
     assert_eq!(transformed.bindings.len(), 1);
-    assert!(std::ptr::eq(
-        transformed.bindings.iter().next().unwrap().1,
-        tensor.as_ref()
-    ));
+    assert_eq!(
+        transformed
+            .bindings
+            .iter()
+            .next()
+            .unwrap()
+            .1
+            .tensor_read()
+            .unwrap()
+            .tensor_view()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[7.0, 8.0]
+    );
 
     let dropping = DroppingBindingTransform {
         identity: TransformIdentity::from_bytes([9; 16]),

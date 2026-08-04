@@ -12,7 +12,7 @@ use super::prepared::{
     CheckedRead, CheckedWrite, PreparedRead, PreparedWrite, ProviderReadMapping,
     ProviderWriteMapping, WriteInjectivityProof,
 };
-use super::root::{OwnedStorage, ProviderKind};
+use super::root::{BackendAllocation, OwnedStorage, ProviderKind};
 use super::span::{ByteRange, RootBoundSpan};
 
 /// A group-local append-only allocation entry.
@@ -292,6 +292,20 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
         &self.descriptor
     }
 
+    pub(crate) fn provider_kind(&self) -> ProviderKind {
+        self.descriptor.provider
+    }
+
+    pub(crate) fn backend_identity(
+        &self,
+    ) -> Option<(crate::AllocationDomainId, crate::AllocationId)> {
+        if self.descriptor.provider == ProviderKind::Cpu {
+            return None;
+        }
+        let key = unsafe { self.owner.as_ref().root_identity().extent().key() };
+        Some((key.domain(), key.local()))
+    }
+
     pub(crate) fn storage_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
         // SAFETY: the owner pointer is bounded by the group borrow carried by
         // this view, and root storage never changes its concrete buffer.
@@ -323,6 +337,13 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
         let buffer = unsafe { self.owner.as_ref().backend_buffer::<T>() }?;
         Some(unsafe {
             std::mem::transmute::<&crate::StorageBuffer<T>, &'a crate::StorageBuffer<T>>(buffer)
+        })
+    }
+
+    pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
+        let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
+        Some(unsafe {
+            std::mem::transmute::<&dyn BackendAllocation, &'a dyn BackendAllocation>(allocation)
         })
     }
 
@@ -539,6 +560,12 @@ impl AllocationGroup {
             .collect()
     }
 
+    /// Borrow one dtype-erased read view for a descriptor without materializing
+    /// or cloning its physical owner.
+    pub fn read_view<'a>(&'a self, slot: DescriptorSlot) -> Result<TensorRead<'a>, GroupError> {
+        self.tensor_read(slot)
+    }
+
     fn tensor_read<'a>(&'a self, slot: DescriptorSlot) -> Result<TensorRead<'a>, GroupError> {
         let dtype = self.resolve_descriptor(slot)?.1.dtype();
         let view = match dtype {
@@ -565,7 +592,8 @@ impl AllocationGroup {
         self.append_group(source, source_slot)
     }
 
-    fn append_group(
+    /// Append one descriptor and all of its physical owners without copying.
+    pub fn append_group(
         &mut self,
         mut source: AllocationGroup,
         source_slot: DescriptorSlot,
@@ -627,6 +655,43 @@ impl AllocationGroup {
             super::root::import_host_vec(data).map_err(|error| GroupError::InvalidDescriptor {
                 message: error.to_string(),
             })?;
+        let span = owner.root_span();
+        let mut group = Self::new();
+        let allocation = group.insert_owner(owner)?;
+        let layout =
+            TensorLayout::<R>::compact(shape).map_err(|error| GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            })?;
+        let input = DescriptorInput::new(
+            ByteRange::new(0, span.byte_len()),
+            R::shape_from_vec(layout.shape().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            R::strides_from_vec(layout.strides().iter().copied().collect()).map_err(|error| {
+                GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                }
+            })?,
+            layout.offset(),
+            true,
+        );
+        let slot = group.insert_descriptor::<T, R>(allocation, input)?;
+        Ok((group, slot))
+    }
+
+    /// Build one compact descriptor by consuming a scalar-independent provider root.
+    #[doc(hidden)]
+    pub fn from_backend_allocation<T: TensorScalar, R: TensorRank>(
+        shape: R::Shape,
+        allocation: Box<dyn BackendAllocation>,
+    ) -> Result<(Self, DescriptorSlot), GroupError> {
+        let owner = super::root::import_unique_root(allocation).map_err(|error| {
+            GroupError::InvalidDescriptor {
+                message: error.to_string(),
+            }
+        })?;
         let span = owner.root_span();
         let mut group = Self::new();
         let allocation = group.insert_owner(owner)?;
@@ -1028,15 +1093,38 @@ impl AllocationGroup {
             .prepare_device_read_for_layout(layout)
     }
 
-    pub(crate) fn host_buffer<T: 'static>(
+    pub(crate) fn allocation_index(&self, slot: DescriptorSlot) -> Result<usize, GroupError> {
+        Ok(self.resolve_descriptor(slot)?.1.allocation.index())
+    }
+
+    pub(crate) fn host_buffer_at<T: 'static>(
         &self,
-        slot: DescriptorSlot,
+        allocation_index: usize,
     ) -> Option<&crate::StorageBuffer<T>> {
-        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
         self.allocations
-            .get(descriptor.allocation.index())?
+            .get(allocation_index)?
             .as_ref()?
             .host_buffer::<T>()
+    }
+
+    pub(crate) fn host_root_metadata<T: 'static>(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<(usize, usize)> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        let owner = self
+            .allocations
+            .get(descriptor.allocation.index())?
+            .as_ref()?;
+        if descriptor.span != owner.root_span() {
+            return None;
+        }
+        let crate::StorageBuffer::Host(data) = owner.host_buffer::<T>()? else {
+            return None;
+        };
+        let pointer = data.as_ptr() as usize;
+        let byte_len = data.len().checked_mul(size_of::<T>())?;
+        Some((pointer, byte_len))
     }
 
     pub(crate) fn backend_buffer<T: 'static>(
@@ -1048,6 +1136,34 @@ impl AllocationGroup {
             .get(descriptor.allocation.index())?
             .as_ref()?
             .backend_buffer::<T>()
+    }
+
+    pub(crate) fn descriptor_len(&self, slot: DescriptorSlot) -> Option<usize> {
+        self.resolve_descriptor(slot)
+            .ok()
+            .map(|(_, descriptor)| descriptor.element_count)
+    }
+
+    pub(crate) fn backend_identity(
+        &self,
+        slot: DescriptorSlot,
+    ) -> Option<(crate::AllocationDomainId, crate::AllocationId)> {
+        let (_, descriptor) = self.resolve_descriptor(slot).ok()?;
+        if descriptor.provider == ProviderKind::Cpu {
+            return None;
+        }
+        let owner = self
+            .allocations
+            .get(descriptor.allocation.index())?
+            .as_ref()?;
+        let key = owner.root_identity().extent().key();
+        Some((key.domain(), key.local()))
+    }
+
+    pub(crate) fn provider_kind(&self, slot: DescriptorSlot) -> Option<ProviderKind> {
+        self.resolve_descriptor(slot)
+            .ok()
+            .map(|(_, descriptor)| descriptor.provider)
     }
 
     pub(crate) fn backend_root_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {

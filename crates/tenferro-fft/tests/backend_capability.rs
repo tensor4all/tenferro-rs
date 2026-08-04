@@ -17,7 +17,7 @@ use tenferro_tensor::{
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
     MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
     TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
     TypedTensor,
 };
 
@@ -115,14 +115,20 @@ macro_rules! impl_minimal_tensor_backend {
         impl TensorFusion for $ty {}
         impl TensorBuffer for $ty {}
         impl TensorDeviceTransfer for $ty {
-            fn download_to_host(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
+            fn download_to_host(
+                &mut self,
+                tensor: TensorRead<'_>,
+            ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                tensor.duplicate()
+                tensor.tensor_view().duplicate()
             }
 
-            fn upload_host_tensor(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
+            fn upload_host_tensor(
+                &mut self,
+                tensor: TensorRead<'_>,
+            ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                tensor.duplicate()
+                tensor.tensor_view().duplicate()
             }
         }
         impl BackendCachedDot for $ty {}

@@ -154,7 +154,7 @@ each FFT call:
 
 ```rust
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::AppleContext;
+use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

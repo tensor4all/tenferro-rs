@@ -5,7 +5,7 @@ use num_complex::Complex64;
 #[cfg(target_os = "macos")]
 use tenferro_fft::{FftNorm, TensorFftExt};
 #[cfg(target_os = "macos")]
-use tenferro_gpu::AppleContext;
+use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, Error, StorageBuffer, Tensor, TypedTensor,

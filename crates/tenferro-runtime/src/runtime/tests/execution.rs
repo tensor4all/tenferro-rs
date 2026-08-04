@@ -14,9 +14,9 @@ use tenferro_tensor::{
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
 use crate::runtime::execution::{
-    collect_tensor_outputs_with, retain_instruction_results, spawn_in_flight, submit_with_spawner,
-    ErasedTensorBackendExecutor, InFlightSubmission, LocatedExecSlot, OsThreadSpawner,
-    RuntimeOutputMode, SubmissionSpawner,
+    collect_scoped_outputs, collect_tensor_outputs_with, retain_instruction_results,
+    spawn_in_flight, submit_with_spawner, ErasedTensorBackendExecutor, InFlightSubmission,
+    LocatedExecSlot, OsThreadSpawner, RuntimeOutputMode, SubmissionSpawner,
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
@@ -25,8 +25,8 @@ use crate::runtime::{
     ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
     InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
     ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
-    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, StorageClass,
-    SubmissionError,
+    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, ScopedExecutionOutcome,
+    ScopedReadInputs, StorageClass, SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -281,6 +281,111 @@ fn admission_test_registration(
         ),
     )?);
     Ok(registration)
+}
+
+#[test]
+fn scoped_immediate_provider_returns_borrowed_output() -> Result<(), Box<dyn StdError>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(admission_test_registration(false)?)?;
+    let runtime = builder.build()?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let view = match &input {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
+    };
+
+    let scoped = ScopedReadInputs::new(vec![view]);
+    let outcome = match runtime.execute_scoped_read_only(&program, scoped) {
+        Ok(outcome) => outcome,
+        Err(rejected) => return Err(rejected.to_string().into()),
+    };
+    let ScopedExecutionOutcome::Completed(bundle) = outcome else {
+        return Err("immediate provider did not complete scoped work".into());
+    };
+    match bundle.output(0)? {
+        crate::runtime::OutputRef::Tensor(TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[1.0, 2.0]);
+        }
+        crate::runtime::OutputRef::Metadata(_) => return Err("unexpected metadata output".into()),
+        _ => return Err("unexpected output dtype".into()),
+    }
+    assert!(matches!(
+        bundle.into_owned_output(0),
+        Err((_, crate::runtime::ScopedOutputExtractError::BorrowedOutput))
+    ));
+    Ok(())
+}
+
+#[test]
+fn scoped_owned_output_is_bundled_and_extractable() -> Result<(), Box<dyn StdError>> {
+    let location = ExecutionLocation::new(
+        EngineId::new("tenferro-test.scoped-owned-engine")?,
+        test_provider_device_identity("scoped-owned"),
+        qualified_domain(3),
+        StorageClass::new("tenferro-test.scoped-owned-storage")?,
+    );
+    let program = crate::exec::ExecProgram {
+        instructions: Vec::new(),
+        input_slots: Vec::new(),
+        output_slots: vec![0],
+        n_slots: 1,
+        shape_guards: Vec::new(),
+    };
+    let output = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    let mut located = vec![Some(LocatedExecSlot {
+        location,
+        value: ExecSlot::Owned(output),
+    })];
+    let bundle = collect_scoped_outputs(&program, &mut located)?;
+    match bundle.output(0)? {
+        crate::runtime::OutputRef::Tensor(TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[3.0, 4.0]);
+        }
+        crate::runtime::OutputRef::Metadata(_) => return Err("unexpected metadata output".into()),
+        _ => return Err("unexpected output dtype".into()),
+    }
+    let extracted = bundle.into_owned_output(0).map_err(|(_, error)| error)?;
+    assert_eq!(extracted.as_slice::<f64>()?, &[3.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn scoped_non_host_input_is_rejected_before_admission() -> Result<(), Box<dyn StdError>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(admission_test_registration(false)?)?;
+    let runtime = builder.build()?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::F64(TypedTensor::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
+            values: Arc::new(Mutex::new(vec![1.0, 2.0])),
+            domain: AllocationDomainId::fresh(),
+            allocation: next_test_allocation_id(),
+        })),
+        Placement {
+            memory_kind: tenferro_tensor::MemoryKind::Device,
+            device: None,
+            cpu_affinity: None,
+        },
+    )?);
+    let view = match &input {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
+    };
+    let rejected = runtime
+        .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
+        .expect_err("non-host scoped input must be rejected before admission");
+    let (error, inputs) = rejected.into_parts();
+    assert_eq!(inputs.len(), 1);
+    assert!(error
+        .to_string()
+        .contains("scoped borrowed execution requires host/CPU storage"));
+    Ok(())
 }
 
 #[test]

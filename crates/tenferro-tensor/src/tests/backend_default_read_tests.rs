@@ -496,7 +496,21 @@ impl TensorFusion for DefaultReadBackend {}
 
 impl TensorBuffer for DefaultReadBackend {}
 
-impl TensorDeviceTransfer for DefaultReadBackend {}
+impl TensorDeviceTransfer for DefaultReadBackend {
+    fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "DefaultReadBackend::download_to_host",
+            "test backend does not transfer tensors",
+        ))
+    }
+
+    fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "DefaultReadBackend::upload_host_tensor",
+            "test backend does not transfer tensors",
+        ))
+    }
+}
 
 impl BackendRuntimeCache for DefaultReadBackend {
     type RuntimeCache = ();

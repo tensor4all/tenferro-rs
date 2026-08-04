@@ -6,14 +6,93 @@ use computegraph::graph::Graph;
 use computegraph::types::ValueKey;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{AllocationGroup, DType, DescriptorSlot, Tensor, TensorRead, TensorValue};
+
+use crate::error::{Error, ErrorPhase, Result};
+
+/// A read-only retained tensor handle backed by one allocation group owner.
+///
+/// Cloning the handle retains the group container and descriptor metadata; it
+/// never clones a physical allocation. Creating another physical value remains
+/// an explicit tensor operation at the caller's boundary.
+#[derive(Clone)]
+pub struct RetainedValue {
+    container: Arc<RetentionContainer>,
+    slot: DescriptorSlot,
+    dtype: DType,
+    shape: Box<[usize]>,
+}
+
+#[derive(Debug)]
+struct RetentionContainer {
+    group: AllocationGroup,
+}
+
+impl fmt::Debug for RetainedValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedValue")
+            .field("slot", &self.slot)
+            .field("dtype", &self.dtype)
+            .field("shape", &self.shape)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetainedValue {
+    /// Move an owned tensor value into a retained group-backed handle.
+    pub fn from_tensor_value(value: TensorValue) -> Result<Self> {
+        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+            Error::runtime_state(
+                "RetainedValue::from_tensor_value",
+                ErrorPhase::Execution,
+                "a TensorValue could not be transferred into its retention group",
+            )
+        })?;
+        Ok(Self {
+            container: Arc::new(RetentionContainer { group }),
+            slot,
+            dtype,
+            shape: shape.into_boxed_slice(),
+        })
+    }
+
+    /// Move an owned compact tensor into a retained group-backed handle.
+    pub fn from_tensor(tensor: Tensor) -> Self {
+        // A compact tensor always has a valid descriptor, so this conversion
+        // cannot fail after the tensor owner has been constructed.
+        Self::from_tensor_value(TensorValue::from_tensor(tensor))
+            .expect("compact tensor retention must have a valid descriptor")
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Borrow the retained descriptor for one read-only execution boundary.
+    pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
+        self.container.group.read_view(self.slot).map_err(|error| {
+            Error::runtime_state(
+                "RetainedValue::tensor_read",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })
+    }
+}
+
+pub type RetainedInputMap = HashMap<TensorInputKey, Arc<RetainedValue>>;
 
 #[derive(Clone)]
 pub struct CheckpointNode {
     pub graph: Arc<Graph<StdTensorOp>>,
     pub alias_key: TensorInputKey,
     pub alias_target: ValueKey<StdTensorOp>,
-    pub old_inputs: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
+    pub old_inputs: Arc<RetainedInputMap>,
     pub prev: Option<Arc<CheckpointNode>>,
 }
 
@@ -49,7 +128,7 @@ impl CheckpointNode {
         graphs
     }
 
-    pub fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
+    pub fn collect_inputs(&self) -> RetainedInputMap {
         let mut inputs = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {

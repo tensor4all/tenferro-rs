@@ -41,6 +41,7 @@ webgpu = [
     "dep:cubecl-wgpu",
     "dep:cubek-matmul",
     "dep:cubek-std",
+    "dep:cubek-fft",
 ]
 rocm = []
 
@@ -56,6 +57,7 @@ cubecl-runtime = { workspace = true, optional = true }
 cubecl-wgpu = { workspace = true, optional = true }
 cubek-matmul = { workspace = true, optional = true }
 cubek-std = { workspace = true, optional = true }
+cubek-fft = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 libloading.workspace = true
 num-complex.workspace = true
@@ -83,6 +85,10 @@ path = "tests/storage_provider_cuda_progress.rs"
 [[test]]
 name = "storage_provider_cuda"
 path = "tests/storage_provider_cuda.rs"
+
+[[test]]
+name = "storage_provider_webgpu"
+path = "tests/storage_provider_webgpu.rs"
 
 [[test]]
 name = "storage_provider_webgpu_progress"

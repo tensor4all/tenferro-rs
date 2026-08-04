@@ -18,12 +18,13 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, IntoShapeVec,
-    PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, ValidationError,
+    PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, TensorValue,
+    ValidationError,
 };
 
 use super::error::{Error, ErrorPhase, Result};
 use super::sym_dim::SymDim;
-use crate::checkpoint::CheckpointNode;
+use crate::checkpoint::{CheckpointNode, RetainedInputMap, RetainedValue};
 use crate::metadata::{
     concrete_tensor_meta, register_scoped_graph_metadata, register_scoped_value_metadata,
     symbolic_input_meta, tensor_meta, MetadataScopeChain,
@@ -46,7 +47,7 @@ pub(crate) fn next_traced_id() -> TracedTensorId {
     NEXT_TRACED_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-type TracedInputMap = HashMap<TensorInputKey, Arc<Tensor>>;
+type TracedInputMap = RetainedInputMap;
 
 #[derive(Clone)]
 pub struct TracedTensor {
@@ -55,7 +56,7 @@ pub struct TracedTensor {
     pub dtype: DType,
     pub(crate) graph: Arc<Graph<StdTensorOp>>,
     pub val: LocalValueId,
-    pub(crate) data: Option<Arc<Tensor>>,
+    pub(crate) data: Option<Arc<RetainedValue>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<TracedInputMap>,
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
@@ -630,12 +631,12 @@ impl TracedTensor {
     /// use tenferro_runtime::{DType, TracedTensor};
     ///
     /// let concrete = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-    /// assert!(concrete.attached_data().is_some());
+    /// assert!(concrete.attached_value().is_some());
     ///
     /// let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    /// assert!(placeholder.attached_data().is_none());
+    /// assert!(placeholder.attached_value().is_none());
     /// ```
-    pub fn attached_data(&self) -> Option<&Arc<Tensor>> {
+    pub fn attached_value(&self) -> Option<&Arc<RetainedValue>> {
         self.data.as_ref()
     }
 
@@ -670,7 +671,7 @@ impl TracedTensor {
         let dtype = tensor.dtype();
         let key = next_input_key();
         let id = next_traced_id();
-        let data = Arc::new(tensor);
+        let data = Arc::new(RetainedValue::from_tensor(tensor));
 
         let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
@@ -726,7 +727,7 @@ impl TracedTensor {
     /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
     /// registration is unavailable or its registry state is poisoned.
     pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Result<Self> {
-        Self::from_tensor_arc_symbolic_shape(Arc::new(tensor))
+        Self::from_tensor_value_symbolic_shape(TensorValue::from_tensor(tensor))
     }
 
     /// Build a data-attached symbolic-shape traced leaf from shared tensor data.
@@ -741,8 +742,8 @@ impl TracedTensor {
     /// use std::sync::Arc;
     /// use tenferro_runtime::{Tensor, TracedTensor};
     ///
-    /// let tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
-    /// let traced = TracedTensor::from_tensor_arc_symbolic_shape(tensor)?;
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// let traced = TracedTensor::from_tensor_symbolic_shape(tensor)?;
     /// assert_eq!(traced.rank, 1);
     /// assert!(!traced.is_concrete_shape());
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -753,7 +754,13 @@ impl TracedTensor {
     /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
     /// registration is unavailable or its registry state is poisoned.
     #[doc(hidden)]
-    pub fn from_tensor_arc_symbolic_shape(data: Arc<Tensor>) -> Result<Self> {
+    pub fn from_tensor_value_symbolic_shape(value: TensorValue) -> Result<Self> {
+        let data = Arc::new(RetainedValue::from_tensor_value(value)?);
+        Self::from_shared_tensor_value_symbolic_shape(data)
+    }
+
+    #[doc(hidden)]
+    pub fn from_shared_tensor_value_symbolic_shape(data: Arc<RetainedValue>) -> Result<Self> {
         let rank = data.shape().len();
         let dtype = data.dtype();
         let key = next_input_key();

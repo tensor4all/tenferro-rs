@@ -52,7 +52,7 @@ impl Eq for WebGpuRuntimeIdentity {}
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::WebGpuRuntime;
+/// use tenferro_gpu::webgpu::WebGpuRuntime;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new;
 /// let _sync: fn(&WebGpuRuntime) -> tenferro_tensor::Result<()> =
@@ -81,7 +81,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new;
     /// ```
@@ -99,7 +99,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _ctor: fn() -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new_default;
     /// ```
@@ -175,7 +175,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _device_ordinal: fn(&WebGpuRuntime) -> usize = WebGpuRuntime::device_ordinal;
     /// ```
@@ -188,9 +188,9 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
-    /// let _identity: fn(&WebGpuRuntime) -> tenferro_gpu::WebGpuRuntimeIdentity =
+    /// let _identity: fn(&WebGpuRuntime) -> tenferro_gpu::webgpu::WebGpuRuntimeIdentity =
     ///     WebGpuRuntime::runtime_identity;
     /// ```
     pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
@@ -202,7 +202,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _sync: fn(&WebGpuRuntime) -> tenferro_tensor::Result<()> =
     ///     WebGpuRuntime::synchronize;
@@ -220,7 +220,7 @@ impl WebGpuRuntime {
 #[cfg(test)]
 mod identity_tests {
     use super::{webgpu_available, WebGpuRuntimeIdentity};
-    use crate::WebGpuBackend;
+    use crate::webgpu::WebGpuBackend;
 
     #[test]
     fn webgpu_runtime_identity_is_clone_stable_and_instance_scoped() {

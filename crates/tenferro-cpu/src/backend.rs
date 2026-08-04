@@ -3576,24 +3576,24 @@ impl TensorFusion for CpuBackend {
 }
 
 impl TensorDeviceTransfer for CpuBackend {
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
-        tensor.duplicate()
+        tensor.tensor_view().duplicate()
     }
 
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
-        tensor.duplicate()
+        tensor.tensor_view().duplicate()
     }
 }
 

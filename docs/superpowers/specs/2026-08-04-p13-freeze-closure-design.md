@@ -77,7 +77,7 @@ The candidate physically lacks:
 - global generation/tombstone/liveness/retirement registries, COW,
   quarantine/poison/retry/cancellation protocols, repeated validation, and
   attestation machinery;
-- `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and every inbound reference.
+- the prior handoff artifact and every inbound reference.
 
 The candidate has exactly one owner/view/view-mut family, one
 root/span/allocation-group model, one prepared-access hierarchy, and one

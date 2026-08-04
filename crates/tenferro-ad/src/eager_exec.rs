@@ -333,7 +333,9 @@ fn upload_generated_host_tensor<B: TensorBackend>(
     backend: &mut B,
     tensor: Tensor,
 ) -> Result<Tensor> {
-    backend.upload_host_tensor(&tensor).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&tensor))
+        .map_err(Error::from)
 }
 
 fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {

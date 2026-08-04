@@ -52,7 +52,7 @@ ops, and provider installation details remain outside this first table unless a
 future change explicitly extends the schema for those families.
 
 The CUDA guide's first-scope core primitive table is rendered from
-`tenferro_gpu::cuda_capabilities()` and checked by a test. Manual rows remain
+`tenferro_gpu::cuda::cuda_capabilities()` and checked by a test. Manual rows remain
 only for coverage outside this first descriptor scope.
 
 ## Consumers

@@ -10,7 +10,7 @@ use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
 use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
 
 #[cfg(feature = "cuda")]
-use tenferro_gpu::with_cuda_exec_session;
+use tenferro_gpu::cuda::with_cuda_exec_session;
 
 use crate::backend::LinalgBackend;
 

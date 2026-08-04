@@ -4,7 +4,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
     MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing,
+    TensorAnalytic, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
     TensorStructural, TypedTensor, ValidationError,
 };
 
@@ -66,12 +66,12 @@ fn cpu_device_transfer_rejects_backend_buffers_at_boundary() {
 
     for (actual, expected_op, expected_hint) in [
         (
-            backend.download_to_host(&tensor),
+            backend.download_to_host(TensorRead::from_tensor(&tensor)),
             "CpuBackend::download_to_host",
             "download",
         ),
         (
-            backend.upload_host_tensor(&tensor),
+            backend.upload_host_tensor(TensorRead::from_tensor(&tensor)),
             "CpuBackend::upload_host_tensor",
             "download",
         ),

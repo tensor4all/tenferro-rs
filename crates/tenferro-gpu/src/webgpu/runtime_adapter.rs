@@ -20,7 +20,7 @@ use tenferro_tensor::{
 
 #[cfg(not(target_family = "wasm"))]
 use super::event_domain::WebGpuEventDomainDriver;
-use super::{WebGpuBackend, WebGpuBuffer};
+use super::{prepared_webgpu_view, WebGpuBackend};
 #[cfg(target_family = "wasm")]
 use tenferro_runtime::{
     assemble_preparation_only_engine_registration, PreparationOnlyEngineRegistrationConfig,
@@ -38,7 +38,7 @@ const WEBGPU_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # #[cfg(feature = "webgpu")]
 /// # {
-/// let engine = tenferro_gpu::webgpu_runtime_engine_id()?;
+/// let engine = tenferro_gpu::webgpu::webgpu_runtime_engine_id()?;
 /// assert_eq!(engine.as_str(), "tenferro-webgpu.default.v1");
 /// # }
 /// # Ok(())
@@ -61,7 +61,7 @@ pub fn webgpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # #[cfg(feature = "webgpu")]
 /// # {
-/// let hardware = tenferro_gpu::webgpu_runtime_hardware_class()?;
+/// let hardware = tenferro_gpu::webgpu::webgpu_runtime_hardware_class()?;
 /// assert_eq!(hardware.as_str(), "tenferro-webgpu.device.v1");
 /// # }
 /// # Ok(())
@@ -86,12 +86,12 @@ pub fn webgpu_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigE
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::WebGpuBackend;
+/// use tenferro_gpu::webgpu::WebGpuBackend;
 ///
 /// let _register: fn(
 ///     &WebGpuBackend,
 /// ) -> Result<tenferro_runtime::EngineRegistration, tenferro_runtime::RuntimeConfigError> =
-///     tenferro_gpu::webgpu_runtime_engine_registration;
+///     tenferro_gpu::webgpu::webgpu_runtime_engine_registration;
 /// ```
 ///
 /// # Errors
@@ -210,7 +210,7 @@ fn webgpu_input_signature(
     allocation_domain: AllocationDomainId,
 ) -> bool {
     webgpu_input_placement(placement, device_ordinal, managed_domain)
-        && backend_family == Some("cubecl-webgpu")
+        && matches!(backend_family, Some("webgpu" | "cubecl-webgpu"))
         && input_domain == Some(allocation_domain)
 }
 
@@ -240,7 +240,7 @@ fn webgpu_input_tensor(
     allocation_domain: AllocationDomainId,
 ) -> bool {
     webgpu_input_placement(input.placement(), device_ordinal, managed_domain)
-        && input.backend_family() == Some("cubecl-webgpu")
+        && matches!(input.backend_family(), Some("webgpu" | "cubecl-webgpu"))
         && input.allocation_domain() == Some(allocation_domain)
         && webgpu_input_has_owned_buffer(input, device_ordinal, allocation_domain)
 }
@@ -279,20 +279,22 @@ fn webgpu_input_has_owned_buffer(
     }
 }
 
-fn webgpu_view_has_owner<T: 'static>(
+fn webgpu_view_has_owner<T: tenferro_tensor::TensorScalar + 'static>(
     view: &tenferro_tensor::TypedTensorView<'_, T>,
     device_ordinal: usize,
     allocation_domain: AllocationDomainId,
 ) -> bool {
-    view.backend_buffer().is_some_and(|buffer| {
-        buffer
-            .as_any()
-            .downcast_ref::<WebGpuBuffer>()
-            .is_some_and(|buffer| {
-                buffer.device_ordinal() == device_ordinal
-                    && buffer.allocation_domain() == allocation_domain
-            })
-    })
+    view.backend_family()
+        .is_some_and(|family| family == "webgpu" || family == "cubecl-webgpu")
+        && view.allocation_domain() == Some(allocation_domain)
+        && matches!(
+            &view.placement().device,
+            Some(device)
+                if device.kind == DeviceKind::Gpu(GpuBackendKind::WebGpu)
+                    && device.ordinal == device_ordinal
+        )
+        && prepared_webgpu_view(view, "webgpu_input_tensor")
+            .is_ok_and(|prepared| prepared.device_ordinal() == device_ordinal)
 }
 
 #[cfg(test)]

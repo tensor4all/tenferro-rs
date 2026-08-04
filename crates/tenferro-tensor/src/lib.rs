@@ -89,6 +89,12 @@ pub use types::{
 
 mod storage;
 
+#[doc(hidden)]
+pub use storage::{
+    AccessError, AllocationKey, BackendAllocation, ProviderCapabilities, ProviderKind,
+    ProviderReadMapping, ProviderWriteMapping, RootBoundSpan, RootResourceExtent, RootResourceId,
+    SpanValidationError,
+};
 pub use storage::{AllocationGroup, DescriptorSlot, GroupError};
 
 pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {

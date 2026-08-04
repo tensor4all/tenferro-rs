@@ -36,7 +36,7 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
+//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaBackend, cuda::CudaDeviceError};
 //!
 //! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
 //!     let devices = cuda_devices()?;
@@ -320,7 +320,7 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
+/// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaDeviceError, cuda::CudaDeviceId};
 ///
 /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
 /// ```
@@ -456,7 +456,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// assert!(cache.is_empty()?);
@@ -485,7 +485,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// assert!(CudaExtensionCache::new().is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -573,7 +573,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();
@@ -735,7 +735,7 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaBackend, CudaDeviceError, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
     /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
     /// ```
@@ -760,7 +760,7 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaBackend, CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaRuntime};
     ///
     /// let _runtime: fn(&CudaBackend) -> &CudaRuntime = CudaBackend::runtime;
     /// ```
@@ -773,7 +773,7 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaBackend, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaDeviceId};
     ///
     /// let _device_id: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
     /// ```
@@ -790,7 +790,7 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaBackend;
     ///
     /// let _identity = CudaBackend::runtime_identity;
     /// ```
@@ -5545,11 +5545,23 @@ impl TensorIndexing for CudaBackend {
 }
 
 impl TensorDeviceTransfer for CudaBackend {
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "CudaBackend::download_to_host",
+                "CUDA transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
         download_tensor(self.runtime(), tensor)
     }
 
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "CudaBackend::upload_host_tensor",
+                "CUDA transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
         upload_tensor(self.runtime(), tensor)
     }
 }

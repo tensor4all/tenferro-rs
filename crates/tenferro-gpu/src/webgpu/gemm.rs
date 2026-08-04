@@ -13,7 +13,9 @@ use super::{
     kernels, typed_tensor_binding_with_layout, unsupported_dtype, unsupported_operation,
     WebGpuBackend,
 };
-use crate::{col_major_strides, DotGeneralConfig, Error, ShapeMismatch, Tensor, TypedTensor};
+use crate::{
+    col_major_strides, DotGeneralConfig, Error, ShapeMismatch, Tensor, TensorScalar, TypedTensor,
+};
 
 const DOT_GENERAL_OP: &str = "webgpu_dot_general";
 
@@ -270,7 +272,7 @@ fn pack_lhs_operand<T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let output = alloc_output::<T>(backend.runtime(), &plan.lhs_cubek_shape, DOT_GENERAL_OP)?;
     let len = output.n_elements();
@@ -317,7 +319,7 @@ fn pack_rhs_operand<T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let output = alloc_output::<T>(backend.runtime(), &plan.rhs_cubek_shape, DOT_GENERAL_OP)?;
     let len = output.n_elements();
@@ -362,7 +364,7 @@ fn prepare_lhs_operand<'a, T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<PreparedOperand<'a, T>>
 where
-    T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.lhs_cubek_strides {
         Some(strides) => {
@@ -387,7 +389,7 @@ fn prepare_rhs_operand<'a, T>(
     plan: &DotGeneralPlan,
 ) -> crate::Result<PreparedOperand<'a, T>>
 where
-    T: CubePrimitive + CubeElement + Clone + Send + Sync + 'static,
+    T: CubePrimitive + CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let tensor = match &plan.rhs_cubek_strides {
         Some(strides) => {

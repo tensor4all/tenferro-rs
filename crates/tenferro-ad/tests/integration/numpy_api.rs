@@ -259,7 +259,7 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     assert_eq!(converted.dtype(), DType::C64);
     assert_eq!(
         converted
-            .materialized()
+            .to_tensor()
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -272,14 +272,11 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         .contains("unsupported dtype conversion"));
 
     let casted = x.cast(DType::I32).unwrap();
-    assert_eq!(
-        casted.materialized().unwrap().as_slice::<i32>().unwrap(),
-        &[1, 2]
-    );
+    assert_eq!(casted.value().unwrap().as_slice::<i32>().unwrap(), &[1, 2]);
 
     let negated = tenferro_ad::extension::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
     assert_eq!(
-        negated.materialized().unwrap().as_slice::<f64>().unwrap(),
+        negated.value().unwrap().as_slice::<f64>().unwrap(),
         &[-1.0, -2.0]
     );
 
@@ -311,7 +308,7 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     let product = a.matmul(&b).unwrap();
     assert_eq!(product.shape(), &[2, 2]);
     assert_eq!(
-        product.materialized().unwrap().as_slice::<f64>().unwrap(),
+        product.value().unwrap().as_slice::<f64>().unwrap(),
         &[22.0, 28.0, 49.0, 64.0]
     );
 
@@ -344,7 +341,7 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
 
     assert_eq!(cond.dtype(), DType::Bool);
     assert_eq!(
-        cond.materialized().unwrap().as_slice::<bool>().unwrap(),
+        cond.value().unwrap().as_slice::<bool>().unwrap(),
         &[true, false]
     );
     assert_eq!(

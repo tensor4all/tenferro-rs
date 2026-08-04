@@ -122,11 +122,7 @@ impl RunTraced for TracedTensor {
 
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile_with_input_specs(self, &specs)?;
-        let input_refs: Vec<&Tensor> = bindings
-            .iter()
-            .map(|(_, tensor)| *tensor)
-            .chain(program.bindings().iter().map(|(_, tensor)| tensor))
-            .collect();
+        let input_refs: Vec<&Tensor> = bindings.iter().map(|(_, tensor)| *tensor).collect();
         run_compiled_one(runtime, &program, &input_refs)
     }
 }

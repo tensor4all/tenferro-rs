@@ -2824,19 +2824,36 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        let input = read_tensor("to_contiguous_read", input)?;
-        if input.is_backend_buffer()
-            || !matches!(
-                input.placement().memory_kind,
-                crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
-            )
-        {
-            return Err(crate::Error::runtime_state(
-                "to_contiguous_read",
-                "default materialization accepts only host-owned tensors; use the storage's owning backend",
-            ));
+        match input {
+            TensorRead::Tensor(input) => {
+                if input.is_backend_buffer()
+                    || !matches!(
+                        input.placement().memory_kind,
+                        crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+                    )
+                {
+                    return Err(crate::Error::runtime_state(
+                        "to_contiguous_read",
+                        "default materialization accepts only host-owned tensors; use the storage's owning backend",
+                    ));
+                }
+                input.duplicate()
+            }
+            TensorRead::View(view) => {
+                if view.backend_family().is_some()
+                    || !matches!(
+                        view.placement().memory_kind,
+                        crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+                    )
+                {
+                    return Err(crate::Error::runtime_state(
+                        "to_contiguous_read",
+                        "default materialization accepts only host-owned tensors; use the storage's owning backend",
+                    ));
+                }
+                view.duplicate()
+            }
         }
-        input.duplicate()
     }
 
     /// Overwrite caller-provided storage from a readable tensor or view.
@@ -3798,25 +3815,27 @@ pub trait TensorBuffer {
 /// fn accepts_transfer<B: TensorDeviceTransfer>(_backend: &mut B) {}
 /// ```
 pub trait TensorDeviceTransfer {
+    /// Explicitly copy a provider-owned read target into host storage.
+    ///
+    /// Implementations must not return the input unchanged or stage through an
+    /// unrelated provider. A backend that cannot transfer the requested read
+    /// target returns a typed unsupported error.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        tensor.duplicate()
-    }
+    /// Returns [`crate::Error::Unsupported`] when the implementation cannot
+    /// perform the requested transfer, or a typed validation/backend error when
+    /// the source cannot be read.
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 
+    /// Explicitly copy a host read target into provider storage.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        tensor.duplicate()
-    }
+    /// Returns [`crate::Error::Unsupported`] when the implementation cannot
+    /// perform the requested transfer, or a typed validation/backend error when
+    /// the source cannot be read.
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 }
 
 /// Runtime cache associated with a backend.

@@ -20,6 +20,10 @@ fn tutorial_binaries_run_successfully() {
         env!("CARGO_BIN_EXE_typed_tensor_non_ad"),
     );
     run_tutorial(
+        "storage_element_access",
+        env!("CARGO_BIN_EXE_storage_element_access"),
+    );
+    run_tutorial(
         "direct_linalg_quickstart",
         env!("CARGO_BIN_EXE_direct_linalg_quickstart"),
     );

@@ -6,7 +6,7 @@
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
+    use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId};
     use tenferro_tensor::{
         AllocationDomainId, AllocationId, DType, Tensor, TensorRead, TensorStructural,
     };
@@ -54,7 +54,7 @@ mod cuda {
 
 #[cfg(feature = "webgpu")]
 mod webgpu {
-    use tenferro_gpu::{upload_webgpu_tensor, WebGpuBackend};
+    use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
     use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {

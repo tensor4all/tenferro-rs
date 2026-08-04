@@ -1,4 +1,4 @@
-use tenferro_gpu::{WebGpuBackend, WebGpuExecSession};
+use tenferro_gpu::{webgpu::WebGpuBackend, webgpu::WebGpuExecSession};
 
 fn owner_accessor<'a>(session: &'a mut WebGpuExecSession<'a>) -> &'a mut WebGpuBackend {
     session.backend_mut()

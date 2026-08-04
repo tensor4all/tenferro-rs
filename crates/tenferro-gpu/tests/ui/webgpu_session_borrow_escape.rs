@@ -1,4 +1,4 @@
-use tenferro_gpu::WebGpuExecSession;
+use tenferro_gpu::webgpu::WebGpuExecSession;
 
 fn escape<'a>(session: WebGpuExecSession<'a>) -> WebGpuExecSession<'static> {
     session

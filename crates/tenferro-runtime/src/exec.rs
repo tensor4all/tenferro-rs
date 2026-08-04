@@ -348,6 +348,25 @@ where
     slot_ref(slots, slot, "input", "get").and_then(|value| value.as_tensor("get"))
 }
 
+pub(crate) fn ensure_owned<'input>(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'input>>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<()> {
+    let slot = checked_input_slot(input_slots, idx, "ensure_owned")?;
+    let needs_materialization = matches!(
+        slot_ref(slots, slot, "input", "ensure_owned")?,
+        ExecSlot::Value(_) | ExecSlot::Read(TensorRead::View(_))
+    );
+    if needs_materialization {
+        let read = slot_ref(slots, slot, "input", "ensure_owned")?.as_read();
+        let tensor = exec.to_contiguous_read(read)?;
+        slots[slot] = Some(ExecSlot::Owned(tensor));
+    }
+    Ok(())
+}
+
 pub(crate) fn get_read<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
     input_slots: &[usize],
@@ -457,9 +476,10 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
             let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
-            match input.reshape_view(&shape) {
+            match input.try_reshape_view(&shape) {
                 Ok(value) => value,
-                Err(_) => {
+                Err(error) => {
+                    let (input, _) = error.into_parts();
                     if consume_input {
                         slots[input_slot] = Some(ExecSlot::Value(input));
                     }
@@ -503,9 +523,9 @@ fn tensor_value_for_lazy_view<'input>(
     match slots[slot].take() {
         Some(ExecSlot::Owned(tensor)) => {
             let value = TensorValue::from_tensor(tensor);
-            let retained = value.clone();
-            slots[slot] = Some(ExecSlot::Value(retained));
-            Ok(value)
+            let output = value.duplicate()?;
+            slots[slot] = Some(ExecSlot::Value(value));
+            Ok(output)
         }
         Some(ExecSlot::Value(value)) => {
             let output = value.duplicate()?;
@@ -777,7 +797,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
 
 pub(crate) fn execute_backend_op<'input>(
     exec: &mut dyn BackendSession,
-    slots: &[Option<ExecSlot<'input>>],
+    slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     dispatch::execute_backend_dispatch(exec, slots, inst)

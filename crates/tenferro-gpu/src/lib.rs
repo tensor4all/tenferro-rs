@@ -4,7 +4,7 @@
 //!
 //! ```rust
 //! #[cfg(feature = "cuda")]
-//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
+//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaBackend, cuda::CudaDeviceError};
 //!
 //! #[cfg(feature = "cuda")]
 //! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
@@ -35,38 +35,30 @@ mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;
 #[cfg(feature = "webgpu")]
-mod webgpu;
+pub mod webgpu;
 
+/// CUDA provider namespace.
 #[cfg(feature = "cuda")]
-pub use cubecl::{
-    cuda_capabilities, cuda_devices, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaExecSession, CudaRuntime,
-    CudaRuntimeIdentity,
-};
-#[cfg(feature = "cuda")]
-#[doc(hidden)]
-pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
-#[cfg(feature = "webgpu")]
-pub use webgpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
-    webgpu_runtime_engine_registration, webgpu_runtime_engine_registration_with_id,
-    webgpu_runtime_hardware_class, with_webgpu_exec_session, AppleContext, AppleTransferStats,
-    WebGpuBackend, WebGpuExecSession, WebGpuRuntime, WebGpuRuntimeIdentity,
-};
+pub mod cuda {
+    pub use super::cubecl::{
+        cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
+        cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
+        with_cuda_exec_session, CudaBackend, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
+        CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
+    };
 
-/// Narrow owner-scoped WebGPU handle interop for extension crates.
-#[cfg(feature = "webgpu")]
-#[doc(hidden)]
-pub mod webgpu_interop {
-    pub use crate::webgpu::interop::*;
+    /// Provider-specific CUDA interop scoped to an active execution session.
+    #[doc(hidden)]
+    pub mod interop {
+        pub use super::super::cubecl::interop::*;
+        pub use super::super::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+    }
 }
 
-#[cfg(feature = "cuda")]
-#[doc(hidden)]
-pub mod cuda_interop {
-    pub use crate::cubecl::interop::*;
-    pub use crate::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+/// Apple shared-allocation provider namespace.
+#[cfg(feature = "webgpu")]
+pub mod apple {
+    pub use super::webgpu::{AppleContext, AppleTransferStats};
 }
 
 #[cfg(any(feature = "cuda", feature = "webgpu"))]

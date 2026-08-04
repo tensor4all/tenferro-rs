@@ -42,8 +42,8 @@ fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
 }
 
 fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.materialized().unwrap();
-    let data = materialized.as_ref();
+    let materialized = tensor.to_tensor().unwrap();
+    let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<f64>().unwrap()[0]);
 }

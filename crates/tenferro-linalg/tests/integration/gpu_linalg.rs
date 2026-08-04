@@ -4,8 +4,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_gpu::{
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceId, CudaExecSession,
+    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session,
+    cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
 };
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{BackendSessionHost, Error, Tensor, TypedTensor};

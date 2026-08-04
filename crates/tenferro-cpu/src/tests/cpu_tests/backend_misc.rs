@@ -1513,7 +1513,21 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl BackendSessionHost for DefaultOnlyBackend {}
 
-    impl TensorDeviceTransfer for DefaultOnlyBackend {}
+    impl TensorDeviceTransfer for DefaultOnlyBackend {
+        fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+            Err(crate::Error::unsupported(
+                "DefaultOnlyBackend::download_to_host",
+                "test backend does not transfer tensors",
+            ))
+        }
+
+        fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+            Err(crate::Error::unsupported(
+                "DefaultOnlyBackend::upload_host_tensor",
+                "test backend does not transfer tensors",
+            ))
+        }
+    }
 
     impl TensorBuffer for DefaultOnlyBackend {}
 
@@ -1804,9 +1818,13 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     .unwrap();
     assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let uploaded = backend.upload_host_tensor(&lhs).unwrap();
+    let uploaded = backend
+        .upload_host_tensor(TensorRead::from_tensor(&lhs))
+        .unwrap();
     assert_eq!(uploaded.shape(), &[1, 1]);
-    let downloaded = backend.download_to_host(&uploaded).unwrap();
+    let downloaded = backend
+        .download_to_host(TensorRead::from_tensor(&uploaded))
+        .unwrap();
     assert_eq!(downloaded.as_slice::<f64>().unwrap(), &[2.0]);
     backend.reclaim_buffer(downloaded);
 

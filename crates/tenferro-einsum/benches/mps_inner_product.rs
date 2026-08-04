@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
@@ -62,7 +60,7 @@ fn trace_default(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime:
     trace
         .input_with_default(
             ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-            Arc::new(tensor.duplicate().unwrap()),
+            tensor.duplicate().unwrap(),
         )
         .unwrap()
 }

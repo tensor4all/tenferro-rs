@@ -2,7 +2,7 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
-use tenferro_gpu::{upload_webgpu_tensor, AppleContext, WebGpuRuntime};
+use tenferro_gpu::{apple::AppleContext, webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
 use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor};
 
 fn apple_context() -> Option<AppleContext> {

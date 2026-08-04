@@ -7,11 +7,40 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::{
-    ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
-    DType, GraphCompiler, SymDim, Tensor, TracedTensor,
+    ad_support::{tensor_from_parts, ConstraintScopeTransfer, RetainedValue, TracedTensorParts},
+    DType, GraphCompiler, ScopedExecutionOutcome, ScopedReadInputs, SymDim, Tensor, TensorView,
+    TracedTensor,
 };
 
 use crate::support::{cpu_runtime, run_compiled_one};
+
+#[test]
+fn cpu_scoped_execution_returns_borrowed_identity_without_copy() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let runtime = cpu_runtime();
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let view = match &input {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        other => panic!("unexpected input dtype: {:?}", other.dtype()),
+    };
+    let outcome = runtime
+        .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
+        .unwrap();
+    let ScopedExecutionOutcome::Completed(bundle) = outcome else {
+        panic!("CPU scoped execution did not complete")
+    };
+    match bundle.output(0).unwrap() {
+        tenferro_runtime::OutputRef::Tensor(TensorView::F64(view)) => {
+            assert_eq!(view.as_slice().unwrap(), &[1.0, 2.0]);
+        }
+        tenferro_runtime::OutputRef::Metadata(_) => panic!("unexpected metadata output"),
+        _ => panic!("unexpected output dtype"),
+    }
+}
 
 #[test]
 fn runtime_runs_compiled_single_output_program() {
@@ -198,7 +227,9 @@ fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
     builder.set_outputs(vec![tangent_id]);
     let graph = Arc::new(builder.build());
 
-    let primal = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let primal = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ));
     let output = tensor_from_parts(TracedTensorParts {
         rank: 1,
         dtype: DType::F64,

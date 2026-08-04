@@ -1677,7 +1677,7 @@ Common validation commands:
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
-| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
+| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of the prior handoff artifact and inbound references | common commands plus closure validation from #1567 |
 
 The Phase 12 element-access section must distinguish O(rank) checked random
 access, contiguous typed-slice/guard traversal, prepared strided traversal,

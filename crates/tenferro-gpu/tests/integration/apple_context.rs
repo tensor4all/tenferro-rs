@@ -1,7 +1,7 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
-use tenferro_gpu::{AppleContext, AppleTransferStats};
-use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor, TensorDot, TypedTensor};
+use tenferro_gpu::{apple::AppleContext, apple::AppleTransferStats};
+use tenferro_tensor::{HostAccessError, Tensor, TensorDot, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -38,7 +38,7 @@ fn managed_upload_maps_without_post_creation_transfers_and_keeps_identity() {
         return;
     };
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let managed = context.upload_tensor(&host).unwrap();
+    let mut managed = context.upload_tensor(&host).unwrap();
     assert_eq!(
         context.transfer_stats(),
         AppleTransferStats {
@@ -52,19 +52,17 @@ fn managed_upload_maps_without_post_creation_transfers_and_keeps_identity() {
     };
     assert_eq!(typed.allocation_domain(), Some(context.domain_id()));
     let allocation = typed.allocation_id().unwrap();
-    let StorageBuffer::Backend(buffer) = typed.buffer() else {
-        panic!("expected managed backend buffer")
-    };
-    assert_eq!(&*buffer.map_read().unwrap(), &[1.0, 2.0]);
-    {
-        let mut write = buffer.map_write().unwrap();
-        write.copy_from_slice(&[3.0, 2.0]).unwrap();
-        assert!(matches!(
-            buffer.map_read(),
-            Err(HostAccessError::OverlappingHostMapping)
-        ));
-    }
-    assert_eq!(&*buffer.map_read().unwrap(), &[3.0, 2.0]);
+    assert_eq!(
+        typed.with_host_read(|data| data.to_vec()).unwrap(),
+        [1.0, 2.0]
+    );
+    typed
+        .with_host_write(|data| data.copy_from_slice(&[3.0, 2.0]))
+        .unwrap();
+    assert_eq!(
+        typed.with_host_read(|data| data.to_vec()).unwrap(),
+        [3.0, 2.0]
+    );
     assert_eq!(typed.allocation_id(), Some(allocation));
     assert_eq!(context.transfer_stats().downloaded_bytes, 0);
 
@@ -80,19 +78,17 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
     };
     let domain = context.cpu_backend().shared_allocation_domain().unwrap();
     let output = domain.allocate(tenferro_tensor::DType::F64, &[2]).unwrap();
-    let Tensor::F64(output) = output else {
+    let Tensor::F64(mut output) = output else {
         panic!("expected f64 output")
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
-    let StorageBuffer::Backend(buffer) = output.buffer() else {
-        panic!("expected managed output")
-    };
-    buffer
-        .map_write()
-        .unwrap()
-        .copy_from_slice(&[5.0, 8.0])
+    output
+        .with_host_write(|data| data.copy_from_slice(&[5.0, 8.0]))
         .unwrap();
-    assert_eq!(&*buffer.map_read().unwrap(), &[5.0, 8.0]);
+    assert_eq!(
+        output.with_host_read(|data| data.to_vec()).unwrap(),
+        [5.0, 8.0]
+    );
     assert_eq!(context.transfer_stats(), AppleTransferStats::default());
 }
 
@@ -109,10 +105,10 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
         panic!("expected f32 lhs")
     };
     let lhs_allocation = lhs_typed.allocation_id().unwrap();
-    let StorageBuffer::Backend(lhs_buffer) = lhs_typed.buffer() else {
-        panic!("expected managed lhs")
-    };
-    assert_eq!(&*lhs_buffer.map_read().unwrap(), &[2.0]);
+    assert_eq!(
+        lhs_typed.with_host_read(|data| data.to_vec()).unwrap(),
+        [2.0]
+    );
     let before = context.transfer_stats();
     let mut metal = context.metal_backend().clone();
     let output = metal
@@ -128,7 +124,10 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
         )
         .unwrap();
     metal.synchronize().unwrap();
-    assert_eq!(&*lhs_buffer.map_read().unwrap(), &[2.0]);
+    assert_eq!(
+        lhs_typed.with_host_read(|data| data.to_vec()).unwrap(),
+        [2.0]
+    );
     assert_eq!(lhs_typed.allocation_id(), Some(lhs_allocation));
 
     let Tensor::F32(output) = output else {
@@ -136,8 +135,5 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     };
     assert_eq!(output.allocation_domain(), Some(context.domain_id()));
     assert_eq!(context.transfer_stats(), before);
-    let StorageBuffer::Backend(buffer) = output.buffer() else {
-        panic!("expected managed backend output")
-    };
-    assert_eq!(&*buffer.map_read().unwrap(), &[6.0]);
+    assert_eq!(output.with_host_read(|data| data.to_vec()).unwrap(), [6.0]);
 }

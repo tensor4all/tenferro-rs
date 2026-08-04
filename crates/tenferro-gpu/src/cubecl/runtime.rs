@@ -66,10 +66,10 @@ impl Eq for CudaRuntimeIdentity {}
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaRuntime;
+/// use tenferro_gpu::cuda::CudaRuntime;
 ///
-/// let _ctor: fn(tenferro_gpu::CudaDeviceId) ->
-///     Result<CudaRuntime, tenferro_gpu::CudaDeviceError> = CudaRuntime::new;
+/// let _ctor: fn(tenferro_gpu::cuda::CudaDeviceId) ->
+///     Result<CudaRuntime, tenferro_gpu::cuda::CudaDeviceError> = CudaRuntime::new;
 /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
 ///     CudaRuntime::synchronize;
 /// ```
@@ -149,7 +149,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId, CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId, cuda::CudaRuntime};
     ///
     /// let _ctor: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
     /// ```
@@ -210,7 +210,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceId, CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaDeviceId, cuda::CudaRuntime};
     ///
     /// let _device_id: fn(&CudaRuntime) -> CudaDeviceId = CudaRuntime::device_id;
     /// ```
@@ -227,9 +227,9 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::cuda::CudaRuntime;
     ///
-    /// let _identity: fn(&CudaRuntime) -> tenferro_gpu::CudaRuntimeIdentity =
+    /// let _identity: fn(&CudaRuntime) -> tenferro_gpu::cuda::CudaRuntimeIdentity =
     ///     CudaRuntime::runtime_identity;
     /// ```
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
@@ -254,7 +254,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::cuda::CudaRuntime;
     ///
     /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
     ///     CudaRuntime::synchronize;
@@ -336,7 +336,7 @@ impl Drop for CudaRuntimeState {
 #[cfg(test)]
 mod identity_tests {
     use super::{gpu_available, is_invalid_device_lookup, CudaRuntime, CudaRuntimeIdentity};
-    use crate::CudaBackend;
+    use crate::cuda::CudaBackend;
     use cudarc::driver::{result::DriverError, sys::CUresult};
 
     #[test]

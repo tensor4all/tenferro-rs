@@ -12,7 +12,7 @@ use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint, ScopedShap
 use crate::sym_dim::SymDim;
 
 use super::{
-    allocate_input_key, ones_tensor, tensor_from_parts, ConstraintScopeTransfer,
+    allocate_input_key, ones_tensor, tensor_from_parts, ConstraintScopeTransfer, RetainedValue,
     ShapeConstraintScope, TracedTensorParts,
 };
 
@@ -46,7 +46,9 @@ fn traced_tensor_parts_debug_summarizes_without_graph_payload() {
     let val = builder.add_input(input_key.clone());
     builder.set_outputs(vec![val]);
     let graph = Arc::new(builder.build());
-    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
+    let data = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+    ));
     let inputs_map = Arc::new(HashMap::from([(input_key, Arc::clone(&data))]));
     let parts = TracedTensorParts {
         rank: 1,
@@ -79,7 +81,9 @@ fn tensor_from_parts_preserves_summary_fields() {
     let val = builder.add_input(input_key.clone());
     builder.set_outputs(vec![val]);
     let graph = Arc::new(builder.build());
-    let data = Arc::new(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
+    let data = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
+    ));
     let inputs_map = Arc::new(HashMap::from([(input_key.clone(), Arc::clone(&data))]));
     let transfer = ConstraintScopeTransfer::with_new(nonempty_constraint_scope(11), []);
     let parts = TracedTensorParts {

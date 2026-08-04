@@ -38,10 +38,7 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(
-        f64_data(c.materialized().unwrap().as_ref()),
-        &[22.0, 28.0, 49.0, 64.0]
-    );
+    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]
@@ -54,25 +51,18 @@ fn eager_tensor_einsum_repeated_output_occurrences_keep_axis_order() {
     .unwrap();
 
     let out = [&a].einsum("ij->iji").unwrap();
-    let materialized = out.materialized().unwrap();
+    let materialized = out.to_tensor().unwrap();
 
     assert_eq!(materialized.shape(), &[2, 3, 2]);
     for i in 0..2 {
         for j in 0..3 {
             for k in 0..2 {
                 let expected = if i == k {
-                    *a.materialized()
-                        .unwrap()
-                        .as_ref()
-                        .get::<f64>(&[i, j])
-                        .unwrap()
+                    *a.to_tensor().unwrap().get::<f64>(&[i, j]).unwrap()
                 } else {
                     0.0
                 };
-                assert_eq!(
-                    *materialized.as_ref().get::<f64>(&[i, j, k]).unwrap(),
-                    expected
-                );
+                assert_eq!(*materialized.get::<f64>(&[i, j, k]).unwrap(), expected);
             }
         }
     }
@@ -101,7 +91,7 @@ fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(out.materialized().unwrap().as_ref()),
+        f64_data(&out.to_tensor().unwrap()),
         &[611.0, 650.0, 1475.0, 1586.0]
     );
 }
@@ -132,7 +122,7 @@ fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(out.materialized().unwrap().as_ref()),
+        f64_data(&out.to_tensor().unwrap()),
         &[22.0, 28.0, 49.0, 64.0]
     );
 }
@@ -212,10 +202,7 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
     let c = [&a, &b].einsum_subscripts(&subscripts).unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(
-        f64_data(c.materialized().unwrap().as_ref()),
-        &[22.0, 28.0, 49.0, 64.0]
-    );
+    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]

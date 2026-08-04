@@ -3,38 +3,215 @@ use cubecl::frontend::CubePrimitive;
 use cubecl::std::tensor::TensorHandle;
 use cubecl_runtime::server::Handle;
 use cubecl_wgpu::WgpuRuntime;
+use cubek_fft::{
+    cfft_interleaved_launch, irfft_interleaved_launch_padded, rfft_interleaved_launch_padded,
+    ComplexTensorHandle, FftMode, FftNormalization,
+};
 use num_complex::Complex32;
-use tenferro_tensor::{Error, TypedTensor};
+use tenferro_tensor::{Error, TensorScalar, TypedTensor};
 
 use super::{
-    checked_shape_product, ensure_resident_on_runtime, typed_from_webgpu, webgpu_buffer,
+    checked_shape_product, ensure_resident_on_runtime, prepared_webgpu_tensor, typed_from_webgpu,
     WebGpuBuffer, WebGpuExecSession,
 };
 
-/// Return the exact client owned by `backend` for an extension launch.
-pub fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a ComputeClient<WgpuRuntime> {
-    session.runtime().client()
+/// Direction of a WebGPU complex FFT launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebGpuFftMode {
+    /// Compute the forward transform.
+    Forward,
+    /// Compute the inverse transform.
+    Inverse,
 }
 
-/// Return the active client's hardware-reported shared-memory budget.
-pub fn max_shared_memory_size(session: &WebGpuExecSession<'_>) -> usize {
-    client(session).properties().hardware.max_shared_memory_size
+/// Normalization applied by a WebGPU FFT launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WebGpuFftNormalization {
+    /// Do not scale the transform.
+    None,
+    /// Scale by the transform length.
+    ByN,
+    /// Apply orthonormal scaling.
+    Ortho,
 }
 
-/// Return the active client's maximum number of units per cube.
-pub fn max_units_per_cube(session: &WebGpuExecSession<'_>) -> u32 {
-    client(session).properties().hardware.max_units_per_cube
+/// Hardware limits used by the WebGPU FFT extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WebGpuFftLimits {
+    /// Maximum shared-memory allocation reported by the adapter.
+    pub max_shared_memory_size: usize,
+    /// Maximum number of compute units reported by the adapter.
+    pub max_units_per_cube: u32,
 }
 
-/// Validate and clone an F32 tensor into CubeCL launch metadata.
+/// Output layout supplied to a session-scoped WebGPU FFT launch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WebGpuFftOutput {
+    /// Logical output shape.
+    pub shape: Vec<usize>,
+    /// Logical column-major output strides.
+    pub strides: Vec<usize>,
+}
+
+impl WebGpuFftOutput {
+    /// Create an output layout for a provider FFT operation.
+    pub fn new(shape: Vec<usize>, strides: Vec<usize>) -> Self {
+        Self { shape, strides }
+    }
+}
+
+/// Read the adapter limits needed to validate a WebGPU FFT plan.
+pub fn fft_limits(session: &WebGpuExecSession<'_>) -> WebGpuFftLimits {
+    let client = client(session);
+    WebGpuFftLimits {
+        max_shared_memory_size: client.properties().hardware.max_shared_memory_size,
+        max_units_per_cube: client.properties().hardware.max_units_per_cube,
+    }
+}
+
+/// Execute a compact C32 forward or inverse FFT and return its owned output.
+///
+/// The CubeCL client, bindings, allocation, and completion checks remain
+/// inside this session-scoped provider boundary. No backend handle escapes.
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::Unsupported`] for noncompact or negative
-/// layouts, [`tenferro_tensor::Error::HostAccess`] for a foreign managed domain,
-/// and validation or runtime-state errors for incompatible placement, shape,
-/// buffer, or stride metadata.
-pub fn f32_input(
+/// Returns a typed placement, layout, allocation, launch, or output-validation
+/// error when the input or requested output is not supported by the session.
+pub fn execute_c32_fft(
+    session: &WebGpuExecSession<'_>,
+    input: &TypedTensor<Complex32>,
+    output: WebGpuFftOutput,
+    axis: usize,
+    mode: WebGpuFftMode,
+    normalization: WebGpuFftNormalization,
+    op: &'static str,
+) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
+    let WebGpuFftOutput {
+        shape: output_shape,
+        strides: output_strides,
+    } = output;
+    let (handle, shape, strides) = input_parts(session, input, op)?;
+    let input =
+        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
+            .map_err(|error| Error::backend_source(op, error))?;
+    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
+        output_shape.clone(),
+        output_strides,
+        allocate_raw(session, output_bytes::<Complex32>(op, &output_shape)?),
+        f32_storage(),
+    )
+    .map_err(|error| Error::backend_source(op, error))?;
+    cfft_interleaved_launch(
+        client(session),
+        input.binding(),
+        output.binding(),
+        axis,
+        match mode {
+            WebGpuFftMode::Forward => FftMode::Forward,
+            WebGpuFftMode::Inverse => FftMode::Inverse,
+        },
+        normalization.into(),
+    )
+    .map_err(|error| Error::backend_source(op, error))?;
+    finish_c32(session, output_shape, output.into_raw_parts().handle, op)
+}
+
+/// Execute a padded one-sided F32-to-C32 real FFT and return its owned output.
+///
+/// The input must be a compact column-major tensor already resident on the
+/// session's adapter. Padding is performed by the provider kernel.
+///
+/// # Errors
+///
+/// Returns a typed placement, layout, allocation, launch, or output-validation
+/// error when the input or requested output is not supported by the session.
+pub fn execute_f32_rfft(
+    session: &WebGpuExecSession<'_>,
+    input: &TypedTensor<f32>,
+    output: WebGpuFftOutput,
+    axis: usize,
+    signal_len: usize,
+    normalization: WebGpuFftNormalization,
+    op: &'static str,
+) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
+    let WebGpuFftOutput {
+        shape: output_shape,
+        strides: output_strides,
+    } = output;
+    let input = f32_input(session, input, op)?;
+    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
+        output_shape.clone(),
+        output_strides,
+        allocate_raw(session, output_bytes::<Complex32>(op, &output_shape)?),
+        f32_storage(),
+    )
+    .map_err(|error| Error::backend_source(op, error))?;
+    rfft_interleaved_launch_padded(
+        client(session),
+        &input,
+        output.binding(),
+        axis,
+        signal_len,
+        normalization.into(),
+    )
+    .map_err(|error| Error::backend_source(op, error))?;
+    finish_c32(session, output_shape, output.into_raw_parts().handle, op)
+}
+
+/// Execute a padded C32-to-F32 inverse real FFT and return its owned output.
+///
+/// The input must be a compact column-major tensor already resident on the
+/// session's adapter. `spectrum_len` is the number of input bins on `axis`.
+///
+/// # Errors
+///
+/// Returns a typed placement, layout, allocation, launch, or output-validation
+/// error when the input or requested output is not supported by the session.
+pub fn execute_c32_irfft(
+    session: &WebGpuExecSession<'_>,
+    input: &TypedTensor<Complex32>,
+    output: WebGpuFftOutput,
+    axis: usize,
+    spectrum_len: usize,
+    normalization: WebGpuFftNormalization,
+    op: &'static str,
+) -> tenferro_tensor::Result<TypedTensor<f32>> {
+    let WebGpuFftOutput {
+        shape: output_shape,
+        strides: output_strides,
+    } = output;
+    let (handle, shape, strides) = input_parts(session, input, op)?;
+    let input =
+        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
+            .map_err(|error| Error::backend_source(op, error))?;
+    let output = TensorHandle::<WgpuRuntime>::new(
+        allocate_raw(session, output_bytes::<f32>(op, &output_shape)?),
+        output_shape.clone(),
+        output_strides,
+        f32_storage(),
+    );
+    irfft_interleaved_launch_padded(
+        client(session),
+        input.binding(),
+        &output,
+        axis,
+        spectrum_len,
+        normalization.into(),
+    )
+    .map_err(|error| Error::backend_source(op, error))?;
+    finish_f32(session, output_shape, output.handle, op)
+}
+
+fn client<'a>(session: &'a WebGpuExecSession<'a>) -> &'a ComputeClient<WgpuRuntime> {
+    session.runtime().client()
+}
+
+fn allocate_raw(session: &WebGpuExecSession<'_>, bytes: usize) -> Handle {
+    client(session).empty(bytes)
+}
+
+fn f32_input(
     session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<f32>,
     op: &'static str,
@@ -48,84 +225,24 @@ pub fn f32_input(
     ))
 }
 
-/// Validate and clone the raw allocation plus logical metadata of a C32 tensor.
-///
-/// # Errors
-///
-/// Returns [`tenferro_tensor::Error::Unsupported`] for noncompact or negative
-/// layouts, [`tenferro_tensor::Error::HostAccess`] for a foreign managed domain,
-/// and validation or runtime-state errors for incompatible placement, shape,
-/// buffer, or stride metadata.
-pub fn c32_input_parts(
-    session: &WebGpuExecSession<'_>,
-    tensor: &TypedTensor<Complex32>,
-    op: &'static str,
-) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
-    input_parts(session, tensor, op)
-}
-
-/// Allocate one unaliased output range on the backend's exact client.
-///
-/// CubeCL's pool may represent the returned range with start or end offsets;
-/// completion validates the used range rather than assuming a whole page.
-pub fn allocate_raw(session: &WebGpuExecSession<'_>, bytes: usize) -> Handle {
-    client(session).empty(bytes)
-}
-
-/// Consume an initialized, exactly sized F32 handle range into a tenferro tensor.
-///
-/// # Errors
-///
-/// Returns a validation or runtime-state error when shape-byte arithmetic
-/// overflows, the handle range is invalid, misaligned, incorrectly sized, or
-/// still has another live raw owner. Backend resource-resolution errors retain
-/// their typed source.
-pub fn finish_f32(
-    session: &WebGpuExecSession<'_>,
-    shape: Vec<usize>,
-    handle: Handle,
-    op: &'static str,
-) -> tenferro_tensor::Result<TypedTensor<f32>> {
-    finish(session, shape, handle, op)
-}
-
-/// Consume an initialized, exactly sized C32 handle range into a tenferro tensor.
-///
-/// # Errors
-///
-/// Returns a validation or runtime-state error when shape-byte arithmetic
-/// overflows, the handle range is invalid, misaligned, incorrectly sized, or
-/// still has another live raw owner. Backend resource-resolution errors retain
-/// their typed source.
-pub fn finish_c32(
-    session: &WebGpuExecSession<'_>,
-    shape: Vec<usize>,
-    handle: Handle,
-    op: &'static str,
-) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
-    finish(session, shape, handle, op)
-}
-
-fn input_parts<T: Send + Sync + 'static>(
+fn input_parts<T: TensorScalar + Send + Sync + 'static>(
     session: &WebGpuExecSession<'_>,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(Handle, Vec<usize>, Vec<usize>)> {
     ensure_resident_on_runtime(session.runtime(), tensor, op)?;
     validate_compact_column_major(tensor, op)?;
-    let buffer = webgpu_buffer(tensor, op)?;
+    let prepared = prepared_webgpu_tensor(tensor, op)?;
     let expected = checked_shape_product(op, tensor.shape())?;
-    if buffer.element_len::<T>() != expected {
+    let actual = prepared.byte_len / core::mem::size_of::<T>();
+    if actual != expected {
         return Err(Error::runtime_state(
             op,
-            format!(
-                "WebGPU allocation has {} elements but shape requires {expected}",
-                buffer.element_len::<T>()
-            ),
+            format!("WebGPU allocation has {actual} elements but shape requires {expected}"),
         ));
     }
     Ok((
-        buffer.handle().clone(),
+        prepared.handle,
         tensor.shape().to_vec(),
         checked_logical_strides(tensor, op)?,
     ))
@@ -180,7 +297,33 @@ fn column_major_strides(shape: &[usize], op: &'static str) -> tenferro_tensor::R
     Ok(strides)
 }
 
-fn finish<T: Send + Sync + 'static>(
+fn output_bytes<T>(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<usize> {
+    checked_shape_product(op, shape)?
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or_else(|| {
+            Error::invalid_argument(op, "shape", "WebGPU FFT output byte length overflow")
+        })
+}
+
+fn finish_f32(
+    session: &WebGpuExecSession<'_>,
+    shape: Vec<usize>,
+    handle: Handle,
+    op: &'static str,
+) -> tenferro_tensor::Result<TypedTensor<f32>> {
+    finish(session, shape, handle, op)
+}
+
+fn finish_c32(
+    session: &WebGpuExecSession<'_>,
+    shape: Vec<usize>,
+    handle: Handle,
+    op: &'static str,
+) -> tenferro_tensor::Result<TypedTensor<Complex32>> {
+    finish(session, shape, handle, op)
+}
+
+fn finish<T: TensorScalar + Send + Sync + 'static>(
     session: &WebGpuExecSession<'_>,
     shape: Vec<usize>,
     handle: Handle,
@@ -253,4 +396,27 @@ fn finish<T: Send + Sync + 'static>(
         op,
     )?;
     typed_from_webgpu(shape, buffer, session.runtime())
+}
+
+impl From<WebGpuFftMode> for FftMode {
+    fn from(mode: WebGpuFftMode) -> Self {
+        match mode {
+            WebGpuFftMode::Forward => Self::Forward,
+            WebGpuFftMode::Inverse => Self::Inverse,
+        }
+    }
+}
+
+impl From<WebGpuFftNormalization> for FftNormalization {
+    fn from(normalization: WebGpuFftNormalization) -> Self {
+        match normalization {
+            WebGpuFftNormalization::None => Self::None,
+            WebGpuFftNormalization::ByN => Self::ByN,
+            WebGpuFftNormalization::Ortho => Self::Ortho,
+        }
+    }
+}
+
+fn f32_storage() -> cubecl::prelude::StorageType {
+    f32::as_type_native_unchecked().storage_type()
 }

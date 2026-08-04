@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_einsum::TraceContextEinsumExt;
@@ -34,7 +32,7 @@ fn build_inner_product_graph(
     let mut env = trace
         .input_with_default(
             ProgramInputSpec::new(DType::C64, DimExpr::from_concrete(env_tensor.shape())),
-            Arc::new(env_tensor),
+            env_tensor,
         )
         .unwrap();
     let bra = shapes

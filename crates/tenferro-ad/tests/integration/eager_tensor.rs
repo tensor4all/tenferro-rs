@@ -126,7 +126,7 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
         .unwrap()
         .reduce_sum(Some(&[0, 1]))
         .unwrap();
-    f64_data(loss.materialized().unwrap().as_ref())[0]
+    f64_data(&loss.to_tensor().unwrap())[0]
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
@@ -189,7 +189,7 @@ fn matrix_eager_input_uses_column_major_values() {
 
     assert_eq!(y.shape(), &[2, 3]);
     assert_eq!(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[2.0, 8.0, 4.0, 10.0, 6.0, 12.0]
     );
 }
@@ -211,7 +211,7 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
     let rows = x.slice_axis(0, 1..3).unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_eq!(
-        f64_data(rows.materialized().unwrap().as_ref()),
+        f64_data(&rows.to_tensor().unwrap()),
         &[2.0, 3.0, 5.0, 6.0, 8.0, 9.0, 11.0, 12.0]
     );
 
@@ -223,7 +223,7 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
         .unwrap();
     assert_eq!(strided.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(strided.materialized().unwrap().as_ref()),
+        f64_data(&strided.to_tensor().unwrap()),
         &[2.0, 3.0, 8.0, 9.0]
     );
 
@@ -235,7 +235,7 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
         .unwrap();
     assert_eq!(mixed.shape(), &[2, 3]);
     assert_eq!(
-        f64_data(mixed.materialized().unwrap().as_ref()),
+        f64_data(&mixed.to_tensor().unwrap()),
         &[10.0, 11.0, 4.0, 5.0, 10.0, 11.0]
     );
 }
@@ -378,8 +378,8 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
     assert!(!fused.tracks_grad());
     assert_eq!(fused.shape(), explicit.shape());
     assert_close_c64_slice(
-        c64_data(fused.materialized().unwrap().as_ref()),
-        c64_data(explicit.materialized().unwrap().as_ref()),
+        c64_data(&fused.to_tensor().unwrap()),
+        c64_data(&explicit.to_tensor().unwrap()),
         TOL,
     );
 }
@@ -428,10 +428,7 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     )
     .unwrap();
     let scaled = real.scale_real(2.5).unwrap();
-    assert_eq!(
-        f64_data(scaled.materialized().unwrap().as_ref()),
-        &[2.5, -5.0]
-    );
+    assert_eq!(f64_data(&scaled.to_tensor().unwrap()), &[2.5, -5.0]);
     assert!(real.scale_complex(Complex64::new(0.0, 1.0)).is_err());
 
     let integer = EagerTensor::from_tensor_in(
@@ -443,7 +440,7 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
         integer
             .scale_real(2.5)
             .unwrap()
-            .materialized()
+            .to_tensor()
             .unwrap()
             .as_slice::<i64>()
             .unwrap(),
@@ -458,12 +455,11 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     .unwrap();
     assert_eq!(
         c64_data(
-            complex
+            &complex
                 .scale_complex(Complex64::new(0.0, 1.0))
                 .unwrap()
-                .materialized()
+                .to_tensor()
                 .unwrap()
-                .as_ref()
         ),
         &[Complex64::new(-2.0, 1.0)]
     );
@@ -495,7 +491,7 @@ fn eager_tensor_has_one_step_column_major_constructor() {
 
     assert_eq!(eager.shape(), &[2, 2]);
     assert_eq!(
-        eager.materialized().unwrap().as_slice::<f64>().unwrap(),
+        eager.value().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 3.0, 2.0, 4.0]
     );
 }
@@ -536,7 +532,7 @@ fn eager_gather_keeps_indices_integer_for_complex_operand() {
 
     assert_eq!(y.shape(), &[2]);
     assert_eq!(
-        c64_data(y.materialized().unwrap().as_ref()),
+        c64_data(&y.to_tensor().unwrap()),
         &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
     );
 }
@@ -561,7 +557,7 @@ fn eager_index_select_keeps_indices_integer_for_complex_operand() {
 
     assert_eq!(y.shape(), &[2]);
     assert_eq!(
-        c64_data(y.materialized().unwrap().as_ref()),
+        c64_data(&y.to_tensor().unwrap()),
         &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
     );
 }
@@ -584,7 +580,7 @@ fn eager_stack_trailing_axis_and_index_select_primal() {
 
     assert_eq!(selected.shape(), &[2, 3]);
     assert_close_slice(
-        f64_data(selected.materialized().unwrap().as_ref()),
+        f64_data(&selected.to_tensor().unwrap()),
         &[3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
         TOL,
     );
@@ -673,7 +669,7 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     let out = EagerTensor::stack(&[&a, &c], 0).unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(out.materialized().unwrap().as_ref()),
+        f64_data(&out.to_tensor().unwrap()),
         &[1.0, 3.0, 2.0, 4.0],
         TOL,
     );
@@ -1041,11 +1037,7 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
     .unwrap();
     let z = x.mul(&y).unwrap();
 
-    assert_close_slice(
-        f64_data(z.materialized().unwrap().as_ref()),
-        &[4.0, 10.0, 18.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&z.to_tensor().unwrap()), &[4.0, 10.0, 18.0], TOL);
     assert!(x.grad().unwrap().is_none());
     assert!(y.grad().unwrap().is_none());
     assert!(z.grad().unwrap().is_none());
@@ -1062,7 +1054,7 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
     let transposed = x.transpose(&[1, 0]).unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(transposed.materialized().unwrap().as_ref()),
+        f64_data(&transposed.to_tensor().unwrap()),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
         TOL,
     );
@@ -1070,7 +1062,7 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
     let reshaped = x.reshape(&[6]).unwrap();
     assert_eq!(reshaped.shape(), &[6]);
     assert_close_slice(
-        f64_data(reshaped.materialized().unwrap().as_ref()),
+        f64_data(&reshaped.to_tensor().unwrap()),
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         TOL,
     );
@@ -1140,18 +1132,10 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     .unwrap();
 
     let div = x.div(&y).unwrap();
-    assert_close_slice(
-        f64_data(div.materialized().unwrap().as_ref()),
-        &[4.0, -2.0, 3.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&div.to_tensor().unwrap()), &[4.0, -2.0, 3.0], TOL);
 
     let abs = x.abs().unwrap();
-    assert_close_slice(
-        f64_data(abs.materialized().unwrap().as_ref()),
-        &[8.0, 6.0, 9.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&abs.to_tensor().unwrap()), &[8.0, 6.0, 9.0], TOL);
 
     let angles = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![0.0_f64, std::f64::consts::FRAC_PI_2]).unwrap(),
@@ -1159,11 +1143,7 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     )
     .unwrap();
     let sin = angles.sin().unwrap();
-    assert_close_slice(
-        f64_data(sin.materialized().unwrap().as_ref()),
-        &[0.0, 1.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&sin.to_tensor().unwrap()), &[0.0, 1.0], TOL);
 }
 
 #[test]
@@ -1178,11 +1158,7 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     )
     .unwrap();
     let diag = matrix.extract_diag(0, 1).unwrap();
-    assert_close_slice(
-        f64_data(diag.materialized().unwrap().as_ref()),
-        &[1.0, 5.0, 9.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&diag.to_tensor().unwrap()), &[1.0, 5.0, 9.0], TOL);
 
     let lower = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
@@ -1192,7 +1168,7 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     .tril(0)
     .unwrap();
     assert_close_slice(
-        f64_data(lower.materialized().unwrap().as_ref()),
+        f64_data(&lower.to_tensor().unwrap()),
         &[1.0, 2.0, 0.0, 4.0],
         TOL,
     );
@@ -1207,17 +1183,13 @@ fn eager_reduction_primal_ops_reduce_prod() {
     .unwrap();
 
     let prod = x.reduce_prod(Some(&[0, 1])).unwrap();
-    assert_close_slice(
-        f64_data(prod.materialized().unwrap().as_ref()),
-        &[24.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&prod.to_tensor().unwrap()), &[24.0], TOL);
 
     let max = x.reduce_max(Some(&[0, 1])).unwrap();
-    assert_close_slice(f64_data(max.materialized().unwrap().as_ref()), &[4.0], TOL);
+    assert_close_slice(f64_data(&max.to_tensor().unwrap()), &[4.0], TOL);
 
     let min = x.reduce_min(Some(&[0, 1])).unwrap();
-    assert_close_slice(f64_data(min.materialized().unwrap().as_ref()), &[1.0], TOL);
+    assert_close_slice(f64_data(&min.to_tensor().unwrap()), &[1.0], TOL);
 }
 
 #[test]
@@ -1229,36 +1201,28 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     .unwrap();
 
     let sum = x.reduce_sum(None).unwrap();
-    assert_close_slice(f64_data(sum.materialized().unwrap().as_ref()), &[10.0], TOL);
+    assert_close_slice(f64_data(&sum.to_tensor().unwrap()), &[10.0], TOL);
 
     let product = x.reduce_prod(None).unwrap();
-    assert_close_slice(
-        f64_data(product.materialized().unwrap().as_ref()),
-        &[24.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&product.to_tensor().unwrap()), &[24.0], TOL);
 
     let identity = x.reduce_sum(Some(&[])).unwrap();
     assert_eq!(identity.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(identity.materialized().unwrap().as_ref()),
+        f64_data(&identity.to_tensor().unwrap()),
         &[1.0, 2.0, 3.0, 4.0],
         TOL,
     );
 
     let column_maxima = x.reduce_max(Some(&[0])).unwrap();
     assert_close_slice(
-        f64_data(column_maxima.materialized().unwrap().as_ref()),
+        f64_data(&column_maxima.to_tensor().unwrap()),
         &[2.0, 4.0],
         TOL,
     );
 
     let row_minima = x.reduce_min(Some(&[1])).unwrap();
-    assert_close_slice(
-        f64_data(row_minima.materialized().unwrap().as_ref()),
-        &[1.0, 2.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&row_minima.to_tensor().unwrap()), &[1.0, 2.0], TOL);
 
     let scalar = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
@@ -1267,11 +1231,7 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     .unwrap();
     let scalar_sum = scalar.reduce_sum(None).unwrap();
     assert_eq!(scalar_sum.shape(), &[] as &[usize]);
-    assert_close_slice(
-        f64_data(scalar_sum.materialized().unwrap().as_ref()),
-        &[3.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&scalar_sum.to_tensor().unwrap()), &[3.0], TOL);
 }
 
 #[test]
@@ -1298,7 +1258,7 @@ fn eager_slice_primal() {
 
     assert_eq!(y.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[1.0, 3.0, 9.0, 11.0],
         TOL,
     );
@@ -1334,7 +1294,7 @@ fn eager_untracked_slice_returns_lazy_view() {
         other => panic!("expected slice to remain a lazy f64 view, got {other:?}"),
     }
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[1.0, 3.0, 9.0, 11.0],
         TOL,
     );
@@ -1351,7 +1311,7 @@ fn eager_broadcast_in_dim_primal() {
 
     assert_eq!(y.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
         TOL,
     );
@@ -1374,7 +1334,7 @@ fn eager_untracked_broadcast_in_dim_returns_lazy_view() {
         other => panic!("expected broadcast_in_dim to remain a lazy f64 view, got {other:?}"),
     }
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
         TOL,
     );
@@ -1397,7 +1357,7 @@ fn eager_pad_primal() {
 
     assert_eq!(y.shape(), &[5]);
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[0.0, 1.0, 0.0, 2.0, 0.0],
         TOL,
     );
@@ -1413,7 +1373,7 @@ fn eager_reverse_primal() {
     let y = x.reverse(&[0]).unwrap();
 
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[4.0, 3.0, 2.0, 1.0],
         TOL,
     );
@@ -1435,7 +1395,7 @@ fn eager_concatenate_primal() {
 
     assert_eq!(z.shape(), &[4]);
     assert_close_slice(
-        f64_data(z.materialized().unwrap().as_ref()),
+        f64_data(&z.to_tensor().unwrap()),
         &[1.0, 2.0, 3.0, 4.0],
         TOL,
     );
@@ -1467,11 +1427,7 @@ fn eager_gather_primal() {
         .unwrap();
 
     assert_eq!(y.shape(), &[3]);
-    assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
-        &[50.0, 20.0, 10.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&y.to_tensor().unwrap()), &[50.0, 20.0, 10.0], TOL);
 }
 
 #[test]
@@ -1497,7 +1453,7 @@ fn eager_dynamic_slice_primal() {
 
     assert_eq!(y.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
+        f64_data(&y.to_tensor().unwrap()),
         &[11.0, 12.0, 15.0, 16.0],
         TOL,
     );
@@ -1517,7 +1473,7 @@ fn eager_conj_primal() {
     let y = x.conj().unwrap();
 
     assert_eq!(
-        c64_data(y.materialized().unwrap().as_ref()),
+        c64_data(&y.to_tensor().unwrap()),
         &[Complex64::new(1.0, -2.0), Complex64::new(-3.0, -0.5)]
     );
 }
@@ -1530,11 +1486,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let sign = sign_input.sign().unwrap();
-    assert_close_slice(
-        f64_data(sign.materialized().unwrap().as_ref()),
-        &[-1.0, 0.0, 1.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&sign.to_tensor().unwrap()), &[-1.0, 0.0, 1.0], TOL);
 
     let log_input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, std::f64::consts::E]).unwrap(),
@@ -1542,11 +1494,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let log = log_input.log().unwrap();
-    assert_close_slice(
-        f64_data(log.materialized().unwrap().as_ref()),
-        &[0.0, 1.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&log.to_tensor().unwrap()), &[0.0, 1.0], TOL);
 
     let sqrt_input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap(),
@@ -1555,16 +1503,8 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let sqrt = sqrt_input.sqrt().unwrap();
     let rsqrt = sqrt_input.rsqrt().unwrap();
-    assert_close_slice(
-        f64_data(sqrt.materialized().unwrap().as_ref()),
-        &[1.0, 2.0],
-        TOL,
-    );
-    assert_close_slice(
-        f64_data(rsqrt.materialized().unwrap().as_ref()),
-        &[1.0, 0.5],
-        TOL,
-    );
+    assert_close_slice(f64_data(&sqrt.to_tensor().unwrap()), &[1.0, 2.0], TOL);
+    assert_close_slice(f64_data(&rsqrt.to_tensor().unwrap()), &[1.0, 0.5], TOL);
 
     let angles = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![0.0_f64, std::f64::consts::PI]).unwrap(),
@@ -1572,11 +1512,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let cos = angles.cos().unwrap();
-    assert_close_slice(
-        f64_data(cos.materialized().unwrap().as_ref()),
-        &[1.0, -1.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&cos.to_tensor().unwrap()), &[1.0, -1.0], TOL);
 
     let tanh_input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap(),
@@ -1585,7 +1521,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let tanh = tanh_input.tanh().unwrap();
     assert_close_slice(
-        f64_data(tanh.materialized().unwrap().as_ref()),
+        f64_data(&tanh.to_tensor().unwrap()),
         &[0.0, 1.0_f64.tanh()],
         TOL,
     );
@@ -1597,7 +1533,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let expm1 = expm1_input.expm1().unwrap();
     assert_close_slice(
-        f64_data(expm1.materialized().unwrap().as_ref()),
+        f64_data(&expm1.to_tensor().unwrap()),
         &[0.0, 1.0_f64.exp_m1()],
         TOL,
     );
@@ -1609,7 +1545,7 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let log1p = log1p_input.log1p().unwrap();
     assert_close_slice(
-        f64_data(log1p.materialized().unwrap().as_ref()),
+        f64_data(&log1p.to_tensor().unwrap()),
         &[2.0_f64.ln(), 5.0_f64.ln()],
         TOL,
     );
@@ -1628,11 +1564,7 @@ fn eager_pow_maximum_and_minimum_primal() {
     )
     .unwrap();
     let pow = base.pow(&exp).unwrap();
-    assert_close_slice(
-        f64_data(pow.materialized().unwrap().as_ref()),
-        &[8.0, 3.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&pow.to_tensor().unwrap()), &[8.0, 3.0], TOL);
 
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![8.0_f64, -2.0, 9.0]).unwrap(),
@@ -1647,12 +1579,12 @@ fn eager_pow_maximum_and_minimum_primal() {
     let maximum = x.maximum(&y).unwrap();
     let minimum = x.minimum(&y).unwrap();
     assert_close_slice(
-        f64_data(maximum.materialized().unwrap().as_ref()),
+        f64_data(&maximum.to_tensor().unwrap()),
         &[8.0, 5.0, 9.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(minimum.materialized().unwrap().as_ref()),
+        f64_data(&minimum.to_tensor().unwrap()),
         &[2.0, -2.0, 3.0],
         TOL,
     );
@@ -1677,11 +1609,7 @@ fn eager_select_primal() {
     .unwrap();
     let y = EagerTensor::select(&condition, &on_true, &on_false).unwrap();
 
-    assert_close_slice(
-        f64_data(y.materialized().unwrap().as_ref()),
-        &[1.0, 20.0, 30.0],
-        TOL,
-    );
+    assert_close_slice(f64_data(&y.to_tensor().unwrap()), &[1.0, 20.0, 30.0], TOL);
 }
 
 #[test]
@@ -1694,7 +1622,7 @@ fn eager_embed_diag_and_triu_primal() {
     let embedded = diagonal.embed_diag(0, 1).unwrap();
     assert_eq!(embedded.shape(), &[3, 3]);
     assert_close_slice(
-        f64_data(embedded.materialized().unwrap().as_ref()),
+        f64_data(&embedded.to_tensor().unwrap()),
         &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0],
         TOL,
     );
@@ -1710,7 +1638,7 @@ fn eager_embed_diag_and_triu_primal() {
     .unwrap();
     let upper = matrix.triu(0).unwrap();
     assert_close_slice(
-        f64_data(upper.materialized().unwrap().as_ref()),
+        f64_data(&upper.to_tensor().unwrap()),
         &[1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0],
         TOL,
     );

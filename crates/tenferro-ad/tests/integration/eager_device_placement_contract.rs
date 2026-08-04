@@ -37,7 +37,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         "fn upload_generated_host_tensor",
         "fn exec_standard_op_on_tensor_reads",
     );
-    assert!(helper.contains("backend.upload_host_tensor(&tensor)"));
+    assert!(helper.contains("backend.upload_host_tensor(TensorRead::from_tensor(&tensor))"));
     assert!(
         helper.contains("StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)")
     );
@@ -87,7 +87,7 @@ fn eager_index_select_uploads_hidden_indices_before_importing_constant() {
         "EagerTensor::index_select",
         index_select,
         &[
-            "backend.upload_host_tensor(&indices)?",
+            "backend.upload_host_tensor(TensorRead::from_tensor(&indices))?",
             "self.ctx.constant_from(indices)?",
             "self.gather(&indices, config)",
         ],
@@ -102,7 +102,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
         "pub(crate) fn zero_like_tensor<B: TensorBackend>",
         "pub(crate) fn one_like_tensor",
     );
-    assert!(eager_zero_like.contains(".upload_host_tensor(&host)"));
+    assert!(eager_zero_like.contains(".upload_host_tensor(TensorRead::from_tensor(&host))"));
 
     let eager_one_like = source_section(
         &eager,
@@ -110,7 +110,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
         "#[cfg(test)]",
     );
     assert!(eager_one_like.contains("ones_tensor(input.dtype(), input.shape().to_vec())"));
-    assert!(eager_one_like.contains(".upload_host_tensor(&host)"));
+    assert!(eager_one_like.contains(".upload_host_tensor(TensorRead::from_tensor(&host))"));
     assert!(!eager_one_like.contains(".exp("));
 
     assert!(!eager.contains("tidu::"));

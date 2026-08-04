@@ -12,25 +12,30 @@ use super::identity::{RootResourceIdentity, RootResourceIdentityError};
 use super::prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
 use super::span::{ByteRange, RootBoundSpan, RootResourceExtent};
 
-/// Provider family metadata retained by the private allocation boundary.
-pub(crate) type ProviderKind = BackendId;
+/// Provider family metadata retained by the root allocation boundary.
+#[doc(hidden)]
+pub type ProviderKind = BackendId;
 
 /// Metadata-only provider capability descriptor for the root boundary.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub(crate) struct ProviderCapabilities {
+pub struct ProviderCapabilities {
     host_access: bool,
 }
 
 impl ProviderCapabilities {
-    pub(crate) const fn none() -> Self {
+    #[doc(hidden)]
+    pub const fn none() -> Self {
         Self { host_access: false }
     }
 
-    pub(crate) const fn host() -> Self {
+    #[doc(hidden)]
+    pub const fn host() -> Self {
         Self { host_access: true }
     }
 
-    pub(crate) const fn host_access(self) -> bool {
+    #[doc(hidden)]
+    pub const fn host_access(self) -> bool {
         self.host_access
     }
 }
@@ -49,9 +54,8 @@ impl ProviderCapabilities {
 /// any typed access.
 // INVARIANT: #1555/#1558/#1560 place the sole provider/mapping unsafe boundary
 // in this private storage kernel; public tensor graph and AD paths remain safe.
-pub(crate) unsafe trait BackendAllocation:
-    std::fmt::Debug + Send + Sync + 'static
-{
+#[doc(hidden)]
+pub unsafe trait BackendAllocation: std::fmt::Debug + Send + Sync + 'static {
     fn root_extent(&self) -> RootResourceExtent;
     fn provider_kind(&self) -> ProviderKind;
     fn capabilities(&self) -> ProviderCapabilities;
@@ -594,6 +598,13 @@ impl RootResourcePin {
         Some(unsafe { &*allocation.data.get() })
     }
 
+    pub(crate) fn backend_allocation(&self) -> Option<&dyn BackendAllocation> {
+        match self {
+            Self::Backend(root) => Some(root.as_ref()),
+            _ => None,
+        }
+    }
+
     fn backend_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         let allocation = self
             .as_any()
@@ -955,6 +966,14 @@ impl OwnedStorage {
         self.pin
     }
 
+    pub(crate) const fn root_identity(&self) -> RootResourceIdentity {
+        self.claim.root
+    }
+
+    pub(crate) fn provider_kind(&self) -> ProviderKind {
+        self.pin.provider_kind()
+    }
+
     pub(crate) const fn root_span(&self) -> RootBoundSpan {
         self.claim.span
     }
@@ -965,6 +984,10 @@ impl OwnedStorage {
 
     pub(crate) fn backend_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         self.pin.backend_buffer::<T>()
+    }
+
+    pub(crate) fn backend_allocation(&self) -> Option<&dyn BackendAllocation> {
+        self.pin.backend_allocation()
     }
 
     pub(crate) fn backend_buffer_mut<T: 'static>(

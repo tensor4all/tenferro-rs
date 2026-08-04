@@ -3,6 +3,7 @@ project:
   output-dir: ../target/docs-site
   render:
     - index.md
+    - storage-ownership.md
     - getting-started/**/*.md
     - tutorials/**/*.md
     - guides/**/*.md
@@ -52,6 +53,8 @@ website:
           - guides/execution-models.md
           - guides/eager-operations.md
           - guides/tensor-operations.md
+          - guides/views-and-slicing.md
+          - storage-ownership.md
           - guides/einsum.md
           - guides/linear-algebra.md
           - guides/custom-operations.md

@@ -3,8 +3,10 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
-use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
+use tenferro_gpu::{
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+};
+use tenferro_runtime::{DotGeneralConfig, Tensor, TensorRead, TracedTensor, TypedTensor};
 use tenferro_tensor::StorageBuffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -173,21 +175,25 @@ fn test_gpu_matmul_vjp() {
     let gpu_grad_a = ctx
         .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
         .unwrap()
-        .materialized()
+        .to_tensor()
         .unwrap();
     let gpu_grad_b = ctx
         .vjp(&y_gpu, &b_gpu, &cotangent_gpu)
         .unwrap()
-        .materialized()
+        .to_tensor()
         .unwrap();
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
     let gpu_grad_a = ctx
-        .with_execution_session(|session| session.download_to_host(&gpu_grad_a))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&gpu_grad_a))
+        })
         .unwrap()
         .unwrap();
     let gpu_grad_b = ctx
-        .with_execution_session(|session| session.download_to_host(&gpu_grad_b))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&gpu_grad_b))
+        })
         .unwrap()
         .unwrap();
 

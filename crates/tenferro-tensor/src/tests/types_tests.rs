@@ -319,14 +319,16 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(explicit.shape(), &[3, 2]);
     assert_eq!(explicit.strides(), &[2, 1]);
 
-    let transposed = owned.transpose_view([1, 0]).unwrap();
+    let transposed = owned.duplicate().unwrap().transpose_view([1, 0]).unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(transposed.strides(), &[2, 1]);
 
-    let reshaped = owned.reshape_view([6]).unwrap();
+    let reshaped = owned.duplicate().unwrap().reshape_view([6]).unwrap();
     assert_eq!(reshaped.shape(), &[6]);
 
     let sliced = owned
+        .duplicate()
+        .unwrap()
         .slice_view(&SliceConfig {
             starts: vec![0, 1],
             limits: vec![2, 3],
@@ -366,7 +368,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         },
     ] {
         assert!(matches!(
-            owned.slice_view(&bad_config),
+            owned.duplicate().unwrap().slice_view(&bad_config),
             Err(Error::Validation {
                 source: ValidationError::RankMismatch { .. },
                 ..
@@ -380,16 +382,26 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(value.shape(), &[2, 3]);
     assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
 
-    let view_value = value.transpose_view([1, 0]).unwrap();
+    let view_value = value.duplicate().unwrap().transpose_view([1, 0]).unwrap();
     assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.dtype(), DType::F64);
     assert_eq!(view_value.shape(), &[3, 2]);
     let original_order = view_value.transpose_view([1, 0]).unwrap();
     assert_eq!(original_order.shape(), &[2, 3]);
 
-    let compact_view = value.reshape_view([6]).unwrap();
-    assert_eq!(compact_view.reshape_view([2, 3]).unwrap().shape(), &[2, 3]);
+    let compact_view = value.duplicate().unwrap().reshape_view([6]).unwrap();
+    assert_eq!(
+        compact_view
+            .duplicate()
+            .unwrap()
+            .reshape_view([2, 3])
+            .unwrap()
+            .shape(),
+        &[2, 3]
+    );
     let sliced_value = compact_view
+        .duplicate()
+        .unwrap()
         .slice_view(&SliceConfig {
             starts: vec![1],
             limits: vec![5],
@@ -399,6 +411,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(sliced_value.shape(), &[2]);
     assert_eq!(
         compact_view
+            .duplicate()
+            .unwrap()
             .broadcast_in_dim_view([6, 2], [0])
             .unwrap()
             .shape(),
@@ -2055,8 +2069,8 @@ fn backend_region_view_exposes_layout_and_shared_buffer() {
     assert_eq!(view.strides(), &[1, 4]);
     assert_eq!(view.offset(), 5);
     assert_eq!(view.placement(), tensor.placement());
-    let buffer = view.backend_buffer().expect("backend buffer");
-    assert_eq!(buffer.len(), 16);
+    assert!(view.backend_buffer().is_none());
+    assert_eq!(view.backing_len(), 16);
 }
 
 #[test]

@@ -50,7 +50,7 @@ fn constant_from_creates_untracked_leaf() {
         .unwrap();
     assert_eq!(c.ctx_id(), ctx.id());
     assert!(!c.tracks_grad());
-    assert_eq!(f64_data(c.materialized().unwrap().as_ref()), &[1.0, 2.0]);
+    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[1.0, 2.0]);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn constant_from_can_cross_context() {
         .constant_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap())
         .unwrap();
     let z = x.add(&c).unwrap();
-    assert_eq!(f64_data(z.materialized().unwrap().as_ref()), &[4.0, 6.0]);
+    assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn detach_into_different_context() {
     let d = x.detach_into(&ctx_b).unwrap();
     assert_eq!(d.ctx_id(), ctx_b.id());
     assert!(!d.tracks_grad());
-    assert_eq!(f64_data(d.materialized().unwrap().as_ref()), &[1.0, 2.0]);
+    assert_eq!(f64_data(&d.to_tensor().unwrap()), &[1.0, 2.0]);
     // Can operate with tensors from ctx_b now
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
@@ -166,7 +166,7 @@ fn detach_into_different_context() {
     )
     .unwrap();
     let z = d.add(&y).unwrap();
-    assert_eq!(f64_data(z.materialized().unwrap().as_ref()), &[4.0, 6.0]);
+    assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
 }
 
 #[test]
@@ -203,10 +203,7 @@ fn promote_i64_add_f64_eager() {
     // I64 + F64 should promote to F64
     let z = a.add(&b).unwrap();
     assert_eq!(z.dtype(), DType::F64);
-    assert_eq!(
-        z.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[1.5, 3.0]
-    );
+    assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
 
 #[test]
@@ -226,7 +223,7 @@ fn promote_i64_mul_c64_eager() {
     let z = a.mul(&b).unwrap();
     assert_eq!(z.dtype(), DType::C64);
     assert_eq!(
-        z.materialized().unwrap().as_slice::<Complex64>().unwrap(),
+        z.value().unwrap().as_slice::<Complex64>().unwrap(),
         &[Complex64::new(3.0, 0.0)]
     );
 }
@@ -253,10 +250,7 @@ fn clamp_promotes_all_three_operands_to_common_dtype() {
     let out = input.clamp(&lower, &upper).unwrap();
 
     assert_eq!(out.dtype(), DType::F64);
-    assert_eq!(
-        out.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[1.0, 1.5]
-    );
+    assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 1.5]);
 }
 
 #[test]
@@ -275,10 +269,7 @@ fn promote_f32_add_f64_eager() {
     // F32 + F64 should promote to F64
     let z = a.add(&b).unwrap();
     assert_eq!(z.dtype(), DType::F64);
-    assert_eq!(
-        z.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[1.5, 3.0]
-    );
+    assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
 
 #[test]
@@ -297,8 +288,5 @@ fn promote_same_dtype_no_conversion_penalty() {
     .unwrap();
     let z = a.add(&b).unwrap();
     assert_eq!(z.dtype(), DType::F64);
-    assert_eq!(
-        z.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0, 6.0]
-    );
+    assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }

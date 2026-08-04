@@ -27,7 +27,7 @@ pub trait EagerTensorFftExt {
     ///     EagerRuntime::new()?,
     /// )?;
     /// let y = x.fft(None, -1, FftNorm::Backward)?;
-    /// assert_eq!(y.materialized()?.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
+    /// assert_eq!(y.value()?.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///

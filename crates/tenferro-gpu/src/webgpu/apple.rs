@@ -9,11 +9,12 @@ use cubecl_wgpu::{
     WgpuDevice, WgpuRuntime as CubeWgpuRuntime,
 };
 
-use super::{alloc_tensor_in_runtime, WebGpuBackend, WebGpuRuntime};
+use super::{
+    alloc_tensor_in_runtime, download_webgpu_tensor, upload_webgpu_tensor, WebGpuBackend,
+    WebGpuRuntime,
+};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{AllocationDomainId, DType, SharedTensorAllocationDomain, Tensor};
-
-use crate::{download_webgpu_tensor, upload_webgpu_tensor};
 
 /// Explicit host/device transfer counters for one [`AppleContext`].
 ///
@@ -22,7 +23,7 @@ use crate::{download_webgpu_tensor, upload_webgpu_tensor};
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_gpu::AppleTransferStats;
+/// use tenferro_gpu::apple::AppleTransferStats;
 ///
 /// assert_eq!(AppleTransferStats::default().uploaded_bytes, 0);
 /// ```
@@ -102,7 +103,7 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_gpu::AppleContext;
+/// use tenferro_gpu::apple::AppleContext;
 ///
 /// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
 /// ```
@@ -129,7 +130,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     ///
     /// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
     /// ```
@@ -176,7 +177,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// use tenferro_tensor::AllocationDomainId;
     /// let _method: fn(&AppleContext) -> AllocationDomainId = AppleContext::domain_id;
     /// ```
@@ -189,7 +190,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// let _method = AppleContext::cpu_backend;
     /// ```
     pub fn cpu_backend(&self) -> &CpuBackend {
@@ -201,7 +202,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// let _method = AppleContext::metal_backend;
     /// ```
     pub fn metal_backend(&self) -> &WebGpuBackend {
@@ -213,7 +214,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// let _method = AppleContext::transfer_stats;
     /// ```
     pub fn transfer_stats(&self) -> AppleTransferStats {
@@ -225,7 +226,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// let _method = AppleContext::upload_tensor;
     /// ```
     ///
@@ -246,7 +247,7 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::AppleContext;
+    /// use tenferro_gpu::apple::AppleContext;
     /// let _method = AppleContext::download_tensor;
     /// ```
     ///

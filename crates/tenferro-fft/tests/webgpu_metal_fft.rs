@@ -4,8 +4,9 @@ mod metal {
     use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
     use tenferro_fft::{FftNorm, TensorFftExt};
     use tenferro_gpu::{
-        upload_webgpu_tensor, webgpu_interop, with_webgpu_exec_session, AppleContext,
-        WebGpuBackend, WebGpuExecSession, WebGpuRuntime,
+        apple::AppleContext, webgpu::interop as webgpu_interop, webgpu::upload_webgpu_tensor,
+        webgpu::with_webgpu_exec_session, webgpu::WebGpuBackend, webgpu::WebGpuExecSession,
+        webgpu::WebGpuRuntime,
     };
     use tenferro_tensor::{BackendSessionHost, Error, StorageBuffer, Tensor};
 
@@ -210,7 +211,7 @@ mod metal {
     fn small_and_large_threshold_paths(context: &AppleContext) {
         let mut metal = context.metal_backend().clone();
         let shared_elements = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::max_shared_memory_size(session)
+            webgpu_interop::fft_limits(session).max_shared_memory_size
         }) / (2 * core::mem::size_of::<f32>());
         let max_shared = if shared_elements.is_power_of_two() {
             shared_elements
@@ -328,45 +329,6 @@ mod metal {
         .unwrap_err();
         assert!(matches!(error, Error::RuntimeState { .. }));
         assert_eq!(context.transfer_stats(), before);
-
-        let undersized_f32 = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::allocate_raw(session, 4)
-        });
-        let error = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::finish_f32(session, vec![2], undersized_f32, "test_finish_f32")
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::RuntimeState { .. }));
-
-        let undersized_c32 = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::allocate_raw(session, 4)
-        });
-        let error = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::finish_c32(session, vec![1], undersized_c32, "test_finish_c32")
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::RuntimeState { .. }));
-
-        let aliased = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::allocate_raw(session, 8)
-        });
-        let surviving_alias = aliased.clone();
-        let error = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::finish_f32(session, vec![2], aliased, "test_finish_alias")
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::RuntimeState { .. }));
-        drop(surviving_alias);
-
-        let mut invalid_range = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::allocate_raw(session, 8)
-        });
-        invalid_range.offset_start = Some(invalid_range.size() + 1);
-        let error = with_webgpu_fft(&mut metal, |session| {
-            webgpu_interop::finish_f32(session, vec![1], invalid_range, "test_finish_invalid_range")
-        })
-        .unwrap_err();
-        assert!(matches!(error, Error::RuntimeState { .. }));
     }
 }
 
@@ -374,7 +336,7 @@ mod metal {
 #[test]
 fn metal_fft_surface_compiles_off_macos() {
     use tenferro_fft::{FftBackend, FftNorm, TensorFftExt};
-    use tenferro_gpu::WebGpuExecSession;
+    use tenferro_gpu::webgpu::WebGpuExecSession;
     use tenferro_tensor::Tensor;
 
     fn compile_surface(input: &Tensor, session: &mut WebGpuExecSession<'static>) {

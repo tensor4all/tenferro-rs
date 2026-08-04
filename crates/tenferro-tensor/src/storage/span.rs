@@ -50,8 +50,9 @@ impl ByteRange {
 }
 
 /// Errors returned by checked root/span metadata operations.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum SpanValidationError {
+pub enum SpanValidationError {
     #[error("byte range end overflows usize: offset {byte_offset}, length {byte_len}")]
     RangeOverflow { byte_offset: usize, byte_len: usize },
     #[error(
@@ -84,8 +85,9 @@ pub(crate) enum SpanValidationError {
 }
 
 /// The complete checked byte extent reported for a provider root.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct RootResourceExtent {
+pub struct RootResourceExtent {
     key: AllocationKey,
     byte_offset: usize,
     byte_len: usize,
@@ -93,7 +95,8 @@ pub(crate) struct RootResourceExtent {
 }
 
 impl RootResourceExtent {
-    pub(crate) fn try_new(
+    #[doc(hidden)]
+    pub fn try_new(
         key: AllocationKey,
         byte_offset: usize,
         byte_len: usize,
@@ -112,19 +115,23 @@ impl RootResourceExtent {
         })
     }
 
-    pub(crate) const fn key(self) -> AllocationKey {
+    #[doc(hidden)]
+    pub const fn key(self) -> AllocationKey {
         self.key
     }
 
-    pub(crate) const fn byte_offset(self) -> usize {
+    #[doc(hidden)]
+    pub const fn byte_offset(self) -> usize {
         self.byte_offset
     }
 
-    pub(crate) const fn byte_len(self) -> usize {
+    #[doc(hidden)]
+    pub const fn byte_len(self) -> usize {
         self.byte_len
     }
 
-    pub(crate) const fn guaranteed_alignment(self) -> NonZeroUsize {
+    #[doc(hidden)]
+    pub const fn guaranteed_alignment(self) -> NonZeroUsize {
         self.guaranteed_alignment
     }
 
@@ -193,8 +200,9 @@ impl RootResourceExtent {
 }
 
 /// A checked span bound to the exact root identity that created it.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct RootBoundSpan {
+pub struct RootBoundSpan {
     root_identity: RootResourceIdentity,
     byte_offset: usize,
     byte_len: usize,
@@ -206,19 +214,23 @@ impl RootBoundSpan {
         self.root_identity
     }
 
-    pub(crate) const fn byte_offset(self) -> usize {
+    #[doc(hidden)]
+    pub const fn byte_offset(self) -> usize {
         self.byte_offset
     }
 
-    pub(crate) const fn byte_len(self) -> usize {
+    #[doc(hidden)]
+    pub const fn byte_len(self) -> usize {
         self.byte_len
     }
 
-    pub(crate) const fn guaranteed_alignment(self) -> NonZeroUsize {
+    #[doc(hidden)]
+    pub const fn guaranteed_alignment(self) -> NonZeroUsize {
         self.guaranteed_alignment
     }
 
-    pub(crate) const fn is_empty(self) -> bool {
+    #[doc(hidden)]
+    pub const fn is_empty(self) -> bool {
         self.byte_len == 0
     }
 

@@ -10,7 +10,9 @@
 use std::fs;
 use std::path::Path;
 
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
+use tenferro_gpu::{
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+};
 use tenferro_tensor::{AllocationDomainId, AllocationId, DType, Tensor, TensorStructural};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -64,8 +66,9 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     );
     drop(prepared);
 
-    let binding = tenferro_gpu::cuda_interop::typed_tensor_binding(tensor, "storage_provider_cuda")
-        .expect("the CUDA binding must consume the provider-prepared state");
+    let binding =
+        tenferro_gpu::cuda::interop::typed_tensor_binding(tensor, "storage_provider_cuda")
+            .expect("the CUDA binding must consume the provider-prepared state");
     drop(binding);
 }
 

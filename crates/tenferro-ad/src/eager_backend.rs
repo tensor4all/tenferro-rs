@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CudaBackend;
+use tenferro_gpu::cuda::CudaBackend;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::WebGpuBackend;
+use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{
     EngineId, EngineRegistration, HardwareClassId, Runtime, RuntimeConfigError,
 };
@@ -127,12 +127,12 @@ fn eager_engine_registration_for_backend(
         EagerBackend::Cuda(backend) => {
             let engine_id = EngineId::new("tenferro-ad.cuda.default.v1")?;
             Ok(EagerBackendRegistration::Install(Box::new(
-                tenferro_gpu::cuda_runtime_engine_registration(backend, engine_id)?,
+                tenferro_gpu::cuda::cuda_runtime_engine_registration(backend, engine_id)?,
             )))
         }
         #[cfg(feature = "webgpu")]
         EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
-            tenferro_gpu::webgpu_runtime_engine_registration(backend)?,
+            tenferro_gpu::webgpu::webgpu_runtime_engine_registration(backend)?,
         ))),
     }
 }
@@ -297,7 +297,15 @@ impl TensorFusion for RecordingBackend {}
 #[cfg(test)]
 impl TensorBuffer for RecordingBackend {}
 #[cfg(test)]
-impl TensorDeviceTransfer for RecordingBackend {}
+impl TensorDeviceTransfer for RecordingBackend {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> TensorResult<Tensor> {
+        self.inner.download_to_host(tensor)
+    }
+
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> TensorResult<Tensor> {
+        self.inner.upload_host_tensor(tensor)
+    }
+}
 #[cfg(test)]
 impl BackendCachedDot for RecordingBackend {}
 #[cfg(test)]
@@ -452,8 +460,8 @@ impl BackendSessionHost for EagerBackend {
 
 impl TensorDeviceTransfer for EagerBackend {
     delegate_tensor_backend_methods! {
-        fn download_to_host(tensor: &Tensor) -> TensorResult<Tensor>;
-        fn upload_host_tensor(tensor: &Tensor) -> TensorResult<Tensor>;
+        fn download_to_host(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
+        fn upload_host_tensor(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
     }
 }
 

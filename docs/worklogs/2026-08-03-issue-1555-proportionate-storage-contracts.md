@@ -68,7 +68,7 @@ Before implementation promotion, scan the design document, ledger, and every
 child issue body for the removed concepts above. Explicit statements that a
 mechanism is forbidden are allowed; normative requirements to implement it are
 not. Phase 13 repeats the same scan over source and live documentation and
-deletes `HANDOFF-2026-07-25-tenferro-unification6-wip.md` plus inbound links.
+removes the prior handoff artifact plus inbound links.
 
 ## CI contract revision
 

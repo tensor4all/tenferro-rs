@@ -835,6 +835,22 @@ impl Runtime {
         super::execution::run_compiled(self, program, inputs)
     }
 
+    /// Execute borrowed read-only inputs synchronously through retirement.
+    ///
+    /// Host/CPU providers may complete this call. Asynchronous device
+    /// providers reject before admission and return the unchanged borrowed
+    /// package through [`crate::ScopedSubmitRejected`].
+    pub fn execute_scoped_read_only<'env>(
+        &self,
+        program: &CompiledGraph,
+        inputs: super::execution::ScopedReadInputs<'env>,
+    ) -> std::result::Result<
+        super::execution::ScopedExecutionOutcome<'env>,
+        super::execution::ScopedSubmitRejected<'env>,
+    > {
+        super::execution::execute_scoped_read_only(self, program, inputs)
+    }
+
     /// Prepare a compiled graph for repeated execution with the same runtime.
     ///
     /// Preparation validates the supplied input metadata, selects a runtime

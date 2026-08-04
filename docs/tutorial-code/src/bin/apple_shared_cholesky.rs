@@ -1,7 +1,7 @@
 //! Explicit CPU Cholesky over an Apple managed tensor without a download.
 
 #[cfg(target_os = "macos")]
-use tenferro_gpu::AppleContext;
+use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_linalg::LinalgBackend;
 #[cfg(target_os = "macos")]

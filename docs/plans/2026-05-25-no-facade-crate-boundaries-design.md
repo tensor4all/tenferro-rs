@@ -289,7 +289,7 @@ crate keeps the first split simple while preserving room for vendor-specific
 features or modules:
 
 ```rust
-use tenferro_gpu::CudaBackend;
+use tenferro_gpu::cuda::CudaBackend;
 
 let backend = CudaBackend::cuda(0)?;
 let mut executor = tenferro_runtime::GraphExecutor::new(backend);

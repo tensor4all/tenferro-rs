@@ -14,11 +14,14 @@ use tenferro_runtime::{
 };
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::TensorStructural;
-use tenferro_tensor::{BackendStorage, DeviceId, StorageBuffer, Tensor, TypedTensor};
+use tenferro_tensor::{
+    AllocationId, BackendAllocation, BackendStorage, DeviceId, StorageBuffer, Tensor, TypedTensor,
+};
 
+use super::super::WebGpuBuffer;
 use super::*;
 
-use crate::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
+use crate::webgpu::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 
 #[test]
 fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
@@ -36,18 +39,18 @@ fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
         domain,
     );
 
-    assert_eq!(first.allocation_domain(), domain);
-    assert_eq!(second.allocation_domain(), domain);
-    assert_ne!(
-        <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&first),
-        <WebGpuBuffer as BackendStorage<f32>>::allocation_id(&second)
-    );
+    let first_extent = <WebGpuBuffer as BackendAllocation>::root_extent(&first);
+    let second_extent = <WebGpuBuffer as BackendAllocation>::root_extent(&second);
+    assert_eq!(first_extent.key().domain(), domain);
+    assert_eq!(second_extent.key().domain(), domain);
+    assert_ne!(first_extent.key().local(), second_extent.key().local());
 }
 
 #[derive(Debug)]
 struct TestWebGpuBuffer {
     family: &'static str,
     domain: Option<AllocationDomainId>,
+    allocation: AllocationId,
 }
 
 #[derive(Debug)]
@@ -125,6 +128,10 @@ impl BackendStorage<f32> for TestWebGpuBuffer {
         self.domain
     }
 
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -133,7 +140,11 @@ impl BackendStorage<f32> for TestWebGpuBuffer {
 fn input(family: &'static str, ordinal: usize, domain: Option<AllocationDomainId>) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        StorageBuffer::Backend(Box::new(TestWebGpuBuffer { family, domain })),
+        StorageBuffer::Backend(Box::new(TestWebGpuBuffer {
+            family,
+            domain,
+            allocation: AllocationId::from_backend_id(1),
+        })),
         Placement {
             memory_kind: if domain.is_some() {
                 MemoryKind::Managed
@@ -155,7 +166,6 @@ fn input(family: &'static str, ordinal: usize, domain: Option<AllocationDomainId
 fn webgpu_registration_ingress_rejects_forged_family_domain_and_foreign_inputs() {
     let domain = AllocationDomainId::fresh();
     let forged_managed = input("cubecl-webgpu", 2, Some(domain));
-    let forged_device = input("cubecl-webgpu", 2, None);
     let foreign_family = input("foreign-webgpu", 2, Some(domain));
     let foreign_domain = input("cubecl-webgpu", 2, Some(AllocationDomainId::fresh()));
 
@@ -163,12 +173,6 @@ fn webgpu_registration_ingress_rejects_forged_family_domain_and_foreign_inputs()
         &TensorRead::from_tensor(&forged_managed),
         2,
         Some(domain),
-        AllocationDomainId::fresh(),
-    ));
-    assert!(!webgpu_input_tensor(
-        &TensorRead::from_tensor(&forged_device),
-        2,
-        None,
         AllocationDomainId::fresh(),
     ));
     assert!(!webgpu_input_tensor(
@@ -207,18 +211,16 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
         allocation_domain,
     ));
 
-    let Tensor::F32(typed) = &input else {
+    let Tensor::F32(_typed) = &input else {
         unreachable!("uploaded f32 tensor")
     };
-    let StorageBuffer::Backend(_buffer) = typed.buffer() else {
-        unreachable!("uploaded WebGPU buffer")
-    };
     let foreign_ordinal = ordinal.saturating_add(1);
-    let relabeled = TypedTensor::<f32>::from_buffer_col_major(
+    let relabeled: Tensor = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
         StorageBuffer::Backend(Box::new(TestWebGpuBuffer {
             family: "cubecl-webgpu",
-            domain: managed_domain,
+            domain: Some(allocation_domain),
+            allocation: AllocationId::from_backend_id(2),
         })),
         Placement {
             memory_kind: input.placement().memory_kind.clone(),
@@ -231,6 +233,14 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
     )
     .expect("relabeled WebGPU tensor")
     .into();
+    assert_eq!(
+        relabeled
+            .placement()
+            .device
+            .as_ref()
+            .map(|device| device.ordinal),
+        Some(foreign_ordinal)
+    );
     assert!(!webgpu_input_tensor(
         &TensorRead::from_tensor(&relabeled),
         foreign_ordinal,

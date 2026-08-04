@@ -13,9 +13,10 @@ use super::identity::RootResourceIdentity;
 use super::root::{StorageMut, StorageRef};
 use super::span::RootBoundSpan;
 
-/// Typed failure at the private prepared-access boundary.
+/// Typed failure at the prepared-access boundary.
+#[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum AccessError {
+pub enum AccessError {
     #[error("invalid checked layout: {message}")]
     InvalidLayout { message: String },
     #[error("dtype mismatch: expected {expected:?}, actual {actual:?}")]
@@ -90,7 +91,8 @@ where
 }
 
 /// Borrowed provider mapping retained by a prepared read.
-pub(crate) struct ProviderReadMapping<'a> {
+#[doc(hidden)]
+pub struct ProviderReadMapping<'a> {
     access: Box<dyn ReadMappingAccess + 'a>,
 }
 
@@ -104,13 +106,15 @@ impl fmt::Debug for ProviderReadMapping<'_> {
 }
 
 impl<'a> ProviderReadMapping<'a> {
-    pub(crate) fn from_slice(bytes: &'a [u8]) -> Self {
+    #[doc(hidden)]
+    pub fn from_slice(bytes: &'a [u8]) -> Self {
         Self {
             access: Box::new(BorrowedRead(bytes)),
         }
     }
 
-    pub(crate) fn from_guard<G>(guard: G) -> Self
+    #[doc(hidden)]
+    pub fn from_guard<G>(guard: G) -> Self
     where
         G: Deref + 'a,
         G::Target: AsRef<[u8]>,
@@ -126,7 +130,8 @@ impl<'a> ProviderReadMapping<'a> {
 }
 
 /// Borrowed provider mapping retained by a prepared write.
-pub(crate) struct ProviderWriteMapping<'a> {
+#[doc(hidden)]
+pub struct ProviderWriteMapping<'a> {
     access: Box<dyn WriteMappingAccess + 'a>,
 }
 
@@ -140,13 +145,15 @@ impl fmt::Debug for ProviderWriteMapping<'_> {
 }
 
 impl<'a> ProviderWriteMapping<'a> {
-    pub(crate) fn from_slice(bytes: &'a mut [u8]) -> Self {
+    #[doc(hidden)]
+    pub fn from_slice(bytes: &'a mut [u8]) -> Self {
         Self {
             access: Box::new(BorrowedWrite(bytes)),
         }
     }
 
-    pub(crate) fn from_guard<G>(guard: G) -> Self
+    #[doc(hidden)]
+    pub fn from_guard<G>(guard: G) -> Self
     where
         G: DerefMut + 'a,
         G::Target: AsMut<[u8]> + AsRef<[u8]>,

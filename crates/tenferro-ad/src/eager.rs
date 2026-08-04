@@ -19,13 +19,13 @@ use computegraph::ValueKey;
 use computegraph::ValueRef;
 use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CudaBackend;
+use tenferro_gpu::cuda::CudaBackend;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::WebGpuBackend;
+use tenferro_gpu::webgpu::WebGpuBackend;
 #[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
-use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor};
+use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor, RetainedValue};
 use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{
     CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
@@ -360,7 +360,7 @@ pub struct EagerRuntimeCacheStats {
 
 #[cfg(test)]
 pub(crate) struct EagerGraphExecution {
-    pub(crate) outputs: Vec<Arc<Tensor>>,
+    pub(crate) outputs: Vec<Tensor>,
 }
 
 /// A read-only value view retained by an eager tensor record.
@@ -805,7 +805,7 @@ impl CpuPlacementBoundEager {
 /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
 /// let z = x.add(&y).unwrap();
 ///
-/// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
+/// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub struct EagerRuntime {
@@ -1121,7 +1121,7 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
     /// let _ctor: fn(CudaBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
@@ -1144,7 +1144,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaBackend;
     ///
     /// let _ctor: fn(CudaBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
@@ -1173,7 +1173,7 @@ impl EagerRuntime {
     ///
     /// ```
     /// use tenferro_ad::EagerRuntime;
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn(WebGpuBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend;
@@ -1195,7 +1195,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn(WebGpuBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend_and_ad_context;
@@ -1618,19 +1618,6 @@ impl EagerRuntime {
         }))
     }
 
-    pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
-        if let Some(tensor) = value
-            .as_tensor()
-            .filter(|tensor| !tensor.is_backend_buffer())
-        {
-            return tensor.duplicate().map_err(Error::from);
-        }
-        let mut backend = self.lock_backend()?;
-        backend
-            .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
-            .map_err(Error::from)
-    }
-
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
     /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
@@ -1696,11 +1683,11 @@ impl EagerRuntime {
     pub(crate) fn exec_standard_graph_outputs(
         &self,
         graph: &Graph<StdTensorOp>,
-        initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+        initial_data: HashMap<ValueKey<StdTensorOp>, Tensor>,
     ) -> Result<EagerGraphExecution> {
         let mut backend =
             profile_eager_op_section("exec_graph.lock_backend", || self.lock_backend())?;
-        let mut all_values = initial_data.clone();
+        let mut all_values = initial_data;
 
         profile_eager_op_section("exec_graph.with_backend_session", || {
             backend.with_backend_session(|exec| -> Result<()> {
@@ -1714,7 +1701,7 @@ impl EagerRuntime {
                                     ValueRef::Local(local_id) => &graph.values()[*local_id].key,
                                     ValueRef::External(key) => key,
                                 };
-                                all_values.get(key).cloned().ok_or_else(|| {
+                                all_values.get(key).ok_or_else(|| {
                                     Error::Internal(format!(
                                         "standard graph eager execution missing value for {key:?}"
                                     ))
@@ -1723,7 +1710,7 @@ impl EagerRuntime {
                             .collect::<Result<Vec<_>>>()?;
                         let input_reads = input_values
                             .iter()
-                            .map(|value| TensorRead::from_tensor(value.as_ref()))
+                            .map(|value| TensorRead::from_tensor(value))
                             .collect::<Vec<_>>();
                         exec_standard_op_on_tensor_reads_in_session(
                             &op_node.operation,
@@ -1743,7 +1730,7 @@ impl EagerRuntime {
 
                     for (output_id, output) in op_node.outputs.iter().zip(outputs) {
                         let key = graph.values()[*output_id].key.clone();
-                        all_values.insert(key, Arc::new(output));
+                        all_values.insert(key, output);
                     }
                 }
                 Ok(())
@@ -1755,11 +1742,15 @@ impl EagerRuntime {
             .iter()
             .map(|&output_id| {
                 let key = &graph.values()[output_id].key;
-                all_values.get(key).cloned().ok_or_else(|| {
-                    Error::Internal(format!(
-                        "standard graph eager execution missing graph output {key:?}"
-                    ))
-                })
+                all_values
+                    .get(key)
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "standard graph eager execution missing graph output {key:?}"
+                        ))
+                    })?
+                    .duplicate()
+                    .map_err(Error::from)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1883,7 +1874,7 @@ impl EagerRuntime {
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx)?;
     /// let z = x.add(&c).unwrap();
     ///
-    /// assert_eq!(z.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(z.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1943,7 +1934,7 @@ impl EagerRuntime {
     /// )?;
     /// let loss = x.mul(&x)?;
     /// let dx = ctx.grad(&loss, &x)?;
-    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1996,15 +1987,15 @@ impl EagerRuntime {
             });
         }
 
-        let value = output.materialized_arc()?;
+        let value = output.to_tensor()?;
         let seed = {
             let mut backend = self.lock_backend()?;
-            one_like_tensor(value.as_ref(), &mut *backend)?
+            one_like_tensor(&value, &mut *backend)?
         };
-        let seed = EagerTensor::new_result_arc(
+        let seed = EagerTensor::new_result(
             Arc::clone(self),
             eager_val_key(),
-            Arc::new(seed),
+            seed,
             false,
             None,
             Vec::new(),
@@ -2031,7 +2022,7 @@ impl EagerRuntime {
     ///     ctx.clone(),
     /// )?;
     /// let dx = ctx.vjp(&y, &x, &seed)?;
-    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -2119,7 +2110,7 @@ impl EagerRuntime {
     /// )?;
     /// let y = x.mul(&x)?;
     /// let dy = ctx.jvp(&y, &x, &tangent)?;
-    /// assert_eq!(dy.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// assert_eq!(dy.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -2497,7 +2488,7 @@ fn semantic_eager_vjp_optional(
             (seed_input_index, derivative_output_index, program, None)
         };
 
-    let cotangent_tensor = cotangent.materialized_arc()?;
+    let cotangent_tensor = Arc::new(RetainedValue::from_tensor(cotangent.to_tensor()?));
     let input_count = derivative_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
@@ -2506,7 +2497,7 @@ fn semantic_eager_vjp_optional(
                 "semantic eager VJP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(copy_tensor_for_runtime(ctx, tensor)?);
+        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2514,7 +2505,7 @@ fn semantic_eager_vjp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(copy_tensor_for_runtime(ctx, cotangent_tensor.as_ref())?);
+    *slot = Some(copy_value_for_runtime(ctx, cotangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2552,7 +2543,7 @@ fn semantic_eager_vjp_optional(
         )));
     };
     let cotangent_trace =
-        TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&cotangent_tensor))?;
+        TracedTensor::from_shared_tensor_value_symbolic_shape(Arc::clone(&cotangent_tensor))?;
     let semantic_trace = derivative_trace_from_frozen_program(
         &source,
         derivative_program.frozen_program(),
@@ -2566,10 +2557,10 @@ fn semantic_eager_vjp_optional(
     #[cfg(test)]
     EAGER_SEMANTIC_VJP_EXECUTIONS.fetch_add(1, Ordering::Relaxed);
 
-    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
         Arc::clone(ctx),
         eager_val_key(),
-        Arc::new(result),
+        result,
         true,
         None,
         Some(semantic_trace),
@@ -2646,7 +2637,7 @@ fn semantic_eager_jvp_optional(
     };
 
     let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
-    let tangent_tensor = tangent.materialized_arc()?;
+    let tangent_tensor = Arc::new(RetainedValue::from_tensor(tangent.to_tensor()?));
     let input_count = derivative_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
@@ -2655,7 +2646,7 @@ fn semantic_eager_jvp_optional(
                 "semantic eager JVP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(copy_tensor_for_runtime(ctx, tensor)?);
+        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2663,7 +2654,7 @@ fn semantic_eager_jvp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(copy_tensor_for_runtime(ctx, tangent_tensor.as_ref())?);
+    *slot = Some(copy_value_for_runtime(ctx, tangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2683,7 +2674,8 @@ fn semantic_eager_jvp_optional(
             output_count
         )));
     };
-    let tangent_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tangent_tensor))?;
+    let tangent_trace =
+        TracedTensor::from_shared_tensor_value_symbolic_shape(Arc::clone(&tangent_tensor))?;
     let semantic_trace = derivative_trace_from_frozen_program(
         &source,
         derivative.frozen(),
@@ -2694,10 +2686,10 @@ fn semantic_eager_jvp_optional(
         "semantic_eager_jvp",
     )?;
 
-    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
         Arc::clone(ctx),
         eager_val_key(),
-        Arc::new(result),
+        result,
         true,
         None,
         Some(semantic_trace),
@@ -2720,21 +2712,16 @@ fn validate_same_runtime(
     Ok(())
 }
 
-fn owned_tensor_from_arc(ctx: &EagerRuntime, tensor: Arc<Tensor>) -> Result<Tensor> {
-    match Arc::try_unwrap(tensor) {
-        Ok(tensor) => Ok(tensor),
-        Err(tensor) => copy_tensor_for_runtime(ctx, tensor.as_ref()),
-    }
-}
-
-fn copy_tensor_for_runtime(ctx: &EagerRuntime, tensor: &Tensor) -> Result<Tensor> {
-    if !tensor.is_backend_buffer() {
-        return tensor.duplicate().map_err(Error::from);
-    }
-    ctx.with_execution_session(|session| {
-        session.to_contiguous_read(TensorRead::from_tensor(tensor))
-    })?
-    .map_err(Error::from)
+fn copy_value_for_runtime(ctx: &EagerRuntime, value: &RetainedValue) -> Result<Tensor> {
+    let read = value.tensor_read().map_err(|error| {
+        Error::runtime_state(
+            "copy_value_for_runtime",
+            ErrorPhase::Execution,
+            error.to_string(),
+        )
+    })?;
+    ctx.with_execution_session(|session| session.to_contiguous_read(read))?
+        .map_err(Error::from)
 }
 
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
@@ -2836,7 +2823,7 @@ impl EagerTensor {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
-    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(x.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -2898,15 +2885,15 @@ impl EagerTensor {
         requires_grad: bool,
     ) -> Result<Self> {
         let key = eager_val_key();
-        let tensor = Arc::new(tensor);
-        let semantic_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tensor))?;
+        let semantic_value = Arc::new(RetainedValue::from_tensor(tensor.duplicate()?));
+        let semantic_trace = TracedTensor::from_shared_tensor_value_symbolic_shape(semantic_value)?;
         let metadata_scope =
-            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(tensor.as_ref()))
-                .map_err(|err| {
-                Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
-            })?;
-        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
-        let value = AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_leaf")?;
+            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
+                |err| {
+                    Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
+                },
+            )?;
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_leaf")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
@@ -2919,15 +2906,15 @@ impl EagerTensor {
         })
     }
 
-    pub(crate) fn new_result_arc(
+    pub(crate) fn new_result(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::new_result_arc_with_semantic_trace(
+        Self::new_result_with_semantic_trace(
             ctx,
             key,
             tensor,
@@ -2938,17 +2925,16 @@ impl EagerTensor {
         )
     }
 
-    pub(crate) fn new_result_arc_with_semantic_trace(
+    pub(crate) fn new_result_with_semantic_trace(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
-        let value = AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_result")?;
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
@@ -2961,18 +2947,16 @@ impl EagerTensor {
         })
     }
 
-    pub(crate) fn new_unregistered_result_arc_with_semantic_trace(
+    pub(crate) fn new_unregistered_result_with_semantic_trace(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        let owned_tensor = owned_tensor_from_arc(ctx.as_ref(), tensor)?;
-        let value =
-            AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_unregistered_result")?;
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_unregistered_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
@@ -2994,13 +2978,14 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        let value = match value.try_into_group_parts() {
-            Ok((group, slot, dtype, shape)) => AdValueRecord::from_group(group, slot, dtype, shape),
-            Err(value) => {
-                let owned_tensor = ctx.materialize_value(&value)?;
-                AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_result_value")?
-            }
-        };
+        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+            Error::runtime_state(
+                "EagerTensor::new_result_value",
+                ErrorPhase::Execution,
+                "a TensorValue could not be transferred into its allocation group",
+            )
+        })?;
+        let value = AdValueRecord::from_group(group, slot, dtype, shape);
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
@@ -3071,13 +3056,14 @@ impl EagerTensor {
         value: TensorValue,
         semantic_trace: Option<TracedTensor>,
     ) -> Result<Self> {
-        let value = match value.try_into_group_parts() {
-            Ok((group, slot, dtype, shape)) => AdValueRecord::from_group(group, slot, dtype, shape),
-            Err(value) => {
-                let owned_tensor = ctx.materialize_value(&value)?;
-                AdValueRecord::from_tensor(owned_tensor, "EagerTensor::new_untracked_value_result")?
-            }
-        };
+        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+            Error::runtime_state(
+                "EagerTensor::new_untracked_value_result",
+                ErrorPhase::Execution,
+                "a TensorValue could not be transferred into its allocation group",
+            )
+        })?;
+        let value = AdValueRecord::from_group(group, slot, dtype, shape);
         Ok(Self::new_untracked_value_record(ctx, value, semantic_trace))
     }
 
@@ -3138,7 +3124,7 @@ impl EagerTensor {
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     /// let y = x.detach();
     ///
-    /// assert_eq!(y.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(y.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// assert!(y.grad().unwrap().is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -3146,7 +3132,7 @@ impl EagerTensor {
         let semantic_trace = self
             .duplicate_value()
             .ok()
-            .and_then(|tensor| TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(tensor)).ok());
+            .and_then(|tensor| TracedTensor::from_tensor_symbolic_shape(tensor).ok());
         Self::new_untracked_value_record(
             self.ctx.clone(),
             Arc::clone(&self._record.value),
@@ -3179,28 +3165,6 @@ impl EagerTensor {
     /// the target context cannot register its metadata.
     pub fn detach_into(&self, ctx: &Arc<EagerRuntime>) -> Result<Self> {
         Self::from_tensor_in(self.to_tensor()?, Arc::clone(ctx))
-    }
-
-    /// Materialize and share the concrete tensor value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(), ctx)?;
-    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[3.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RuntimeState`] when lazy/backend-resident storage cannot
-    /// be materialized, or when eager value-record state is poisoned.
-    pub fn materialized(&self) -> Result<Arc<Tensor>> {
-        self.materialized_arc()
     }
 
     /// Borrow the retained value without creating an owner or copy.
@@ -3320,13 +3284,13 @@ impl EagerTensor {
     }
 
     /// Return this tensor's scalar dtype without materializing through
-    /// [`materialized`](Self::materialized).
+    /// [`value`](Self::value).
     pub fn dtype(&self) -> DType {
         self._record.value.dtype()
     }
 
     /// Return this tensor's logical shape without materializing through
-    /// [`materialized`](Self::materialized).
+    /// [`value`](Self::value).
     pub fn shape(&self) -> &[usize] {
         self._record.value.shape()
     }
@@ -3335,7 +3299,7 @@ impl EagerTensor {
     ///
     /// This is the preferred borrowed input boundary for executor calls. It
     /// preserves the option to replace eager storage with non-contiguous views
-    /// without forcing callers through [`materialized`](Self::materialized).
+    /// without forcing callers through [`value`](Self::value).
     pub fn tensor_read(&self) -> TensorRead<'_> {
         self._record
             .value
@@ -3355,15 +3319,6 @@ impl EagerTensor {
     /// typed tensor backend error when contiguous materialization fails.
     pub fn to_tensor(&self) -> Result<Tensor> {
         self.duplicate_value()
-    }
-
-    pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
-        Ok(Arc::new(self.duplicate_value()?))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn materialized_cache_is_initialized(&self) -> bool {
-        false
     }
 
     /// Return the accumulated gradient currently stored for this tensor.
@@ -3551,9 +3506,9 @@ impl EagerTensor {
         let initial_data = graph_input_keys
             .iter()
             .zip(inputs.iter())
-            .map(|(key, tensor)| Ok((ValueKey::Input(key.clone()), tensor.materialized_arc()?)))
+            .map(|(key, tensor)| Ok((ValueKey::Input(key.clone()), tensor.to_tensor()?)))
             .collect::<Result<HashMap<_, _>>>()?;
-        let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), &initial_data)?;
+        let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), initial_data)?;
         if execution.outputs.len() != graph.outputs().len() {
             return Err(Error::Internal(format!(
                 "standard eager graph op expected {} graph outputs, got {}",
@@ -3567,7 +3522,7 @@ impl EagerTensor {
                 .outputs
                 .into_iter()
                 .map(|output| {
-                    Self::new_unregistered_result_arc_with_semantic_trace(
+                    Self::new_unregistered_result_with_semantic_trace(
                         Arc::clone(&ctx),
                         eager_val_key(),
                         output,
@@ -3607,7 +3562,7 @@ impl EagerTensor {
             .zip(recorded.semantic_traces)
             .zip(execution.outputs)
             .map(|((trace, semantic_trace), output)| {
-                Self::new_result_arc_with_semantic_trace(
+                Self::new_result_with_semantic_trace(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
@@ -3662,7 +3617,7 @@ impl EagerTensor {
         let value = self.to_tensor()?;
         let seed = {
             let mut backend = self.ctx.lock_backend()?;
-            Arc::new(one_like_tensor(&value, &mut *backend)?)
+            one_like_tensor(&value, &mut *backend)?
         };
         self.backward_from_seed(seed)
     }
@@ -3709,11 +3664,11 @@ impl EagerTensor {
             });
         }
         validate_seed_tensor("backward", self, cotangent)?;
-        self.backward_from_seed(Arc::new(cotangent.to_tensor()?))
+        self.backward_from_seed(cotangent.to_tensor()?)
     }
 
-    fn backward_from_seed(&self, seed: Arc<Tensor>) -> Result<Gradients> {
-        let cotangent = EagerTensor::new_result_arc(
+    fn backward_from_seed(&self, seed: Tensor) -> Result<Gradients> {
+        let cotangent = EagerTensor::new_result(
             Arc::clone(&self.ctx),
             eager_val_key(),
             seed,
@@ -3784,13 +3739,11 @@ pub(crate) struct RecordedEagerOutputs {
 
 pub(crate) fn record_eager_outputs(
     op: &StdTensorOp,
-    outputs: &[Arc<Tensor>],
+    outputs: &[&Tensor],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
     let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
-    let output_metadata = outputs
-        .iter()
-        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    let output_metadata = outputs.iter().map(|output| tensor_meta_from_tensor(output));
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
@@ -3835,13 +3788,11 @@ fn record_semantic_eager_outputs(
 fn record_eager_graph_outputs(
     graph: &Graph<StdTensorOp>,
     graph_input_keys: &[TensorInputKey],
-    outputs: &[Arc<Tensor>],
+    outputs: &[Tensor],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
     let semantic_traces = record_semantic_eager_graph_outputs(graph, graph_input_keys, inputs)?;
-    let output_metadata = outputs
-        .iter()
-        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    let output_metadata = outputs.iter().map(tensor_meta_from_tensor);
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
@@ -4019,12 +3970,16 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())?),
     };
-    backend.upload_host_tensor(&host).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&host))
+        .map_err(Error::from)
 }
 
 pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Result<Tensor> {
     let host = ones_tensor(input.dtype(), input.shape().to_vec())?;
-    backend.upload_host_tensor(&host).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&host))
+        .map_err(Error::from)
 }
 
 #[cfg(test)]

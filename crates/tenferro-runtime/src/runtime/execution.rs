@@ -13,8 +13,8 @@ use std::thread::{self, ThreadId};
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
-    AllocationGroup, DescriptorSlot, GroupError, Tensor, TensorBackend, TensorRead, TensorValue,
-    TensorView,
+    AllocationGroup, DType, DescriptorSlot, GroupError, MemoryKind, Tensor, TensorBackend,
+    TensorRead, TensorValue, TensorView,
 };
 
 use crate::error::ErrorPhase;
@@ -35,7 +35,6 @@ use crate::runtime::{
 };
 use crate::{Error, Result};
 
-type RuntimeInputRefs<'a> = SmallVec<[&'a Tensor; 8]>;
 type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
 type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = SmallVec<[usize; 8]>;
@@ -118,6 +117,212 @@ impl fmt::Debug for ExecutionInputs {
     }
 }
 
+/// Borrowed immutable inputs for synchronous, retirement-before-return execution.
+pub struct ScopedReadInputs<'env> {
+    bindings: Box<[ScopedReadBinding<'env>]>,
+}
+
+impl<'env> ScopedReadInputs<'env> {
+    /// Build a scoped input package from borrowed dtype-erased views.
+    pub fn new(bindings: Vec<TensorView<'env>>) -> Self {
+        Self {
+            bindings: bindings
+                .into_iter()
+                .map(|tensor| ScopedReadBinding { tensor })
+                .collect(),
+        }
+    }
+
+    fn as_reads(&self) -> Vec<TensorRead<'env>> {
+        self.bindings
+            .iter()
+            .map(|binding| TensorRead::from_view(binding.tensor.clone()))
+            .collect()
+    }
+
+    fn has_non_host_provider(&self) -> bool {
+        self.bindings.iter().any(|binding| {
+            !matches!(
+                binding.tensor.placement().memory_kind,
+                MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+            )
+        })
+    }
+
+    /// Return the number of borrowed bindings.
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Return whether no borrowed bindings were supplied.
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+}
+
+/// One immutable borrowed binding in a scoped input package.
+pub struct ScopedReadBinding<'env> {
+    tensor: TensorView<'env>,
+}
+
+impl<'env> ScopedReadBinding<'env> {
+    /// Wrap one immutable dtype-erased view.
+    pub fn new(tensor: TensorView<'env>) -> Self {
+        Self { tensor }
+    }
+
+    /// Borrow the binding's dtype-erased view.
+    pub fn tensor(&self) -> &TensorView<'env> {
+        &self.tensor
+    }
+}
+
+impl fmt::Debug for ScopedReadInputs<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScopedReadInputs")
+            .field("len", &self.bindings.len())
+            .finish()
+    }
+}
+
+/// A synchronous scoped execution result.
+// INVARIANT: these variants keep the borrowed execution contract allocation-free
+// at the API boundary; boxing would add an avoidable ownership allocation.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum ScopedExecutionOutcome<'env> {
+    /// All provider work retired before this call returned.
+    Completed(ScopedExecutionBundle<'env>),
+    /// Execution retired with an ordinary error and the original borrows remain available.
+    RetiredFailed {
+        error: Error,
+        inputs: ScopedReadInputs<'env>,
+    },
+}
+
+/// Metadata for a storage-free scoped output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputMetadata {
+    /// Scalar dtype of the logical output.
+    pub dtype: DType,
+    /// Logical shape of the output.
+    pub shape: Box<[usize]>,
+}
+
+/// Owned outputs and borrowed identity views from one completed scoped call.
+pub struct ScopedExecutionBundle<'env> {
+    owned: AllocationGroup,
+    outputs: Box<[ScopedOutput<'env>]>,
+}
+
+impl fmt::Debug for ScopedExecutionBundle<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScopedExecutionBundle")
+            .field("len", &self.outputs.len())
+            .finish()
+    }
+}
+
+impl<'env> ScopedExecutionBundle<'env> {
+    /// Borrow one completed output.
+    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
+        let output = self
+            .outputs
+            .get(index)
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        match output {
+            ScopedOutput::Borrowed(view) => Ok(OutputRef::Tensor(view.clone())),
+            ScopedOutput::Owned(slot) => output_ref_from_group(&self.owned, *slot),
+            ScopedOutput::Metadata(metadata) => Ok(OutputRef::Metadata(metadata)),
+        }
+    }
+
+    /// Consume the bundle and extract a fresh owned output.
+    #[allow(clippy::result_large_err)]
+    pub fn into_owned_output(
+        self,
+        index: usize,
+    ) -> std::result::Result<Tensor, (Self, ScopedOutputExtractError)> {
+        let slot = match self.outputs.get(index) {
+            Some(ScopedOutput::Owned(slot)) => *slot,
+            Some(ScopedOutput::Borrowed(_)) => {
+                return Err((self, ScopedOutputExtractError::BorrowedOutput))
+            }
+            Some(ScopedOutput::Metadata(_)) => {
+                return Err((self, ScopedOutputExtractError::MetadataOutput))
+            }
+            None => return Err((self, ScopedOutputExtractError::InvalidOutput { index })),
+        };
+        let Self { owned, outputs } = self;
+        match owned.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((owned, error)) => Err((
+                Self { owned, outputs },
+                ScopedOutputExtractError::Output(OutputExtractError::Group(error)),
+            )),
+        }
+    }
+}
+
+/// Output classification used by scoped providers.
+// INVARIANT: borrowed views stay inline so scoped output classification does
+// not materialize an extra owner or heap allocation.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum ScopedOutput<'env> {
+    /// A result that aliases an immutable caller input.
+    Borrowed(TensorView<'env>),
+    /// A fresh result owned by the scoped bundle's allocation group.
+    Owned(DescriptorSlot),
+    /// Metadata-only output with no tensor payload.
+    Metadata(OutputMetadata),
+}
+
+/// Failure while consuming a scoped output.
+#[derive(Debug, thiserror::Error)]
+pub enum ScopedOutputExtractError {
+    #[error("scoped output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("scoped output is borrowed from the caller")]
+    BorrowedOutput,
+    #[error("scoped output contains metadata only")]
+    MetadataOutput,
+    #[error("scoped owned output cannot be extracted: {0}")]
+    Output(#[from] OutputExtractError),
+}
+
+/// A pre-admission scoped submission rejection. The original borrows remain available.
+#[derive(Debug)]
+pub struct ScopedSubmitRejected<'env> {
+    source: Box<Error>,
+    inputs: ScopedReadInputs<'env>,
+}
+
+impl<'env> ScopedSubmitRejected<'env> {
+    /// Consume the rejection and preserve its original environment lifetime.
+    pub fn into_parts(self) -> (Error, ScopedReadInputs<'env>) {
+        (*self.source, self.inputs)
+    }
+}
+
+impl fmt::Display for ScopedSubmitRejected<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "scoped submission rejected before admission: {}",
+            self.source
+        )
+    }
+}
+
+impl StdError for ScopedSubmitRejected<'_> {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 /// A detached execution result retaining one allocation group for all outputs.
 #[derive(Debug)]
 pub struct ExecutionBundle {
@@ -126,9 +331,13 @@ pub struct ExecutionBundle {
 }
 
 /// A borrowed output view from an [`ExecutionBundle`].
+// INVARIANT: this read-only result is a zero-allocation projection of an
+// already-prepared view; boxing would add work on the output hot path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum OutputRef<'a> {
     Tensor(TensorView<'a>),
+    Metadata(&'a OutputMetadata),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1032,15 +1241,175 @@ pub(super) fn run_compiled(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
-    execute_scheduled_tensor_refs(
+    execute_scheduled_reads(
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
         &inputs,
     )
+}
+
+/// Execute one immutable borrowed package synchronously through provider retirement.
+///
+/// Asynchronous or non-host providers are rejected before preparation can enqueue
+/// work. CPU/host execution returns only after the schedule has retired.
+pub(super) fn execute_scoped_read_only<'env>(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: ScopedReadInputs<'env>,
+) -> std::result::Result<ScopedExecutionOutcome<'env>, ScopedSubmitRejected<'env>> {
+    if inputs.has_non_host_provider() {
+        return Err(ScopedSubmitRejected {
+            source: Box::new(Error::unsupported(
+                "Runtime::execute_scoped_read_only",
+                ErrorPhase::Execution,
+                "scoped borrowed execution requires host/CPU storage",
+            )),
+            inputs,
+        });
+    }
+
+    let reads = inputs.as_reads();
+    let prepared = match prepare_compiled_reads(runtime, program, &reads) {
+        Ok(prepared) => prepared,
+        Err(source) => {
+            return Err(ScopedSubmitRejected {
+                source: Box::new(source),
+                inputs,
+            })
+        }
+    };
+    if !schedule_supports_scoped_execution(prepared.prepared.root().schedule()) {
+        return Err(ScopedSubmitRejected {
+            source: Box::new(Error::unsupported(
+                "Runtime::execute_scoped_read_only",
+                ErrorPhase::Execution,
+                "the selected provider does not prove retirement before scoped return",
+            )),
+            inputs,
+        });
+    }
+
+    match execute_scoped_admitted(
+        prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
+        prepared.prepared.operations(),
+        &reads,
+    ) {
+        Ok(bundle) => Ok(ScopedExecutionOutcome::Completed(bundle)),
+        Err(error) => Ok(ScopedExecutionOutcome::RetiredFailed { error, inputs }),
+    }
+}
+
+fn execute_scoped_admitted<'env>(
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationPlan],
+    inputs: &[TensorRead<'env>],
+) -> Result<ScopedExecutionBundle<'env>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scoped tensor executor")?;
+    let input_slots = inputs.iter().cloned().map(ExecSlot::Read).collect();
+    let mut located = execute_scheduled_slots(
+        program,
+        schedule,
+        operations,
+        input_slots,
+        RuntimeOutputMode::Tensor,
+    )?;
+    collect_scoped_outputs(program, &mut located)
+}
+
+pub(crate) fn collect_scoped_outputs<'env>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'env>>],
+) -> Result<ScopedExecutionBundle<'env>> {
+    let mut owned = AllocationGroup::from_tensors(Vec::new())
+        .map(|(group, _)| group)
+        .map_err(|error| {
+            Error::runtime_state(
+                "Runtime::collect_scoped_outputs",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+    let mut scoped = Vec::with_capacity(program.output_slots.len());
+    for &slot in &program.output_slots {
+        let located = outputs
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        let output = match located.value {
+            ExecSlot::Read(read) => ScopedOutput::Borrowed(read.tensor_view()),
+            ExecSlot::Owned(tensor) => {
+                let slot = owned.append_tensor(tensor).map_err(|error| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        error.to_string(),
+                    )
+                })?;
+                ScopedOutput::Owned(slot)
+            }
+            ExecSlot::Value(value) => {
+                let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        "scoped value output was retained by another owner",
+                    )
+                })?;
+                let slot = owned.append_group(group, slot).map_err(|error| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        error.to_string(),
+                    )
+                })?;
+                let _ = (dtype, shape);
+                ScopedOutput::Owned(slot)
+            }
+        };
+        scoped.push(output);
+    }
+    outputs.iter_mut().for_each(|output| *output = None);
+    Ok(ScopedExecutionBundle {
+        owned,
+        outputs: scoped.into_boxed_slice(),
+    })
+}
+
+fn output_ref_from_group<'a>(
+    group: &'a AllocationGroup,
+    slot: DescriptorSlot,
+) -> std::result::Result<OutputRef<'a>, OutputAccessError> {
+    let mut views = group.read_views(std::slice::from_ref(&slot))?;
+    match views.pop() {
+        Some(TensorRead::View(view)) => Ok(OutputRef::Tensor(view)),
+        Some(TensorRead::Tensor(_)) | None => Err(OutputAccessError::InvalidOutput {
+            index: slot.index(),
+        }),
+    }
+}
+
+fn schedule_supports_scoped_execution(schedule: &ScheduledGraph) -> bool {
+    let supports = |location: &ExecutionLocation| {
+        location
+            .witness()
+            .event_domain_driver()
+            .supports_scoped_read_only()
+    };
+    supports(schedule.root_location())
+        && schedule.input_locations().iter().all(supports)
+        && schedule.operation_locations().iter().all(supports)
+        && schedule.nodes().iter().all(|node| {
+            node.event_domain_witness()
+                .event_domain_driver()
+                .supports_scoped_read_only()
+        })
 }
 
 pub(super) fn prepare_compiled(
@@ -1049,7 +1418,7 @@ pub(super) fn prepare_compiled(
     inputs: &[&Tensor],
 ) -> Result<PreparedCompiledGraph> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
         runtime,
@@ -1107,7 +1476,7 @@ pub(super) fn run_prepared(
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    execute_scheduled_tensor_refs(
+    execute_scheduled_reads(
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -1159,14 +1528,14 @@ pub(super) fn run_compiled_values(
     inputs: &[&Tensor],
 ) -> Result<Vec<TensorValue>> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
         runtime,
         prepared.root().epoch(),
         "Runtime::run_compiled_values",
     )?;
-    execute_scheduled_value_refs(
+    execute_scheduled_value_reads(
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -1233,19 +1602,6 @@ fn validate_prepared_epoch(
     Ok(())
 }
 
-fn execute_scheduled_tensor_refs(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    operations: &[PreparedOperationPlan],
-    inputs: &[&Tensor],
-) -> Result<Vec<Tensor>> {
-    let inputs = inputs
-        .iter()
-        .map(|tensor| TensorRead::from_tensor(tensor))
-        .collect::<Vec<_>>();
-    execute_scheduled_reads(program, schedule, operations, &inputs)
-}
-
 fn execute_scheduled_reads(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
@@ -1269,18 +1625,15 @@ fn execute_scheduled_reads(
     })
 }
 
-fn execute_scheduled_value_refs(
+fn execute_scheduled_value_reads(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
-    inputs: &[&Tensor],
+    inputs: &[TensorRead<'_>],
 ) -> Result<Vec<TensorValue>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    let inputs = inputs
-        .iter()
-        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-        .collect();
+    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
     execute_scheduled_slots(
         program,
         schedule,
@@ -2250,14 +2603,6 @@ fn collect_value_outputs_with<'input>(
         .collect()
 }
 
-fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {
-    let reads: RuntimeInputReads<'_> = inputs
-        .iter()
-        .map(|tensor| TensorRead::from_tensor(tensor))
-        .collect();
-    input_signature_reads(&reads)
-}
-
 fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
     InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }
@@ -2265,40 +2610,71 @@ fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
 fn resolve_input_refs<'a>(
     program: &'a CompiledGraph,
     inputs: &'a [&'a Tensor],
-) -> Result<RuntimeInputRefs<'a>> {
+) -> Result<RuntimeInputReads<'a>> {
+    let expected = program.program().inputs().len();
+    if inputs.len() > expected {
+        return Err(Error::GraphInputCountMismatch {
+            expected,
+            actual: inputs.len(),
+        });
+    }
     let resolved = if inputs.is_empty() {
         semantic_default_inputs(program)?
+    } else if inputs.len() == expected {
+        inputs
+            .iter()
+            .map(|tensor| TensorRead::from_tensor(tensor))
+            .collect()
     } else {
-        inputs.iter().copied().collect()
+        let mut explicit = inputs.iter();
+        let mut resolved = RuntimeInputReads::new();
+        for value in program.program().inputs() {
+            if let Some(retained) = program.bindings().tensor_ref_for_input(*value) {
+                resolved.push(retained.tensor_read()?);
+            } else {
+                let tensor = explicit.next().ok_or_else(|| {
+                    Error::invalid_argument(
+                        "Runtime::resolve_input_refs",
+                        ErrorPhase::Execution,
+                        "inputs",
+                        format!(
+                            "expected {expected} inputs, or one explicit input for each unbound placeholder"
+                        ),
+                    )
+                })?;
+                resolved.push(TensorRead::from_tensor(tensor));
+            }
+        }
+        if explicit.next().is_some() {
+            return Err(Error::invalid_argument(
+                "Runtime::resolve_input_refs",
+                ErrorPhase::Execution,
+                "inputs",
+                format!("expected {expected} inputs, received {}", inputs.len()),
+            ));
+        }
+        resolved
     };
-    validate_ordered_input_metadata(program, &resolved)?;
+    validate_ordered_input_metadata_reads(program, &resolved)?;
     Ok(resolved)
 }
 
-fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputRefs<'_>> {
+fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputReads<'_>> {
     program
         .program()
         .inputs()
         .iter()
         .enumerate()
         .map(|(input_index, value)| {
-            program
+            let retained = program
                 .bindings()
                 .tensor_ref_for_input(*value)
-                .map(AsRef::as_ref)
                 .ok_or_else(|| Error::UnboundPlaceholder {
                     input_key: format!("semantic input {input_index}"),
-                })
+                })?;
+            retained.tensor_read()
         })
         .collect()
-}
-
-fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) -> Result<()> {
-    let actuals = inputs
-        .iter()
-        .map(|tensor| (tensor.dtype(), tensor.shape().to_vec()))
-        .collect::<Vec<_>>();
-    validate_ordered_input_metadata_values(program, &actuals, "Runtime::run_compiled")
 }
 
 fn validate_ordered_input_metadata_reads(

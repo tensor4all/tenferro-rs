@@ -14,7 +14,7 @@ use tenferro_tensor::{
 };
 
 use super::*;
-use crate::{
+use crate::cuda::{
     cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceError,
     CudaDeviceId, CudaDeviceInfo, CudaRuntime,
 };

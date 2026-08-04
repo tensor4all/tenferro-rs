@@ -13,7 +13,7 @@ use super::ffi::cusolver::{
     CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
-use tenferro_gpu::cuda_interop::{
+use tenferro_gpu::cuda::interop::{
     alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
     ensure_typed_tensor_resident, flush_cubecl_client, typed_tensor_array_arg,
     typed_tensor_binding, upload_device_bytes, with_cubecl_client, with_raw_cuda_stream,
@@ -23,7 +23,7 @@ use tenferro_gpu::cuda_interop::{
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
 // reduce_min/reduce_max) then downloads scalar summaries — no bulk host
 // roundtrip.
-use tenferro_gpu::{download_tensor, CudaExecSession, CudaRuntime};
+use tenferro_gpu::{cuda::download_tensor, cuda::CudaExecSession, cuda::CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, Error, Tensor, TensorElementwise, TensorRead, TensorReduction, TensorScalar,

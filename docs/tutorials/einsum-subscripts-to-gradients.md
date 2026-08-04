@@ -11,8 +11,6 @@ planning choices for a three-operand contraction, then differentiates
 
 <!-- snippet-source: docs/tutorial-code/src/bin/einsum_subscripts_to_gradients.rs -->
 ```rust
-use std::sync::Arc;
-
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EagerEinsumExt, EinsumOptimize, TraceContextEinsumExt};
@@ -76,7 +74,7 @@ fn trace_and_run(
         .map(|tensor| {
             trace.input_with_default(
                 ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-                Arc::new(tensor),
+                tensor,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -100,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(
-        product.materialized()?.as_slice::<f64>().unwrap(),
+        product.value()?.as_slice::<f64>().unwrap(),
         &[58.0, 139.0, 64.0, 154.0],
     );
 
@@ -118,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let loss = product.reduce_sum(Some(&[0, 1]))?;
     let grad_a = runtime.grad(&loss, &a)?;
-    let grad_value = grad_a.materialized()?;
+    let grad_value = grad_a.value()?;
 
     assert_eq!(grad_value.shape(), &[2, 3]);
     assert_close(

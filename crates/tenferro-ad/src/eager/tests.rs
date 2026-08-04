@@ -416,7 +416,6 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     .unwrap();
     let x_t = x.transpose(&[1, 0]).unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
-    assert!(!x_t.materialized_cache_is_initialized());
 
     let outputs = crate::extension::apply_eager_with_extension_session(
         Arc::new(ReadPathFallbackProbe),
@@ -439,14 +438,9 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     )
     .expect("eager extension dispatch");
 
-    assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(outputs.len(), 1);
     assert_eq!(
-        outputs[0]
-            .materialized()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        outputs[0].to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }
@@ -499,11 +493,7 @@ fn standard_graph_op_executes_untracked_outputs_without_trace() {
     assert_eq!(outputs[0].debug_trace_saved_value_count(), None);
     assert_eq!(outputs[0].shape(), &[] as &[usize]);
     assert_eq!(
-        outputs[0]
-            .materialized()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        outputs[0].to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[36.0]
     );
 }
@@ -528,10 +518,7 @@ fn standard_graph_op_records_one_tracked_graph_and_backpropagates() {
     let loss = outputs.pop().expect("one output");
 
     assert!(loss.tracks_grad());
-    assert_eq!(
-        loss.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[36.0]
-    );
+    assert_eq!(loss.value().unwrap().as_slice::<f64>().unwrap(), &[36.0]);
     assert_eq!(loss.debug_trace_saved_value_count(), None);
 
     loss.backward().expect("backward through recorded graph");
@@ -601,7 +588,7 @@ fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
     let vjp = ctx.vjp(&y, &x, &seed).unwrap();
 
     assert_eq!(
-        vjp.materialized().unwrap().as_slice::<f64>().unwrap(),
+        vjp.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 12.0]
     );
 }
@@ -629,14 +616,8 @@ fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled
     let dx = ctx.vjp(&output, &x, &seed).unwrap();
     let dy = ctx.vjp(&output, &y, &seed).unwrap();
 
-    assert_eq!(
-        dx.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[5.0, 14.0]
-    );
-    assert_eq!(
-        dy.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[2.0, 6.0]
-    );
+    assert_eq!(dx.value().unwrap().as_slice::<f64>().unwrap(), &[5.0, 14.0]);
+    assert_eq!(dy.value().unwrap().as_slice::<f64>().unwrap(), &[2.0, 6.0]);
 }
 
 #[test]
@@ -711,10 +692,7 @@ fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
     let dx = ctx.vjp(&y, &x, &seed).unwrap();
 
     assert!(dx.tracks_grad());
-    assert_eq!(
-        dx.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0, 12.0]
-    );
+    assert_eq!(dx.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
     assert!(x.grad().unwrap().is_none());
 }
 
@@ -747,19 +725,11 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
     let active_vjp = ctx.vjp_optional(&loss, &active, &seed).unwrap().unwrap();
     let active_jvp = ctx.jvp_optional(&loss, &active, &seed).unwrap().unwrap();
     assert_eq!(
-        active_vjp
-            .materialized()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        active_vjp.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     assert_eq!(
-        active_jvp
-            .materialized()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        active_jvp.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
 }
@@ -782,10 +752,7 @@ fn eager_runtime_jvp_returns_composable_semantic_trace() {
     let dy = ctx.jvp(&y, &x, &tangent).unwrap();
 
     assert!(dy.tracks_grad());
-    assert_eq!(
-        dy.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0, 6.0]
-    );
+    assert_eq!(dy.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
 
 #[test]
@@ -807,7 +774,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
 
     let first = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(
-        first.materialized().unwrap().as_slice::<f64>().unwrap(),
+        first.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     let after_first = ctx.cache_stats().unwrap().ad_transforms;
@@ -815,7 +782,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
 
     let second = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(
-        second.materialized().unwrap().as_slice::<f64>().unwrap(),
+        second.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     let after_second = ctx.cache_stats().unwrap().ad_transforms;
@@ -831,10 +798,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
     )
     .unwrap();
     let dy = ctx.jvp(&y, &x, &tangent).unwrap();
-    assert_eq!(
-        dy.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[4.0, 6.0]
-    );
+    assert_eq!(dy.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     assert!(ctx.cache_stats().unwrap().ad_transforms.entries > 0);
 }
 
@@ -857,7 +821,7 @@ fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
 
     let first = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(
-        first.materialized().unwrap().as_slice::<f64>().unwrap(),
+        first.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     let after_first = ctx.runtime.cache_stats().unwrap().prepared_plans;
@@ -865,7 +829,7 @@ fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
 
     let second = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(
-        second.materialized().unwrap().as_slice::<f64>().unwrap(),
+        second.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     let after_second = ctx.runtime.cache_stats().unwrap().prepared_plans;
@@ -894,7 +858,7 @@ fn eager_prepared_derivative_cache_is_visible_and_clearable() {
 
     let first = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(
-        first.materialized().unwrap().as_slice::<f64>().unwrap(),
+        first.value().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
     );
     let after_first = ctx.cache_stats().unwrap().prepared_derivatives;
@@ -963,14 +927,8 @@ fn eager_functional_grad_can_feed_jvp() {
     let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
     assert!(grad.tracks_grad());
-    assert_eq!(
-        grad.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[6.0]
-    );
-    assert_eq!(
-        hvp.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[2.0]
-    );
+    assert_eq!(grad.value().unwrap().as_slice::<f64>().unwrap(), &[6.0]);
+    assert_eq!(hvp.value().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
 }
 
 #[test]
@@ -992,14 +950,8 @@ fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
     let grad = ctx.grad(&loss, &x).unwrap();
     let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
-    assert_eq!(
-        grad.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[27.0]
-    );
-    assert_eq!(
-        hvp.materialized().unwrap().as_slice::<f64>().unwrap(),
-        &[18.0]
-    );
+    assert_eq!(grad.value().unwrap().as_slice::<f64>().unwrap(), &[27.0]);
+    assert_eq!(hvp.value().unwrap().as_slice::<f64>().unwrap(), &[18.0]);
 }
 
 #[test]
@@ -1151,19 +1103,16 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     .unwrap();
     let x_t = x.transpose(&[1, 0]).unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
-    assert!(!x_t.materialized_cache_is_initialized());
 
     let doubled = x_t.add(&x_t).unwrap();
-    assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
-        doubled.materialized().unwrap().as_slice::<f64>().unwrap(),
+        doubled.value().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 
     let reduced = x_t.reduce_sum(Some(&[0])).unwrap();
-    assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
-        reduced.materialized().unwrap().as_slice::<f64>().unwrap(),
+        reduced.value().unwrap().as_slice::<f64>().unwrap(),
         &[9.0, 12.0]
     );
 
@@ -1178,9 +1127,8 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
             },
         )
         .unwrap();
-    assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
-        dot.materialized().unwrap().as_slice::<f64>().unwrap(),
+        dot.value().unwrap().as_slice::<f64>().unwrap(),
         &[5.0, 11.0, 17.0, 11.0, 25.0, 39.0, 17.0, 39.0, 61.0]
     );
 }
@@ -1216,7 +1164,6 @@ fn eager_retention_exposes_borrowed_values_and_explicit_duplication() {
     let value = x.value().unwrap();
     assert_eq!(value.shape(), &[2]);
     drop(value);
-    assert!(!x.materialized_cache_is_initialized());
 
     let duplicate = x.duplicate_value().unwrap();
     assert_eq!(duplicate.as_slice::<f64>().unwrap(), &[1.0, 2.0]);

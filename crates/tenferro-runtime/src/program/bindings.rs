@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use tenferro_tensor::Tensor;
+use crate::checkpoint::RetainedValue;
 
 use super::value::ProgramBuilderNonce;
 use super::{BindingKey, ProgramValue};
@@ -9,12 +9,12 @@ use super::{BindingKey, ProgramValue};
 pub(crate) struct PendingBinding {
     pub(crate) key: BindingKey,
     pub(crate) input: ProgramValue,
-    pub(crate) tensor: Arc<Tensor>,
+    pub(crate) tensor: Arc<RetainedValue>,
 }
 
 struct ProgramBinding {
     key: BindingKey,
-    tensor: Arc<Tensor>,
+    tensor: Arc<RetainedValue>,
 }
 
 /// Immutable tensor defaults and large constants kept outside semantic structure.
@@ -44,11 +44,11 @@ impl ProgramBindings {
         self.owner == owner
     }
 
-    pub(crate) fn tensor_for_input(&self, input: ProgramValue) -> Option<Arc<Tensor>> {
+    pub(crate) fn tensor_for_input(&self, input: ProgramValue) -> Option<Arc<RetainedValue>> {
         self.tensor_ref_for_input(input).map(Arc::clone)
     }
 
-    pub(crate) fn tensor_ref_for_input(&self, input: ProgramValue) -> Option<&Arc<Tensor>> {
+    pub(crate) fn tensor_ref_for_input(&self, input: ProgramValue) -> Option<&Arc<RetainedValue>> {
         if input.owner != self.owner {
             return None;
         }
@@ -108,7 +108,7 @@ impl ProgramBindings {
     }
 
     /// Borrow a tensor by opaque binding key.
-    pub fn get(&self, key: BindingKey) -> Option<&Tensor> {
+    pub fn get(&self, key: BindingKey) -> Option<&RetainedValue> {
         if key.owner != self.owner {
             return None;
         }
@@ -120,8 +120,8 @@ impl ProgramBindings {
             .map(|entry| entry.tensor.as_ref())
     }
 
-    /// Iterate over ordered binding keys and borrowed tensors.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (BindingKey, &Tensor)> + '_ {
+    /// Iterate over ordered binding keys and borrowed move-only values.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (BindingKey, &RetainedValue)> + '_ {
         self.entries
             .iter()
             .map(|entry| (entry.key, entry.tensor.as_ref()))

@@ -144,13 +144,17 @@ fn direct_and_session_cpu_noop_transfers_preserve_remote_storage_affinity() {
     let remote = remote_domain(selected);
     let input = placed_f64(vec![2], vec![1.0, 2.0], remote);
 
-    let direct_upload = backend.upload_host_tensor(&input).unwrap();
-    let direct_download = backend.download_to_host(&input).unwrap();
+    let direct_upload = backend
+        .upload_host_tensor(TensorRead::from_tensor(&input))
+        .unwrap();
+    let direct_download = backend
+        .download_to_host(TensorRead::from_tensor(&input))
+        .unwrap();
     let (session_upload, session_download) = backend
         .with_backend_session(|session| -> crate::Result<_> {
             Ok((
-                session.upload_host_tensor(&input)?,
-                session.download_to_host(&input)?,
+                session.upload_host_tensor(TensorRead::from_tensor(&input))?,
+                session.download_to_host(TensorRead::from_tensor(&input))?,
             ))
         })
         .unwrap();

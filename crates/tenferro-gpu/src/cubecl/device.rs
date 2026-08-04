@@ -31,7 +31,7 @@ struct CudaDriverApi;
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaDeviceId;
+/// use tenferro_gpu::cuda::CudaDeviceId;
 ///
 /// let device = CudaDeviceId::from_ordinal(2);
 /// assert_eq!(device.ordinal(), 2);
@@ -45,7 +45,7 @@ impl CudaDeviceId {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaDeviceId;
+    /// use tenferro_gpu::cuda::CudaDeviceId;
     ///
     /// const DEVICE: CudaDeviceId = CudaDeviceId::from_ordinal(0);
     /// assert_eq!(DEVICE.ordinal(), 0);
@@ -59,7 +59,7 @@ impl CudaDeviceId {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaDeviceId;
+    /// use tenferro_gpu::cuda::CudaDeviceId;
     ///
     /// let device = CudaDeviceId::from_ordinal(3);
     /// assert_eq!(device.ordinal(), 3);
@@ -87,7 +87,7 @@ impl fmt::Debug for CudaDeviceId {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaDeviceInfo;
+/// use tenferro_gpu::cuda::CudaDeviceInfo;
 ///
 /// let _type_name = std::any::type_name::<CudaDeviceInfo>();
 /// ```
@@ -111,7 +111,7 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaDeviceInfo;
+    /// use tenferro_gpu::cuda::CudaDeviceInfo;
     ///
     /// let _id = CudaDeviceInfo::id;
     /// ```
@@ -124,7 +124,7 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaDeviceInfo;
+    /// use tenferro_gpu::cuda::CudaDeviceInfo;
     ///
     /// let _name = CudaDeviceInfo::name;
     /// ```
@@ -229,7 +229,7 @@ impl DiscoveryDriver for CudaDriverApi {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{cuda_devices, CudaDeviceError, CudaDeviceInfo};
+/// use tenferro_gpu::{cuda::cuda_devices, cuda::CudaDeviceError, cuda::CudaDeviceInfo};
 ///
 /// let _discover: fn() -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> = cuda_devices;
 /// ```
@@ -255,7 +255,7 @@ pub(crate) fn unavailable_device_error(
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+/// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId};
 ///
 /// let error = CudaDeviceError::Unavailable {
 ///     requested: CudaDeviceId::from_ordinal(1),
@@ -304,7 +304,7 @@ impl CudaDeviceError {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
     /// let error = CudaDeviceError::Unavailable {
     ///     requested: CudaDeviceId::from_ordinal(1),
@@ -326,7 +326,7 @@ impl CudaDeviceError {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
     /// let requested = CudaDeviceId::from_ordinal(1);
     /// let error = CudaDeviceError::Unavailable {
@@ -347,7 +347,7 @@ impl CudaDeviceError {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
     /// let error = CudaDeviceError::Unavailable {
     ///     requested: CudaDeviceId::from_ordinal(1),
@@ -367,7 +367,7 @@ impl CudaDeviceError {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
     /// let device = CudaDeviceId::from_ordinal(1);
     /// let error = CudaDeviceError::Initialization {

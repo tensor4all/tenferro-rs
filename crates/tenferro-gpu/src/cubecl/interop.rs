@@ -94,8 +94,8 @@ pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaRuntime;
-/// use tenferro_gpu::cuda_interop::with_raw_cuda_stream;
+/// use tenferro_gpu::cuda::CudaRuntime;
+/// use tenferro_gpu::cuda::interop::with_raw_cuda_stream;
 ///
 /// # fn example(rt: &CudaRuntime) -> tenferro_tensor::Result<()> {
 /// with_raw_cuda_stream(rt, "example", |_stream| {})?;
@@ -193,8 +193,8 @@ pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cuda_interop::with_typed_device_ptr;
-/// use tenferro_gpu::CudaRuntime;
+/// use tenferro_gpu::cuda::interop::with_typed_device_ptr;
+/// use tenferro_gpu::cuda::CudaRuntime;
 /// use tenferro_tensor::TypedTensor;
 ///
 /// # fn example(rt: &CudaRuntime, tensor: &TypedTensor<f32>) -> tenferro_tensor::Result<()> {

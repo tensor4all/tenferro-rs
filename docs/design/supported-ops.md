@@ -64,7 +64,7 @@ and linalg provider.
 ### CUDA/CubeCL Status
 
 The public GPU crate exposes this backend as
-`tenferro_gpu::CudaBackend` behind the `cuda` feature. It is backed
+`tenferro_gpu::cuda::CudaBackend` behind the `cuda` feature. It is backed
 by CubeCL/CubeCL-CUDA and runtime-loaded cuTENSOR, cuSOLVER, and cuBLAS.
 Static kernels live in `crates/tenferro-gpu/src/kernels`.
 

@@ -1954,6 +1954,6 @@ fn cuda_indexing_preflights_structure_and_all_inputs_before_value_scans() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cubecl_runtime_exposes_explicit_synchronize() {
-    let _sync: fn(&tenferro_gpu::CudaRuntime) -> tenferro_tensor::Result<()> =
-        tenferro_gpu::CudaRuntime::synchronize;
+    let _sync: fn(&tenferro_gpu::cuda::CudaRuntime) -> tenferro_tensor::Result<()> =
+        tenferro_gpu::cuda::CudaRuntime::synchronize;
 }

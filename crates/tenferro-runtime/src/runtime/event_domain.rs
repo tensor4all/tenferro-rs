@@ -337,6 +337,14 @@ pub trait EventDomainRun: fmt::Debug + Send {
 /// }
 /// ```
 pub trait EventDomainDriver: fmt::Debug + Send + Sync + 'static {
+    /// Report whether this provider proves retirement before a scoped call returns.
+    ///
+    /// The default is conservative: asynchronous queues and providers with
+    /// unknown retirement semantics cannot admit borrowed scoped inputs.
+    fn supports_scoped_read_only(&self) -> bool {
+        false
+    }
+
     /// Begin one isolated execution run for exactly `domain`.
     ///
     /// # Errors
@@ -396,6 +404,10 @@ impl ImmediateEventDomainDriver {
 }
 
 impl EventDomainDriver for ImmediateEventDomainDriver {
+    fn supports_scoped_read_only(&self) -> bool {
+        true
+    }
+
     fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
         Ok(Box::new(ImmediateEventDomainRun { domain }))
     }

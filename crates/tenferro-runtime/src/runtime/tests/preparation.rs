@@ -382,9 +382,7 @@ fn two_input_add_program() -> FrozenProgram {
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1024)]))
         .expect("right input");
     let bound = Tensor::from_vec_col_major(vec![1024], vec![1.0_f64; 1024]).expect("bound tensor");
-    builder
-        .bind_input(left, Arc::new(bound))
-        .expect("input binding");
+    builder.bind_input(left, bound).expect("input binding");
     let sum = builder
         .add_op(CoreSemanticOp::Add, &[left, right])
         .expect("add op")[0];

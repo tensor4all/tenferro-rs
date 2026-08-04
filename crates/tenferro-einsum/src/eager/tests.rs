@@ -421,7 +421,15 @@ impl TensorDot for NoBroadcastMaterializationBackend {
 impl TensorFusion for NoBroadcastMaterializationBackend {}
 impl TensorBuffer for NoBroadcastMaterializationBackend {}
 impl SessionCachedDot for NoBroadcastMaterializationBackend {}
-impl TensorDeviceTransfer for NoBroadcastMaterializationBackend {}
+impl TensorDeviceTransfer for NoBroadcastMaterializationBackend {
+    fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> Result<Tensor> {
+        Err(unexpected("download_to_host"))
+    }
+
+    fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> Result<Tensor> {
+        Err(unexpected("upload_host_tensor"))
+    }
+}
 
 #[test]
 fn generic_read_exec_reduces_single_view_input() {
