@@ -118,3 +118,4 @@ docs/superpowers/plans/
 .env
 *.gif
 *.png
+/.superpowers/
