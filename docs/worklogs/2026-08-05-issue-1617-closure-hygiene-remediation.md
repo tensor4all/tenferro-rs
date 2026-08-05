@@ -5,9 +5,10 @@ Date: 2026-08-05
 ## Scope and decision
 
 This remediation follows the approved Issue #1617 design in one branch and one
-non-squash PR. It stops before Apple M5 Max Metal/WebGPU execution. No
-checksum, signature, attestation, nonce, hostile-runner defense, generic runner,
-extra dependency, compatibility shim, or hidden transfer is introduced.
+non-squash PR. Apple M5 Max Metal/WebGPU execution was supplied separately and
+is recorded in the merged hardware matrix. No checksum, signature, attestation,
+nonce, hostile-runner defense, generic runner, extra dependency, compatibility
+shim, or hidden transfer is introduced.
 
 The product/checker candidate is selected only after the changes below and the
 pre-candidate checks pass. Candidate-bound reports are generated after that
@@ -20,7 +21,7 @@ commit; evidence descendants may change only the closed evidence allowlist.
 | T0 | Fixed | `apple_context.rs` now destructures through `&mut managed`; CI cross-checks the macOS-gated integration target from Linux. |
 | T1 | Fixed by regeneration protocol | Freeze, static-rank, traversal, hardware, docs-audit, and closure reports use one candidate. Stale reports are rejected by the freeze evidence-path check. |
 | T2 | Fixed | Closure keeps recorded-evidence mode by default and adds a fixed six-command `--reproduce` mode that delegates receipt validation to the existing ownership checker. |
-| T3 | Linux evidence complete; Apple handoff ready | Hardware checker supports incomplete host captures and strict merge of one passing record for every required lane. Linux CPU/CUDA/CUDA-AD passed; Apple execution is deliberately not run in this stage. |
+| T3 | Fixed and merged | Strict merge records positive passing evidence for CPU, CUDA, WebGPU, Metal, and CUDA-AD on candidate C; Apple M5 Max Metal 4/4 and WebGPU 3/3 are included. |
 | T4 | Fixed | `static_rank_mismatch.rs` is included in the existing storage `trybuild` compile-fail suite. |
 | T5 NonNull | Fixed | Three `NonNull::from(&mut *owner)` sites use `NonNull::from(owner)`. |
 | T5 cast_host_vec | Fixed | Size/alignment checks at the existing unsafe boundary are release-active `assert_eq!` checks. |
@@ -40,20 +41,18 @@ commit; evidence descendants may change only the closed evidence allowlist.
 - Fixture hardware report merge produces five ordered passing lanes and rejects candidate mismatch, duplicate, missing, and skipped lanes.
 - Old structured-skip matrix blocks the new closure checker, as required until real required-lane evidence is merged.
 
-## Candidate and pre-Mac evidence state
+## Candidate and merged hardware evidence state
 
 - Product candidate C: `652b5c45f753f04425d71541b387acedc39cfa04`.
 - Candidate branch pushed as `origin/codex/issue-1617-remediation-plan`.
-- Current evidence checkout: `b4704a79`.
-- Candidate-bound freeze, static-rank codegen, traversal, and documentation
-  audit reports all name C.
-- Linux partial report `/tmp/storage-hardware-linux.md` records CPU 3/3,
-  CUDA provider 4/4, and CUDA-AD 2/2 passing tests for C.
+- Hardware evidence commit: `885005ca`.
+- Candidate-bound freeze, static-rank codegen, traversal, documentation audit,
+  and merged hardware matrix reports all name C.
+- The merged matrix is `complete: true`, `required_mode: true`, and records
+  CPU 3/3, CUDA 4/4, WebGPU 3/3, Metal 4/4, and CUDA-AD 2/2 passing tests.
+  Linux lanes use the AMD EPYC host; Apple lanes use arm64 Apple M5 Max,
+  Darwin 25.5.0.
 - The generated remediation plan was removed from the PR after the repository
   rules review identified it as prohibited standalone AI content.
-- Apple handoff `/tmp/issue-1617-mac-test-handoff.md` contains the exact
-  checkout, command, and merge steps.
-
-This is the stopping point for this remediation stage. The Apple/Metal and
-Apple WebGPU commands have not been executed; their results remain absent until
-the separate real-hardware execution begins.
+- The default recorded-evidence closure report passes; bounded reproduction and
+  final receipt generation remain the next closure steps.
