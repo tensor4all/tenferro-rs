@@ -5266,6 +5266,16 @@ impl<'a> TensorRead<'a> {
     ///
     /// Owned tensors are borrowed without copying their storage. Existing
     /// views preserve their layout and placement metadata.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_tensor::{Tensor, TensorRead};
+    /// # let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let view = TensorRead::from_tensor(&tensor).tensor_view();
+    /// assert_eq!(view.shape(), &[2]);
+    /// assert_eq!(view.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn tensor_view(self) -> TensorView<'a> {
         match self {
             Self::Tensor(tensor) => tensor_view_with_layout(tensor, tensor_layout(tensor)),

@@ -19,6 +19,21 @@ pub trait EagerTensorLinalgExt {
     /// `Error::Extension` with an unsupported-operation or unsupported-dtype
     /// source when the selected backend cannot execute the decomposition, and
     /// `Error::RuntimeState` when the eager runtime or backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (_u, s, _vt) = a.svd()?;
+    /// assert_eq!(s.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
     /// # Errors
     ///
@@ -26,6 +41,21 @@ pub trait EagerTensorLinalgExt {
     /// non-positive, `Error::Extension` for unsupported dtypes or numerical
     /// non-convergence, and `Error::Internal` if the extension violates its
     /// output-count contract.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{EagerTensorLinalgExt, SvdOptions};
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (_u, s, _vt) = a.svd_with_options(SvdOptions::default())?;
+    /// assert_eq!(s.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn svd_with_options(
         &self,
         options: SvdOptions,
@@ -42,18 +72,92 @@ pub trait EagerTensorLinalgExt {
     /// slice). Automatic differentiation through the full variant is
     /// unsupported and surfaces a typed error rather than a silent thin
     /// fallback.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # {
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let faer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+    /// #     .expect("faer CPU backend");
+    /// # let ctx = EagerRuntime::with_cpu_backend(faer)?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (u, s, vh) = a.svd_full()?;
+    /// assert_eq!(u.shape(), &[1, 1]);
+    /// assert_eq!(s.shape(), &[1]);
+    /// assert_eq!(vh.shape(), &[2, 2]);
+    /// let singular_values = s.value()?.as_slice::<f64>()?;
+    /// assert!((singular_values[0] - 2.0_f64.sqrt()).abs() < 1e-12);
+    /// # }
+    /// # #[cfg(all(feature = "cpu-blas", not(feature = "cpu-faer")))]
+    /// # {
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let blas = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas)
+    /// #     .expect("BLAS CPU backend");
+    /// # let ctx = EagerRuntime::with_cpu_backend(blas)?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// # let error = match a.svd_full() {
+    /// #     Ok(_) => panic!("expected full-matrices SVD to be unsupported for BLAS"),
+    /// #     Err(error) => error,
+    /// # };
+    /// # assert!(error.to_string().contains("full-matrices SVD"));
+    /// # }
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn svd_full(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for invalid matrix rank or shape,
     /// `Error::Extension` for unsupported dtypes or numerical failure, and
     /// `Error::RuntimeState` when the eager runtime or backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (q, r) = a.qr()?;
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for invalid matrix rank or shape,
     /// `Error::Extension` for unsupported dtypes or numerical failure, and
     /// `Error::Internal` if the extension violates its output-count contract.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{EagerTensorLinalgExt, QrOptions};
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (q, r) = a.qr_with_options(QrOptions::default())?;
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)>;
     /// # Errors
     ///
@@ -61,6 +165,23 @@ pub trait EagerTensorLinalgExt {
     /// `Error::Extension` for an unsupported dtype or singular numerical
     /// result, and `Error::RuntimeState` when execution cannot access its
     /// backend.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (_p, l, u, parity) = a.lu()?;
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// assert_eq!(u.shape(), &[2, 2]);
+    /// assert_eq!(parity.shape(), &[]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
     /// # Errors
     ///
@@ -68,6 +189,23 @@ pub trait EagerTensorLinalgExt {
     /// `Error::Extension` for unsupported dtypes or singular numerical
     /// results, and `Error::Internal` if the extension violates its output
     /// contract.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (p, _l, _u, q, parity) = a.full_piv_lu()?;
+    /// assert_eq!(p.shape(), &[2, 2]);
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(parity.shape(), &[]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn full_piv_lu(
         &self,
     ) -> Result<(
@@ -83,12 +221,50 @@ pub trait EagerTensorLinalgExt {
     /// or batch shapes, `Error::Extension` for an unsupported dtype or
     /// singular system, and `Error::RuntimeState` when the backend is
     /// unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
+    /// #     ctx.clone(),
+    /// # )?;
+    /// # let b = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let x = a.full_piv_lu_solve(&b)?;
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn full_piv_lu_solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
     /// metadata, `Error::Extension` for an unsupported dtype or singular
     /// system, and `Error::RuntimeState` when the backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx.clone(),
+    /// # )?;
+    /// # let b = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let x = a.solve(&b)?;
+    /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
     /// Least-squares solve `argmin_x ||A x - b||_2` for a tall or square,
     /// full-column-rank `A`, via the thin QR factorization.
@@ -101,36 +277,144 @@ pub trait EagerTensorLinalgExt {
     /// QR or triangular-solve failures; and `Error::RuntimeState` when the
     /// backend is unavailable. Rank-deficient `A` is not detected and yields an
     /// ill-defined result.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(
+    /// #         vec![3, 2],
+    /// #         vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0],
+    /// #     )
+    /// #     .unwrap(),
+    /// #     ctx.clone(),
+    /// # )?;
+    /// # let b = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let x = a.lstsq(&b)?;
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// let values = x.value()?.as_slice::<f64>()?;
+    /// assert!((values[0] - 1.0_f64).abs() < 1e-12);
+    /// assert!((values[1] - 2.0_f64).abs() < 1e-12);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn lstsq(&self, b: &EagerTensor) -> Result<EagerTensor>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for a non-square or invalid-rank input,
     /// `Error::Extension` for unsupported dtypes or a non-positive-definite
     /// matrix, and `Error::RuntimeState` when the backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let l = a.cholesky()?;
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn cholesky(&self) -> Result<EagerTensor>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for a non-square or invalid-rank input,
     /// `Error::Extension` for unsupported dtypes or numerical non-convergence,
     /// and `Error::RuntimeState` when the backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (values, vectors) = a.eigh()?;
+    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[1.0, 3.0]);
+    /// assert_eq!(vectors.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn eigh(&self) -> Result<(EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for an invalid rank, shape, or
     /// `derivative_eps`, `Error::Extension` for unsupported dtypes or
     /// non-convergence, and `Error::Internal` for an output-count violation.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{EagerTensorLinalgExt, EighOptions};
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (values, vectors) = a.eigh_with_options(EighOptions::default())?;
+    /// assert_eq!(values.shape(), &[2]);
+    /// assert_eq!(vectors.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn eigh_with_options(&self, options: EighOptions) -> Result<(EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for a non-square or invalid-rank input,
     /// `Error::Extension` for unsupported dtypes or numerical non-convergence,
     /// and `Error::RuntimeState` when the backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (values, vectors) = a.eig()?;
+    /// assert_eq!(values.shape(), &[2]);
+    /// assert_eq!(vectors.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn eig(&self) -> Result<(EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
     /// metadata, `Error::Extension` for unsupported dtypes or a singular
     /// system, and `Error::RuntimeState` when the backend is unavailable.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap(),
+    /// #     ctx.clone(),
+    /// # )?;
+    /// # let b = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let x = a.triangular_solve(&b, true, false, false, false)?;
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn triangular_solve(
         &self,
         b: &EagerTensor,
@@ -146,6 +430,22 @@ pub trait EagerTensorLinalgExt {
     /// Returns `Error::Validation` for a non-square input, `Error::Extension`
     /// for an unsupported dtype or numerical failure, and `Error::Internal`
     /// if a primitive violates its output contract.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let (sign, logabsdet) = a.slogdet()?;
+    /// assert_eq!(sign.value()?.as_slice::<f64>()?, &[1.0]);
+    /// assert_eq!(logabsdet.shape(), &[]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn slogdet(&self) -> Result<(EagerTensor, EagerTensor)>;
     /// Return the determinant.
     ///
@@ -153,6 +453,21 @@ pub trait EagerTensorLinalgExt {
     ///
     /// Returns `Error::Validation`, `Error::Extension`, `Error::RuntimeState`,
     /// or `Error::Internal` under the conditions documented by [`Self::slogdet`].
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let determinant = a.det()?;
+    /// assert!((determinant.value()?.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn det(&self) -> Result<EagerTensor>;
     /// Return the matrix inverse.
     ///
@@ -161,6 +476,21 @@ pub trait EagerTensorLinalgExt {
     /// Returns `Error::Validation` for invalid matrix metadata,
     /// `Error::Extension` for an unsupported dtype or singular solve, and
     /// `Error::RuntimeState` when eager execution cannot access its backend.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let inverse = a.inv()?;
+    /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn inv(&self) -> Result<EagerTensor>;
     /// Return Hermitian eigenvalues without eigenvectors.
     ///
@@ -168,6 +498,21 @@ pub trait EagerTensorLinalgExt {
     ///
     /// Returns the validation, unsupported-dtype, numerical-convergence,
     /// runtime-state, or output-contract errors reported by [`Self::eigh`].
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let values = a.eigvalsh()?;
+    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[1.0, 3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn eigvalsh(&self) -> Result<EagerTensor>;
     /// Return general eigenvalues without eigenvectors.
     ///
@@ -175,6 +520,21 @@ pub trait EagerTensorLinalgExt {
     ///
     /// Returns the validation, unsupported-dtype, numerical-convergence,
     /// runtime-state, or output-contract errors reported by [`Self::eig`].
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let values = a.eigvals()?;
+    /// assert_eq!(values.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn eigvals(&self) -> Result<EagerTensor>;
     /// Return the Moore-Penrose pseudoinverse with the default tolerance.
     ///
@@ -183,6 +543,21 @@ pub trait EagerTensorLinalgExt {
     /// Returns `Error::Validation` for invalid matrix metadata,
     /// `Error::Extension` for unsupported SVD execution, and
     /// `Error::Internal` for an unexpected decomposition output contract.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let pseudoinverse = a.pinv()?;
+    /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn pinv(&self) -> Result<EagerTensor>;
     /// Return the Moore-Penrose pseudoinverse with an explicit relative tolerance.
     ///
@@ -190,6 +565,21 @@ pub trait EagerTensorLinalgExt {
     ///
     /// Returns `Error::Validation` when `rtol` is negative or non-finite, plus
     /// the `Error::Extension` and output-contract errors reported by [`Self::pinv`].
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let pseudoinverse = a.pinv_with_rtol(1.0e-12)?;
+    /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor>;
     /// Return a vector, matrix, or tensor norm.
     ///
@@ -198,6 +588,21 @@ pub trait EagerTensorLinalgExt {
     /// Returns `Error::Validation` for an unsupported order/dimension
     /// combination or invalid axes, `Error::Extension` when a required matrix
     /// decomposition is unsupported, and eager runtime/backend failures.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::EagerTensorLinalgExt;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let a = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let frobenius = a.norm(None, None, false)?;
+    /// assert_eq!(frobenius.shape(), &[]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<EagerTensor>;
 }
 
@@ -436,21 +841,43 @@ pub fn svd_with_options(
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// use tenferro_linalg::EagerTensorLinalgExt;
-///
-/// let ctx = EagerRuntime::new()?;
-/// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
-///     ctx,
-/// ).unwrap();
-/// // Full SVD is provided by the CPU faer backend; other providers (e.g. the
-/// // LAPACK provider) report it as unsupported, so guard on the result.
-/// if let Ok((u, s, vh)) = a.svd_full() {
-///     assert_eq!(u.shape(), &[1, 1]);
-///     assert_eq!(s.shape(), &[1]);
-///     assert_eq!(vh.shape(), &[2, 2]);
-/// }
+/// # #[cfg(feature = "cpu-faer")]
+/// # {
+/// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+/// # use tenferro_linalg::EagerTensorLinalgExt;
+/// # let faer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer)
+/// #     .expect("faer CPU backend");
+/// # let ctx = EagerRuntime::with_cpu_backend(faer)?;
+/// # let a = EagerTensor::from_tensor_in(
+/// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
+/// #     ctx,
+/// # )?;
+/// let (u, s, vh) = a.svd_full()?;
+/// assert_eq!(u.shape(), &[1, 1]);
+/// assert_eq!(s.shape(), &[1]);
+/// assert_eq!(vh.shape(), &[2, 2]);
+/// let singular_values = s.value()?.as_slice::<f64>()?;
+/// assert!((singular_values[0] - 2.0_f64.sqrt()).abs() < 1e-12);
+/// # }
+/// # #[cfg(all(feature = "cpu-blas", not(feature = "cpu-faer")))]
+/// # {
+/// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_cpu::{CpuBackend, CpuBackendKind};
+/// # let blas = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas)
+/// #     .expect("BLAS CPU backend");
+/// # let ctx = EagerRuntime::with_cpu_backend(blas)?;
+/// # let a = EagerTensor::from_tensor_in(
+/// #     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
+/// #     ctx,
+/// # )?;
+/// # use tenferro_linalg::EagerTensorLinalgExt;
+/// # let error = match a.svd_full() {
+/// #     Ok(_) => panic!("expected full-matrices SVD to be unsupported for BLAS"),
+/// #     Err(error) => error,
+/// # };
+/// # assert!(error.to_string().contains("full-matrices SVD"));
+/// # }
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 ///

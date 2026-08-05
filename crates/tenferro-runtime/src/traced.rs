@@ -1910,6 +1910,18 @@ impl TracedTensor {
     ///
     /// Unsupported dtypes and backend execution failures are reported when the
     /// compiled graph is executed.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
+    /// #     vec![2, 2],
+    /// #     vec![1.0_f64, 2.0, 3.0, 4.0],
+    /// # )?;
+    /// let squares = x.reduce_sum_squares(&[1])?;
+    /// assert_eq!(squares.rank, 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     pub fn reduce_sum_squares(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_sum_squares")?;
