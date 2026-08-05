@@ -213,6 +213,10 @@ def resolve_report(path: Path, *, allow_external: bool) -> Path:
     return ROOT / path
 
 
+def report_output_path(path: Path, *, merge: bool) -> Path:
+    return resolve_report(path, allow_external=not merge)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", required=True, type=Path)
@@ -223,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         freeze = read_freeze(ROOT / FREEZE)
-        output = resolve_report(args.report, allow_external=bool(args.merge_report))
+        output = report_output_path(args.report, merge=bool(args.merge_report))
         candidate = freeze["candidate_commit"]
         if args.merge_report:
             record = merge_records(

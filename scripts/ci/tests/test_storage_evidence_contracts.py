@@ -83,6 +83,15 @@ class ClosureReproductionTests(unittest.TestCase):
 class HardwareMatrixTests(unittest.TestCase):
     candidate = "a" * 40
 
+    def test_partial_capture_accepts_external_report_path(self) -> None:
+        module = load_script("check-storage-hardware-matrix.py")
+        self.assertEqual(
+            module.report_output_path(Path("/tmp/storage-hardware.md"), merge=False),
+            Path("/tmp/storage-hardware.md"),
+        )
+        with self.assertRaises(module.CheckError):
+            module.report_output_path(Path("/tmp/storage-hardware.md"), merge=True)
+
     def partial(self, names: tuple[str, ...], *, candidate: str | None = None) -> dict:
         return {
             "schema": "tenferro.storage-hardware-matrix.v1",
