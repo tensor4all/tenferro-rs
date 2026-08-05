@@ -1144,52 +1144,48 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
         download_source,
         &[
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
-            "let buffer = dispatch::cubecl_buffer(tensor, op)?;",
+            "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
             "if tensor.n_elements() == 0",
             "rt.synchronize()?;",
-            ".read_one(buffer.handle().clone())",
+            ".read_one(prepared.into_handle())",
         ],
     );
 }
 
 #[test]
-fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
+fn cubecl_raw_device_pointer_paths_are_not_public() {
     let memory_source = cubecl_source("memory.rs");
-    let memory_ptr = source_section(
-        &memory_source,
-        "pub fn device_ptr(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<u64> {",
-        "fn upload_typed<",
-    );
-    assert_ordered_needles(
-        "memory::device_ptr",
-        memory_ptr,
-        &[
-            "ensure_tensor_resident_on_runtime(rt, tensor, \"device_ptr\")?;",
-            "let handle = cubecl_handle(tensor)?;",
-            ".get_resource(handle)",
-        ],
+    assert!(
+        !memory_source.contains("pub fn device_ptr")
+            && !gpu_source(&["lib.rs"]).contains("device_ptr,")
+            && !gpu_source(&["cubecl", "mod.rs"]).contains("device_ptr,"),
+        "the unscoped CUDA device pointer must not be re-exported from the public crate root"
     );
 
     let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn typed_device_ptr"),
+        "CUDA interop must not expose an unscoped typed pointer function"
+    );
     let interop_ptr = source_section(
         &interop_source,
-        "pub fn typed_device_ptr<T: 'static>(",
+        "pub fn with_typed_device_ptr<T: TensorScalar + 'static>(",
         "/// Upload host data into a dense GPU tensor",
     );
     assert_ordered_needles(
-        "interop::typed_device_ptr",
+        "interop::with_typed_device_ptr",
         interop_ptr,
         &[
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
-            "dispatch::cubecl_buffer(tensor, op)?;",
-            ".get_resource(buffer.handle().clone())",
+            "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
+            ".get_resource(prepared.into_handle())",
         ],
     );
 
     let gemm_source = cubecl_source("gemm.rs");
     let gemm_ptr = source_section(
         &gemm_source,
-        "fn typed_device_ptr<T: 'static>(",
+        "fn typed_device_ptr<T: TensorScalar + 'static>(",
         "fn zero_alloc<T>",
     );
     assert_ordered_needles(
@@ -1197,9 +1193,42 @@ fn cubecl_raw_device_pointer_paths_validate_runtime_residency() {
         gemm_ptr,
         &[
             "ensure_resident_on_runtime(rt, tensor, OP)?;",
-            "cubecl_buffer(tensor, OP)?;",
-            ".get_resource(buffer.handle().clone())",
+            "let prepared = prepared_tensor_access(tensor, OP)?;",
+            "let handle = prepared.into_handle();",
+            ".get_resource(handle)",
         ],
+    );
+}
+
+#[test]
+fn cubecl_workspace_pointer_is_scoped_to_owner_borrow() {
+    let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn ptr(&self) -> *mut c_void"),
+        "workspace owners must not expose an unscoped raw pointer accessor"
+    );
+    assert!(
+        interop_source.contains("pub fn with_ptr(&self, f: impl FnOnce(*mut c_void))"),
+        "workspace pointers must be borrowed through a scoped closure"
+    );
+}
+
+#[test]
+fn cubecl_stream_pointer_is_scoped_to_runtime_borrow() {
+    let interop_source = cubecl_source("interop.rs");
+    assert!(
+        !interop_source.contains("pub fn raw_cuda_stream("),
+        "CUDA interop must not expose an unscoped stream pointer function"
+    );
+    let stream_source = source_section(
+        &interop_source,
+        "pub fn with_raw_cuda_stream(",
+        "/// Return the launch cube count",
+    );
+    assert_ordered_needles(
+        "interop::with_raw_cuda_stream",
+        stream_source,
+        &["raw_cuda_stream()", "map_err"],
     );
 }
 
@@ -1208,7 +1237,7 @@ fn cubecl_host_download_paths_synchronize_before_reading() {
     let memory_source = cubecl_source("memory.rs");
     let typed_download = source_section(
         &memory_source,
-        "fn download_typed<T: CubeElement + Clone + 'static>(",
+        "fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(",
         "fn upload_bool(",
     );
     assert_ordered_needles(
@@ -1341,7 +1370,7 @@ fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
 
     let pad_shape = source_section(&mod_source, "fn pad_output_shape(", "fn index_vector_size(");
     assert!(
-        pad_shape.contains("i64::try_from(input_shape[axis])"),
+        pad_shape.contains("i64::try_from(input_dim_raw)"),
         "GPU pad output shape must not cast usize dimensions to i64 with `as`"
     );
     assert!(
@@ -1925,6 +1954,6 @@ fn cuda_indexing_preflights_structure_and_all_inputs_before_value_scans() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cubecl_runtime_exposes_explicit_synchronize() {
-    let _sync: fn(&tenferro_gpu::CudaRuntime) -> tenferro_tensor::Result<()> =
-        tenferro_gpu::CudaRuntime::synchronize;
+    let _sync: fn(&tenferro_gpu::cuda::CudaRuntime) -> tenferro_tensor::Result<()> =
+        tenferro_gpu::cuda::CudaRuntime::synchronize;
 }

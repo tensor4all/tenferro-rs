@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `TypedTensor<T, R>` in the current scope
+ --> tests/ui/storage/fail/typed_tensor_not_clone.rs
+  |
+  |     let _ = tensor.clone();
+  |                    ^^^^^ method not found in `TypedTensor<f64>`

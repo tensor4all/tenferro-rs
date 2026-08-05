@@ -52,9 +52,11 @@ Long-term architecture quality gate:
 
 Terminology:
 
-- **Allocation**: one physical memory root and its claims. `AllocationSpan` is
-  metadata (a domain-qualified key plus byte range), never an access
-  capability or proof of ownership.
+- **Allocation**: one physical memory root and its claims. A requested byte
+  range is metadata (optionally carrying a domain-qualified key), never an
+  access capability or proof of ownership. A `RootBoundSpan` is the checked
+  range form and carries the exact `RootResourceIdentity` from which it was
+  derived.
 - **Owner**: the unique, non-cloneable ownership token for an allocation span
   (`OwnedStorage`, or a tensor/group wrapping it); this is the umbrella's
   one-owner rule.
@@ -102,6 +104,60 @@ six review-checklist questions from #1557, abbreviated as:
 Error conventions: all failures are structured errors carrying operation,
 requested range/ids, and resolved span identity, without raw addresses.
 
+### P2 identity and span correction boundary
+
+P2 constructs the private identity/span vocabulary used by later owners and
+prepared descriptors. `RootResourceExtent` checks every half-open range end
+with checked arithmetic before alignment or containment decisions.
+`RootResourceIdentity` pairs one private root provenance ID with that exact
+extent. `RootBoundSpan` can be created only from that identity and retains the
+identity in its value; equal extents from two roots therefore cannot be
+interchanged as resolved spans.
+
+Compound relative-range validation checks, in order, the root end, relative
+end, base-plus-relative offset, and child end. Only after those checks does it
+evaluate containment and alignment. This makes a relative-range overflow win
+over a simultaneous malformed-alignment condition without adding runtime
+recovery or repeated access validation.
+
+Operation request metadata uses the single sum type
+`RequestedIdentity::{Raw, Keyed, Rooted}`. It is untrusted and may differ from
+the resolved value; the resolved side retains a `RootBoundSpan`. No diagnostic
+identity contains a pointer, provider handle, or write authority.
+
+### P2 root claim kernel
+
+The selected P2 root-claims artifact adds one private `BackendAllocation` unsafe
+boundary and one `Arc<RootResource>` lifetime pin. `import_unique_root` validates
+the provider extent once, creates one `RootResource`, one non-`Clone`
+`RootResourcePin`, and one non-`Clone` `OwnedSpanClaim` carrying the full
+`RootBoundSpan`. `StorageRef<'a>` and `StorageMut<'a>` retain borrows of
+`OwnedStorage` and expose only identity/span metadata. The final `Arc` drop owns
+the provider destructor exactly once. There is no second claim/hold accounting
+state machine, provider access, persistent split/group, recovery, quarantine,
+compatibility, or repeated validation in this phase.
+
+### P4 prepared access and retirement kernel
+
+P4 keeps the ownership boundary private and adds one checked transition from a
+borrowed `StorageRef`/`StorageMut` to enum-authoritative `PreparedRead` and
+`PreparedWrite` states. The constructor checks the exact root-bound span,
+dtype size/alignment, layout arithmetic, reachable offsets, and mutable
+injectivity once. Host preparation maps provider bytes once and retains a
+typed borrowed mapping; contiguous access uses a typed slice and strided access
+uses the stored shape/stride/carry plan. Device preparation retains only the
+checked capability and an opaque private token, with no host pointer or
+iterator. The mapping and prepared transition accept no replacement range,
+provider, or access-mode argument.
+
+Detached admission creates one retirement record owning the provider event,
+bindings, root pins, and provider context. A proven completion, including a
+typed provider failure after completion is proven, drops the record exactly
+once. If completion is unproven, the complete private record is intentionally
+retained and only a diagnostic outcome is returned; no owner, retry,
+quarantine, cancellation, or recovery protocol is introduced. A rejection
+known before admission returns the same prepared package unchanged.
+
 ## Phase 1 verification ledger
 
 The machine-readable production registry is
@@ -115,11 +171,15 @@ contractual active/deferred IDs without becoming another production registry.
 The checker is v2-only, the old v1 test authority is deleted, and the retained
 v1 fixture contains only its schema marker so that an old manifest is rejected
 without a compatibility parser. The real design-document checker is an active
-P1 obligation. The current production state deliberately activates only these
-four P1 rows: `p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
-`p1-element-access-baseline`. P0 control-plane and P2 root claims remain
-deferred until their real artifacts and verifiers land. No missing deferred
-artifact is fabricated to make this phase terminal.
+P1 obligation. The current production state activates the four P1 rows
+(`p1-ledger`, `p1-contract-document`, `p1-api-parity`, and
+`p1-element-access-baseline`) plus the selected P2 `p2-root-claims` row; the
+already reconciled P0 `p0-control-plane` row is active as their prerequisite.
+The five P4 access-retirement rows, the selected P5 allocation-group row, the
+atomic P3/P9 cutover rows, and the selected P6 reinterpretation rows are active
+with their real proof artifacts. P7 and all later rows remain deferred until
+their own phase gates and verifiers land. No missing deferred artifact is
+fabricated to make a phase terminal.
 
 ### One canonical graph
 
@@ -321,11 +381,15 @@ alias. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
-Hosted `ci-config` checks fetch full Git history and pass exactly one canonical
-event base to the existing production checker: `pull_request.base.sha` for a
-pull request and `github.event.before` for a push. The local `ci-config`
-profile omits the base by default and remains a structural developer check.
-Supplying a storage-ownership base without selecting `ci-config` is invalid.
+Hosted `ci-config` checks fetch full Git history and pass one canonical
+promotion base to the existing production checker. Ordinary changes use
+`pull_request.base.sha` for a pull request and `github.event.before` for a
+push. An aggregate, sequential P8–P13 promotion stream may use its recorded
+latest promotion-base commit instead when the event base predates an earlier
+validated manifest revision; the workflow must verify that this pinned base is
+an ancestor of the checked-out commit. The local `ci-config` profile omits the
+base by default and remains a structural developer check. Supplying a
+storage-ownership base without selecting `ci-config` is invalid.
 
 Availability is an explicit CLI contract, not source inspection or path
 existence. Both tools accept `--contract-schema`, exit successfully
@@ -420,11 +484,13 @@ The v2 suite uses temporary repositories for reachable path, graph, promotion,
 command, receipt, and exit-status mistakes, plus an integration case for the
 checked-in production manifest. Counts are derived from the parsed manifest;
 the suite does not preserve a migration-event registry or historical totals.
-It verifies the four currently implementable P1 rows, including the measured
-element-access baseline. P0 control-plane and P2 root claims remain deferred,
-and the remaining future rows are not executed or materialized. Fake active
-artifacts are rejected because they would turn missing scientific evidence
-into a green lifecycle state rather than proving the underlying work.
+It verifies the active P0 prerequisite, the four currently implementable P1 rows
+(including the measured element-access baseline), the selected P2 root-claims
+test command, the five P4 access-retirement commands, and the selected P5
+allocation-group command. The remaining future rows remain deferred and are not
+executed or materialized. Fake active artifacts are rejected because they would
+turn missing scientific evidence into a green lifecycle state rather than
+proving the underlying work.
 
 Command tests cover exact typed argv and repository path confinement, including
 the ordering rule that a path escape is reported before a later command-identity
@@ -432,10 +498,8 @@ comparison. The runner integration uses the real active Python verifiers and a
 temporary local cargo executable to prove that the canonical argv is executed;
 this fixture is not a production command mode or a lifecycle authority.
 
-P4 and P5 remain deferred;
-the CUTOVER candidate activates every required P4/P5 obligation and obtains
-successful runner evidence before atomically activating all P3/P9 obligations.
-In particular, the canonical obligation set includes:
+P4, the selected P5 obligation, and the atomic P3/P9 cohort are active. The
+canonical obligation set includes:
 
 - P4/G1+G4: a deferred production-code-bound compile/test artifact for the
   prepared read/write borrow shape and exact capability recovery before
@@ -480,36 +544,42 @@ authority, liveness table, or reconstructable identity protocol.
 
 ```rust
 struct RootResource {
-    provider: Arc<ProviderContext>,
-    allocation: ProviderAllocation,
-    capacity_bytes: usize,
-    diagnostics: AllocationDiagnostics,
+    identity: RootResourceIdentity,
+    extent: RootResourceExtent,
+    allocation: Box<dyn BackendAllocation>,
 }
 
+struct RootResourcePin(Arc<RootResource>);
+
 struct OwnedSpanClaim {
-    root: Arc<RootResource>,
-    byte_range: Range<usize>,
+    root: RootResourceIdentity,
+    span: RootBoundSpan,
 }
 
 struct OwnedStorage {
+    pin: RootResourcePin,
     claim: OwnedSpanClaim,
 }
 
 struct StorageRef<'a> {
-    root: &'a Arc<RootResource>,
-    byte_range: Range<usize>,
+    owner: &'a OwnedStorage,
 }
 
 struct StorageMut<'a> {
-    root: &'a mut Arc<RootResource>,
-    byte_range: Range<usize>,
+    owner: &'a mut OwnedStorage,
 }
 
 struct RootBoundSpan {
+    root_identity: RootResourceIdentity,
     byte_range: Range<usize>,
-    dtype: DType,
+    guaranteed_alignment: NonZeroUsize,
 }
 ```
+
+The G1 shape above is the P2 root-kernel boundary: the executable
+`RootBoundSpan` carries the exact `RootResourceIdentity` and checked alignment,
+and is not constructible from a range alone. Later G1 access fields are added
+only by their owning prepared-access phase.
 
 `OwnedStorage` and `OwnedSpanClaim` are non-`Clone`. `Arc<RootResource>` is
 cloneable only where direct physical lifetime must survive asynchronous work or
@@ -737,6 +807,16 @@ G1 is accepted only with executable evidence for all of the following:
 
 The group is the only sound representation for one owner with many logical
 values (#1555, "Disjoint views and allocation groups"; #1561).
+
+The P5 candidate implements this kernel privately in
+`crates/tenferro-tensor/src/storage/group.rs`. It retains rank-erased checked
+layout metadata and root-bound spans in append-only local tables, resolves
+opaque descriptor slots only through a group borrow, and creates borrowed read
+or write children without copying storage. `split_mut` performs the single
+central injectivity/disjoint-envelope proof and `try_extract` performs the
+sole-local-descriptor ownership move. This is the P5 proof boundary; the
+atomic P3/P9 transition is now active, while the later public API normalization
+remains deferred.
 
 ### Types
 
@@ -1601,7 +1681,7 @@ Common validation commands:
 | 10 (#1566) | GPU quickstarts, provider matrix, namespace rustdoc; `# Errors` sections for every public `Result` API | common commands |
 | 11 (#1568) | hardware evidence recorded in the test profile/worklog with candidate Git commit | common commands |
 | 12 (#1569) | `docs/guides/views-and-slicing.md` plus sidebar entry and an **Element access and performance** section; `docs/getting-started/core-concepts.md`; README/tutorials; rustdoc for `as_view`, random access, contiguous guard/slice access, iterators, and rank conversion; runnable owner/view/view-mut traversal examples; the rendered stale-language checker (`scripts/check-storage-docs.py`); the source-blind audit | common commands plus `python3 scripts/check-storage-docs.py --include-rendered`, `python3 scripts/check-storage-element-access-docs.py docs/guides/views-and-slicing.md`, and the exact `p12-element-access-examples` release command |
-| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of `HANDOFF-2026-07-25-tenferro-unification6-wip.md` and inbound references | common commands plus closure validation from #1567 |
+| 13 (#1567) | final worklog linking candidate Git commit, scaffolding disposition, hardware/docs/audit reports; deletion of the prior handoff artifact and inbound references | common commands plus closure validation from #1567 |
 
 The Phase 12 element-access section must distinguish O(rank) checked random
 access, contiguous typed-slice/guard traversal, prepared strided traversal,

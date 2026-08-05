@@ -1,6 +1,8 @@
 use std::ops::Range;
 
-use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, TypedTensor};
+use tenferro_tensor::{
+    GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, TensorRead, TypedTensor,
+};
 
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
@@ -402,7 +404,7 @@ impl EagerTensor {
     /// ).unwrap();
     /// let y = x.take_axis(0, &[2, 0]).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -437,7 +439,7 @@ impl EagerTensor {
     /// let y = x.take_rows(&[1]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[1, 2]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -465,7 +467,7 @@ impl EagerTensor {
     /// let y = x.take_cols(&[1]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[2, 1]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -497,7 +499,7 @@ impl EagerTensor {
     /// let y = x.take_block(&[1], &[0]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[1, 1]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -524,7 +526,7 @@ impl EagerTensor {
     /// ).unwrap();
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -536,7 +538,7 @@ impl EagerTensor {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = {
             let mut backend = self.ctx.lock_backend()?;
-            backend.upload_host_tensor(&indices)?
+            backend.upload_host_tensor(TensorRead::from_tensor(&indices))?
         };
         let indices = self.ctx.constant_from(indices)?;
         self.gather(&indices, config)
@@ -559,7 +561,7 @@ impl EagerTensor {
     /// let out = EagerTensor::stack(&[&a, &b], -1).unwrap();
     ///
     /// assert_eq!(out.shape(), &[2]);
-    /// assert_eq!(out.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors

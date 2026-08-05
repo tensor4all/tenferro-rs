@@ -143,7 +143,7 @@ fn fixture(n: usize, threads: usize) -> Fixture {
 }
 
 fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.materialized().unwrap();
+    let materialized = tensor.to_tensor().unwrap();
     black_box(materialized.shape());
     black_box(materialized.as_slice::<f64>().unwrap()[0]);
 }

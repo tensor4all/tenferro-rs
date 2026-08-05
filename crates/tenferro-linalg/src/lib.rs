@@ -3,7 +3,7 @@
 //! This crate owns the graph-facing linalg op payloads and runtime
 //! registration. Tensor-facing operations are exposed through extension traits.
 //! CPU backend kernels live in this crate behind the linalg backend trait.
-//! A CPU backend paired by `tenferro_gpu::AppleContext` additionally supports
+//! A CPU backend paired by `tenferro_gpu::apple::AppleContext` additionally supports
 //! guarded rank-2 Cholesky on matching Apple managed `F32`, `F64`, `C32`, and
 //! `C64` tensors. This is an explicit CPU selection and is not a general
 //! managed-memory fallback for other linalg operations.

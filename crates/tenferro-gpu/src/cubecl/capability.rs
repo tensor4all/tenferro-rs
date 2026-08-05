@@ -15,7 +15,7 @@ const N: SupportLevel = SupportLevel::Native;
 ///
 /// ```rust
 /// use tenferro_core_ops::PrimitiveOpKind;
-/// use tenferro_gpu::cuda_capabilities;
+/// use tenferro_gpu::cuda::cuda_capabilities;
 /// use tenferro_tensor::{DType, SupportLevel};
 ///
 /// let add = cuda_capabilities()

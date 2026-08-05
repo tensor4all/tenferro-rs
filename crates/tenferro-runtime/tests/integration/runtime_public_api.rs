@@ -2,8 +2,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
     CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
-    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorValue,
-    TracedTensor,
+    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TracedTensor,
 };
 use tenferro_tensor::{Error as TensorError, ValidationError};
 
@@ -56,7 +55,7 @@ fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
     let source = include_str!("../../src/runtime/execution.rs");
 
     assert!(
-        source.contains("type RuntimeInputRefs<'a> = SmallVec"),
+        source.contains("type RuntimeInputReads<'a> = SmallVec"),
         "Runtime::run_prepared should keep short input reference lists inline"
     );
     assert!(
@@ -362,7 +361,7 @@ fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(y_data.clone()).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(y_data.duplicate().unwrap()).unwrap();
 
     let z = (&x + &y).unwrap();
 
@@ -444,13 +443,8 @@ fn runtime_can_return_final_transpose_as_lazy_value() {
 
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].shape(), &[3, 2]);
-    match &values[0] {
-        TensorValue::View(view) => {
-            assert_eq!(view.shape(), &[3, 2]);
-            assert_eq!(view.strides(), &[2, 1]);
-        }
-        TensorValue::Tensor(_) => panic!("final transpose should stay as a lazy owned view"),
-    }
+    assert!(values[0].is_view());
+    assert_eq!(values[0].strides(), &[2, 1]);
 }
 
 #[test]

@@ -13,20 +13,21 @@ use super::ffi::cusolver::{
     CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
-use tenferro_gpu::cuda_interop::{
+use tenferro_gpu::cuda::interop::{
     alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
-    ensure_typed_tensor_resident, flush_cubecl_client, raw_cuda_stream,
-    typed_device_ptr as interop_typed_device_ptr, typed_tensor_array_arg, typed_tensor_binding,
-    upload_device_bytes, with_cubecl_client, CudaExtensionCacheGuard, DeviceByteBuffer,
+    ensure_typed_tensor_resident, flush_cubecl_client, typed_tensor_array_arg,
+    typed_tensor_binding, upload_device_bytes, with_cubecl_client, with_raw_cuda_stream,
+    with_typed_device_ptr as interop_with_typed_device_ptr, CudaExtensionCacheGuard,
+    DeviceByteBuffer,
 };
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
 // reduce_min/reduce_max) then downloads scalar summaries — no bulk host
 // roundtrip.
-use tenferro_gpu::{download_tensor, CudaExecSession, CudaRuntime};
+use tenferro_gpu::{cuda::download_tensor, cuda::CudaExecSession, cuda::CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
-    ValidationError,
+    DType, Error, Tensor, TensorElementwise, TensorRead, TensorReduction, TensorScalar,
+    TensorStructural, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -34,7 +35,7 @@ type Result<T> = tenferro_tensor::Result<T>;
 trait LinalgScalar:
     CubeElement + CubePrimitive + Copy + Clone + One + Zero + Neg<Output = Self>
 {
-    type Real: CubeElement + CubePrimitive + Copy + Clone + Zero;
+    type Real: TensorScalar + CubeElement + CubePrimitive + Copy + Clone + Zero;
 
     const DATA_TYPE: CudaDataType;
     const NEEDS_RWORK: bool;
@@ -179,7 +180,8 @@ impl Workspace {
     }
 
     fn from_device(owner: DeviceByteBuffer) -> Self {
-        let ptr = owner.ptr();
+        let mut ptr = std::ptr::null_mut();
+        owner.with_ptr(|device_ptr| ptr = device_ptr);
         Self { _owner: owner, ptr }
     }
 }
@@ -423,7 +425,10 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
             Some(b.shape().to_vec()),
         )
     } else {
-        (b.clone(), None)
+        (
+            backend.to_contiguous_read(TensorRead::from_tensor(b))?,
+            None,
+        )
     };
 
     let factors = lu_factor(backend, a)?;
@@ -471,7 +476,10 @@ pub(super) fn lu_solve_prepared(
             Some(b.shape().to_vec()),
         )
     } else {
-        (b.clone(), None)
+        (
+            backend.to_contiguous_read(TensorRead::from_tensor(b))?,
+            None,
+        )
     };
 
     validate_nonsingular_gpu(backend, packed_lu)?;
@@ -509,7 +517,7 @@ fn cholesky_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "cholesky";
 
@@ -584,7 +592,7 @@ fn triangular_solve_typed<T>(
     unit_diagonal: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let trans = if transpose_a {
         CublasOperation::T
@@ -614,7 +622,7 @@ fn triangular_solve_typed_with_op<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     backend.runtime().set_current_cuda_context(op)?;
     ensure_cubecl_resident_typed(op, a)?;
@@ -742,7 +750,7 @@ fn lu_typed<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "lu";
 
@@ -764,7 +772,7 @@ fn lu_factor_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "lu_factor";
 
@@ -854,7 +862,7 @@ fn lu_solve_prepared_typed<T>(
     conjugate_a: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "lu_solve_prepared";
 
@@ -919,7 +927,7 @@ fn copy_matrix_adjoint_real<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let vt = alloc_output::<T>(rt, vt_shape)?;
     launch_matrix_adjoint_real(rt, v, &vt, op)?;
@@ -933,7 +941,7 @@ fn copy_matrix_adjoint_complex<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + ComplexCore,
+    T: LinalgScalar + TensorScalar + ComplexCore,
 {
     let vt = alloc_output::<T>(rt, vt_shape)?;
     launch_matrix_adjoint_complex(rt, v, &vt, op)?;
@@ -947,7 +955,7 @@ fn launch_matrix_adjoint_real<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     if vt.n_elements() == 0 {
         return Ok(());
@@ -977,7 +985,7 @@ fn launch_matrix_adjoint_complex<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar + ComplexCore,
+    T: LinalgScalar + TensorScalar + ComplexCore,
 {
     if vt.n_elements() == 0 {
         return Ok(());
@@ -1009,7 +1017,7 @@ fn svd_typed<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "svd";
 
@@ -1244,9 +1252,9 @@ where
 fn svd_values_typed<T>(
     backend: &CudaExecSession<'_>,
     input: &TypedTensor<T>,
-) -> Result<TypedTensor<T::Real>>
+) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "svd_values";
 
@@ -1261,7 +1269,7 @@ where
         return Ok(alloc_output(backend.runtime(), &s_shape)?);
     }
 
-    let s = alloc_output::<T::Real>(backend.runtime(), &s_shape)?;
+    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape)?;
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
     let s_stride = k;
@@ -1327,7 +1335,7 @@ where
                 let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
                     (
                         batch_ptr::<T>(a_ptr, a_offset),
-                        batch_ptr::<T::Real>(s_ptr, s_offset),
+                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
                         batch_ptr::<T>(u_ptr, u_offset),
                         batch_ptr::<T>(v_ptr, v_offset),
                         batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
@@ -1387,7 +1395,7 @@ where
                     .gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)?;
             let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
             let rwork = if T::NEEDS_RWORK {
-                alloc_workspace_elems::<T::Real>(
+                alloc_workspace_elems::<<T as LinalgScalar>::Real>(
                     backend.runtime(),
                     as_i32(
                         checked_mul_usize(OP, "svd_values rwork length", 5, k)?,
@@ -1417,7 +1425,7 @@ where
                 let (batch_a, batch_s, batch_info) = unsafe {
                     (
                         batch_ptr::<T>(a_ptr, a_offset),
-                        batch_ptr::<T::Real>(s_ptr, s_offset),
+                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
                         batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
                     )
                 };
@@ -1456,7 +1464,7 @@ fn qr_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "qr";
 
@@ -1580,9 +1588,9 @@ where
 fn eigh_typed<T>(
     backend: &CudaExecSession<'_>,
     input: &TypedTensor<T>,
-) -> Result<(TypedTensor<T::Real>, TypedTensor<T>)>
+) -> Result<(TypedTensor<<T as LinalgScalar>::Real>, TypedTensor<T>)>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "eigh";
 
@@ -1600,7 +1608,7 @@ where
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape)?;
+    let values = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &values_shape)?;
     let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
@@ -1635,7 +1643,7 @@ where
         let (batch_a, batch_w, batch_info) = unsafe {
             (
                 batch_ptr::<T>(a_ptr, a_offset),
-                batch_ptr::<T::Real>(values_ptr, values_offset),
+                batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
                 batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
             )
         };
@@ -1665,9 +1673,9 @@ where
 fn eigh_values_typed<T>(
     backend: &CudaExecSession<'_>,
     input: &TypedTensor<T>,
-) -> Result<TypedTensor<T::Real>>
+) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "eigh_values";
 
@@ -1682,7 +1690,7 @@ where
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<T::Real>(backend.runtime(), &values_shape)?;
+    let values = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &values_shape)?;
     let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
@@ -1718,7 +1726,7 @@ where
         let (batch_a, batch_w, batch_info) = unsafe {
             (
                 batch_ptr::<T>(a_ptr, a_offset),
-                batch_ptr::<T::Real>(values_ptr, values_offset),
+                batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
                 batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
             )
         };
@@ -1759,7 +1767,7 @@ fn build_lu_outputs_device<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let k = m.min(n);
     let mut p_shape = vec![m, m];
@@ -1815,7 +1823,7 @@ fn build_lu_parity_device<T>(
     batch_shape: &[usize],
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let parity = alloc_output::<T>(rt, batch_shape)?;
     let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
@@ -1843,7 +1851,7 @@ fn fill_one_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let out = alloc_output::<T>(rt, shape)?;
     let out_arg = typed_tensor_binding(&out, op)?;
@@ -1869,7 +1877,7 @@ fn apply_lu_pivots_typed<T>(
     inverse: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let out = alloc_output::<T>(rt, input.shape())?;
     if out.n_elements() == 0 {
@@ -1904,7 +1912,7 @@ fn zero_sized_lu_factor_outputs<T>(
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
-    T: LinalgScalar,
+    T: LinalgScalar + TensorScalar,
 {
     let m = shape[0];
     let n = shape[1];
@@ -1922,7 +1930,9 @@ where
 }
 
 fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
-    raw_cuda_stream(rt, op).map(|stream| stream as usize as CudaStream)
+    let mut stream = 0;
+    with_raw_cuda_stream(rt, op, |value| stream = value)?;
+    Ok(stream as usize as CudaStream)
 }
 
 fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
@@ -1954,12 +1964,14 @@ where
     alloc_workspace_bytes(rt, nbytes, op)
 }
 
-fn typed_device_ptr<T: 'static>(
+fn typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<*mut c_void> {
-    interop_typed_device_ptr(rt, tensor, op)
+    let mut ptr = std::ptr::null_mut();
+    interop_with_typed_device_ptr(rt, tensor, op, |value| ptr = value)?;
+    Ok(ptr)
 }
 
 fn clone_device_tensor<T>(
@@ -1968,7 +1980,7 @@ fn clone_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + Copy + Clone,
+    T: CubeElement + TensorScalar + CubePrimitive + Copy + Clone,
 {
     let out = alloc_output(rt, tensor.shape())?;
     if out.n_elements() == 0 {
@@ -2004,7 +2016,7 @@ fn download_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone,
+    T: CubeElement + TensorScalar + Clone,
 {
     sync_stream(rt, op)?;
     download_typed_tensor(rt, tensor, op)

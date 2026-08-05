@@ -1300,7 +1300,7 @@ fn broadcast<B: LinalgBackend>(
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     if input.shape() == shape {
-        return Ok(input.clone());
+        return input.duplicate();
     }
     backend.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
 }
@@ -1658,7 +1658,7 @@ fn move_axes_to_front<B: LinalgBackend>(
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     if axes.iter().enumerate().all(|(index, &axis)| index == axis) {
-        return Ok(input.clone());
+        return input.duplicate();
     }
     let mut selected = vec![false; input.shape().len()];
     for &axis in axes {

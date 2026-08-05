@@ -205,9 +205,21 @@ class RunProfileTests(unittest.TestCase):
         self.assertIn('elif [ "${EVENT_NAME}" = push ]; then', ci_config_job)
         self.assertIn('BASE_SHA="${PR_BASE_SHA}"', ci_config_job)
         self.assertIn('BASE_SHA="${PUSH_BASE_SHA}"', ci_config_job)
+        self.assertIn(
+            "STORAGE_OWNERSHIP_PROMOTION_BASE: 402c962c61543f1477e3e3e0ade2c293b9d05ad",
+            ci_config_job,
+        )
+        self.assertIn(
+            'PROMOTION_BASE_SHA="${STORAGE_OWNERSHIP_PROMOTION_BASE:-${BASE_SHA}}"',
+            ci_config_job,
+        )
+        self.assertIn(
+            'git merge-base --is-ancestor "${PROMOTION_BASE_SHA}" HEAD',
+            ci_config_job,
+        )
         invocation = (
             "python3 scripts/ci/run_profile.py ci-config "
-            '--storage-ownership-base "${BASE_SHA}"'
+            '--storage-ownership-base "${PROMOTION_BASE_SHA}"'
         )
         self.assertEqual(ci_config_job.count(invocation), 1)
 

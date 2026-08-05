@@ -14,9 +14,12 @@ use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeExtent, ShapeRelation, SymDim};
-use tenferro_tensor::{CacheStats, DType, SliceConfig, Tensor, TensorScalar};
+#[cfg(test)]
+use tenferro_tensor::Tensor;
+use tenferro_tensor::{CacheStats, DType, SliceConfig, TensorScalar};
 
 use super::program::CompiledGraph;
+use crate::checkpoint::RetainedValue;
 #[cfg(test)]
 use crate::compiler::semantic_staging::stage_semantic_program;
 use crate::compiler::{lower_scoped_dim_expr, CompilerOptions};
@@ -37,7 +40,7 @@ struct InputDescriptor {
     dtype: DType,
     shape: Vec<usize>,
     extent_identity: InputExtentIdentity,
-    default_tensor: Option<Arc<Tensor>>,
+    default_tensor: Option<Arc<RetainedValue>>,
 }
 
 #[derive(Clone, Copy)]
@@ -462,7 +465,7 @@ impl GraphCompiler {
         &mut self,
         outputs: &[&TracedTensor],
         binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
-        default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
+        default_inputs: &HashMap<TensorInputKey, Arc<RetainedValue>>,
         explicit_input_order: Option<&[TensorInputKey]>,
         include_checkpoint_aliases: bool,
         allow_unbound_placeholders: bool,
@@ -941,7 +944,7 @@ fn compile_materialized_semantic_program(
             .map_err(semantic_build_error)?;
         if let Some(tensor) = &descriptor.default_tensor {
             builder
-                .bind_input(value, Arc::clone(tensor))
+                .bind_input_retained(value, Arc::clone(tensor))
                 .map_err(semantic_build_error)?;
         }
         *value_slot = Some(value);
@@ -1142,7 +1145,7 @@ impl Default for GraphCompiler {
 
 fn collect_default_inputs(
     outputs: &[&TracedTensor],
-) -> Result<HashMap<TensorInputKey, Arc<Tensor>>> {
+) -> Result<HashMap<TensorInputKey, Arc<RetainedValue>>> {
     let mut all_inputs = HashMap::new();
     for output in outputs {
         for (key, tensor) in output.inputs_map.iter() {
@@ -1408,7 +1411,7 @@ fn validate_placeholder_shape(placeholder: &TracedTensor, shape: &[usize]) -> Re
 fn descriptor_for_input(
     key: &TensorInputKey,
     binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
-    default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
+    default_inputs: &HashMap<TensorInputKey, Arc<RetainedValue>>,
     allow_unbound_placeholders: bool,
 ) -> Result<InputDescriptor> {
     if let Some(tensor) = default_inputs.get(key) {
@@ -1458,7 +1461,7 @@ fn concrete_shape_from_sym_dims(shape: &[SymDim]) -> Option<Vec<usize>> {
 
 fn default_input_extent_identity(
     key: &TensorInputKey,
-    tensor: &Tensor,
+    tensor: &RetainedValue,
 ) -> Result<InputExtentIdentity> {
     let metadata = registered_meta(&ValueKey::Input(key.clone()))?;
     let exact_shape = metadata.exact_shape();
@@ -1552,7 +1555,7 @@ fn invalid_compiled_graph(message: impl Into<String>) -> Error {
     Error::Internal(message.into())
 }
 
-fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
+fn default_tensors_equivalent(lhs: &Arc<RetainedValue>, rhs: &Arc<RetainedValue>) -> bool {
     if Arc::ptr_eq(lhs, rhs) {
         return true;
     }
@@ -1570,11 +1573,19 @@ fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {
     }
 }
 
-fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Tensor) -> bool {
+fn default_slices_equivalent<T: TensorScalar + PartialEq>(
+    lhs: &RetainedValue,
+    rhs: &RetainedValue,
+) -> bool {
+    let (Ok(lhs), Ok(rhs)) = (lhs.tensor_read(), rhs.tensor_read()) else {
+        return false;
+    };
+    let lhs = lhs.tensor_view();
+    let rhs = rhs.tensor_view();
     match (lhs.as_slice::<T>(), rhs.as_slice::<T>()) {
         (Ok(lhs), Ok(rhs)) => lhs == rhs,
         // Backend-resident defaults cannot be inspected here; only the same
-        // Arc<Tensor> is considered equivalent by `default_tensors_equivalent`.
+        // value handle is considered equivalent by `default_tensors_equivalent`.
         _ => false,
     }
 }
@@ -1596,8 +1607,8 @@ mod tests {
         SymDim,
     };
     use tenferro_tensor::{
-        Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
-        TypedTensor,
+        BackendStorageHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+        StorageBuffer, TypedTensor,
     };
 
     #[test]
@@ -1656,7 +1667,9 @@ mod tests {
         let y1 = x.neg().unwrap();
         let mut y2 = x.neg().unwrap();
         let key = x.input_key().expect("concrete traced tensor has input key");
-        let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
+        let replacement = Arc::new(RetainedValue::from_tensor(
+            Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        ));
         let mut inputs = (*y2.inputs_map).clone();
         inputs.insert(key.clone(), replacement);
         y2.inputs_map = Arc::new(inputs);
@@ -1679,22 +1692,22 @@ mod tests {
             }),
             cpu_affinity: None,
         };
-        let lhs = Arc::new(Tensor::F64(
+        let lhs = Arc::new(RetainedValue::from_tensor(Tensor::F64(
             TypedTensor::from_buffer_col_major(
                 vec![2],
-                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(1, 2))),
+                StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1, 2))),
                 placement.clone(),
             )
             .unwrap(),
-        ));
-        let rhs = Arc::new(Tensor::F64(
+        )));
+        let rhs = Arc::new(RetainedValue::from_tensor(Tensor::F64(
             TypedTensor::from_buffer_col_major(
                 vec![2],
-                Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(2, 2))),
+                StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(2, 2))),
                 placement,
             )
             .unwrap(),
-        ));
+        )));
 
         assert!(
             !default_tensors_equivalent(&lhs, &rhs),

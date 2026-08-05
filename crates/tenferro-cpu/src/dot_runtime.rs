@@ -1,6 +1,6 @@
 use tenferro_tensor::{
-    Buffer, DType, DotGeneralAccumulation, DotGeneralConfig, ShapeMismatch, Tensor, TensorRead,
-    TensorView, TensorViewMut, TensorWrite, TypedTensor, ValidationError,
+    DType, DotGeneralAccumulation, DotGeneralConfig, ShapeMismatch, Tensor, TensorRead, TensorView,
+    TensorViewMut, TensorWrite, TypedTensor, ValidationError,
 };
 
 use smallvec::SmallVec;
@@ -900,11 +900,7 @@ where
 {
     let element_count =
         tenferro_tensor::validate::checked_shape_product(OP, "canonical operand", &shape)?;
-    TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Host(T::pool_acquire_zeroed(buffers, element_count)),
-        crate::default_placement(),
-    )
+    TypedTensor::from_vec_col_major(shape, T::pool_acquire_zeroed(buffers, element_count))
 }
 
 fn allocate_canonical_operand(
@@ -1616,10 +1612,10 @@ pub(crate) fn validate_layout_metadata(
 macro_rules! validate_owned_layout {
     ($tensor:expr, $role:expr) => {{
         let tensor = $tensor;
-        let storage_len = match tensor.buffer() {
-            Buffer::Host(storage) => storage.len(),
-            Buffer::Backend(_) => return Err(crate::cpu_backend_buffer_error(OP)),
-        };
+        if tensor.backend_buffer().is_some() {
+            return Err(crate::cpu_backend_buffer_error(OP));
+        }
+        let storage_len = tensor.host_data()?.len();
         validate_layout_metadata(
             $role,
             tensor.shape(),

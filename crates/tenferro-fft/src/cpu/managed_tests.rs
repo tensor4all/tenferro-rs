@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendBuffer, BackendSessionHost, Buffer, DType,
-    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
-    SharedTensorAllocationDomain, Tensor, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorScalar, TypedTensor,
 };
 
 use crate::{FftNorm, TensorFftExt};
@@ -36,7 +36,7 @@ impl<T> fmt::Debug for FakeManagedBuffer<T> {
     }
 }
 
-impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> {
+impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "fake-managed"
     }
@@ -64,7 +64,7 @@ impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> 
         Ok(HostReadGuard::new(guard))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         let mut guard = self
             .values
             .lock()
@@ -99,7 +99,7 @@ impl FakeDomain {
         })
     }
 
-    fn tensor<T: Copy + Send + Sync + 'static>(
+    fn tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
@@ -114,7 +114,7 @@ impl FakeDomain {
         };
         TypedTensor::from_buffer_col_major(
             shape.to_vec(),
-            Buffer::Backend(Arc::new(buffer)),
+            StorageBuffer::Backend(Box::new(buffer)),
             Placement {
                 memory_kind: MemoryKind::Managed,
                 device: None,

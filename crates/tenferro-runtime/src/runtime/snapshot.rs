@@ -786,7 +786,11 @@ impl Runtime {
         super::preparation::prepare_compiled_for(self, &self.0.caches, program, signature, options)
     }
 
-    /// Run a compiled graph through runtime-owned prepared execution.
+    /// Run a compiled graph synchronously with borrowed tensor inputs.
+    ///
+    /// The borrows remain valid until this call returns; this surface never
+    /// detaches work. Asynchronous [`Self::submit`] accepts only the owning
+    /// [`super::execution::ExecutionInputs`] package.
     ///
     /// # Examples
     ///
@@ -829,6 +833,30 @@ impl Runtime {
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<Tensor>> {
         super::execution::run_compiled(self, program, inputs)
+    }
+
+    /// Execute borrowed read-only inputs synchronously through retirement.
+    ///
+    /// Host/CPU providers may complete this call. Asynchronous device
+    /// providers reject before admission and return the unchanged borrowed
+    /// package through [`crate::ScopedSubmitRejected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Unsupported`] when the selected asynchronous
+    /// provider cannot execute borrowed inputs synchronously, or
+    /// [`crate::ScopedSubmitRejected`] when pre-admission validation fails.
+    /// Provider execution failures are reported as
+    /// [`crate::runtime::execution::ScopedExecutionOutcome::RetiredFailed`].
+    pub fn execute_scoped_read_only<'env>(
+        &self,
+        program: &CompiledGraph,
+        inputs: super::execution::ScopedReadInputs<'env>,
+    ) -> std::result::Result<
+        super::execution::ScopedExecutionOutcome<'env>,
+        super::execution::ScopedSubmitRejected<'env>,
+    > {
+        super::execution::execute_scoped_read_only(self, program, inputs)
     }
 
     /// Prepare a compiled graph for repeated execution with the same runtime.
@@ -898,8 +926,8 @@ impl Runtime {
     pub fn submit(
         &self,
         program: &CompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<super::execution::ExecutionHandle> {
+        inputs: super::execution::ExecutionInputs,
+    ) -> std::result::Result<super::execution::ExecutionHandle, super::execution::SubmitError> {
         super::execution::submit(self, program, inputs)
     }
 

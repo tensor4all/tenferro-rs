@@ -126,7 +126,8 @@ tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops
 tenferro-cpu              -> tenferro-tensor
 tenferro-cpu              -> tenferro-internal-cpu-kernels
 tenferro-cpu              -> tenferro-runtime
-tenferro-gpu              -> tenferro-tensor, tenferro-core-ops
+tenferro-gpu              -> tenferro-tensor, tenferro-core-ops,
+                              tenferro-cpu, tenferro-runtime
 tenferro-internal-cpu-kernels
                            -> tenferro-tensor
 tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
@@ -143,7 +144,7 @@ tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
 tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu
 tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor
+                              tenferro-tensor, tenferro-cpu
 ```
 
 Additional internal dependencies:

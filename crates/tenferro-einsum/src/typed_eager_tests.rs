@@ -141,7 +141,21 @@ impl BackendCachedDot for WrongDTypeBackend {}
 
 impl BackendSessionHost for WrongDTypeBackend {}
 
-impl TensorDeviceTransfer for WrongDTypeBackend {}
+impl TensorDeviceTransfer for WrongDTypeBackend {
+    fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "WrongDTypeBackend::download_to_host",
+            "test backend does not transfer tensors",
+        ))
+    }
+
+    fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "WrongDTypeBackend::upload_host_tensor",
+            "test backend does not transfer tensors",
+        ))
+    }
+}
 
 impl TensorBuffer for WrongDTypeBackend {}
 

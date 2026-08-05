@@ -7,9 +7,37 @@ use crate::cubecl::dispatch::{
 };
 use crate::cubecl::{CudaBackend, CudaExtensionCache};
 use crate::{
-    Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
+    CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    TypedTensor,
 };
-use tenferro_tensor::{CacheStats, Error, ErrorKind, ValidationError, ValidationKind};
+use tenferro_tensor::{
+    AllocationDomainId, BackendStorage, CacheStats, Error, ErrorKind, ValidationError,
+    ValidationKind,
+};
+
+#[test]
+fn cubecl_buffers_keep_domain_and_distinguish_allocations() {
+    let domain = AllocationDomainId::fresh();
+    let first = CubeclBuffer::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        4,
+        0,
+        domain,
+    );
+    let second = CubeclBuffer::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        4,
+        0,
+        domain,
+    );
+
+    assert_eq!(first.allocation_domain(), domain);
+    assert_eq!(second.allocation_domain(), domain);
+    assert_ne!(
+        <CubeclBuffer as BackendStorage<f32>>::allocation_id(&first),
+        <CubeclBuffer as BackendStorage<f32>>::allocation_id(&second)
+    );
+}
 
 #[test]
 fn scalar_reduction_shape_stays_separate_from_cubecl_launch_metadata() {
@@ -250,13 +278,19 @@ fn cubecl_tensor_with_len(
     shape: Vec<usize>,
     len: usize,
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
+    let domain = AllocationDomainId::fresh();
     let handle = cubecl::server::Handle::new(
         StreamId::current(),
         (len * core::mem::size_of::<f32>()) as u64,
     );
     TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len, 0))),
+        StorageBuffer::Backend(Box::new(CubeclBuffer::new(
+            handle,
+            len * std::mem::size_of::<f32>(),
+            0,
+            domain,
+        ))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

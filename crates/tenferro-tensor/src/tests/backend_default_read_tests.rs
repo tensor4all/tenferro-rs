@@ -255,10 +255,10 @@ impl TensorStructural for DefaultReadBackend {
                     "default materialization accepts only host-owned tensors; use the storage's owning backend",
                 ));
             }
-            return Ok(tensor.clone());
+            return tensor.duplicate();
         }
         match input {
-            TensorRead::Tensor(tensor) => Ok(tensor.clone()),
+            TensorRead::Tensor(tensor) => tensor.duplicate(),
             TensorRead::View(TensorView::F32(view)) => materialize_host_view(view),
             TensorRead::View(TensorView::F64(view)) => materialize_host_view(view),
             TensorRead::View(TensorView::I32(view)) => materialize_host_view(view),
@@ -424,7 +424,7 @@ impl TensorIndexing for DefaultReadBackend {
     ) -> crate::Result<Tensor> {
         let _ = operand;
         self.calls.push("gather");
-        self.gather_indices = Some(start_indices.clone());
+        self.gather_indices = Some(start_indices.duplicate().unwrap());
         self.gather_config = Some(config.clone());
         Ok(marker())
     }
@@ -484,7 +484,11 @@ impl TensorDot for DefaultReadBackend {
         _config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         self.calls.push("dot_general");
-        Ok(self.dot_result.clone().unwrap_or_else(marker))
+        self.dot_result
+            .as_ref()
+            .map(Tensor::duplicate)
+            .transpose()
+            .map(|result| result.unwrap_or_else(marker))
     }
 }
 
@@ -492,7 +496,21 @@ impl TensorFusion for DefaultReadBackend {}
 
 impl TensorBuffer for DefaultReadBackend {}
 
-impl TensorDeviceTransfer for DefaultReadBackend {}
+impl TensorDeviceTransfer for DefaultReadBackend {
+    fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "DefaultReadBackend::download_to_host",
+            "test backend does not transfer tensors",
+        ))
+    }
+
+    fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "DefaultReadBackend::upload_host_tensor",
+            "test backend does not transfer tensors",
+        ))
+    }
+}
 
 impl BackendRuntimeCache for DefaultReadBackend {
     type RuntimeCache = ();
@@ -727,9 +745,7 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
 }
 
 #[test]
-fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
-    let shared: std::sync::Arc<dyn crate::BackendBuffer<f64>> =
-        std::sync::Arc::new(crate::BufferHandle::<f64>::new_with_len(17, 1));
+fn elementwise_into_accepts_independent_backend_destinations() {
     let placement = crate::Placement {
         memory_kind: crate::MemoryKind::Device,
         device: Some(crate::DeviceId {
@@ -741,31 +757,28 @@ fn elementwise_into_rejects_shared_backend_destination_before_fallback() {
     let lhs = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![1],
-            crate::Buffer::Backend(std::sync::Arc::clone(&shared)),
+            crate::StorageBuffer::Backend(Box::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(17, 1),
+            )),
             placement.clone(),
         )
         .unwrap(),
     );
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut out = Tensor::F64(
-        TypedTensor::from_buffer_col_major(vec![1], crate::Buffer::Backend(shared), placement)
-            .unwrap(),
+        TypedTensor::from_buffer_col_major(
+            vec![1],
+            crate::StorageBuffer::Backend(Box::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(18, 1),
+            )),
+            placement,
+        )
+        .unwrap(),
     );
 
-    let error = DefaultReadBackend::default()
+    DefaultReadBackend::default()
         .add_into(&lhs, &rhs, TensorWrite::from_tensor(&mut out))
-        .unwrap_err();
-
-    assert!(matches!(
-        error,
-        crate::Error::Validation {
-            op: "add",
-            source: crate::ValidationError::InvalidArgument {
-                argument: "out",
-                ..
-            },
-        }
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -1329,7 +1342,7 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
-    let mut out_mut = out.clone();
+    let mut out_mut = out.duplicate().unwrap();
     let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
 
     let rhs_f32 = Tensor::from_vec_col_major(vec![2], vec![3.0_f32, 4.0]).unwrap();
@@ -1618,8 +1631,8 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
     let input = Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![2],
-            crate::Buffer::Backend(std::sync::Arc::new(
-                crate::BufferHandle::<f64>::new_with_len(41, 2),
+            crate::StorageBuffer::Backend(Box::new(
+                crate::BackendStorageHandle::<f64>::new_with_len(41, 2),
             )),
             crate::Placement {
                 memory_kind: crate::MemoryKind::Device,

@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let loss = prediction.reduce_sum(Some(&[0]))?;
 
     assert_eq!(loss.shape(), &[]);
-    assert_close(loss.materialized()?.as_slice::<f64>().unwrap(), &[14.0]);
+    assert_close(loss.value()?.as_slice::<f64>().unwrap(), &[14.0]);
 
     loss.backward()?;
 

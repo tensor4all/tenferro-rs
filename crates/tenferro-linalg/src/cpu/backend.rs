@@ -6,9 +6,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
-    validate::validate_nonsingular_u, AllocationDomainId, Buffer, DType, Error, HostAccessError,
-    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead,
-    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
+    MemoryKind, SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorElementwise, TensorRead,
+    TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 trait FreshLinalgOutput {
@@ -240,7 +240,7 @@ impl LinalgBackend for CpuExecSession<'_> {
                 Some(b.shape().to_vec()),
             )
         } else {
-            (b.clone(), None)
+            (b.duplicate()?, None)
         };
 
         let result = match provider {
@@ -646,7 +646,7 @@ impl LinalgBackend for CpuExecSession<'_> {
                 Some(b.shape().to_vec()),
             )
         } else {
-            (b.clone(), None)
+            (b.duplicate()?, None)
         };
 
         validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), rhs.shape())?;
@@ -654,7 +654,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         let lu_op = if conjugate_a {
             self.conj(packed_lu)?
         } else {
-            packed_lu.clone()
+            packed_lu.duplicate()?
         };
         let mut result = if transpose_a {
             let z = self.triangular_solve(&lu_op, &rhs, true, false, true, false)?;
@@ -777,13 +777,13 @@ fn solve_shape_direct_eligible(a_shape: &[usize], b_shape: &[usize]) -> bool {
 
 fn tensor_uses_backend_storage(input: &Tensor) -> bool {
     match input {
-        Tensor::F32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::F64(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::I32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::I64(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::Bool(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::C32(input) => matches!(input.buffer(), Buffer::Backend(_)),
-        Tensor::C64(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::F32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::F64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::I32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::I64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::Bool(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::C32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
+        Tensor::C64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
     }
 }
 
@@ -803,7 +803,7 @@ fn managed_cholesky(
     }
 }
 
-trait ManagedCholeskyScalar: Copy + Send + Sync + 'static {
+trait ManagedCholeskyScalar: Copy + Send + Sync + TensorScalar + 'static {
     const DTYPE: DType;
 
     fn factor(
@@ -894,7 +894,7 @@ where
     T: ManagedCholeskyScalar,
 {
     let n = validate_managed_cholesky_input(input, domain.id())?;
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             "cholesky",
             HostAccessError::Unsupported { backend: "host" },
@@ -908,12 +908,12 @@ where
             .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))?;
         T::factor(context, buffers, &read, n, provider)?
     };
-    let typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
-    write_managed_cholesky_output(&typed, domain.id(), &values)?;
+    let mut typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
+    write_managed_cholesky_output(&mut typed, domain.id(), &values)?;
     Ok(T::wrap(typed))
 }
 
-fn validate_managed_cholesky_input<T: Copy + Send + Sync + 'static>(
+fn validate_managed_cholesky_input<T: Copy + Send + Sync + TensorScalar + 'static>(
     input: &TypedTensor<T>,
     expected_domain: AllocationDomainId,
 ) -> tenferro_tensor::Result<usize> {
@@ -947,7 +947,7 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + 'static>(
             "matrix element count overflows usize",
         )
     })?;
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             "cholesky",
             HostAccessError::Unsupported { backend: "host" },
@@ -985,7 +985,7 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + 'static>(
 }
 
 fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
-    output: &TypedTensor<T>,
+    output: &mut TypedTensor<T>,
     expected_domain: AllocationDomainId,
     values: &[T],
 ) -> tenferro_tensor::Result<()> {
@@ -997,7 +997,7 @@ fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
             "shared allocation owner returned an output outside its managed domain",
         ));
     }
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let Some(buffer) = output.backend_buffer_mut() else {
         return Err(tenferro_tensor::Error::runtime_state(
             "cholesky",
             "shared allocation owner returned a host output",
@@ -1225,7 +1225,7 @@ fn solve_entered(
             Some(b.shape().to_vec()),
         )
     } else {
-        (b.clone(), None)
+        (b.duplicate()?, None)
     };
 
     let result = match provider {
@@ -1941,7 +1941,7 @@ fn full_piv_lu_faer_view_entered(
     }
 }
 
-fn ensure_host_typed_tensor<T: 'static>(
+fn ensure_host_typed_tensor<T: TensorScalar>(
     op: &'static str,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<()> {
@@ -2223,7 +2223,7 @@ fn apply_lu_pivots_cpu(
     }
 }
 
-fn apply_lu_pivots_typed<T: Clone>(
+fn apply_lu_pivots_typed<T: Clone + TensorScalar>(
     input: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     inverse: bool,
@@ -2295,7 +2295,7 @@ fn apply_lu_pivots_typed<T: Clone>(
         )?;
         for col in 0..cols {
             for &source_row in &row_map {
-                data.push(input_data[batch_offset + source_row + col * rows].clone());
+                data.push(input_data[batch_offset + source_row + col * rows]);
             }
         }
     }

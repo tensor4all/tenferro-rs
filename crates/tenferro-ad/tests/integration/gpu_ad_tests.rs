@@ -3,9 +3,11 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
-use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::Buffer;
+use tenferro_gpu::{
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+};
+use tenferro_runtime::{DotGeneralConfig, Tensor, TensorRead, TracedTensor, TypedTensor};
+use tenferro_tensor::StorageBuffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -34,8 +36,8 @@ fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: 
 }
 
 fn assert_device_backed(tensor: &Tensor) {
-    fn is_cubecl<T: 'static>(buffer: &Buffer<T>) -> bool {
-        matches!(buffer, Buffer::Backend(buffer) if buffer.backend_family() == "cubecl")
+    fn is_cubecl<T: 'static>(buffer: &StorageBuffer<T>) -> bool {
+        matches!(buffer, StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl")
     }
 
     match tensor {
@@ -90,8 +92,11 @@ fn test_gpu_eager_backward_smoke() {
 
     y.backward_with(&seed).unwrap();
     let grad = x.grad().unwrap().unwrap();
+    let grad_tensor = grad.to_tensor().unwrap();
     let grad_host = ctx
-        .with_execution_session(|session| session.download_to_host(grad.as_ref()))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&grad_tensor))
+        })
         .unwrap()
         .unwrap();
 
@@ -139,9 +144,10 @@ fn test_gpu_matmul_vjp() {
         ],
     );
 
-    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone()).unwrap();
-    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone()).unwrap();
-    let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone()).unwrap();
+    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.duplicate().unwrap()).unwrap();
+    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.duplicate().unwrap()).unwrap();
+    let cotangent_cpu =
+        TracedTensor::from_tensor_concrete_shape(cotangent_host.duplicate().unwrap()).unwrap();
     let cpu_engine = cpu_runtime();
     let y_cpu = matmul(&a_cpu, &b_cpu);
     let grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
@@ -171,21 +177,25 @@ fn test_gpu_matmul_vjp() {
     let gpu_grad_a = ctx
         .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
         .unwrap()
-        .materialized()
+        .to_tensor()
         .unwrap();
     let gpu_grad_b = ctx
         .vjp(&y_gpu, &b_gpu, &cotangent_gpu)
         .unwrap()
-        .materialized()
+        .to_tensor()
         .unwrap();
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
     let gpu_grad_a = ctx
-        .with_execution_session(|session| session.download_to_host(&gpu_grad_a))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&gpu_grad_a))
+        })
         .unwrap()
         .unwrap();
     let gpu_grad_b = ctx
-        .with_execution_session(|session| session.download_to_host(&gpu_grad_b))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&gpu_grad_b))
+        })
         .unwrap()
         .unwrap();
 

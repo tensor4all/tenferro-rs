@@ -341,6 +341,9 @@ impl CutensorLibrary {
 }
 
 #[cfg(test)]
+// INVARIANT: the loader contract test is kept beside the private FFI loader;
+// the production handle types intentionally remain below this test module.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     #[test]
     fn cutensor_loader_missing_library_is_typed_io_error() {
@@ -433,6 +436,9 @@ impl CutensorHandle {
         Ok(workspace_size)
     }
 
+    // INVARIANT: cuTENSOR's C ABI fixes this argument list; keeping it
+    // explicit preserves the provider call order at the unsafe boundary.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) unsafe fn contract(
         &self,
         plan: &Plan,
@@ -540,6 +546,9 @@ pub(crate) struct OperationDescriptor {
 }
 
 impl OperationDescriptor {
+    // INVARIANT: these arguments map one-for-one to cuTENSOR's C descriptor
+    // API; a parameter object would obscure the FFI order.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_contraction_with_ops(
         handle: &CutensorHandle,
         desc_a: &TensorDescriptor,
@@ -583,6 +592,9 @@ impl OperationDescriptor {
         })
     }
 
+    // INVARIANT: these arguments map one-for-one to cuTENSOR's C descriptor
+    // API; a parameter object would obscure the FFI order.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_permutation(
         handle: &CutensorHandle,
         desc_a: &TensorDescriptor,

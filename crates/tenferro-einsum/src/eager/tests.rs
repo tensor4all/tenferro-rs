@@ -23,7 +23,7 @@ fn tensor_value_view_paths_materialize_and_read() {
     assert_eq!(borrowed.as_tensor().unwrap().shape(), &[2]);
     assert_eq!(borrowed.tensor_read().shape(), &[2]);
 
-    let owned = TensorValue::Owned(tensor.clone());
+    let owned = TensorValue::Owned(tensor.duplicate().unwrap());
     assert_eq!(owned.as_tensor().unwrap().shape(), &[2]);
     assert_eq!(owned.tensor_read().shape(), &[2]);
 
@@ -421,7 +421,15 @@ impl TensorDot for NoBroadcastMaterializationBackend {
 impl TensorFusion for NoBroadcastMaterializationBackend {}
 impl TensorBuffer for NoBroadcastMaterializationBackend {}
 impl SessionCachedDot for NoBroadcastMaterializationBackend {}
-impl TensorDeviceTransfer for NoBroadcastMaterializationBackend {}
+impl TensorDeviceTransfer for NoBroadcastMaterializationBackend {
+    fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> Result<Tensor> {
+        Err(unexpected("download_to_host"))
+    }
+
+    fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> Result<Tensor> {
+        Err(unexpected("upload_host_tensor"))
+    }
+}
 
 #[test]
 fn generic_read_exec_reduces_single_view_input() {

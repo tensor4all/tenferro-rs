@@ -3,8 +3,8 @@ use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
 use std::sync::Arc;
 use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
-    Buffer, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
-    GatherConfig, PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,
+    CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
+    PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -44,11 +44,7 @@ where
 {
     let element_count =
         tenferro_tensor::validate::checked_shape_product("dot_general", "output", &shape)?;
-    TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Host(T::pool_acquire_zeroed(buffers, element_count)),
-        crate::default_placement(),
-    )
+    TypedTensor::from_vec_col_major(shape, T::pool_acquire_zeroed(buffers, element_count))
 }
 
 fn allocate_dot_output(
@@ -209,24 +205,24 @@ impl CpuExecSession<'_> {
 }
 
 impl TensorDeviceTransfer for CpuExecSession<'_> {
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.tensor_view().duplicate()
     }
 
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.tensor_view().duplicate()
     }
 }
 

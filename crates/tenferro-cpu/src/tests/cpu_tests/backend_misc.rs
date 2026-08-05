@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    Buffer, BufferHandle, MemoryKind, Placement, TensorViewCanonicalization, TypedTensorView,
-    TypedTensorViewMut,
+    BackendStorageHandle, MemoryKind, Placement, StorageBuffer, TensorViewCanonicalization,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 fn opaque_backend_placement() -> Placement {
@@ -166,7 +166,7 @@ fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() 
 }
 
 #[test]
-fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
+fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
     let mut backend = CpuBackend::new();
 
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
@@ -209,30 +209,6 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             ref message,
         }) if message.contains("destination") && message.contains("host placement")
     ));
-
-    let shared = Arc::new(BufferHandle::<f64>::new_with_len(91, 2));
-    let placement = opaque_backend_placement();
-    let aliased_src = Tensor::F64(
-        TypedTensor::from_buffer_col_major(
-            vec![2],
-            Buffer::Backend(shared.clone()),
-            placement.clone(),
-        )
-        .unwrap(),
-    );
-    let mut aliased_dst = Tensor::F64(
-        TypedTensor::from_buffer_col_major(vec![2], Buffer::Backend(shared), placement).unwrap(),
-    );
-    assert!(matches!(
-        backend.copy_read_into(
-            TensorRead::from_tensor(&aliased_src),
-            TensorWrite::from_tensor(&mut aliased_dst),
-        ),
-        Err(Error::Validation {
-            op: "CpuBackend::copy_read_into",
-            source,
-        }) if source.to_string().contains("alias")
-    ));
 }
 
 #[test]
@@ -272,7 +248,7 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
     let mut backend = CpuBackend::new();
     let src = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(9, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 2))),
         opaque_backend_placement(),
     )
     .unwrap();
@@ -297,7 +273,7 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(8, 2))),
         opaque_backend_placement(),
     )
     .unwrap();
@@ -1134,9 +1110,9 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
 fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() {
     let backend_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        tenferro_tensor::Buffer::Backend(Arc::new(
-            tenferro_tensor::BufferHandle::<f64>::new_with_len(17, 2),
-        )),
+        tenferro_tensor::StorageBuffer::Backend(Box::new(tenferro_tensor::BackendStorageHandle::<
+            f64,
+        >::new_with_len(17, 2))),
         tenferro_tensor::Placement {
             memory_kind: tenferro_tensor::MemoryKind::Device,
             device: Some(tenferro_tensor::DeviceId {
@@ -1537,7 +1513,21 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl BackendSessionHost for DefaultOnlyBackend {}
 
-    impl TensorDeviceTransfer for DefaultOnlyBackend {}
+    impl TensorDeviceTransfer for DefaultOnlyBackend {
+        fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+            Err(crate::Error::unsupported(
+                "DefaultOnlyBackend::download_to_host",
+                "test backend does not transfer tensors",
+            ))
+        }
+
+        fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+            Err(crate::Error::unsupported(
+                "DefaultOnlyBackend::upload_host_tensor",
+                "test backend does not transfer tensors",
+            ))
+        }
+    }
 
     impl TensorBuffer for DefaultOnlyBackend {}
 
@@ -1800,20 +1790,14 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let read_views_err = TensorDot::dot_general_read(
+    let read_views = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap_err();
-    assert!(matches!(
-        &read_views_err,
-        crate::Error::Unsupported {
-            op: "to_contiguous_read",
-            ..
-        }
-    ));
+    .unwrap();
+    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
     let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
         &mut backend,
@@ -1828,11 +1812,26 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     .unwrap();
     assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let uploaded = backend.upload_host_tensor(&lhs).unwrap();
-    assert_eq!(uploaded.shape(), &[1, 1]);
-    let downloaded = backend.download_to_host(&uploaded).unwrap();
-    assert_eq!(downloaded.as_slice::<f64>().unwrap(), &[2.0]);
-    backend.reclaim_buffer(downloaded);
+    let upload_error = backend
+        .upload_host_tensor(TensorRead::from_tensor(&lhs))
+        .unwrap_err();
+    assert!(matches!(
+        upload_error,
+        crate::Error::Unsupported {
+            op: "DefaultOnlyBackend::upload_host_tensor",
+            ..
+        }
+    ));
+    let download_error = backend
+        .download_to_host(TensorRead::from_tensor(&lhs))
+        .unwrap_err();
+    assert!(matches!(
+        download_error,
+        crate::Error::Unsupported {
+            op: "DefaultOnlyBackend::download_to_host",
+            ..
+        }
+    ));
 
     let fusion_plan =
         tenferro_tensor::backend::ElementwiseFusionPlan::new(DType::F64, 0, vec![], vec![]);
@@ -1862,20 +1861,14 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views_err = TensorDot::dot_general_read(
+    let exec_read_views = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap_err();
-    assert!(matches!(
-        &exec_read_views_err,
-        crate::Error::Unsupported {
-            op: "to_contiguous_read",
-            ..
-        }
-    ));
+    .unwrap();
+    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
     let exec_no_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);

@@ -333,7 +333,9 @@ fn upload_generated_host_tensor<B: TensorBackend>(
     backend: &mut B,
     tensor: Tensor,
 ) -> Result<Tensor> {
-    backend.upload_host_tensor(&tensor).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&tensor))
+        .map_err(Error::from)
 }
 
 fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
@@ -391,6 +393,15 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
     inputs: &[TensorRead<'_>],
     exec: &mut dyn BackendSession,
 ) -> Result<Vec<Tensor>> {
+    // Provider backends receive owned compact tensors at this execution
+    // boundary. A borrowed view is still a useful public read handle, but it
+    // must be materialized explicitly before dispatch rather than relying on a
+    // backend to interpret arbitrary borrowed layout metadata.
+    let concrete_inputs = concrete_tensor_reads(exec, inputs)?;
+    let inputs: Vec<TensorRead<'_>> = concrete_inputs
+        .iter()
+        .map(|input| TensorRead::from_tensor(input.tensor()))
+        .collect();
     let result = match op {
         StdTensorOp::Add => {
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
@@ -451,11 +462,11 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.dot_general_read(a.tensor_read(), b.tensor_read(), config)?]
         }
         StdTensorOp::Reshape { to_shape, .. } => {
-            let shape = resolve_tensor_read_shape_exprs(inputs, to_shape)?;
+            let shape = resolve_tensor_read_shape_exprs(&inputs, to_shape)?;
             vec![exec.reshape_read(inputs[0].clone(), &shape)?]
         }
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            let shape = resolve_tensor_read_shape_exprs(inputs, shape)?;
+            let shape = resolve_tensor_read_shape_exprs(&inputs, shape)?;
             vec![exec.broadcast_in_dim_read(inputs[0].clone(), &shape, dims)?]
         }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
@@ -539,7 +550,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.concatenate(&refs, *axis)?]
         }
         StdTensorOp::Gather(config) => {
-            let tensors = concrete_tensor_reads(exec, inputs)?;
+            let tensors = concrete_tensor_reads(exec, &inputs)?;
             vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), config)?]
         }
         StdTensorOp::GatherDynamicSliceSizes {
@@ -549,7 +560,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             index_vector_dim,
             slice_sizes,
         } => {
-            let slice_sizes = resolve_tensor_read_shape_exprs(inputs, slice_sizes)?;
+            let slice_sizes = resolve_tensor_read_shape_exprs(&inputs, slice_sizes)?;
             let config = tenferro_tensor::GatherConfig {
                 offset_dims: offset_dims.clone(),
                 collapsed_slice_dims: collapsed_slice_dims.clone(),
@@ -557,7 +568,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 index_vector_dim: *index_vector_dim,
                 slice_sizes,
             };
-            let tensors = concrete_tensor_reads(exec, inputs)?;
+            let tensors = concrete_tensor_reads(exec, &inputs)?;
             vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
         }
         StdTensorOp::Scatter(config) => {
@@ -569,7 +580,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
         }
         StdTensorOp::DynamicSlice { slice_sizes } => {
-            let tensors = concrete_tensor_reads(exec, inputs)?;
+            let tensors = concrete_tensor_reads(exec, &inputs)?;
             vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
         }
         StdTensorOp::DynamicUpdateSlice => {
@@ -845,7 +856,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 let target_size = reference.shape()[*axis];
                 let current_size = input.shape()[*axis];
                 if current_size >= target_size {
-                    vec![input.clone()]
+                    vec![input.duplicate()?]
                 } else {
                     let rank = input.shape().len();
                     let mut high = vec![0i64; rank];

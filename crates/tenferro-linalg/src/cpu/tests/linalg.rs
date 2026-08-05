@@ -2,7 +2,7 @@ use super::*;
 
 use crate::TensorReadLinalgExt;
 use std::sync::Arc;
-use tenferro_tensor::{Buffer, BufferHandle, MemoryKind, Placement};
+use tenferro_tensor::{BackendStorageHandle, MemoryKind, Placement, StorageBuffer};
 
 fn assert_c32_close(actual: Complex32, expected: Complex32) {
     assert!(
@@ -247,7 +247,9 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 
                 let backend_vector = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
-                    Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(120, 2))),
+                    StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
+                        120, 2,
+                    ))),
                     Placement {
                         memory_kind: MemoryKind::Device,
                         device: None,
@@ -272,7 +274,9 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 
                 let backend_matrix = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2, 2],
-                    Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(121, 4))),
+                    StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
+                        121, 4,
+                    ))),
                     Placement {
                         memory_kind: MemoryKind::Device,
                         device: None,

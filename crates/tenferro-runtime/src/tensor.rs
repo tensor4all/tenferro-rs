@@ -487,12 +487,12 @@ fn broadcast_to(
 ) -> Result<Tensor> {
     let input_shape = input.shape();
     if input_shape == target_shape {
-        return Ok(input.clone());
+        return input.duplicate();
     }
 
     let plan = broadcast_input_plan(input_shape, target_shape).map_err(broadcast_error)?;
     let source = if plan.source_shape == input_shape {
-        input.clone()
+        input.duplicate()?
     } else {
         backend.with_backend_session(|exec| exec.reshape(input, &plan.source_shape))?
     };

@@ -149,7 +149,7 @@ impl EagerTensor {
     /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let z = x.add(&y).unwrap();
     ///
-    /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -190,7 +190,7 @@ impl EagerTensor {
     /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let z = x.mul(&y).unwrap();
     ///
-    /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
+    /// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -217,7 +217,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.neg().unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -242,7 +242,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.exp().unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -267,7 +267,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.reduce_sum(None).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[10.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[10.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -486,7 +486,7 @@ impl EagerTensor {
     /// let c = a.matmul(&b).unwrap();
     ///
     /// assert_eq!(c.shape(), &[2, 1]);
-    /// assert_eq!(c.materialized().unwrap().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
+    /// assert_eq!(c.value().unwrap().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -536,7 +536,8 @@ impl EagerTensor {
     /// let y = x.transpose(&[1, 0]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[3, 2]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    /// let materialized = y.to_tensor().unwrap();
+    /// assert_eq!(materialized.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -549,8 +550,10 @@ impl EagerTensor {
         let op = StdTensorOp::Transpose {
             perm: perm.to_vec(),
         };
-        let value = self
-            .value
+        // INVARIANT: the result must own a group independent of `self`; the
+        // explicit duplicate is the ownership boundary before making a view.
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .transpose_view(perm)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], op, value)
@@ -572,7 +575,7 @@ impl EagerTensor {
     /// let y = x.reshape(&[6]).unwrap();
     ///
     /// assert_eq!(y.shape(), &[6]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -585,7 +588,10 @@ impl EagerTensor {
         let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
         };
-        if let Ok(value) = self.value.reshape_view(shape) {
+        // INVARIANT: a returned eager tensor cannot borrow `self`'s group, so
+        // the explicit duplicate precedes metadata-only view construction.
+        let base = self.to_tensor()?;
+        if let Ok(value) = TensorValue::from_tensor(base).reshape_view(shape) {
             return Self::nary_value_op(&[self], op, value);
         }
         self.unary_op(op)
@@ -609,7 +615,7 @@ impl EagerTensor {
     ///     })
     ///     .unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -619,8 +625,11 @@ impl EagerTensor {
     /// `AxisOutOfBounds`/`InvalidArgument` when starts, limits, or strides are
     /// invalid, or a typed backend/runtime-state error while creating the view.
     pub fn slice(&self, config: SliceConfig) -> Result<Self> {
-        let value = self
-            .value
+        // INVARIANT: the result must retain an independent owner while the
+        // input handle remains live; this is an explicit duplicate, not an
+        // implicit backend transfer.
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .slice_view(&config)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], StdTensorOp::Slice(config), value)
@@ -655,8 +664,10 @@ impl EagerTensor {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
         };
-        let value = self
-            .value
+        // INVARIANT: output descriptors cannot borrow the input's move-only
+        // allocation group, so this explicit duplicate owns the view's root.
+        let base = self.to_tensor()?;
+        let value = TensorValue::from_tensor(base)
             .broadcast_in_dim_view(shape, dims)
             .map_err(Error::TensorRuntime)?;
         Self::nary_value_op(&[self], op, value)
@@ -709,7 +720,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.cast(DType::I32).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<i32>().unwrap(), &[1, -2]);
+    /// assert_eq!(y.value().unwrap().as_slice::<i32>().unwrap(), &[1, -2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -742,7 +753,7 @@ impl EagerTensor {
     ///     })
     ///     .unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0, 1.0, 0.0, 2.0, 0.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[0.0, 1.0, 0.0, 2.0, 0.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -771,7 +782,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.reverse(&[0]).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 3.0, 2.0, 1.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 3.0, 2.0, 1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -813,7 +824,7 @@ impl EagerTensor {
     ///     )
     ///     .unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[50.0, 20.0, 10.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[50.0, 20.0, 10.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -850,7 +861,7 @@ impl EagerTensor {
     ///     )
     ///     .unwrap();
     ///
-    /// assert_eq!(result.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0, 5.0, 0.0, 7.0]);
+    /// assert_eq!(result.value().unwrap().as_slice::<f64>().unwrap(), &[0.0, 5.0, 0.0, 7.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -875,7 +886,7 @@ impl EagerTensor {
     /// let starts = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2_i64]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.dynamic_slice(&starts, &[2]).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -906,7 +917,7 @@ impl EagerTensor {
     /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let z = EagerTensor::concatenate(&[&x, &y], 0).unwrap();
     ///
-    /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -940,7 +951,7 @@ impl EagerTensor {
     /// ).unwrap(), ctx.clone()).unwrap();
     /// let y = x.extract_diag(0, 1).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -965,7 +976,7 @@ impl EagerTensor {
     /// let y = x.embed_diag(0, 1).unwrap();
     ///
     /// assert_eq!(y.shape(), &[3, 3]);
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -989,7 +1000,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.tril(0).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 0.0, 4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 0.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1012,7 +1023,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.triu(0).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 3.0, 4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 3.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1035,7 +1046,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.reduce_prod(None).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[24.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[24.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1061,7 +1072,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.reduce_max(None).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1087,7 +1098,7 @@ impl EagerTensor {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = x.reduce_min(None).unwrap();
     ///
-    /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
+    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1133,7 +1144,7 @@ impl EagerTensor {
         }
 
         if !eager_grad_recording_enabled() {
-            return Ok(Self::new_untracked_value_result(ctx, value));
+            return Self::new_untracked_value_result(ctx, value);
         }
 
         let output_ref = &value;
@@ -1216,8 +1227,7 @@ impl EagerTensor {
             let output = profile_eager_op_section("nary_op.exec_single_output_read", || {
                 exec_single_output_read(&op, &input_reads, &ctx)
             })?;
-            let output = Arc::new(output);
-            let outputs = vec![Arc::clone(&output)];
+            let outputs = vec![&output];
             let mut recorded =
                 profile_eager_op_section("nary_op.record_untracked_outputs", || {
                     record_eager_outputs(&op, &outputs, tensors)
@@ -1233,7 +1243,7 @@ impl EagerTensor {
                 }
             }
             let result = profile_eager_op_section("nary_op.new_untracked_semantic_result", || {
-                Self::new_unregistered_result_arc_with_semantic_trace(
+                Self::new_unregistered_result_with_semantic_trace(
                     ctx,
                     trace.key,
                     output,
@@ -1253,7 +1263,7 @@ impl EagerTensor {
         let input_arcs = profile_eager_op_section("nary_op.materialize_inputs", || {
             tensors
                 .iter()
-                .map(|tensor| tensor.materialized_arc())
+                .map(|tensor| tensor.to_tensor().map(Arc::new))
                 .collect::<Result<Vec<_>>>()
         })?;
         let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
@@ -1263,8 +1273,7 @@ impl EagerTensor {
             exec_single_output(&op, &inputs, &ctx)
         })?;
 
-        let output = Arc::new(output);
-        let outputs = vec![Arc::clone(&output)];
+        let outputs = vec![&output];
         let mut recorded = profile_eager_op_section("nary_op.record_outputs", || {
             record_eager_outputs(&op, &outputs, tensors)
         })?;
@@ -1280,7 +1289,7 @@ impl EagerTensor {
         }
 
         let result = profile_eager_op_section("nary_op.new_tracked_result", || {
-            Self::new_result_arc_with_semantic_trace(
+            Self::new_result_with_semantic_trace(
                 ctx,
                 trace.key,
                 output,

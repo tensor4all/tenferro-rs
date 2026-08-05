@@ -1,7 +1,38 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView};
+use tenferro_tensor::{Rank, Tensor, TypedTensor, TypedTensorView};
 
 const INDEX_COUNT: usize = 4096;
+
+/// # Panics
+///
+/// Panics if the benchmark is called with a non-compact or non-host tensor;
+/// the probe is intentionally restricted to the validated benchmark fixture.
+#[inline(never)]
+#[no_mangle]
+pub extern "C" fn tensor_static_rank_read_probe(tensor: &TypedTensor<f64, Rank<2>>) -> f64 {
+    tensor
+        .as_view()
+        .as_slice()
+        .expect("the probe uses a compact host tensor")
+        .iter()
+        .copied()
+        .sum()
+}
+
+/// # Panics
+///
+/// Panics if the benchmark is called with a non-host tensor; the probe is
+/// intentionally restricted to the validated benchmark fixture.
+#[inline(never)]
+#[no_mangle]
+pub extern "C" fn tensor_static_rank_write_probe(tensor: &mut TypedTensor<f64, Rank<2>>) {
+    for value in tensor
+        .host_data_mut()
+        .expect("the probe uses a host tensor")
+    {
+        *value *= 2.0;
+    }
+}
 
 fn typed_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64> {
     let len = shape.iter().product();
@@ -60,7 +91,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("direct_slice_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let data = tensor.host_data_mut().unwrap();
                 let mut sum = 0.0;
@@ -108,7 +139,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("get_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for index in &indices {
@@ -124,7 +155,7 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
 
     group.bench_function(BenchmarkId::new("get_unchecked_mut", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for index in &indices {
@@ -184,7 +215,7 @@ fn bench_rank2_fixed(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("get_mut2", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for [i, j] in &indices {
@@ -237,7 +268,7 @@ fn bench_rank3_fixed(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("get_mut3", INDEX_COUNT), |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for [i, j, k] in &indices {
@@ -295,7 +326,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
 
     group.bench_function("tensor_iter_mut", |b| {
         b.iter_batched(
-            || tensor.clone(),
+            || tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for value in tensor.iter_mut().unwrap() {
@@ -310,7 +341,7 @@ fn bench_linear_iteration(c: &mut Criterion) {
 
     group.bench_function("dynamic_tensor_iter_mut", |b| {
         b.iter_batched(
-            || dynamic_tensor.clone(),
+            || dynamic_tensor.duplicate().unwrap(),
             |mut tensor| {
                 let mut sum = 0.0;
                 for value in tensor.iter_mut::<f64>().unwrap() {
@@ -321,6 +352,13 @@ fn bench_linear_iteration(c: &mut Criterion) {
             },
             BatchSize::SmallInput,
         );
+    });
+
+    group.bench_function("empty", |b| {
+        b.iter(|| {
+            let values: &[f64] = &[];
+            black_box(values.iter().copied().sum::<f64>())
+        });
     });
 
     group.finish();

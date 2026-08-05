@@ -1660,9 +1660,7 @@ fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> Result<TracedTensor, S
 
 fn tensor_shape(tensor: &TracedTensor) -> Vec<usize> {
     tensor
-        .attached_data()
-        .map(|data| data.shape().to_vec())
-        .or_else(|| tensor.try_concrete_shape())
+        .try_concrete_shape()
         .expect("oracle replay tensors should have concrete shape")
 }
 

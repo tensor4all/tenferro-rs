@@ -18,9 +18,9 @@
 //! [`TensorView`] with arbitrary strides. Prefer `TensorRead` for read-only
 //! operation inputs so callers are not forced to materialize layout-only views.
 //!
-//! [`TensorOwnedView`] and [`TensorValue`] are the owned lazy-value forms. Use
-//! them when an API must store a view result beyond the lifetime of a borrowed
-//! input, then expose a short-lived `TensorRead` at kernel-dispatch time.
+//! [`TensorValue`] is the owned lazy-value form. Use it when an API must store
+//! a view result beyond the lifetime of a borrowed input, then expose a
+//! short-lived `TensorRead` at kernel-dispatch time.
 //!
 //! Use [`Tensor::as_slice`] or [`TypedTensorView::as_slice`] only when compact
 //! contiguous storage is part of the API contract. Use shape/stride-aware kernel
@@ -76,15 +76,26 @@ pub use capability::{
 pub use config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-pub use error::{BoxError, Error, Result};
+pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use types::{
-    col_major_strides, AllocationDomainId, AllocationId, BackendBuffer, Buffer, BufferHandle,
-    CpuDomainId, DType, DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError,
-    HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, SharedTensorAllocationDomain,
-    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
-    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
+    col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
+    CpuDomainId, DType, DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DynRank,
+    GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    PreparedDeviceAccess, Rank, SharedTensorAllocationDomain, StorageBuffer, StridedSliceSpec,
+    Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef,
+    TensorStorageRefMut, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
 };
+
+mod storage;
+
+#[doc(hidden)]
+pub use storage::{
+    AccessError, AllocationKey, BackendAllocation, ProviderCapabilities, ProviderKind,
+    ProviderReadMapping, ProviderWriteMapping, RootBoundSpan, RootResourceExtent, RootResourceId,
+    SpanValidationError,
+};
+pub use storage::{AllocationGroup, DescriptorSlot, GroupError};
 
 pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {
     match dtype {

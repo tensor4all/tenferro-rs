@@ -13,11 +13,12 @@ use tenferro_fft::{
 };
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural, TypedTensor,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TypedTensor,
 };
 
 macro_rules! unreachable_backend_methods {
@@ -114,14 +115,20 @@ macro_rules! impl_minimal_tensor_backend {
         impl TensorFusion for $ty {}
         impl TensorBuffer for $ty {}
         impl TensorDeviceTransfer for $ty {
-            fn download_to_host(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
+            fn download_to_host(
+                &mut self,
+                tensor: TensorRead<'_>,
+            ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                Ok(tensor.clone())
+                tensor.tensor_view().duplicate()
             }
 
-            fn upload_host_tensor(&mut self, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
+            fn upload_host_tensor(
+                &mut self,
+                tensor: TensorRead<'_>,
+            ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                Ok(tensor.clone())
+                tensor.tensor_view().duplicate()
             }
         }
         impl BackendCachedDot for $ty {}
@@ -196,7 +203,7 @@ impl FftBackend for MockNonCpuSession {
             self.plan_builds += 1;
             store.put(cache_key, MockNonCpuPlan { key: plan_key }, 96);
         }
-        Ok(input.clone())
+        input.duplicate()
     }
 }
 
@@ -456,7 +463,9 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(
+                7, len,
+            ))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

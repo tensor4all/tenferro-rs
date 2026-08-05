@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `owner` because it is borrowed
+ --> tests/ui/storage/fail/consuming_submission_borrowed_view.rs
+  |
+  |     let owner = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+  |         ----- binding `owner` declared here
+  |     let view = owner.as_view();
+  |                ----- borrow of `owner` occurs here
+  |     submit(owner);
+  |            ^^^^^ move out of `owner` occurs here
+  |     let _ = view.shape();
+  |             ---- borrow later used here

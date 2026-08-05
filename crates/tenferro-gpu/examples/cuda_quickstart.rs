@@ -1,4 +1,6 @@
-use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::{
+    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
+};
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

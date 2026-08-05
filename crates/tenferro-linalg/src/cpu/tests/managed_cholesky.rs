@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, Tensor, TensorRead,
-    TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
+    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
+    TensorRead, TensorScalar, TypedTensor,
 };
 
 use super::with_cpu_linalg;
@@ -67,7 +67,7 @@ impl<T> fmt::Debug for FakeManagedBuffer<T> {
     }
 }
 
-impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> {
+impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "fake-managed"
     }
@@ -99,7 +99,7 @@ impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> 
         Ok(HostReadGuard::new(guard))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         self.counts.observe_entry();
         if self.gpu_busy.load(Ordering::Relaxed) {
             return Err(HostAccessError::GpuAccessInProgress);
@@ -142,7 +142,7 @@ impl FakeDomain {
         AllocationId::from_backend_id(self.next_allocation.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub(super) fn tensor<T: Copy + Send + Sync + 'static>(
+    pub(super) fn tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
@@ -150,7 +150,7 @@ impl FakeDomain {
         self.tensor_with_domain(shape, values, Some(self.id), false, MemoryKind::Managed)
     }
 
-    fn tensor_with_domain<T: Copy + Send + Sync + 'static>(
+    fn tensor_with_domain<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
@@ -167,7 +167,7 @@ impl FakeDomain {
         };
         TypedTensor::from_buffer_col_major(
             shape.to_vec(),
-            Buffer::Backend(Arc::new(buffer)),
+            StorageBuffer::Backend(Box::new(buffer)),
             Placement {
                 memory_kind,
                 device: None,
@@ -286,7 +286,7 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
                 assert_eq!(output.placement().cpu_affinity, Some(selected));
-                let Buffer::Backend(buffer) = output.buffer() else {
+                let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
                 let mapped = buffer.map_read().unwrap();
@@ -311,7 +311,7 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
                 assert_eq!(output.placement().cpu_affinity, Some(selected));
-                let Buffer::Backend(buffer) = output.buffer() else {
+                let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
                 let mapped = buffer.map_read().unwrap();
@@ -351,8 +351,13 @@ fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
             }
         ));
 
-        let device_local =
-            domain.tensor_with_domain(&[2, 2], values.clone(), None, false, MemoryKind::Device);
+        let device_local = domain.tensor_with_domain(
+            &[2, 2],
+            values.clone(),
+            Some(domain.id),
+            false,
+            MemoryKind::Device,
+        );
         let error = backend.cholesky(&Tensor::F32(device_local)).unwrap_err();
         assert!(matches!(
             error,

@@ -2,8 +2,8 @@
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use num_complex::Complex64;
 use tenferro_tensor::{
-    Buffer, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, TensorIndexing,
-    TypedTensor,
+    DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
+    TensorIndexing, TypedTensor,
 };
 
 use super::{
@@ -14,23 +14,16 @@ use super::{
 };
 use tenferro_tensor::{ValidationError, ValidationKind};
 
-fn with_cuda_ordinal<T: Clone + 'static>(
-    tensor: &TypedTensor<T>,
-    ordinal: usize,
-) -> TypedTensor<T> {
-    TypedTensor::from_buffer_col_major(
-        tensor.shape().to_vec(),
-        tensor.buffer().clone(),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal,
-            }),
-            cpu_affinity: None,
-        },
-    )
-    .unwrap()
+fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
+    tensor.set_placement(Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal,
+        }),
+        cpu_affinity: None,
+    });
+    tensor
 }
 
 #[test]
@@ -290,8 +283,14 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let starts_f32 = tensor_f32(vec![1], vec![0.5]);
     let valid_starts = tensor_i32(vec![1], vec![0]);
     for (operand, invalid_starts) in [
-        (operand_f64.clone(), starts_f64),
-        (operand_f32.clone(), starts_f32),
+        (
+            operand_f64.duplicate().expect("host operand duplication"),
+            starts_f64,
+        ),
+        (
+            operand_f32.duplicate().expect("host operand duplication"),
+            starts_f32,
+        ),
     ] {
         assert!(cpu.dynamic_slice(&operand, &valid_starts, &[3]).is_err());
         let err = gpu
@@ -330,12 +329,12 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
     let gather_indices = tensor_f64(vec![1, 1], vec![f64::NAN]);
     let valid_gather_indices = tensor_i32(vec![1, 1], vec![0]);
     for operand in [
-        operand_f64.clone(),
+        operand_f64.duplicate().expect("host operand duplication"),
         tensor_c64(
             vec![2],
             vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
         ),
-        operand_bool.clone(),
+        operand_bool.duplicate().expect("host operand duplication"),
     ] {
         let expected = cpu
             .gather(&operand, &valid_gather_indices, &bad_gather)
@@ -443,21 +442,24 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let empty_operand = upload(&gpu, &tensor_f64(vec![0], vec![]));
     let indices = upload(&gpu, &tensor_i32(vec![0, 1], vec![]));
     let other_indices = upload(&other_gpu, &tensor_i32(vec![0, 1], vec![]));
-    // INVARIANT: CUDA runtime residency is identified by device ordinal, not
-    // by the `CudaBackend` wrapper. Same-device CubeCL clients share the
-    // primary context, so a second cuda:0 backend remains compatible.
-    gpu.scatter(
-        &empty_operand,
-        &other_indices,
-        &upload(&gpu, &tensor_f64(vec![0], vec![])),
-        &config,
-    )
-    .unwrap();
+    let foreign_domain_error = gpu
+        .scatter(
+            &empty_operand,
+            &other_indices,
+            &upload(&gpu, &tensor_f64(vec![0], vec![])),
+            &config,
+        )
+        .unwrap_err();
+    assert_runtime_state(
+        &foreign_domain_error,
+        "scatter",
+        "CubeCL allocation belongs to a different runtime domain",
+    );
 
     let wrong_device_message =
         "expected GPU tensor resident on cuda:0, got Gpu(Cuda):1".to_string();
     let wrong_starts = crate::Tensor::I32(with_cuda_ordinal(
-        match &upload(&gpu, &tensor_i32(vec![1], vec![0])) {
+        match upload(&gpu, &tensor_i32(vec![1], vec![0])) {
             crate::Tensor::I32(tensor) => tensor,
             _ => unreachable!(),
         },
@@ -470,7 +472,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
 
     let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
     let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
-        match &upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
+        match upload(&gpu, &tensor_f32(vec![1], vec![0.0])) {
             crate::Tensor::F32(tensor) => tensor,
             _ => unreachable!(),
         },
@@ -484,7 +486,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let malformed_bool = crate::Tensor::Bool(
         TypedTensor::from_buffer_col_major(
             vec![0],
-            Buffer::Host(vec![]),
+            StorageBuffer::Host(vec![]),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {
@@ -510,7 +512,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     );
 
     let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(
-        match &indices {
+        match upload(&gpu, &tensor_i32(vec![0, 1], vec![])) {
             crate::Tensor::I32(tensor) => tensor,
             _ => unreachable!(),
         },
@@ -559,7 +561,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let malformed_updates = crate::Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![0],
-            Buffer::Host(vec![]),
+            StorageBuffer::Host(vec![]),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

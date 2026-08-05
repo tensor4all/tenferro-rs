@@ -2,20 +2,19 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
 use cubecl_wgpu::WgpuRuntime;
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
 
 use super::{
-    ensure_resident_on_runtime, typed_from_webgpu, webgpu_handle_from_backend, WebGpuBuffer,
+    ensure_resident_on_runtime, prepared_webgpu_tensor, typed_from_webgpu, WebGpuBuffer,
     WebGpuRuntime,
 };
-use crate::{Buffer, Tensor, TypedTensor};
+use crate::{Tensor, TypedTensor};
 
 /// Upload a host tensor into a CubeCL-managed WebGPU allocation.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{upload_webgpu_tensor, WebGpuRuntime};
+/// use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _upload: fn(&WebGpuRuntime, &Tensor) -> Result<Tensor> = upload_webgpu_tensor;
@@ -44,7 +43,7 @@ pub fn upload_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Resul
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::{download_webgpu_tensor, WebGpuRuntime};
+/// use tenferro_gpu::{webgpu::download_webgpu_tensor, webgpu::WebGpuRuntime};
 /// use tenferro_tensor::{Result, Tensor};
 ///
 /// let _download: fn(&WebGpuRuntime, &Tensor) -> Result<Tensor> = download_webgpu_tensor;
@@ -68,46 +67,29 @@ pub fn download_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Res
     }
 }
 
-pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
+pub(super) fn upload_typed<T: CubeElement + crate::TensorScalar + Clone + Send + Sync + 'static>(
     rt: &WebGpuRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
+    let host_data = typed.host_data().map_err(|error| {
+        crate::Error::runtime_state("webgpu_upload", format!("expected host buffer: {error}"))
+    })?;
 
     let byte_len = T::as_bytes(host_data).len();
     let handle = rt.client().create_from_slice(T::as_bytes(host_data));
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, byte_len, "webgpu_upload")?;
     let tensor = typed_from_webgpu(typed.shape().to_vec(), buffer, rt)?;
     rt.record_upload(byte_len);
     Ok(tensor)
 }
 
-pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
+pub(super) fn download_typed<T: CubeElement + crate::TensorScalar + Clone + 'static>(
     rt: &WebGpuRuntime,
     client: &ComputeClient<WgpuRuntime>,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
-    let handle = match typed.buffer() {
-        Buffer::Host(_) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_download",
-                "expected WebGPU backend buffer",
-            ));
-        }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
-    };
+    let handle = prepared_webgpu_tensor(typed, "webgpu_download")?.handle;
 
     if typed.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
@@ -122,26 +104,17 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
 }
 
 fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
-    let host_data = match typed.buffer() {
-        Buffer::Host(data) => data,
-        Buffer::Backend(buffer) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_upload",
-                format!(
-                    "expected host buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            ));
-        }
-    };
+    let host_data = typed.host_data().map_err(|error| {
+        crate::Error::runtime_state("webgpu_upload", format!("expected host buffer: {error}"))
+    })?;
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
     let handle = rt.client().create_from_slice(&bytes);
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, bytes.len(), "webgpu_upload")?;
     rt.record_upload(bytes.len());
-    TypedTensor::from_buffer_col_major(
+    TypedTensor::from_backend_allocation(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(buffer)),
+        Box::new(buffer),
         super::webgpu_placement(rt),
     )
 }
@@ -152,15 +125,7 @@ fn download_bool(
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
     ensure_resident_on_runtime(rt, typed, "webgpu_download")?;
-    let handle = match typed.buffer() {
-        Buffer::Host(_) => {
-            return Err(crate::Error::runtime_state(
-                "webgpu_download",
-                "expected WebGPU backend buffer",
-            ));
-        }
-        Buffer::Backend(buffer) => webgpu_handle_from_backend(buffer.as_ref(), "webgpu_download")?,
-    };
+    let handle = prepared_webgpu_tensor(typed, "webgpu_download")?.handle;
 
     if typed.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());

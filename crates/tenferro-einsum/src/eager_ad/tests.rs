@@ -23,7 +23,7 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
 
     assert_eq!(out.shape(), &[4, 3]);
     assert_eq!(
-        out.materialized().unwrap().as_slice::<f64>().unwrap(),
+        out.value().unwrap().as_slice::<f64>().unwrap(),
         &[2.0_f64; 12]
     );
     assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 0);
@@ -61,8 +61,8 @@ fn whole_program_untracked_matches_per_op_nary_result() {
     let whole = einsum_whole_program_untracked(&[&a, &b, &c], &tree).unwrap();
 
     assert_eq!(whole.shape(), reference.shape());
-    let got_tensor = whole.materialized().unwrap();
-    let want_tensor = reference.materialized().unwrap();
+    let got_tensor = whole.to_tensor().unwrap();
+    let want_tensor = reference.to_tensor().unwrap();
     let got = got_tensor.as_slice::<f64>().unwrap();
     let want = want_tensor.as_slice::<f64>().unwrap();
     assert_eq!(got.len(), want.len());
@@ -130,7 +130,7 @@ fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
 
     assert_eq!(out.shape(), &[2, 5]);
     assert_eq!(
-        out.materialized().unwrap().as_slice::<f64>().unwrap(),
+        out.value().unwrap().as_slice::<f64>().unwrap(),
         &[12.0_f64; 10]
     );
     assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 1);
@@ -305,7 +305,7 @@ fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
 
     assert_eq!(out.shape(), &[2, 3]);
     assert_eq!(
-        out.materialized().unwrap().as_slice::<f64>().unwrap(),
+        out.value().unwrap().as_slice::<f64>().unwrap(),
         &[10.0, 15.0, 14.0, 21.0, 22.0, 33.0]
     );
     assert!(!out.tracks_grad());
@@ -357,7 +357,7 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
         })
         .collect();
     assert_eq!(
-        out.materialized().unwrap().as_slice::<f64>().unwrap(),
+        out.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         expected.as_slice()
     );
 }

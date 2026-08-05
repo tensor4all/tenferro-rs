@@ -2,30 +2,31 @@ use std::any::Any;
 use std::error::Error as StdError;
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread;
 
 use tenferro_tensor::{
-    AllocationDomainId, BackendBuffer, Buffer, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, Placement, Tensor, TensorOwnedView, TensorValue, TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
+    HostWriteGuard, Placement, StorageBuffer, Tensor, TensorRead, TensorValue, TensorView,
+    TypedTensor,
 };
 
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
 use crate::runtime::execution::{
-    collect_tensor_outputs_with, retain_instruction_results, spawn_in_flight, submit_with_spawner,
-    ErasedTensorBackendExecutor, InFlightSubmission, LocatedExecSlot, OsThreadSpawner,
-    RuntimeOutputMode, SubmissionSpawner,
+    collect_scoped_outputs, collect_tensor_outputs_with, retain_instruction_results,
+    spawn_in_flight, submit_with_spawner, ErasedTensorBackendExecutor, InFlightSubmission,
+    LocatedExecSlot, OsThreadSpawner, RuntimeOutputMode, SubmissionSpawner,
 };
 use crate::runtime::schedule::ExecutionLocation;
 use crate::runtime::{
     CacheOwnerError, CacheStats, CoreCapabilityBundle, EngineId, EngineRegistration, EventDomainId,
-    ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId,
+    ExecutableEngineContract, ExecutionContextIdentity, ExecutionInputs, HardwareClassId,
     ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
     InputSignatureContract, PreparedOperationPlan, ProviderDeviceIdentity,
     ProviderExecutableBinding, ProviderId, RegistrationIdentity, ResidentOutputContract, Runtime,
-    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, StorageClass,
-    SubmissionError,
+    RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeInputContract, ScopedExecutionOutcome,
+    ScopedReadInputs, StorageClass, SubmissionError,
 };
 use crate::{Error, ErrorPhase, GraphCompiler, TracedTensor};
 
@@ -48,13 +49,20 @@ fn qualified_domain(ordinal: u64) -> EventDomainId {
     )
 }
 
+static NEXT_TEST_ALLOCATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_test_allocation_id() -> AllocationId {
+    AllocationId::from_backend_id(NEXT_TEST_ALLOCATION_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 #[derive(Debug)]
 struct ForeignProbeBuffer {
     values: Arc<Mutex<Vec<f64>>>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
-impl BackendBuffer<f64> for ForeignProbeBuffer {
+impl BackendStorage<f64> for ForeignProbeBuffer {
     fn backend_family(&self) -> &'static str {
         "tenferro-test.foreign-output-probe"
     }
@@ -67,13 +75,17 @@ impl BackendBuffer<f64> for ForeignProbeBuffer {
         Some(self.domain)
     }
 
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
     fn map_read(&self) -> Result<HostReadGuard<'_, f64>, HostAccessError> {
         Ok(HostReadGuard::new(
             self.values.lock().expect("probe buffer lock"),
         ))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, f64>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, f64>, HostAccessError> {
         let values = Arc::clone(&self.values);
         Ok(HostWriteGuard::new(self.len(), move |source| {
             values
@@ -150,7 +162,11 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
         _operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<Tensor>> {
-        Ok(inputs.iter().map(|input| (*input).clone()).collect())
+        inputs
+            .iter()
+            .map(|input| input.duplicate())
+            .collect::<tenferro_tensor::Result<Vec<_>>>()
+            .map_err(Error::from)
     }
 
     fn execute_values(
@@ -168,10 +184,11 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
         _operations: &[PreparedOperationPlan],
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<TensorValue>> {
-        Ok(inputs
+        inputs
             .iter()
-            .map(|input| TensorValue::from_tensor((*input).clone()))
-            .collect())
+            .map(|input| input.duplicate().map(TensorValue::from_tensor))
+            .collect::<tenferro_tensor::Result<Vec<_>>>()
+            .map_err(Error::from)
     }
 
     fn execute_slot_instruction<'input>(
@@ -198,8 +215,17 @@ impl ErasedTensorBackendExecutor for AdmissionTestExecutor {
                 "replacement executor must not serve admitted work",
             ));
         }
-        slot.as_tensor("AdmissionTestExecutor::materialize_slot")
-            .cloned()
+        match slot {
+            ExecSlot::Owned(tensor) => tensor.duplicate().map_err(Error::from),
+            ExecSlot::Read(TensorRead::Tensor(tensor)) => tensor.duplicate().map_err(Error::from),
+            ExecSlot::Read(TensorRead::View(TensorView::F64(view))) => {
+                let data = view.as_slice().map_err(Error::from)?.to_vec();
+                Tensor::from_vec_col_major(view.shape().to_vec(), data).map_err(Error::from)
+            }
+            _ => Err(Error::Internal(
+                "AdmissionTestExecutor received unsupported materialization value".to_owned(),
+            )),
+        }
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> crate::Result<TensorValue> {
@@ -258,6 +284,111 @@ fn admission_test_registration(
 }
 
 #[test]
+fn scoped_immediate_provider_returns_borrowed_output() -> Result<(), Box<dyn StdError>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(admission_test_registration(false)?)?;
+    let runtime = builder.build()?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let view = match &input {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
+    };
+
+    let scoped = ScopedReadInputs::new(vec![view]);
+    let outcome = match runtime.execute_scoped_read_only(&program, scoped) {
+        Ok(outcome) => outcome,
+        Err(rejected) => return Err(rejected.to_string().into()),
+    };
+    let ScopedExecutionOutcome::Completed(bundle) = outcome else {
+        return Err("immediate provider did not complete scoped work".into());
+    };
+    match bundle.output(0)? {
+        crate::runtime::OutputRef::Tensor(TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[1.0, 2.0]);
+        }
+        crate::runtime::OutputRef::Metadata(_) => return Err("unexpected metadata output".into()),
+        _ => return Err("unexpected output dtype".into()),
+    }
+    assert!(matches!(
+        bundle.into_owned_output(0),
+        Err((_, crate::runtime::ScopedOutputExtractError::BorrowedOutput))
+    ));
+    Ok(())
+}
+
+#[test]
+fn scoped_owned_output_is_bundled_and_extractable() -> Result<(), Box<dyn StdError>> {
+    let location = ExecutionLocation::new(
+        EngineId::new("tenferro-test.scoped-owned-engine")?,
+        test_provider_device_identity("scoped-owned"),
+        qualified_domain(3),
+        StorageClass::new("tenferro-test.scoped-owned-storage")?,
+    );
+    let program = crate::exec::ExecProgram {
+        instructions: Vec::new(),
+        input_slots: Vec::new(),
+        output_slots: vec![0],
+        n_slots: 1,
+        shape_guards: Vec::new(),
+    };
+    let output = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    let mut located = vec![Some(LocatedExecSlot {
+        location,
+        value: ExecSlot::Owned(output),
+    })];
+    let bundle = collect_scoped_outputs(&program, &mut located)?;
+    match bundle.output(0)? {
+        crate::runtime::OutputRef::Tensor(TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[3.0, 4.0]);
+        }
+        crate::runtime::OutputRef::Metadata(_) => return Err("unexpected metadata output".into()),
+        _ => return Err("unexpected output dtype".into()),
+    }
+    let extracted = bundle.into_owned_output(0).map_err(|(_, error)| error)?;
+    assert_eq!(extracted.as_slice::<f64>()?, &[3.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn scoped_non_host_input_is_rejected_before_admission() -> Result<(), Box<dyn StdError>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(admission_test_registration(false)?)?;
+    let runtime = builder.build()?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
+    let input = Tensor::F64(TypedTensor::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
+            values: Arc::new(Mutex::new(vec![1.0, 2.0])),
+            domain: AllocationDomainId::fresh(),
+            allocation: next_test_allocation_id(),
+        })),
+        Placement {
+            memory_kind: tenferro_tensor::MemoryKind::Device,
+            device: None,
+            cpu_affinity: None,
+        },
+    )?);
+    let view = match &input {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        other => return Err(format!("unexpected input dtype: {:?}", other.dtype()).into()),
+    };
+    let rejected = runtime
+        .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
+        .expect_err("non-host scoped input must be rejected before admission");
+    let (error, inputs) = rejected.into_parts();
+    assert_eq!(inputs.len(), 1);
+    assert!(error
+        .to_string()
+        .contains("scoped borrowed execution requires host/CPU storage"));
+    Ok(())
+}
+
+#[test]
 fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn StdError>> {
     let mut builder = Runtime::builder();
     builder.register_engine(admission_test_registration(false)?)?;
@@ -274,7 +405,12 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
     };
     let admitted_epoch = runtime.epoch()?;
 
-    let handle = submit_with_spawner(&runtime, &program, &[&input], &spawner)?;
+    let handle = submit_with_spawner(
+        &runtime,
+        &program,
+        ExecutionInputs::new(vec![input.duplicate()?])?,
+        &spawner,
+    )?;
     started.wait();
     runtime.reconfigure(|edit| {
         edit.replace_engine(admission_test_registration(true)?)?;
@@ -283,8 +419,21 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
     assert_ne!(runtime.epoch()?, admitted_epoch);
     release.wait();
 
-    let output = handle.wait()?;
-    assert_eq!(output[0].as_slice::<f64>()?, &[1.0, 2.0]);
+    let output = match handle.wait()? {
+        crate::runtime::ExecutionOutcome::Completed(output) => output,
+        other => panic!("unexpected submission outcome: {other:?}"),
+    };
+    match output.output(0)? {
+        crate::runtime::OutputRef::Tensor(tenferro_tensor::TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[1.0, 2.0]);
+        }
+        other => panic!("unexpected output view: {other:?}"),
+    }
+    let extracted = match output.into_output(0) {
+        Ok(tensor) => tensor,
+        Err((_bundle, error)) => return Err(Box::new(error)),
+    };
+    assert_eq!(extracted.as_slice::<f64>()?, &[1.0, 2.0]);
     Ok(())
 }
 
@@ -292,13 +441,14 @@ fn in_flight_worker_uses_state_captured_before_release() -> Result<(), Box<dyn S
 fn submission_spawn_failure_preserves_typed_source() -> Result<(), Box<dyn StdError>> {
     let submission = Arc::new(InFlightSubmission::for_test(|| Ok(Vec::new())));
 
-    let error = spawn_in_flight(submission, &FailingSpawner).unwrap_err();
+    let (inputs, error) = *spawn_in_flight(submission, &FailingSpawner).unwrap_err();
 
     let source = error
         .source()
         .and_then(|source| source.downcast_ref::<SubmissionError>())
         .expect("typed submission error source");
     assert!(matches!(source, SubmissionError::WorkerSpawn { .. }));
+    assert!(format!("{inputs:?}").contains("ExecutionInputs"));
     Ok(())
 }
 
@@ -315,7 +465,7 @@ fn dropped_handle_does_not_cancel_blocked_worker() -> Result<(), Box<dyn StdErro
         Ok(Vec::new())
     }));
 
-    let handle = spawn_in_flight(submission, &OsThreadSpawner)?;
+    let handle = spawn_in_flight(submission, &OsThreadSpawner).map_err(|failure| failure.1)?;
     entered_rx.recv()?;
     drop(handle);
     assert!(!completed.load(Ordering::Acquire));
@@ -331,12 +481,19 @@ fn worker_panic_and_execution_error_complete_handle() -> Result<(), Box<dyn StdE
     let panic_submission = Arc::new(InFlightSubmission::for_test(|| {
         panic!("injected submission panic")
     }));
-    let panic_error = spawn_in_flight(panic_submission, &OsThreadSpawner)?
-        .wait()
-        .unwrap_err();
-    assert!(panic_error
-        .to_string()
-        .contains("injected submission panic"));
+    let panic_outcome = spawn_in_flight(panic_submission, &OsThreadSpawner)
+        .map_err(|failure| failure.1)?
+        .wait()?;
+    match panic_outcome {
+        crate::runtime::ExecutionOutcome::CompletionUnproven {
+            error,
+            diagnostic_keys,
+        } => {
+            assert!(error.to_string().contains("injected submission panic"));
+            assert_eq!(diagnostic_keys.as_ref(), ["execution.retirement-unproven"]);
+        }
+        other => panic!("unexpected panic outcome: {other:?}"),
+    }
 
     let error_submission = Arc::new(InFlightSubmission::for_test(|| {
         Err(Error::runtime_state(
@@ -345,7 +502,8 @@ fn worker_panic_and_execution_error_complete_handle() -> Result<(), Box<dyn StdE
             "injected execution error",
         ))
     }));
-    let execution_error = spawn_in_flight(error_submission, &OsThreadSpawner)?
+    let execution_error = spawn_in_flight(error_submission, &OsThreadSpawner)
+        .map_err(|failure| failure.1)?
         .wait()
         .unwrap_err();
     assert!(execution_error
@@ -370,13 +528,14 @@ fn terminal_lazy_read_keeps_nonroot_location_for_materialization() -> Result<(),
         StorageClass::new("tenferro-test.output-nonroot-storage")?,
     );
     let domain = AllocationDomainId::fresh();
-    let buffer = Buffer::Backend(Arc::new(ForeignProbeBuffer {
+    let buffer = StorageBuffer::Backend(Box::new(ForeignProbeBuffer {
         values: Arc::new(Mutex::new(vec![1.0, 2.0, 3.0, 4.0])),
         domain,
+        allocation: next_test_allocation_id(),
     }));
     let base: Tensor =
         TypedTensor::<f64>::from_buffer_col_major(vec![4], buffer, Placement::default())?.into();
-    let view = TensorOwnedView::from_parts(Arc::new(base), vec![2], vec![2], 0)?;
+    let view = TensorValue::from_parts(base, vec![2], vec![2], 0)?;
     let program = crate::exec::ExecProgram {
         instructions: Vec::new(),
         input_slots: vec![0],

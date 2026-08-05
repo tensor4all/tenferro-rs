@@ -152,7 +152,7 @@ fn repeated_input_program() -> tenferro_runtime::program::FrozenProgram {
     builder
         .bind_input(
             input,
-            Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0_f64]).unwrap()),
+            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0_f64]).unwrap(),
         )
         .unwrap();
     let output = builder
@@ -178,10 +178,7 @@ fn bound_core_square_program(values: Vec<f64>) -> tenferro_runtime::program::Fro
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
         .unwrap();
     builder
-        .bind_input(
-            input,
-            Arc::new(Tensor::from_vec_col_major(vec![2], values).unwrap()),
-        )
+        .bind_input(input, Tensor::from_vec_col_major(vec![2], values).unwrap())
         .unwrap();
     let output = builder
         .add_op(CoreSemanticOp::Mul, &[input, input])
@@ -1665,7 +1662,13 @@ fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings
             bindings.next().is_none(),
             "derivative seed inputs must not inherit source bindings"
         );
-        tensor.as_slice::<f64>().unwrap().to_vec()
+        tensor
+            .tensor_read()
+            .unwrap()
+            .tensor_view()
+            .as_slice::<f64>()
+            .unwrap()
+            .to_vec()
     }
 
     let first_source = bound_core_square_program(vec![2.0, 3.0]);

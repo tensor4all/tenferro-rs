@@ -9,10 +9,10 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
 use super::dispatch::{
-    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, cubecl_view_buffer,
-    cubecl_view_mut_buffer, dtype_mismatch, ensure_resident_on_runtime,
+    alloc_output, cube_count_for_len, cube_dim_1d, dtype_mismatch, ensure_resident_on_runtime,
     ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_nullary_into,
-    typed_tensor_array_arg,
+    prepared_tensor_access, prepared_view_access, prepared_view_mut_access, typed_tensor_array_arg,
+    CubeclPreparedAccess,
 };
 use super::error::{unsupported_dtype, unsupported_operation, workspace_size_overflow};
 use super::ffi::cutensor::{
@@ -24,10 +24,10 @@ use super::memory::upload_tensor;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
-use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
+use crate::{col_major_strides, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
-    CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
+    CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
+    TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 
 const OP: &str = "dot_general";
@@ -35,7 +35,7 @@ const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
 const DEFAULT_CUTENSOR_PLAN_CACHE_MAX_ENTRIES: usize = 64;
 type CutensorPlanCacheState = Arc<Mutex<CutensorContractionPlanCache>>;
 
-trait CutensorScalar: CubeElement + CubePrimitive + Clone + One + Zero {
+trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One + Zero {
     const DATA_TYPE: CudaDataType;
     const DTYPE: DType;
     const IS_COMPLEX: bool;
@@ -877,8 +877,8 @@ where
         }),
         ReadOperand::View(view) => {
             ensure_view_resident_on_runtime(rt, view, OP)?;
-            let buffer = cubecl_view_buffer(view, OP)?;
-            resolve_device_region(rt, buffer, view.shape(), view.strides(), view.offset())
+            let prepared = prepared_view_access(view, OP)?;
+            resolve_prepared_device_region::<T>(rt, prepared, view.strides(), view.offset())
         }
     }
 }
@@ -899,8 +899,8 @@ where
         }),
         WriteOperand::View(view) => {
             ensure_view_mut_resident_on_runtime(rt, view, OP)?;
-            let buffer = cubecl_view_mut_buffer(view, OP)?;
-            resolve_device_region(rt, buffer, view.shape(), view.strides(), view.offset())
+            let prepared = prepared_view_mut_access(view, OP)?;
+            resolve_prepared_device_region::<T>(rt, prepared, view.strides(), view.offset())
         }
     }
 }
@@ -909,10 +909,9 @@ where
 /// cuTENSOR operand: `ptr = base + offset * size_of::<T>()`, the view's own
 /// element strides, and the alignment actually guaranteed by the effective
 /// byte address.
-fn resolve_device_region<T: 'static>(
+fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
     rt: &CudaRuntime,
-    buffer: &CubeclBuffer<T>,
-    shape: &[usize],
+    prepared: CubeclPreparedAccess,
     strides: &[isize],
     offset: isize,
 ) -> crate::Result<ResolvedOperand> {
@@ -923,73 +922,36 @@ fn resolve_device_region<T: 'static>(
                 OP,
                 "layout",
                 format!(
-                    "cuTENSOR dot-general accumulation requires nonnegative view \
-                     strides, got {strides:?}; canonicalize the view on device first"
+                    "cuTENSOR dot-general accumulation requires nonnegative view strides, got {strides:?}; canonicalize the view on device first"
                 ),
             ));
         }
         strides_i64.push(stride as i64);
     }
-    let offset = usize::try_from(offset).map_err(|_| {
-        Error::invalid_argument(
-            OP,
-            "layout",
-            format!(
-                "view offset {offset} must be nonnegative for cuTENSOR dot-general accumulation"
-            ),
-        )
-    })?;
-    // Reachable-span validation against the physical device buffer length.
-    if !shape.contains(&0) {
-        let mut max_offset = offset;
-        for (&dim, &stride) in shape.iter().zip(strides) {
-            max_offset = (dim - 1)
-                .checked_mul(stride as usize)
-                .and_then(|span| max_offset.checked_add(span))
-                .ok_or_else(|| {
-                    Error::invalid_argument(OP, "layout", "view element span overflows usize")
-                })?;
-        }
-        if max_offset >= buffer.element_len() {
-            return Err(Error::invalid_argument(
-                OP,
-                "layout",
-                format!(
-                    "view region reaches element offset {max_offset} but the device \
-                     buffer holds only {} elements",
-                    buffer.element_len()
-                ),
-            ));
-        }
-    }
+    let offset = usize::try_from(offset)
+        .map_err(|_| Error::invalid_argument(OP, "layout", "view offset must be nonnegative"))?;
+    let handle = prepared.into_handle();
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(handle)
         .map_err(|err| Error::backend_source(OP, err))?;
-    let offset_bytes = (offset as u64)
-        .checked_mul(std::mem::size_of::<T>() as u64)
-        .ok_or_else(|| Error::invalid_argument(OP, "layout", "view byte offset overflows u64"))?;
+    let offset_bytes = offset
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| Error::invalid_argument(OP, "layout", "view byte offset overflows"))?;
     let addr = resource
         .resource()
         .ptr
-        .checked_add(offset_bytes)
-        .ok_or_else(|| {
-            Error::invalid_argument(OP, "layout", "view device address overflows u64")
-        })?;
+        .checked_add(offset_bytes as u64)
+        .ok_or_else(|| Error::invalid_argument(OP, "layout", "view device address overflows"))?;
+    // INVARIANT: CubeCL root allocations are at least 256-byte aligned, and
+    // the checked element offset preserves alignment to the scalar size. A
+    // strided view therefore guarantees the scalar-sized cuTENSOR requirement,
+    // even when the view starts inside the root allocation.
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
         strides: strides_i64,
-        alignment: address_alignment(addr),
+        alignment: view_descriptor_alignment_requirement::<T>(),
     })
-}
-
-/// Largest power of two dividing the byte address, capped at the CUDA
-/// allocation alignment cuTENSOR descriptors assume for whole allocations.
-fn address_alignment(addr: u64) -> u32 {
-    if addr == 0 {
-        return CUDA_ALLOCATION_ALIGNMENT;
-    }
-    1u32 << addr.trailing_zeros().min(8)
 }
 
 /// Device-side `out *= beta` for the degenerate zero-contraction case. The
@@ -1242,15 +1204,16 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     })
 }
 
-fn typed_device_ptr<T: 'static>(
+fn typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T>,
 ) -> crate::Result<*mut c_void> {
     ensure_resident_on_runtime(rt, tensor, OP)?;
-    let buffer = cubecl_buffer(tensor, OP)?;
+    let prepared = prepared_tensor_access(tensor, OP)?;
+    let handle = prepared.into_handle();
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(handle)
         .map_err(|err| crate::Error::backend_source(OP, err))?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(resource.resource().ptr, OP)

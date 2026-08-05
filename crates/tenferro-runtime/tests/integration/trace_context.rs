@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramBuildError, ProgramInputSpec};
@@ -33,13 +31,12 @@ fn trace_values_are_context_owned_and_opaque() {
 #[test]
 fn trace_finish_preserves_ordered_inputs_defaults_and_duplicate_outputs() {
     let mut trace = TraceContext::new();
-    let lhs_tensor = Arc::new(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("test tensor must be valid"),
-    );
+    let lhs_tensor =
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("test tensor must be valid");
     let lhs = trace
         .input_with_default(
             ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]),
-            Arc::clone(&lhs_tensor),
+            lhs_tensor.duplicate().unwrap(),
         )
         .unwrap();
     let rhs = trace
@@ -55,7 +52,12 @@ fn trace_finish_preserves_ordered_inputs_defaults_and_duplicate_outputs() {
     let frozen_default = graph.bindings().iter().next().unwrap().1;
     assert_eq!(frozen_default.shape(), lhs_tensor.shape());
     assert_eq!(
-        frozen_default.as_slice::<f64>().unwrap(),
+        frozen_default
+            .tensor_read()
+            .unwrap()
+            .tensor_view()
+            .as_slice::<f64>()
+            .unwrap(),
         lhs_tensor.as_slice::<f64>().unwrap()
     );
 }

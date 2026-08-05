@@ -12,7 +12,7 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
-use crate::{TensorRank, TypedTensor};
+use crate::{TensorRank, TensorScalar, TypedTensor};
 
 use super::{dispatch, CudaRuntime};
 
@@ -40,9 +40,12 @@ impl DeviceByteBuffer {
         }
     }
 
-    /// Return the CUDA device pointer for this workspace.
-    pub fn ptr(&self) -> *mut c_void {
-        self.ptr
+    /// Borrow the CUDA device pointer for the duration of `f`.
+    ///
+    /// The pointer is only exposed while this owner is borrowed, so callers
+    /// cannot obtain an unscoped pointer from the workspace handle.
+    pub fn with_ptr(&self, f: impl FnOnce(*mut c_void)) {
+        f(self.ptr)
     }
 
     /// Return whether this workspace owns a live CubeCL allocation.
@@ -83,14 +86,37 @@ pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
-/// Return the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
+/// Borrow the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
+///
+/// The stream is passed only to `f`; callers must not retain the raw handle
+/// after the callback returns.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::CudaRuntime;
+/// use tenferro_gpu::cuda::interop::with_raw_cuda_stream;
+///
+/// # fn example(rt: &CudaRuntime) -> tenferro_tensor::Result<()> {
+/// with_raw_cuda_stream(rt, "example", |_stream| {})?;
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
 /// stream, or [`crate::Error::RuntimeState`] when its server is unavailable.
-pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str) -> crate::Result<u64> {
-    rt.raw_cuda_stream()
-        .map_err(|err| crate::Error::backend_source(op, err))
+pub fn with_raw_cuda_stream(
+    rt: &CudaRuntime,
+    op: &'static str,
+    f: impl FnOnce(u64),
+) -> crate::Result<()> {
+    let stream = rt
+        .raw_cuda_stream()
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    f(stream);
+    Ok(())
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
@@ -114,7 +140,7 @@ pub fn cube_dim_1d() -> CubeDim {
 ///
 /// Returns [`crate::Error::Validation`] with `InvalidArgument` when the shape
 /// product overflows, or [`crate::Error::BackendSource`] when allocation fails.
-pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
+pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -139,7 +165,7 @@ pub fn ensure_typed_tensor_resident<T: 'static>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_binding<T: CubeElement + Clone>(
+pub fn typed_tensor_binding<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CubeclCudaRuntime>> {
@@ -151,32 +177,54 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 ///
 /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
 /// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
-pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
+pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
     dispatch::typed_tensor_array_arg(tensor, op)
 }
 
-/// Return a raw CUDA device pointer for a CubeCL-backed tensor.
+/// Borrow a raw CUDA device pointer for a CubeCL-backed tensor.
+///
+/// The pointer is passed only to `f`, while the residency-checked tensor and
+/// runtime remain borrowed by this call. Callers must not retain the pointer
+/// after `f` returns.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::interop::with_typed_device_ptr;
+/// use tenferro_gpu::cuda::CudaRuntime;
+/// use tenferro_tensor::TypedTensor;
+///
+/// # fn example(rt: &CudaRuntime, tensor: &TypedTensor<f32>) -> tenferro_tensor::Result<()> {
+/// with_typed_device_ptr(rt, tensor, "example", |_ptr| {})?;
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
 /// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
 /// [`crate::Error::Validation`] when the pointer address overflows `usize`.
-pub fn typed_device_ptr<T: 'static>(
+pub fn with_typed_device_ptr<T: TensorScalar + 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
-) -> crate::Result<*mut c_void> {
+    f: impl FnOnce(*mut c_void),
+) -> crate::Result<()> {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
     let resource = rt
         .client()
-        .get_resource(buffer.handle().clone())
+        .get_resource(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    cuda_device_ptr_from_addr(resource.resource().ptr, op)
+    // The residency check above ties this raw FFI pointer to the caller's
+    // runtime/device for the duration of the callback.
+    let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, op)?;
+    f(ptr);
+    Ok(())
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
@@ -191,13 +239,18 @@ pub fn upload_typed_tensor<T>(
     data: Vec<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone + Send + Sync + 'static,
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
-    let len = data.len();
+    let byte_len = T::as_bytes(&data).len();
     let handle = rt.client().create_from_slice(T::as_bytes(&data));
     dispatch::typed_from_cubecl(
         shape,
-        crate::CubeclBuffer::new(handle, len, rt.device_ordinal()),
+        crate::CubeclBuffer::new(
+            handle,
+            byte_len,
+            rt.device_ordinal(),
+            rt.allocation_domain_id(),
+        ),
         rt.device_ordinal(),
     )
 }
@@ -214,17 +267,17 @@ pub fn download_typed_tensor<T>(
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + Clone + 'static,
+    T: CubeElement + TensorScalar + Clone + 'static,
 {
     dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
     if tensor.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
     }
     rt.synchronize()?;
     let bytes = rt
         .client()
-        .read_one(buffer.handle().clone())
+        .read_one(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
 }

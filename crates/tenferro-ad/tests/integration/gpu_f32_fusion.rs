@@ -3,8 +3,10 @@
 // Run with: cargo test --features cuda -- --ignored
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
-use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_gpu::{
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+};
+use tenferro_runtime::{Tensor, TensorRead, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -30,10 +32,12 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
     let sum = a.add(&b).unwrap();
-    let result = sum.mul(&c).unwrap().materialized().unwrap();
+    let result = sum.mul(&c).unwrap().to_tensor().unwrap();
 
     let result = ctx
-        .with_execution_session(|session| session.download_to_host(result.as_ref()))
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&result))
+        })
         .unwrap()
         .unwrap();
     let values = result

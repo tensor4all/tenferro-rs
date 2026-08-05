@@ -2,10 +2,10 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_gpu::{upload_webgpu_tensor, AppleContext, WebGpuRuntime};
+use tenferro_gpu::{apple::AppleContext, webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
 use tenferro_linalg::{EagerTensorLinalgExt, LinalgBackend, TracedTensorLinalgExt};
 use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_tensor::{Buffer, HostAccessError, Tensor};
+use tenferro_tensor::{HostAccessError, Tensor};
 
 use super::support;
 
@@ -23,10 +23,9 @@ fn mapped_f32(tensor: &Tensor) -> Vec<f32> {
     let Tensor::F32(tensor) = tensor else {
         panic!("expected F32 tensor")
     };
-    let Buffer::Backend(buffer) = tensor.buffer() else {
-        panic!("expected managed backend storage")
-    };
-    buffer.map_read().unwrap().to_vec()
+    tensor
+        .with_host_read(|values| values.to_vec())
+        .expect("expected managed host-visible storage")
 }
 
 fn f32_ids(
@@ -45,7 +44,7 @@ fn assert_cholesky_result(
     input: &Tensor,
     output: &Tensor,
     context: &AppleContext,
-    before: tenferro_gpu::AppleTransferStats,
+    before: tenferro_gpu::apple::AppleTransferStats,
 ) {
     let values = mapped_f32(output);
     assert_eq!(values.len(), 4);
@@ -110,10 +109,10 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected F64 output")
     };
-    let Buffer::Backend(buffer) = f64_output.buffer() else {
-        panic!("expected managed F64 output")
-    };
-    assert_lower_real(&buffer.map_read().unwrap(), |value| value);
+    let values = f64_output
+        .with_host_read(|values| values.to_vec())
+        .expect("expected managed F64 output");
+    assert_lower_real(&values, |value| value);
     assert_eq!(context.transfer_stats(), before);
 
     let c32 = |value| Complex32::new(value, 0.0);
@@ -128,13 +127,11 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected C32 output")
     };
-    let Buffer::Backend(buffer) = c32_output.buffer() else {
-        panic!("expected managed C32 output")
-    };
-    let values = buffer.map_read().unwrap();
+    let values = c32_output
+        .with_host_read(|values| values.to_vec())
+        .expect("expected managed C32 output");
     assert!(values.iter().all(|value| value.im.abs() <= 1.0e-6));
     assert_lower_real(&values, |value| f64::from(value.re));
-    drop(values);
     assert_eq!(context.transfer_stats(), before);
 
     let c64 = |value| Complex64::new(value, 0.0);
@@ -149,13 +146,11 @@ fn managed_cpu_cholesky_supports_all_cpu_float_and_complex_dtypes() {
     else {
         panic!("expected C64 output")
     };
-    let Buffer::Backend(buffer) = c64_output.buffer() else {
-        panic!("expected managed C64 output")
-    };
-    let values = buffer.map_read().unwrap();
+    let values = c64_output
+        .with_host_read(|values| values.to_vec())
+        .expect("expected managed C64 output");
     assert!(values.iter().all(|value| value.im.abs() <= 1.0e-12));
     assert_lower_real(&values, |value| value.re);
-    drop(values);
     assert_eq!(context.transfer_stats(), before);
 }
 
@@ -174,7 +169,7 @@ fn public_concrete_eager_and_traced_cholesky_preserve_apple_domain_without_trans
     let before = context.transfer_stats();
     let runtime = EagerRuntime::with_cpu_backend(context.cpu_backend().clone()).unwrap();
     let eager_input = EagerTensor::from_tensor_in(input.clone(), runtime).unwrap();
-    let eager = eager_input.cholesky().unwrap().materialized().unwrap();
+    let eager = eager_input.cholesky().unwrap().to_tensor().unwrap();
     assert_cholesky_result(&input, eager.as_ref(), &context, before);
 
     let input = managed_spd(&context);

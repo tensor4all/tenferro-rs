@@ -1,5 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
+use tenferro_gpu::{
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorScalar};
 
 fn matmul_config() -> DotGeneralConfig {

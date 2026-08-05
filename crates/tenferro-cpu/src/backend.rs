@@ -28,7 +28,7 @@ use crate::{
     CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
+    CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
@@ -3576,34 +3576,35 @@ impl TensorFusion for CpuBackend {
 }
 
 impl TensorDeviceTransfer for CpuBackend {
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.tensor_view().duplicate()
     }
 
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        if tensor.is_backend_buffer() {
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuBackend::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
-        Ok(tensor.clone())
+        tensor.tensor_view().duplicate()
     }
 }
 
 impl TensorBackend for CpuBackend {}
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
-    let (buffer, _, _) = typed.into_parts();
-    match buffer {
-        Buffer::Host(data) => T::pool_release(pool, data),
-        Buffer::Backend(_) => {}
+    if typed.backend_buffer().is_some() {
+        return;
+    }
+    if let Ok(data) = typed.into_host_vec() {
+        T::pool_release(pool, data);
     }
 }
 

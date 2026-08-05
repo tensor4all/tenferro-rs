@@ -39,8 +39,8 @@ use tenferro_cpu::provider::{
 };
 use tenferro_cpu::{CpuPlacementControl, CpuProviderExecutionCapabilities, CpuThreadCountControl};
 use tenferro_tensor::{
-    col_major_strides, ContractionScalar, Error, Result, Tensor, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    col_major_strides, ContractionScalar, Error, Result, Tensor, TensorRead, TensorScalar,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 #[cfg(all(feature = "runtime", feature = "source-build"))]
@@ -132,7 +132,7 @@ trait TblisTensorRead<T> {
     fn host_data(&self) -> Result<&[T]>;
 }
 
-impl<T: Clone> TblisTensorRead<T> for TypedTensor<T> {
+impl<T: TensorScalar> TblisTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
         self.shape()
     }

@@ -10,6 +10,7 @@ use cubecl_cuda::{CudaDevice, CudaRuntime as CubeclCudaRuntime};
 use cudarc::driver::result::DriverError;
 use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
+use tenferro_tensor::AllocationDomainId;
 
 use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId};
 
@@ -65,10 +66,10 @@ impl Eq for CudaRuntimeIdentity {}
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::CudaRuntime;
+/// use tenferro_gpu::cuda::CudaRuntime;
 ///
-/// let _ctor: fn(tenferro_gpu::CudaDeviceId) ->
-///     Result<CudaRuntime, tenferro_gpu::CudaDeviceError> = CudaRuntime::new;
+/// let _ctor: fn(tenferro_gpu::cuda::CudaDeviceId) ->
+///     Result<CudaRuntime, tenferro_gpu::cuda::CudaDeviceError> = CudaRuntime::new;
 /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
 ///     CudaRuntime::synchronize;
 /// ```
@@ -83,6 +84,7 @@ struct CudaRuntimeState {
     device_ordinal: usize,
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
+    allocation_domain: AllocationDomainId,
 }
 
 // SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
@@ -147,7 +149,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceError, CudaDeviceId, CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaDeviceError, cuda::CudaDeviceId, cuda::CudaRuntime};
     ///
     /// let _ctor: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
     /// ```
@@ -194,6 +196,7 @@ impl CudaRuntime {
                 device_ordinal,
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
+                allocation_domain: AllocationDomainId::fresh(),
             }),
         })
     }
@@ -207,7 +210,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{CudaDeviceId, CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaDeviceId, cuda::CudaRuntime};
     ///
     /// let _device_id: fn(&CudaRuntime) -> CudaDeviceId = CudaRuntime::device_id;
     /// ```
@@ -224,13 +227,17 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::cuda::CudaRuntime;
     ///
-    /// let _identity: fn(&CudaRuntime) -> tenferro_gpu::CudaRuntimeIdentity =
+    /// let _identity: fn(&CudaRuntime) -> tenferro_gpu::cuda::CudaRuntimeIdentity =
     ///     CudaRuntime::runtime_identity;
     /// ```
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
         self.inner.identity.clone()
+    }
+
+    pub(crate) fn allocation_domain_id(&self) -> AllocationDomainId {
+        self.inner.allocation_domain
     }
 
     #[doc(hidden)]
@@ -247,7 +254,7 @@ impl CudaRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaRuntime;
+    /// use tenferro_gpu::cuda::CudaRuntime;
     ///
     /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
     ///     CudaRuntime::synchronize;
@@ -329,7 +336,7 @@ impl Drop for CudaRuntimeState {
 #[cfg(test)]
 mod identity_tests {
     use super::{gpu_available, is_invalid_device_lookup, CudaRuntime, CudaRuntimeIdentity};
-    use crate::CudaBackend;
+    use crate::cuda::CudaBackend;
     use cudarc::driver::{result::DriverError, sys::CUresult};
 
     #[test]

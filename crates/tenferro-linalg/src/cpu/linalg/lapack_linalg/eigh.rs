@@ -10,7 +10,7 @@ use super::helpers::{
 };
 
 pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
-    type Real: Clone + Copy + Default;
+    type Real: Clone + Copy + Default + tenferro_tensor::TensorScalar;
 
     fn eigh_2d(
         buffers: &mut BufferPool,
@@ -19,7 +19,7 @@ pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
     fn eigh_values_2d(
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackEigh>::Real>>;
 }
 
 fn iwork_len(query: i32, op: &'static str, routine: &'static str) -> tenferro_tensor::Result<i32> {
@@ -133,7 +133,7 @@ macro_rules! impl_real_eigh {
             fn eigh_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackEigh>::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
                 let mut work_matrix = input.host_data()?.to_vec();
@@ -263,7 +263,7 @@ macro_rules! impl_complex_eigh {
             fn eigh_values_2d(
                 _buffers: &mut BufferPool,
                 input: &TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
+            ) -> tenferro_tensor::Result<TypedTensor<<Self as LapackEigh>::Real>> {
                 let n = square_matrix_dim(input, "eigh_values")?;
                 let n_i32 = dim_i32(n, "eigh_values")?;
                 let mut work_matrix = input.host_data()?.to_vec();
@@ -355,14 +355,14 @@ pub(crate) fn eigh<T: LapackEigh>(
 fn eigh_values_2d<T: LapackEigh>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as LapackEigh>::Real>> {
     T::eigh_values_2d(buffers, input)
 }
 
 pub(crate) fn eigh_values<T: LapackEigh>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
+) -> tenferro_tensor::Result<TypedTensor<<T as LapackEigh>::Real>> {
     if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "eigh_values")?;
         return tensor_from_vec_with_template(

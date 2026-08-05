@@ -1,4 +1,4 @@
-use tenferro_gpu::CudaExecSession;
+use tenferro_gpu::cuda::CudaExecSession;
 
 fn escape<'a>(session: CudaExecSession<'a>) -> CudaExecSession<'static> {
     session

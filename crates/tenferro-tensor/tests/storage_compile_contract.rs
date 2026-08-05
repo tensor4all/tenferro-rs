@@ -49,3 +49,39 @@ fn storage_ui_compile_contracts() {
         tests.pass(path);
     }
 }
+
+#[test]
+fn p9_final_surface_has_no_parallel_tensor_owner_or_vec_result_path() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let group = fs::read_to_string(manifest.join("src/storage/group.rs"))
+        .expect("group source must be readable");
+    assert!(
+        !group.contains("tensor_owners"),
+        "AllocationGroup must not retain a parallel tensor owner table"
+    );
+    assert!(
+        !group.contains("tensor_refs"),
+        "AllocationGroup must not expose a tensor-reference side table"
+    );
+
+    let execution = fs::read_to_string(
+        manifest
+            .join("../tenferro-runtime/src/runtime/execution.rs")
+            .canonicalize()
+            .expect("runtime execution source must be present"),
+    )
+    .expect("runtime execution source must be readable");
+    assert!(
+        !execution.contains("Completed(Vec<Tensor>)"),
+        "detached results must retain alias-safe group ownership"
+    );
+    let submit_error = execution
+        .split("pub enum SubmitError")
+        .nth(1)
+        .and_then(|rest| rest.split("impl SubmitError").next())
+        .expect("SubmitError declaration must be present");
+    assert!(
+        !submit_error.contains("WorkerSpawn"),
+        "worker-spawn failure must recover unchanged inputs before admission"
+    );
+}

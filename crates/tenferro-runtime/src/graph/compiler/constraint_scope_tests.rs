@@ -258,7 +258,9 @@ fn constraint_scope_checkpoint_preserves_chain() {
 
     crate::ad_support::checkpoint_tensor(
         &mut output,
-        Arc::new(Tensor::from_vec_col_major(vec![6], vec![3.0_f64; 6]).unwrap()),
+        Arc::new(crate::checkpoint::RetainedValue::from_tensor(
+            Tensor::from_vec_col_major(vec![6], vec![3.0_f64; 6]).unwrap(),
+        )),
     )
     .unwrap();
 

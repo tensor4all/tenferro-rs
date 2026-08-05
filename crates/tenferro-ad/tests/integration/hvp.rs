@@ -28,7 +28,7 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 fn eval_tensor(traced: TracedTensor) -> Tensor {
     let engine = cpu_runtime();
     let t = traced;
-    t.run_with(&engine).unwrap().clone()
+    t.run_with(&engine).unwrap().duplicate().unwrap()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {

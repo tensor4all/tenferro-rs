@@ -6,13 +6,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    AllocationDomainId, AllocationId, BackendBuffer, BackendCachedDot, BackendRuntimeCache, Buffer,
-    CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig, GpuBackendKind,
-    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, PadConfig, Placement,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
+    BackendCachedDot, BackendId, BackendRuntimeCache, CompareDir, DType, DeviceAccessError,
+    DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig,
+    GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement, PreparedDeviceAccess,
+    ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
+    RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
+    TensorViewCanonicalization, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -23,7 +25,8 @@ mod error;
 mod event_domain;
 mod exec_session;
 mod gemm;
-pub(crate) mod interop;
+#[doc(hidden)]
+pub mod interop;
 mod kernels;
 mod memory;
 mod runtime;
@@ -41,240 +44,336 @@ pub use runtime_adapter::{
     webgpu_runtime_engine_registration_with_id, webgpu_runtime_hardware_class,
 };
 
-/// CubeCL-managed WebGPU buffer stored behind tensor backend-buffer trait objects.
-#[derive(Clone)]
-pub(crate) struct WebGpuBuffer<T> {
+/// Scalar-independent WebGPU allocation stored behind tensor backend-buffer
+/// trait objects; dtype is carried by the borrowed tensor descriptor.
+pub(crate) struct WebGpuBuffer {
     handle: cubecl_runtime::server::Handle,
-    len: usize,
+    byte_len: usize,
     device_ordinal: usize,
     managed: Option<Arc<cubecl_runtime::storage::ManagedResource<cubecl_wgpu::WgpuResource>>>,
-    domain: Option<Arc<apple::AppleDomainState>>,
-    _marker: std::marker::PhantomData<T>,
+    allocation_domain: AllocationDomainId,
+    allocation_id: AllocationId,
 }
 
-impl<T> std::fmt::Debug for WebGpuBuffer<T> {
+static NEXT_WEBGPU_ALLOCATION_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+impl std::fmt::Debug for WebGpuBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebGpuBuffer")
-            .field("len", &self.len)
+            .field("byte_len", &self.byte_len)
             .field("device_ordinal", &self.device_ordinal)
-            .field(
-                "allocation_domain",
-                &self.domain.as_ref().map(|domain| domain.id),
-            )
+            .field("allocation_domain", &self.allocation_domain)
+            .field("allocation_id", &self.allocation_id)
             .finish()
     }
 }
 
-impl<T> WebGpuBuffer<T> {
-    fn new(handle: cubecl_runtime::server::Handle, len: usize, device_ordinal: usize) -> Self {
+impl WebGpuBuffer {
+    fn new(
+        handle: cubecl_runtime::server::Handle,
+        byte_len: usize,
+        device_ordinal: usize,
+        allocation_domain: AllocationDomainId,
+    ) -> Self {
         Self {
             handle,
-            len,
+            byte_len,
             device_ordinal,
             managed: None,
-            domain: None,
-            _marker: std::marker::PhantomData,
+            allocation_domain,
+            allocation_id: AllocationId::from_backend_id(
+                NEXT_WEBGPU_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ),
         }
+    }
+
+    fn element_len<T: 'static>(&self) -> usize {
+        let element_size = std::mem::size_of::<T>();
+        debug_assert!(element_size != 0 && self.byte_len.is_multiple_of(element_size));
+        self.byte_len / element_size
     }
 
     fn new_for_runtime(
         rt: &WebGpuRuntime,
         handle: cubecl_runtime::server::Handle,
-        len: usize,
+        byte_len: usize,
         op: &'static str,
     ) -> crate::Result<Self> {
-        let Some(domain) = rt.allocation_domain() else {
-            return Ok(Self::new(handle, len, rt.device_ordinal()));
+        let Some(_domain) = rt.allocation_domain() else {
+            return Ok(Self::new(
+                handle,
+                byte_len,
+                rt.device_ordinal(),
+                rt.allocation_domain_id(),
+            ));
         };
         let managed = rt
             .client()
             .get_resource(handle.clone())
             .map_err(|error| crate::Error::backend_source(op, error))?;
+        let allocation_id = AllocationId::from_backend_id(managed.resource().allocation_id());
         Ok(Self {
             handle,
-            len,
+            byte_len,
             device_ordinal: rt.device_ordinal(),
             managed: Some(Arc::new(managed)),
-            domain: Some(Arc::clone(domain)),
-            _marker: std::marker::PhantomData,
+            allocation_domain: rt.allocation_domain_id(),
+            allocation_id,
         })
     }
+}
 
-    fn handle(&self) -> &cubecl_runtime::server::Handle {
-        &self.handle
+/// Opaque provider state produced by the shared storage root.
+#[derive(Debug)]
+pub(crate) struct WebGpuPreparedAccess {
+    handle: cubecl_runtime::server::Handle,
+    byte_len: usize,
+    device_ordinal: usize,
+}
+
+impl PreparedDeviceAccess for WebGpuPreparedAccess {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
-    fn element_len(&self) -> usize {
-        self.len
-    }
-
-    fn device_ordinal(&self) -> usize {
-        self.device_ordinal
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
     }
 }
 
-struct TypedMappedRead<T> {
-    bytes: cubecl_wgpu::WgpuMappedReadGuard,
-    marker: std::marker::PhantomData<T>,
+struct WebGpuReadMapping {
+    guard: cubecl_wgpu::WgpuMappedReadGuard,
+    range: std::ops::Range<usize>,
 }
 
-impl<T> std::ops::Deref for TypedMappedRead<T> {
-    type Target = [T];
+impl std::ops::Deref for WebGpuReadMapping {
+    type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: WebGpuBuffer is private and is constructed only by typed allocation helpers.
-        // Bool uses a separate byte representation and is rejected before this guard is created.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.bytes.as_ptr().cast::<T>(),
-                self.bytes.len() / core::mem::size_of::<T>(),
-            )
-        }
+        &self.guard[self.range.clone()]
     }
 }
 
-fn host_access_error(error: cubecl_wgpu::HostAccessError) -> HostAccessError {
-    match error {
-        cubecl_wgpu::HostAccessError::DeviceLocalAllocation => HostAccessError::Unsupported {
-            backend: "cubecl-webgpu",
-        },
-        cubecl_wgpu::HostAccessError::OverlappingHostMapping => {
-            HostAccessError::OverlappingHostMapping
-        }
-        cubecl_wgpu::HostAccessError::GpuAccessInProgress => HostAccessError::GpuAccessInProgress,
-        cubecl_wgpu::HostAccessError::MappedForHost => HostAccessError::MappedForHost,
-        other => HostAccessError::BackendFailure {
-            message: other.to_string(),
-        },
+impl AsRef<[u8]> for WebGpuReadMapping {
+    fn as_ref(&self) -> &[u8] {
+        self
     }
 }
 
-fn supports_typed_mapping<T: 'static>() -> bool {
-    let type_id = std::any::TypeId::of::<T>();
-    type_id == std::any::TypeId::of::<f32>()
-        || type_id == std::any::TypeId::of::<f64>()
-        || type_id == std::any::TypeId::of::<i32>()
-        || type_id == std::any::TypeId::of::<i64>()
-        || type_id == std::any::TypeId::of::<num_complex::Complex32>()
-        || type_id == std::any::TypeId::of::<num_complex::Complex64>()
+struct WebGpuWriteMapping {
+    guard: cubecl_wgpu::WgpuMappedWriteGuard,
+    bytes: Vec<u8>,
 }
 
-fn validate_typed_mapping_len<T: 'static>(
-    mapped_bytes: usize,
-    len: usize,
-) -> Result<(), HostAccessError> {
-    if !supports_typed_mapping::<T>() {
-        return Err(HostAccessError::Unsupported {
-            backend: "cubecl-webgpu",
-        });
+impl std::ops::Deref for WebGpuWriteMapping {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
     }
-    let expected = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-        HostAccessError::BackendFailure {
-            message: "mapped byte length overflow".to_owned(),
-        }
-    })?;
-    if mapped_bytes != expected {
-        return Err(HostAccessError::BackendFailure {
-            message: format!(
-                "mapped byte length mismatch: expected {expected}, got {mapped_bytes}",
-            ),
-        });
-    }
-    Ok(())
 }
 
-fn validate_typed_read_mapping<T: 'static>(
-    bytes: &[u8],
-    len: usize,
-) -> Result<(), HostAccessError> {
-    validate_typed_mapping_len::<T>(bytes.len(), len)?;
-    if bytes.as_ptr().align_offset(core::mem::align_of::<T>()) != 0 {
-        return Err(HostAccessError::BackendFailure {
-            message: format!(
-                "mapped pointer is not aligned for {}",
-                std::any::type_name::<T>()
-            ),
-        });
+impl std::ops::DerefMut for WebGpuWriteMapping {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.bytes
     }
-    Ok(())
 }
 
-impl<T: Send + Sync + 'static> BackendBuffer<T> for WebGpuBuffer<T> {
-    fn backend_family(&self) -> &'static str {
-        "cubecl-webgpu"
+impl AsRef<[u8]> for WebGpuWriteMapping {
+    fn as_ref(&self) -> &[u8] {
+        self
     }
+}
 
-    fn len(&self) -> usize {
-        self.len
+impl AsMut<[u8]> for WebGpuWriteMapping {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self
     }
+}
 
-    fn allocation_domain(&self) -> Option<AllocationDomainId> {
-        self.domain.as_ref().map(|domain| domain.id)
+impl Drop for WebGpuWriteMapping {
+    fn drop(&mut self) {
+        self.guard.copy_from_slice(&self.bytes);
     }
+}
 
-    fn allocation_id(&self) -> Option<AllocationId> {
-        self.managed
-            .as_ref()
-            .map(|managed| AllocationId::from_backend_id(managed.resource().allocation_id()))
+fn provider_dtype_size(dtype: DType) -> usize {
+    match dtype {
+        DType::F32 | DType::I32 => core::mem::size_of::<f32>(),
+        DType::F64 | DType::I64 => core::mem::size_of::<f64>(),
+        DType::Bool => core::mem::size_of::<bool>(),
+        DType::C32 => core::mem::size_of::<num_complex::Complex32>(),
+        DType::C64 => core::mem::size_of::<num_complex::Complex64>(),
     }
+}
 
-    fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
-        let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
-            backend: self.backend_family(),
+fn provider_mapping_range(
+    buffer: &WebGpuBuffer,
+    span: RootBoundSpan,
+    dtype: DType,
+) -> Result<std::ops::Range<usize>, AccessError> {
+    let start = span.byte_offset();
+    let end = start
+        .checked_add(span.byte_len())
+        .ok_or_else(|| AccessError::Provider {
+            message: "WebGPU mapping span overflows".to_owned(),
         })?;
-        let bytes = managed.resource().map_read().map_err(host_access_error)?;
-        validate_typed_read_mapping::<T>(&bytes, self.len)?;
-        Ok(HostReadGuard::new(TypedMappedRead {
-            bytes,
-            marker: std::marker::PhantomData,
+    if end > buffer.byte_len {
+        return Err(AccessError::Provider {
+            message: "WebGPU mapping span exceeds the allocation".to_owned(),
+        });
+    }
+    let element_size = provider_dtype_size(dtype);
+    if !start.is_multiple_of(element_size) || !span.byte_len().is_multiple_of(element_size) {
+        return Err(AccessError::Provider {
+            message: "WebGPU mapping span is not element-aligned".to_owned(),
+        });
+    }
+    Ok(start..end)
+}
+
+// SAFETY: WebGpuBuffer owns exactly one CubeCL allocation handle. Its provider
+// guards retain the underlying managed resource for every borrowed mapping;
+// the root importer consumes the buffer exactly once and the provider handle
+// is never used as a public ownership authority.
+unsafe impl BackendAllocation for WebGpuBuffer {
+    fn root_extent(&self) -> RootResourceExtent {
+        RootResourceExtent::try_new(
+            AllocationKey::new(self.allocation_domain, self.allocation_id),
+            0,
+            self.byte_len,
+            8,
+        )
+        .expect("WebGPU allocation metadata is constructed with a valid extent")
+    }
+
+    fn provider_kind(&self) -> BackendId {
+        BackendId::WebGpu
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        if self.managed.is_some() {
+            ProviderCapabilities::host()
+        } else {
+            ProviderCapabilities::none()
+        }
+    }
+
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        if request.allocation_domain() != self.allocation_domain
+            || request.allocation_id() != self.allocation_id
+        {
+            return Err(DeviceAccessError::InvalidRequest {
+                message: "prepared request does not match the WebGPU allocation identity"
+                    .to_owned(),
+            });
+        }
+        if request.byte_len() > self.byte_len {
+            return Err(DeviceAccessError::InvalidRequest {
+                message: "prepared request exceeds the WebGPU allocation extent".to_owned(),
+            });
+        }
+        Ok(Box::new(WebGpuPreparedAccess {
+            handle: self.handle.clone(),
+            byte_len: self.byte_len,
+            device_ordinal: self.device_ordinal,
         }))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
-        let managed = self.managed.as_ref().ok_or(HostAccessError::Unsupported {
-            backend: self.backend_family(),
+    fn map_read(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderReadMapping<'_>, AccessError> {
+        let managed = self.managed.as_ref().ok_or(AccessError::Unsupported {
+            backend: "cubecl-webgpu",
         })?;
-        let mut bytes = managed.resource().map_write().map_err(host_access_error)?;
-        validate_typed_mapping_len::<T>(bytes.len(), self.len)?;
-        Ok(HostWriteGuard::new(self.len, move |source: &[T]| {
-            let byte_len = source
-                .len()
-                .checked_mul(core::mem::size_of::<T>())
-                .ok_or_else(|| HostAccessError::BackendFailure {
-                    message: "mapped write byte length overflow".to_owned(),
-                })?;
-            // SAFETY: the source is borrowed for this call and byte slices may inspect any
-            // initialized Rust value. Private constructors restrict mapped tensors to supported
-            // scalar representations; bool was rejected above.
-            let source_bytes =
-                unsafe { std::slice::from_raw_parts(source.as_ptr().cast::<u8>(), byte_len) };
-            bytes.copy_from_slice(source_bytes);
-            Ok(())
+        let range = provider_mapping_range(self, span, dtype)?;
+        let guard = managed
+            .resource()
+            .map_read()
+            .map_err(|error| AccessError::Provider {
+                message: error.to_string(),
+            })?;
+        if range.end > guard.len() {
+            return Err(AccessError::Provider {
+                message: "WebGPU host mapping is shorter than the checked root extent".to_owned(),
+            });
+        }
+        Ok(ProviderReadMapping::from_guard(WebGpuReadMapping {
+            guard,
+            range,
+        }))
+    }
+
+    fn map_write(
+        &self,
+        span: RootBoundSpan,
+        dtype: DType,
+    ) -> Result<ProviderWriteMapping<'_>, AccessError> {
+        let managed = self.managed.as_ref().ok_or(AccessError::Unsupported {
+            backend: "cubecl-webgpu",
+        })?;
+        let range = provider_mapping_range(self, span, dtype)?;
+        let guard = managed
+            .resource()
+            .map_write()
+            .map_err(|error| AccessError::Provider {
+                message: error.to_string(),
+            })?;
+        if range.end > guard.len() {
+            return Err(AccessError::Provider {
+                message: "WebGPU host mapping is shorter than the checked root extent".to_owned(),
+            });
+        }
+        let bytes = vec![0_u8; range.len()];
+        Ok(ProviderWriteMapping::from_guard(WebGpuWriteMapping {
+            guard,
+            bytes,
         }))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
-fn webgpu_handle_from_backend<T: 'static>(
-    buffer: &dyn BackendBuffer<T>,
+pub(super) fn prepared_webgpu_tensor<T: TensorScalar + 'static>(
+    tensor: &TypedTensor<T>,
     op: &'static str,
-) -> crate::Result<cubecl_runtime::server::Handle> {
-    buffer
-        .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
-        .map(|buffer| buffer.handle().clone())
-        .ok_or_else(|| {
-            crate::Error::runtime_state(
-                op,
-                format!(
-                    "expected WebGPU backend buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            )
-        })
+) -> crate::Result<WebGpuPreparedAccess> {
+    let prepared = tensor.prepare_device_read(op)?;
+    prepared
+        .into_any()
+        .downcast::<WebGpuPreparedAccess>()
+        .map(|prepared| *prepared)
+        .map_err(|_| crate::Error::runtime_state(op, "expected a WebGPU prepared allocation"))
+}
+
+impl WebGpuPreparedAccess {
+    pub(crate) const fn device_ordinal(&self) -> usize {
+        self.device_ordinal
+    }
+}
+
+pub(super) fn prepared_webgpu_view<T: TensorScalar + 'static, R: TensorRank>(
+    view: &TypedTensorView<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<WebGpuPreparedAccess> {
+    let prepared = view.prepare_device_read(op)?;
+    prepared
+        .into_any()
+        .downcast::<WebGpuPreparedAccess>()
+        .map(|prepared| *prepared)
+        .map_err(|_| crate::Error::runtime_state(op, "expected a WebGPU prepared allocation"))
 }
 
 fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usize> {
@@ -317,50 +416,7 @@ fn comptime_sequence<T: CubeType + Clone>(values: &[T]) -> Sequence<T> {
     out
 }
 
-fn validate_webgpu_buffer_len<T>(
-    tensor: &TypedTensor<T>,
-    buffer: &WebGpuBuffer<T>,
-    op: &'static str,
-) -> crate::Result<()> {
-    let expected_len = checked_shape_product(op, tensor.shape())?;
-    let actual_len = buffer.element_len();
-    if expected_len != actual_len {
-        return Err(Error::runtime_state(
-            op,
-            format!(
-                "expected shape product {expected_len} elements, actual WebGpuBuffer::len {actual_len}"
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn webgpu_buffer<'a, T: 'static>(
-    tensor: &'a TypedTensor<T>,
-    op: &'static str,
-) -> crate::Result<&'a WebGpuBuffer<T>> {
-    match tensor.buffer() {
-        Buffer::Host(_) => Err(Error::runtime_state(
-            op,
-            "expected WebGPU tensor, got host tensor. \
-             Use upload_webgpu_tensor() to transfer to WebGPU before calling WebGPU ops.",
-        )),
-        Buffer::Backend(buffer) => buffer
-            .as_any()
-            .downcast_ref::<WebGpuBuffer<T>>()
-            .ok_or_else(|| {
-                Error::runtime_state(
-                    op,
-                    format!(
-                        "expected WebGPU tensor, got backend buffer family `{}`",
-                        buffer.backend_family()
-                    ),
-                )
-            }),
-    }
-}
-
-fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
+fn typed_tensor_binding_with_layout<T: CubeElement + TensorScalar + Clone>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     strides: &[usize],
@@ -369,15 +425,14 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
     if shape.len() != strides.len() {
         return Err(Error::rank_mismatch(op, shape.len(), strides.len()));
     }
-    let buffer = webgpu_buffer(tensor, op)?;
-    validate_webgpu_buffer_len(tensor, buffer, op)?;
+    let prepared = prepared_webgpu_tensor(tensor, op)?;
     let layout_len = checked_shape_product(op, shape)?;
-    if layout_len != buffer.element_len() {
+    if layout_len != tensor.n_elements() {
         return Err(Error::runtime_state(
             op,
             format!(
-                "WebGPU tensor binding layout covers {layout_len} elements, backing buffer has {}",
-                buffer.element_len()
+                "WebGPU tensor binding layout covers {layout_len} elements, tensor has {}",
+                tensor.n_elements()
             ),
         ));
     }
@@ -388,40 +443,39 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
         (shape.to_vec(), strides.to_vec())
     };
 
-    // SAFETY: The tensor buffer is a validated WebGPU allocation for `tensor`.
-    // The caller-provided shape/stride metadata is checked to cover exactly the
-    // same element count, so CubeCL logical indexing remains inside the backing
-    // allocation.
-    Ok(unsafe {
-        TensorBinding::from_raw_parts(buffer.handle().clone(), strides.into(), shape.into())
-    })
+    // SAFETY: The tensor root prepared the provider allocation for this exact
+    // descriptor before the binding is constructed. The caller-provided
+    // shape/stride metadata covers the validated logical tensor extent.
+    Ok(unsafe { TensorBinding::from_raw_parts(prepared.handle, strides.into(), shape.into()) })
 }
 
-pub(super) fn ensure_resident_on_runtime<T: 'static>(
+pub(super) fn ensure_resident_on_runtime<T: TensorScalar + 'static>(
     rt: &WebGpuRuntime,
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<()> {
-    let buffer = webgpu_buffer(tensor, op)?;
-    if let Some(expected) = rt.allocation_domain() {
-        match buffer.domain.as_ref().map(|domain| domain.id) {
-            Some(actual) if actual == expected.id => {}
-            Some(actual) => {
-                return Err(Error::host_access(
-                    op,
-                    HostAccessError::ForeignDomain {
-                        expected: expected.id,
-                        actual,
-                    },
-                ));
-            }
-            None => {
-                return Err(Error::runtime_state(
-                    op,
-                    "Apple runtime requires a managed allocation from its domain",
-                ));
-            }
-        }
+    let view = tensor.as_view();
+    let expected_allocation_domain = rt.allocation_domain_id();
+    let Some(actual_allocation_domain) = tensor.allocation_domain() else {
+        return Err(Error::runtime_state(
+            op,
+            "expected a WebGPU backend tensor, got host storage",
+        ));
+    };
+    if actual_allocation_domain != expected_allocation_domain {
+        return Err(Error::host_access(
+            op,
+            HostAccessError::ForeignDomain {
+                expected: expected_allocation_domain,
+                actual: actual_allocation_domain,
+            },
+        ));
+    }
+    if !matches!(view.backend_family(), Some("webgpu" | "cubecl-webgpu")) {
+        return Err(Error::runtime_state(
+            op,
+            "expected a WebGPU allocation from the selected provider",
+        ));
     }
     ensure_placement_resident_on_runtime(rt, tensor.placement(), op)
 }
@@ -471,19 +525,25 @@ fn ensure_placement_resident_on_runtime(
     }
 }
 
-pub(super) fn typed_from_webgpu<T: Send + Sync + 'static>(
+pub(super) fn typed_from_webgpu<T: TensorScalar + Send + Sync + 'static>(
     shape: Vec<usize>,
-    buffer: WebGpuBuffer<T>,
+    buffer: WebGpuBuffer,
     rt: &WebGpuRuntime,
 ) -> crate::Result<TypedTensor<T>> {
-    TypedTensor::from_buffer_col_major(
-        shape,
-        Buffer::Backend(Arc::new(buffer)),
-        webgpu_placement(rt),
-    )
+    let expected_len = checked_shape_product("typed_from_webgpu", &shape)?;
+    if expected_len != buffer.element_len::<T>() {
+        return Err(Error::runtime_state(
+            "typed_from_webgpu",
+            format!(
+                "WebGPU allocation has {} elements, shape requires {expected_len}",
+                buffer.element_len::<T>()
+            ),
+        ));
+    }
+    TypedTensor::from_backend_allocation(shape, Box::new(buffer), webgpu_placement(rt))
 }
 
-fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
+fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
     rt: &WebGpuRuntime,
     shape: &[usize],
     op: &'static str,
@@ -497,7 +557,7 @@ fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
         )
     })?;
     let handle = rt.client().empty(bytes);
-    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, len, op)?;
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, bytes, op)?;
     typed_from_webgpu(shape.to_vec(), buffer, rt)
 }
 
@@ -521,9 +581,9 @@ pub(super) fn alloc_tensor_in_runtime(
             let len = checked_shape_product("apple_alloc", shape)?;
             let handle = rt.client().empty(len);
             let buffer = WebGpuBuffer::new_for_runtime(rt, handle, len, "apple_alloc")?;
-            Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
+            Ok(Tensor::Bool(TypedTensor::from_backend_allocation(
                 shape.to_vec(),
-                Buffer::Backend(Arc::new(buffer)),
+                Box::new(buffer),
                 webgpu_placement(rt),
             )?))
         }
@@ -550,7 +610,7 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::WebGpuBackend;
+/// use tenferro_gpu::webgpu::WebGpuBackend;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
@@ -573,7 +633,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
     /// ```
@@ -592,7 +652,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn() -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new_default;
     /// ```
@@ -611,7 +671,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{WebGpuBackend, WebGpuRuntime};
+    /// use tenferro_gpu::{webgpu::WebGpuBackend, webgpu::WebGpuRuntime};
     ///
     /// let _from_runtime: fn(WebGpuRuntime) -> WebGpuBackend = WebGpuBackend::from_runtime;
     /// ```
@@ -624,7 +684,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{WebGpuBackend, WebGpuRuntime};
+    /// use tenferro_gpu::{webgpu::WebGpuBackend, webgpu::WebGpuRuntime};
     ///
     /// let _runtime: fn(&WebGpuBackend) -> &WebGpuRuntime = WebGpuBackend::runtime;
     /// ```
@@ -641,7 +701,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _identity = WebGpuBackend::runtime_identity;
     /// ```
@@ -654,7 +714,7 @@ impl WebGpuBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _sync: fn(&WebGpuBackend) -> tenferro_tensor::Result<()> = WebGpuBackend::synchronize;
     /// ```
@@ -967,11 +1027,23 @@ impl TensorFusion for WebGpuBackend {}
 impl TensorBuffer for WebGpuBackend {}
 
 impl TensorDeviceTransfer for WebGpuBackend {
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "WebGpuBackend::download_to_host",
+                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
         download_webgpu_tensor(self.runtime(), tensor)
     }
 
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "WebGpuBackend::upload_host_tensor",
+                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
         upload_webgpu_tensor(self.runtime(), tensor)
     }
 }

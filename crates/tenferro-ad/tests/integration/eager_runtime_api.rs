@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CudaBackend;
+use tenferro_gpu::cuda::CudaBackend;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::WebGpuBackend;
+use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::Tensor;
 
 #[test]

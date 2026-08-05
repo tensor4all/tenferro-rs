@@ -75,6 +75,9 @@ pub(crate) enum DispatchMode {
     Segmented,
 }
 
+// INVARIANT: execution slots carry either a move-only tensor or a borrowed
+// read; the enum is the single dispatch boundary and is not cloned.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ExecSlot<'a> {
     Owned(Tensor),
     Value(TensorValue),
@@ -99,10 +102,11 @@ impl<'a> ExecSlot<'a> {
     {
         match self {
             Self::Owned(tensor) => Ok(tensor),
-            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref()),
-            Self::Value(TensorValue::View(_)) => Err(Error::Internal(format!(
-                "{op}: owned TensorValue view reached an owned-only execution boundary"
-            ))),
+            Self::Value(value) => value.as_tensor().ok_or_else(|| {
+                Error::Internal(format!(
+                    "{op}: owned TensorValue view reached an owned-only execution boundary"
+                ))
+            }),
             Self::Read(read) => read.as_tensor().ok_or_else(|| {
                 Error::Internal(format!(
                     "{op}: borrowed TensorView reached an owned-only execution boundary"
@@ -122,11 +126,14 @@ impl<'a> ExecSlot<'a> {
     pub(crate) fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),
-            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref().clone()),
-            Self::Value(TensorValue::View(view)) => {
-                Ok(exec.to_contiguous_read(view.tensor_read())?)
+            Self::Value(value) => {
+                if let Some(tensor) = value.as_tensor() {
+                    Ok(tensor.duplicate()?)
+                } else {
+                    Ok(exec.to_contiguous_read(value.tensor_read())?)
+                }
             }
-            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.clone()),
+            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.duplicate()?),
             Self::Read(read @ TensorRead::View(_)) => Ok(exec.to_contiguous_read(read)?),
         }
     }
@@ -135,7 +142,9 @@ impl<'a> ExecSlot<'a> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
-            Self::Read(TensorRead::Tensor(tensor)) => Ok(TensorValue::from_tensor(tensor.clone())),
+            Self::Read(TensorRead::Tensor(tensor)) => {
+                Ok(TensorValue::from_tensor(tensor.duplicate()?))
+            }
             Self::Read(read @ TensorRead::View(_)) => {
                 Ok(TensorValue::from_tensor(exec.to_contiguous_read(read)?))
             }
@@ -339,6 +348,25 @@ where
     slot_ref(slots, slot, "input", "get").and_then(|value| value.as_tensor("get"))
 }
 
+pub(crate) fn ensure_owned<'input>(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'input>>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<()> {
+    let slot = checked_input_slot(input_slots, idx, "ensure_owned")?;
+    let needs_materialization = matches!(
+        slot_ref(slots, slot, "input", "ensure_owned")?,
+        ExecSlot::Value(_) | ExecSlot::Read(TensorRead::View(_))
+    );
+    if needs_materialization {
+        let read = slot_ref(slots, slot, "input", "ensure_owned")?.as_read();
+        let tensor = exec.to_contiguous_read(read)?;
+        slots[slot] = Some(ExecSlot::Owned(tensor));
+    }
+    Ok(())
+}
+
 pub(crate) fn get_read<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
     input_slots: &[usize],
@@ -448,9 +476,10 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
             let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
-            match input.reshape_view(&shape) {
+            match input.try_reshape_view(&shape) {
                 Ok(value) => value,
-                Err(_) => {
+                Err(error) => {
+                    let (input, _) = error.into_parts();
                     if consume_input {
                         slots[input_slot] = Some(ExecSlot::Value(input));
                     }
@@ -493,19 +522,19 @@ fn tensor_value_for_lazy_view<'input>(
     let slot = checked_slot_index(slot, slots.len(), "input", "tensor_value_for_lazy_view")?;
     match slots[slot].take() {
         Some(ExecSlot::Owned(tensor)) => {
-            let tensor = Arc::new(tensor);
-            let value = TensorValue::from_tensor_arc(Arc::clone(&tensor));
-            slots[slot] = Some(ExecSlot::Value(TensorValue::from_tensor_arc(tensor)));
-            Ok(value)
+            let value = TensorValue::from_tensor(tensor);
+            let output = value.duplicate()?;
+            slots[slot] = Some(ExecSlot::Value(value));
+            Ok(output)
         }
         Some(ExecSlot::Value(value)) => {
-            let output = value.clone();
+            let output = value.duplicate()?;
             slots[slot] = Some(ExecSlot::Value(value));
             Ok(output)
         }
         Some(ExecSlot::Read(read)) => {
             let output = match read.clone() {
-                TensorRead::Tensor(tensor) => TensorValue::from_tensor(tensor.clone()),
+                TensorRead::Tensor(tensor) => TensorValue::from_tensor(tensor.duplicate()?),
                 read @ TensorRead::View(_) => {
                     TensorValue::from_tensor(exec.to_contiguous_read(read)?)
                 }
@@ -768,7 +797,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
 
 pub(crate) fn execute_backend_op<'input>(
     exec: &mut dyn BackendSession,
-    slots: &[Option<ExecSlot<'input>>],
+    slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     dispatch::execute_backend_dispatch(exec, slots, inst)
@@ -1209,12 +1238,11 @@ pub(crate) fn reclaim_last_use_inputs_backend<'input, B: TensorBackend>(
 fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSession) {
     match slot {
         ExecSlot::Owned(tensor) => exec.reclaim_buffer(tensor),
-        ExecSlot::Value(TensorValue::Tensor(tensor)) => {
-            if let Ok(tensor) = Arc::try_unwrap(tensor) {
+        ExecSlot::Value(value) => {
+            if let Ok(tensor) = value.into_tensor() {
                 exec.reclaim_buffer(tensor);
             }
         }
-        ExecSlot::Value(TensorValue::View(_)) => {}
         ExecSlot::Read(_) => {}
     }
 }
@@ -1222,12 +1250,11 @@ fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSess
 fn reclaim_exec_slot_with_backend<B: TensorBackend>(slot: ExecSlot<'_>, backend: &mut B) {
     match slot {
         ExecSlot::Owned(tensor) => backend.reclaim_buffer(tensor),
-        ExecSlot::Value(TensorValue::Tensor(tensor)) => {
-            if let Ok(tensor) = Arc::try_unwrap(tensor) {
+        ExecSlot::Value(value) => {
+            if let Ok(tensor) = value.into_tensor() {
                 backend.reclaim_buffer(tensor);
             }
         }
-        ExecSlot::Value(TensorValue::View(_)) => {}
         ExecSlot::Read(_) => {}
     }
 }

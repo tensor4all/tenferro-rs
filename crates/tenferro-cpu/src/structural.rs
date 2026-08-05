@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use std::mem::MaybeUninit;
-use std::sync::Arc;
 use strided_kernel::{
     col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
 };
@@ -11,8 +10,8 @@ use crate::{
     flat_to_multi, ConjElem,
 };
 use tenferro_tensor::{
-    DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorView, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 #[cfg(test)]
@@ -121,22 +120,20 @@ macro_rules! dispatch_tensor_unary_with_bool_special_result {
     };
 }
 
-fn host_view<'a, T: Copy>(
+fn host_view<'a, T: Copy + TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> crate::Result<StridedView<'a, T, Identity>> {
-    match tensor.buffer() {
-        crate::Buffer::Host(data) => {
-            let strides = col_major_strides(tensor.shape());
-            StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
-                .map_err(|err| crate::Error::backend_source(op, err))
-        }
-        crate::Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
     }
+    let strides = col_major_strides(tensor.shape());
+    StridedView::new(tensor.host_data()?, tensor.shape(), &strides, 0)
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 #[cfg(test)]
-fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
+fn copy_view_to_array<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     op: &'static str,
     mut out: strided_kernel::StridedArray<T>,
     src: &StridedView<'_, T>,
@@ -147,18 +144,15 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
 }
 
 #[cfg(test)]
-fn tensor_from_array_with_placement<T: 'static>(
-    op: &'static str,
+fn tensor_from_array_with_placement<T: TensorScalar + 'static>(
+    _op: &'static str,
     out: strided_kernel::StridedArray<T>,
     placement: &tenferro_tensor::Placement,
 ) -> crate::Result<TypedTensor<T>> {
     let shape = out.dims().to_vec();
-    TypedTensor::from_buffer_col_major(
-        shape,
-        crate::Buffer::Host(out.into_data()),
-        placement.clone(),
-    )
-    .map_err(|err| crate::Error::backend_source(op, err))
+    let mut output = TypedTensor::from_vec_col_major(shape, out.into_data())?;
+    output.set_placement(placement.clone());
+    Ok(output)
 }
 
 pub(crate) fn typed_materialize_view_with_pool<T, R>(
@@ -207,7 +201,7 @@ where
         ));
     }
     if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
-        if Arc::ptr_eq(src_buffer, dst_buffer) {
+        if std::ptr::eq(src_buffer, dst_buffer) {
             return Err(crate::Error::invalid_argument(
                 op,
                 "configuration",
@@ -258,7 +252,7 @@ where
         ));
     }
     if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
-        if Arc::ptr_eq(src_buffer, dst_buffer) {
+        if std::ptr::eq(src_buffer, dst_buffer) {
             return Err(crate::Error::invalid_argument(
                 op,
                 "configuration",
@@ -347,17 +341,15 @@ fn clone_host_tensor_from_pool<T>(
 where
     T: Copy + PoolScalar + 'static,
 {
-    let input = match tensor.buffer() {
-        crate::Buffer::Host(data) => data.as_slice(),
-        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
-    };
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    let input = tensor.host_data()?;
     let mut data = buffers.acquire_with_capacity::<T>(input.len());
     data.extend_from_slice(input);
-    TypedTensor::from_buffer_col_major(
-        tensor.shape().to_vec(),
-        crate::Buffer::Host(data),
-        tensor.placement().clone(),
-    )
+    let mut output = TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)?;
+    output.set_placement(tensor.placement().clone());
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -487,7 +479,7 @@ pub(crate) fn cast_with_pool(
     }
 
     match (input, to) {
-        (Tensor::F32(t), DType::F32) => Ok(Tensor::F32(t.clone())),
+        (Tensor::F32(t), DType::F32) => Ok(Tensor::F32(t.duplicate()?)),
         (Tensor::F32(t), DType::F64) => converted!(F64, t, |x| x as f64),
         (Tensor::F32(t), DType::I32) => {
             validate_real_values_cast_to_i32(t, |x| x as f64)?;
@@ -503,7 +495,7 @@ pub(crate) fn cast_with_pool(
             converted!(C64, t, |x| Complex64::new(x as f64, 0.0))
         }
         (Tensor::F64(t), DType::F32) => converted!(F32, t, |x| x as f32),
-        (Tensor::F64(t), DType::F64) => Ok(Tensor::F64(t.clone())),
+        (Tensor::F64(t), DType::F64) => Ok(Tensor::F64(t.duplicate()?)),
         (Tensor::F64(t), DType::I32) => {
             validate_real_values_cast_to_i32(t, |x| x)?;
             converted!(I32, t, |x| x as i32)
@@ -519,7 +511,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::F64(t), DType::C64) => converted!(C64, t, |x| Complex64::new(x, 0.0)),
         (Tensor::I32(t), DType::F32) => converted!(F32, t, |x| x as f32),
         (Tensor::I32(t), DType::F64) => converted!(F64, t, |x| x as f64),
-        (Tensor::I32(t), DType::I32) => Ok(Tensor::I32(t.clone())),
+        (Tensor::I32(t), DType::I32) => Ok(Tensor::I32(t.duplicate()?)),
         (Tensor::I32(t), DType::I64) => converted!(I64, t, |x| x as i64),
         (Tensor::I32(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
         (Tensor::I32(t), DType::C32) => {
@@ -531,7 +523,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::I64(t), DType::F32) => converted!(F32, t, |x| x as f32),
         (Tensor::I64(t), DType::F64) => converted!(F64, t, |x| x as f64),
         (Tensor::I64(t), DType::I32) => converted!(I32, t, |x| x as i32),
-        (Tensor::I64(t), DType::I64) => Ok(Tensor::I64(t.clone())),
+        (Tensor::I64(t), DType::I64) => Ok(Tensor::I64(t.duplicate()?)),
         (Tensor::I64(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
         (Tensor::I64(t), DType::C32) => {
             converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
@@ -543,7 +535,7 @@ pub(crate) fn cast_with_pool(
         (Tensor::Bool(t), DType::F64) => converted!(F64, t, |x| if x { 1.0 } else { 0.0 }),
         (Tensor::Bool(t), DType::I32) => converted!(I32, t, |x| if x { 1 } else { 0 }),
         (Tensor::Bool(t), DType::I64) => converted!(I64, t, |x| if x { 1 } else { 0 }),
-        (Tensor::Bool(t), DType::Bool) => Ok(Tensor::Bool(t.clone())),
+        (Tensor::Bool(t), DType::Bool) => Ok(Tensor::Bool(t.duplicate()?)),
         (Tensor::Bool(t), DType::C32) => {
             converted!(C32, t, |x| Complex32::new(if x { 1.0 } else { 0.0 }, 0.0))
         }
@@ -561,7 +553,7 @@ pub(crate) fn cast_with_pool(
             converted!(I64, t, |z| z.re as i64)
         }
         (Tensor::C32(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
-        (Tensor::C32(t), DType::C32) => Ok(Tensor::C32(t.clone())),
+        (Tensor::C32(t), DType::C32) => Ok(Tensor::C32(t.duplicate()?)),
         (Tensor::C32(t), DType::C64) => {
             converted!(C64, t, |z| Complex64::new(z.re as f64, z.im as f64))
         }
@@ -579,11 +571,11 @@ pub(crate) fn cast_with_pool(
         (Tensor::C64(t), DType::C32) => {
             converted!(C32, t, |z| Complex32::new(z.re as f32, z.im as f32))
         }
-        (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.clone())),
+        (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.duplicate()?)),
     }
 }
 
-fn validate_real_values_cast_to_i32<S: Copy>(
+fn validate_real_values_cast_to_i32<S: Copy + TensorScalar>(
     tensor: &TypedTensor<S>,
     real: impl Fn(S) -> f64,
 ) -> crate::Result<()> {
@@ -593,7 +585,7 @@ fn validate_real_values_cast_to_i32<S: Copy>(
     Ok(())
 }
 
-fn validate_real_values_cast_to_i64<S: Copy>(
+fn validate_real_values_cast_to_i64<S: Copy + TensorScalar>(
     tensor: &TypedTensor<S>,
     real: impl Fn(S) -> f64,
 ) -> crate::Result<()> {
@@ -718,7 +710,7 @@ pub(crate) fn triu_with_pool(
 }
 
 #[cfg(test)]
-pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + 'static>(
+pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -772,7 +764,7 @@ where
 /// Returns [`crate::Error::Validation`] with `ShapeMismatch` when the input and
 /// output element counts differ, or `InvalidArgument` when checked shape
 /// products overflow `usize` or output storage cannot be constructed.
-pub fn typed_reshape<T: Clone + 'static>(
+pub fn typed_reshape<T: Clone + TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -785,11 +777,15 @@ pub fn typed_reshape<T: Clone + 'static>(
             shape.to_vec(),
         ));
     }
-    TypedTensor::from_buffer_col_major(
-        shape.to_vec(),
-        tensor.buffer().clone(),
-        tensor.placement().clone(),
-    )
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error("reshape"));
+    }
+    // INVARIANT: `typed_reshape` returns an independently owned tensor while
+    // the borrowed input remains live; sharing its move-only root would violate
+    // the single-owner contract, so this explicit host duplicate is required.
+    let mut output = TypedTensor::from_vec_col_major(shape.to_vec(), tensor.host_data()?.to_vec())?;
+    output.set_placement(tensor.placement().clone());
+    Ok(output)
 }
 
 pub(crate) fn typed_reshape_view_with_pool<T, R>(
@@ -830,7 +826,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync + 'static>(
+pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
@@ -920,7 +916,7 @@ fn typed_broadcast_in_dim_view_impl<T, R>(
     make_out: impl FnOnce(&[usize]) -> crate::Result<strided_kernel::StridedArray<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync + 'static,
+    T: Copy + Clone + Send + Sync + TensorScalar + 'static,
     R: TensorRank,
 {
     validate_rank("broadcast_in_dim", view.shape().len(), dims.len())?;
@@ -975,7 +971,7 @@ fn typed_convert_with_pool<S, T>(
     f: impl Fn(S) -> T + Sync,
 ) -> crate::Result<TypedTensor<T>>
 where
-    S: Copy + Send + Sync,
+    S: Copy + Send + Sync + TensorScalar,
     T: Copy + Clone + PoolScalar,
 {
     let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape().to_vec())?;
@@ -990,7 +986,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync>(
+pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync + TensorScalar>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -1033,7 +1029,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone>(
+pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone + TensorScalar>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -1062,7 +1058,7 @@ fn typed_embed_diagonal_impl<T>(
     make_zeroed: impl FnOnce(Vec<usize>) -> crate::Result<TypedTensor<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone,
+    T: Copy + Clone + TensorScalar,
 {
     validate_axis("embed_diagonal", axis_a, tensor.shape().len())?;
     if axis_b > tensor.shape().len() {
@@ -1083,10 +1079,10 @@ where
     let mut in_idx = vec![0usize; in_rank];
     let mut out_idx = vec![0usize; out_rank];
 
-    let input_data = match tensor.buffer() {
-        crate::Buffer::Host(data) => data.as_slice(),
-        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("embed_diagonal")),
-    };
+    if tensor.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error("embed_diagonal"));
+    }
+    let input_data = tensor.host_data()?;
 
     // Intentionally sequential: embed_diagonal writes a sparse diagonal subset
     // into a zeroed output and has no current strided-kernel parallel primitive.
@@ -1113,7 +1109,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_tril<T: Copy + Zero + Clone>(
+pub(crate) fn typed_tril<T: Copy + Zero + Clone + TensorScalar>(
     tensor: &TypedTensor<T>,
     k: i64,
 ) -> crate::Result<TypedTensor<T>> {
@@ -1132,7 +1128,7 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn typed_triu<T: Copy + Zero + Clone>(
+pub(crate) fn typed_triu<T: Copy + Zero + Clone + TensorScalar>(
     tensor: &TypedTensor<T>,
     k: i64,
 ) -> crate::Result<TypedTensor<T>> {
@@ -1151,7 +1147,7 @@ where
 }
 
 #[cfg(test)]
-fn typed_triangular_mask<T: Copy + Zero + Clone>(
+fn typed_triangular_mask<T: Copy + Zero + Clone + TensorScalar>(
     tensor: &TypedTensor<T>,
     k: i64,
     upper: bool,
@@ -1164,11 +1160,11 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     let rows = tensor.shape()[0];
     let cols = tensor.shape()[1];
     if tensor.shape().contains(&0) {
-        return Ok(tensor.clone());
+        return tensor.duplicate();
     }
 
     let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;
-    let mut out = tensor.clone();
+    let mut out = tensor.duplicate()?;
     let data = out.host_data_mut()?;
 
     // Intentionally sequential: triangular masks are index-dependent in the
@@ -1214,7 +1210,7 @@ where
     let rows = tensor.shape()[0];
     let cols = tensor.shape()[1];
     if tensor.shape().contains(&0) {
-        return Ok(tensor.clone());
+        return tensor.duplicate();
     }
 
     let (batch_count, block_size) = checked_triangular_extent(op, tensor.shape(), rows, cols)?;

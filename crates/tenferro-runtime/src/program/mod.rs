@@ -22,7 +22,7 @@
 //! ))?;
 //! let key = builder.bind_input(
 //!     input,
-//!     Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?),
+//!     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
 //! )?;
 //! let output = builder.add_op(CoreSemanticOp::Neg, &[input])?[0];
 //! let frozen = builder.finish(&[output])?;

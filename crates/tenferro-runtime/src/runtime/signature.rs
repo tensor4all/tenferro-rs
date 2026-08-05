@@ -480,7 +480,7 @@ fn tensor_alignment_log2(tensor: &Tensor) -> Option<u8> {
 }
 
 fn typed_tensor_alignment_log2<T: TensorScalar>(tensor: &TypedTensor<T>) -> Option<u8> {
-    if tensor.buffer().is_backend() {
+    if tensor.backend_family().is_some() {
         return None;
     }
     if shape_is_empty(tensor.shape()) {
@@ -504,8 +504,10 @@ fn view_alignment_log2(view: &TensorView<'_>) -> Option<u8> {
     }
 }
 
-fn typed_view_alignment_log2<T: 'static>(view: &TypedTensorView<'_, T>) -> Option<u8> {
-    if view.backend_buffer().is_some() {
+fn typed_view_alignment_log2<T: TensorScalar + 'static>(
+    view: &TypedTensorView<'_, T>,
+) -> Option<u8> {
+    if view.backend_family().is_some() {
         return None;
     }
     if shape_is_empty(view.shape()) {

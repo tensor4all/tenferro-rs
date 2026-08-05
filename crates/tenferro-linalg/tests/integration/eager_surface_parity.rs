@@ -23,7 +23,7 @@ fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
 
 fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
     tensor
-        .materialized()
+        .to_tensor()
         .unwrap()
         .as_slice::<f64>()
         .unwrap()
@@ -44,7 +44,7 @@ fn eager_composites_match_diagonal_matrix_values() {
     let mut eigvals = a
         .eigvals()
         .unwrap()
-        .materialized()
+        .to_tensor()
         .unwrap()
         .as_slice::<Complex64>()
         .unwrap()

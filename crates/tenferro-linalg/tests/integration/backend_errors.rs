@@ -1,14 +1,13 @@
 use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
     DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView,
     ValidationError,
@@ -63,7 +62,9 @@ fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
     Tensor::F64(
         TypedTensor::<f64>::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(
+                handle_id, len,
+            ))),
             opaque_backend_placement(),
         )
         .unwrap(),
@@ -211,7 +212,24 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     impl TensorFusion for DefaultOnlyLinalgBackend {}
     impl TensorBuffer for DefaultOnlyLinalgBackend {}
-    impl TensorDeviceTransfer for DefaultOnlyLinalgBackend {}
+    impl TensorDeviceTransfer for DefaultOnlyLinalgBackend {
+        fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+            Err(Error::unsupported(
+                "DefaultOnlyLinalgBackend::download_to_host",
+                "test backend does not transfer tensors",
+            ))
+        }
+
+        fn upload_host_tensor(
+            &mut self,
+            _tensor: TensorRead<'_>,
+        ) -> tenferro_tensor::Result<Tensor> {
+            Err(Error::unsupported(
+                "DefaultOnlyLinalgBackend::upload_host_tensor",
+                "test backend does not transfer tensors",
+            ))
+        }
+    }
     impl BackendCachedDot for DefaultOnlyLinalgBackend {}
     impl BackendSessionHost for DefaultOnlyLinalgBackend {}
     impl TensorBackend for DefaultOnlyLinalgBackend {}
@@ -263,14 +281,18 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         eig_values_calls: 0,
     };
 
-    let eig_values = Tensor::F64(input.clone()).eigvals(&mut backend).unwrap();
+    let eig_values = Tensor::F64(input.duplicate().unwrap())
+        .eigvals(&mut backend)
+        .unwrap();
     assert_eq!(backend.eig_values_calls, 1);
     assert_eq!(
         c64_values(&eig_values),
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
     );
 
-    let err = backend.lu_factor(&Tensor::F64(input.clone())).unwrap_err();
+    let err = backend
+        .lu_factor(&Tensor::F64(input.duplicate().unwrap()))
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
@@ -279,7 +301,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let err = backend.svd_values(&Tensor::F64(input.clone())).unwrap_err();
+    let err = backend
+        .svd_values(&Tensor::F64(input.duplicate().unwrap()))
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
@@ -288,7 +312,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
-    let owned_input = Tensor::F64(input.clone());
+    let owned_input = Tensor::F64(input.duplicate().unwrap());
 
     let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f64, 11.0]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64; 2]).unwrap();
@@ -373,7 +397,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .eigh_values(&Tensor::F64(input.clone()))
+        .eigh_values(&Tensor::F64(input.duplicate().unwrap()))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -386,10 +410,10 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     let pivots = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
     let err = backend
         .lu_solve_prepared(
-            &Tensor::F64(input.clone()),
-            &Tensor::F64(input.clone()),
+            &Tensor::F64(input.duplicate().unwrap()),
+            &Tensor::F64(input.duplicate().unwrap()),
             &pivots,
-            &Tensor::F64(input.clone()),
+            &Tensor::F64(input.duplicate().unwrap()),
             false,
             false,
         )

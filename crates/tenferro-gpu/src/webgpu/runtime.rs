@@ -4,6 +4,7 @@ use cubecl::client::ComputeClient;
 use cubecl::Runtime;
 use cubecl_common::future;
 use cubecl_wgpu::{WgpuDevice, WgpuRuntime};
+use tenferro_tensor::AllocationDomainId;
 
 use super::apple::AppleDomainState;
 
@@ -51,7 +52,7 @@ impl Eq for WebGpuRuntimeIdentity {}
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::WebGpuRuntime;
+/// use tenferro_gpu::webgpu::WebGpuRuntime;
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new;
 /// let _sync: fn(&WebGpuRuntime) -> tenferro_tensor::Result<()> =
@@ -63,6 +64,7 @@ pub struct WebGpuRuntime {
     device_ordinal: usize,
     pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
     identity: WebGpuRuntimeIdentity,
+    allocation_domain: AllocationDomainId,
 }
 
 impl fmt::Debug for WebGpuRuntime {
@@ -79,7 +81,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new;
     /// ```
@@ -97,7 +99,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _ctor: fn() -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new_default;
     /// ```
@@ -125,6 +127,7 @@ impl WebGpuRuntime {
             device_ordinal,
             apple_domain: None,
             identity: WebGpuRuntimeIdentity::fresh(),
+            allocation_domain: AllocationDomainId::fresh(),
         })
     }
 
@@ -133,16 +136,22 @@ impl WebGpuRuntime {
         device_ordinal: usize,
         domain: std::sync::Arc<AppleDomainState>,
     ) -> Self {
+        let allocation_domain = domain.id;
         Self {
             client,
             device_ordinal,
             apple_domain: Some(domain),
             identity: WebGpuRuntimeIdentity::fresh(),
+            allocation_domain,
         }
     }
 
     pub(super) fn allocation_domain(&self) -> Option<&std::sync::Arc<AppleDomainState>> {
         self.apple_domain.as_ref()
+    }
+
+    pub(super) fn allocation_domain_id(&self) -> AllocationDomainId {
+        self.allocation_domain
     }
 
     pub(super) fn record_upload(&self, bytes: usize) {
@@ -166,7 +175,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _device_ordinal: fn(&WebGpuRuntime) -> usize = WebGpuRuntime::device_ordinal;
     /// ```
@@ -179,9 +188,9 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
-    /// let _identity: fn(&WebGpuRuntime) -> tenferro_gpu::WebGpuRuntimeIdentity =
+    /// let _identity: fn(&WebGpuRuntime) -> tenferro_gpu::webgpu::WebGpuRuntimeIdentity =
     ///     WebGpuRuntime::runtime_identity;
     /// ```
     pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
@@ -193,7 +202,7 @@ impl WebGpuRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::WebGpuRuntime;
+    /// use tenferro_gpu::webgpu::WebGpuRuntime;
     ///
     /// let _sync: fn(&WebGpuRuntime) -> tenferro_tensor::Result<()> =
     ///     WebGpuRuntime::synchronize;
@@ -211,7 +220,7 @@ impl WebGpuRuntime {
 #[cfg(test)]
 mod identity_tests {
     use super::{webgpu_available, WebGpuRuntimeIdentity};
-    use crate::WebGpuBackend;
+    use crate::webgpu::WebGpuBackend;
 
     #[test]
     fn webgpu_runtime_identity_is_clone_stable_and_instance_scoped() {

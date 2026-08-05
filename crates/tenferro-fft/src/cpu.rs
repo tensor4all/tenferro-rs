@@ -4,8 +4,9 @@ use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuExecSession;
 use tenferro_tensor::{
-    AllocationDomainId, Buffer, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
-    SharedTensorAllocationDomain, Tensor, TensorRead, TensorView, TypedTensor,
+    AllocationDomainId, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
+    SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
+    TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -243,7 +244,7 @@ fn with_managed_read<T, R>(
 where
     T: Send + Sync + 'static,
 {
-    let Buffer::Backend(buffer) = input.buffer() else {
+    let StorageBuffer::Backend(buffer) = input.buffer() else {
         return Err(tenferro_tensor::Error::host_access(
             op,
             HostAccessError::Unsupported { backend: "host" },
@@ -284,7 +285,7 @@ where
 }
 
 fn write_managed_output<T>(
-    output: &TypedTensor<T>,
+    output: &mut TypedTensor<T>,
     expected_domain: AllocationDomainId,
     op: &'static str,
     values: &[T],
@@ -304,7 +305,7 @@ where
             "shared allocation owner returned a non-managed output",
         ));
     }
-    let Buffer::Backend(buffer) = output.buffer() else {
+    let Some(buffer) = output.backend_buffer_mut() else {
         return Err(tenferro_tensor::Error::runtime_state(
             op,
             "shared allocation owner returned a host output",
@@ -326,7 +327,7 @@ macro_rules! write_managed_output {
             op: &'static str,
             values: &[$scalar],
         ) -> tenferro_tensor::Result<Tensor> {
-            let Tensor::$variant(output) = output else {
+            let Tensor::$variant(mut output) = output else {
                 return Err(tenferro_tensor::Error::runtime_state(
                     op,
                     concat!(
@@ -336,7 +337,7 @@ macro_rules! write_managed_output {
                     ),
                 ));
             };
-            write_managed_output(&output, expected_domain, op, values)?;
+            write_managed_output(&mut output, expected_domain, op, values)?;
             Ok(Tensor::$variant(output))
         }
     };
@@ -427,7 +428,8 @@ fn execute_c2c<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_c2c_data(input.shape(), input_data, axis, n, forward, norm, plans)
@@ -444,7 +446,7 @@ fn execute_c2c_data<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
 {
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
@@ -498,7 +500,8 @@ fn execute_r2c<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_r2c_data(input.shape(), input_data, axis, n, onesided, norm, plans)
@@ -568,7 +571,8 @@ fn execute_c2r<T>(
     plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<T>>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + TensorScalar,
+    Complex<T>: TensorScalar,
 {
     let input_data = input.host_data()?;
     execute_c2r_data(input.shape(), input_data, axis, n, norm, plans)

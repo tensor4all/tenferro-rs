@@ -271,10 +271,7 @@ mod tests {
         builder
             .bind_input(
                 input,
-                Arc::new(
-                    tenferro_tensor::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-                        .unwrap(),
-                ),
+                tenferro_tensor::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
             )
             .unwrap();
         let pair = builder

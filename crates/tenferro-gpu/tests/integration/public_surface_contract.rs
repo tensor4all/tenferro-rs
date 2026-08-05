@@ -16,9 +16,57 @@ fn repo_file_if_exists(path: &str) -> Option<String> {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn cuda_prepared_access_has_one_provider_handle_and_no_dead_request_metadata() {
+    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    let prepared_start = dispatch
+        .find("pub(crate) struct CubeclPreparedAccess")
+        .expect("prepared access definition must exist");
+    let prepared_end = dispatch[prepared_start..]
+        .find("impl CubeclPreparedAccess")
+        .map(|offset| prepared_start + offset)
+        .expect("prepared access implementation must exist");
+    let prepared = &dispatch[prepared_start..prepared_end];
+    assert_eq!(
+        prepared
+            .matches("handle: cubecl_runtime::server::Handle")
+            .count(),
+        1,
+        "prepared CUDA state must retain one provider handle"
+    );
+    assert!(
+        !prepared.contains("binding: TensorBinding"),
+        "prepared CUDA state must not retain a second binding owner"
+    );
+
+    let group = repo_file("crates/tenferro-tensor/src/storage/group.rs");
+    assert!(
+        !group.contains("prepare_device_read_for_layout_raw")
+            && !group.contains("prepare_device_write_for_layout_raw")
+            && !group.contains("DeviceAccessRequest::new"),
+        "device preparation must use the single checked storage hierarchy"
+    );
+
+    let tensor_types = repo_file("crates/tenferro-tensor/src/types.rs");
+    let request_start = tensor_types
+        .find("pub struct DeviceAccessRequest")
+        .expect("device request definition must exist");
+    let request_end = tensor_types[request_start..]
+        .find("/// Typed failure returned")
+        .map(|offset| request_start + offset)
+        .expect("device request boundary must exist");
+    let request = &tensor_types[request_start..request_end];
+    assert!(
+        !request.contains("dtype:") && !request.contains("writable:"),
+        "device requests must carry only metadata consumed by the root/provider seam"
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     use tenferro_gpu::{
-        cuda_runtime_engine_registration, CudaBackend, CudaDeviceError, CudaDeviceId, CudaRuntime,
+        cuda::cuda_runtime_engine_registration, cuda::CudaBackend, cuda::CudaDeviceError,
+        cuda::CudaDeviceId, cuda::CudaRuntime,
     };
     use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
 
@@ -26,6 +74,33 @@ fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
     let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
         cuda_runtime_engine_registration;
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_prepared_access_has_one_state_and_one_downcast_boundary() {
+    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
+    assert!(
+        !dispatch.contains("writable: bool"),
+        "prepared CUDA state must not retain a dead writable flag"
+    );
+    assert!(
+        !dispatch.contains("offset: isize") && !dispatch.contains("element_size: usize"),
+        "prepared CUDA state must not retain dead layout scalar fields"
+    );
+    assert_eq!(
+        dispatch
+            .matches("downcast::<CubeclPreparedAccess>()")
+            .count(),
+        1,
+        "CUDA dispatch must centralize prepared-state downcasting"
+    );
+    assert!(
+        !dispatch.contains("request.allocation_domain()")
+            && !dispatch.contains("request.allocation_id()")
+            && !dispatch.contains("request.byte_len()"),
+        "CUDA preparation must not repeat root identity validation"
+    );
 }
 
 fn feature_block(manifest: &str, name: &str) -> String {
@@ -63,8 +138,12 @@ fn cubecl_implementation_module_is_not_public_api() {
         "CubeCL backend buffer representation must not be public API"
     );
     assert!(
-        lib_rs.contains("pub mod cuda_interop"),
-        "sibling-crate CUDA bridge should be the only explicit low-level public module"
+        lib_rs.contains("pub mod cuda"),
+        "CUDA provider namespace should be the explicit low-level public module"
+    );
+    assert!(
+        !lib_rs.contains("pub mod cuda_interop"),
+        "the legacy flat CUDA interop module must not remain public"
     );
 
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
@@ -143,13 +222,14 @@ fn downstream_gpu_features_are_explicit_and_additive() {
 #[test]
 fn public_backend_names_are_provider_specific() {
     let lib_rs = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
     assert!(
         lib_rs.contains("CudaBackend"),
         "CUDA backend should have an explicit public CudaBackend name"
     );
     assert!(
-        lib_rs.contains("WebGpuBackend"),
-        "WebGPU backend should have an explicit public WebGpuBackend name"
+        webgpu_mod.contains("pub struct WebGpuBackend"),
+        "WebGPU namespace should have an explicit public WebGpuBackend name"
     );
     assert!(
         !lib_rs.contains("CubeclBackend") && !lib_rs.contains("CubeclRuntime"),
@@ -332,7 +412,45 @@ fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
 }
 
 #[test]
-fn cubecl_copy_into_rejects_aliased_backend_allocations() {
+fn provider_buffer_owners_are_scalar_independent_and_not_cloneable() {
+    let cubecl_lib = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (name, source) in [("CubeCL", cubecl_lib), ("WebGPU", webgpu_mod)] {
+        assert!(
+            !source.contains("struct CubeclBuffer<T>")
+                && !source.contains("struct WebGpuBuffer<T>"),
+            "{name} provider owner must not be typed by scalar"
+        );
+        assert!(
+            !source.contains("impl Clone for CubeclBuffer")
+                && !source.contains("impl Clone for WebGpuBuffer"),
+            "{name} provider owner must not expose a shallow clone"
+        );
+        assert!(
+            !source.contains("allocation_domain: Option<AllocationDomainId>"),
+            "{name} provider owner must require an allocation domain"
+        );
+    }
+}
+
+#[test]
+fn provider_buffer_owners_store_bytes_and_derive_typed_lengths() {
+    let cubecl_lib = repo_file("crates/tenferro-gpu/src/lib.rs");
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (name, source) in [("CubeCL", cubecl_lib), ("WebGPU", webgpu_mod)] {
+        assert!(
+            source.contains("byte_len: usize"),
+            "{name} provider owner must identify physical storage in bytes"
+        );
+        assert!(
+            source.contains("fn element_len<T: 'static>(&self)"),
+            "{name} typed views must derive element counts from the borrowed scalar"
+        );
+    }
+}
+
+#[test]
+fn cubecl_copy_into_checks_borrowed_backend_identity() {
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
     let copy_body = cubecl_mod
         .split_once("fn copy_view_to_view_typed")
@@ -343,8 +461,8 @@ fn cubecl_copy_into_rejects_aliased_backend_allocations() {
         .0;
 
     assert!(
-        copy_body.contains("Arc::ptr_eq(source_buffer, destination_buffer)"),
-        "CUDA copy_into must reject source and destination views backed by the same allocation"
+        copy_body.contains("std::ptr::eq(source_buffer, destination_buffer)"),
+        "CUDA copy_into must compare source and destination through borrowed backend identity"
     );
 }
 
@@ -420,8 +538,8 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
         .0;
     assert!(copy_helper.contains("ensure_view_resident_on_runtime"));
     assert!(copy_helper.contains("ensure_view_mut_resident_on_runtime"));
-    assert!(copy_helper.contains("Arc::ptr_eq(source_buffer, destination_buffer)"));
-    assert!(copy_helper.contains("compact source view covering its full allocation"));
+    assert!(copy_helper.contains("std::ptr::eq(source_buffer, destination_buffer)"));
+    assert!(copy_helper.contains("typed_view_binding(src, op)?"));
 }
 
 #[test]

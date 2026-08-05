@@ -26,9 +26,6 @@ rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 webgpu = [
     "dep:tenferro-gpu",
     "tenferro-gpu/webgpu",
-    "dep:cubecl",
-    "dep:cubecl-wgpu",
-    "dep:cubek-fft",
 ]
 
 [dependencies]
@@ -37,9 +34,6 @@ tenferro-ad = { path = "../tenferro-ad", version = "0.2.0", default-features = f
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false, optional = true }
-cubecl = { workspace = true, optional = true }
-cubecl-wgpu = { workspace = true, optional = true }
-cubek-fft = { workspace = true, optional = true }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
 computegraph.workspace = true

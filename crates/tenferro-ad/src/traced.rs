@@ -8,10 +8,10 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{SymDim, TensorMeta};
 use tenferro_runtime::ad_support::{
     allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, compile_ad_source,
-    frozen_input_tensor, inputs_map as tensor_inputs_map, leaf_input_key,
+    frozen_input_value, inputs_map as tensor_inputs_map, leaf_input_key,
     metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new, ones_tensor,
     register_scoped_graph_analysis, shape_hint as tensor_shape_hint, tensor_from_parts,
-    ConstraintScopeTransfer, TracedTensorParts,
+    ConstraintScopeTransfer, RetainedValue, TracedTensorParts,
 };
 use tenferro_runtime::program::{FrozenProgram, ProgramValue, ProgramValueMetadata, SemanticOpRef};
 use tenferro_runtime::{
@@ -253,8 +253,9 @@ pub trait TracedTensorAdExt {
     ///
     /// y.checkpoint(&mut compiler, &runtime).unwrap();
     ///
-    /// let value = y.attached_data().unwrap();
-    /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
+    /// let value = y.attached_value().unwrap();
+    /// let materialized = value.tensor_read().unwrap().tensor_view().duplicate().unwrap();
+    /// assert_eq!(materialized.as_slice::<f64>().unwrap(), &[9.0]);
     /// ```
     ///
     /// # Errors
@@ -444,14 +445,14 @@ impl TracedTensorAdExt for TracedTensor {
     }
 
     fn checkpoint(&mut self, compiler: &mut GraphCompiler, runtime: &Runtime) -> Result<()> {
-        let data = if let Some(data) = self.attached_data() {
+        let data = if let Some(data) = self.attached_value() {
             Arc::clone(data)
         } else {
             let program = compiler.compile(self)?;
-            Arc::new(single_runtime_output(
+            Arc::new(RetainedValue::from_tensor(single_runtime_output(
                 runtime.run_compiled(&program, &[])?,
                 "TracedTensorAdExt::checkpoint",
-            )?)
+            )?))
         };
         checkpoint_tensor(self, data)?;
         Ok(())
@@ -498,7 +499,7 @@ fn jvp_optional_impl(
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    let tangent_data = tangent.attached_data().cloned().ok_or_else(|| {
+    let tangent_data = tangent.attached_value().cloned().ok_or_else(|| {
         Error::invalid_argument(
             "jvp",
             ErrorPhase::GraphBuild,
@@ -558,7 +559,7 @@ fn vjp_optional_impl(
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
-    let cotangent_data = cotangent.attached_data().cloned().ok_or_else(|| {
+    let cotangent_data = cotangent.attached_value().cloned().ok_or_else(|| {
         Error::invalid_argument(
             transform,
             ErrorPhase::GraphBuild,
@@ -715,7 +716,7 @@ fn derivative_tensor_from_program(
     source: &CompiledGraph,
     derivative: &SemanticAdProgram,
     derivative_output_index: usize,
-    seed_tensors: &[(usize, Arc<Tensor>)],
+    seed_tensors: &[(usize, Arc<RetainedValue>)],
     inherited_tensors: [&TracedTensor; 3],
     fallback_shape_hint: Option<Vec<SymDim>>,
     transform: &'static str,
@@ -735,7 +736,7 @@ pub(crate) fn derivative_trace_from_frozen_program(
     source: &CompiledGraph,
     frozen: &FrozenProgram,
     derivative_output_index: usize,
-    seed_tensors: &[(usize, Arc<Tensor>)],
+    seed_tensors: &[(usize, Arc<RetainedValue>)],
     inherited_tensors: &[&TracedTensor],
     fallback_shape_hint: Option<Vec<SymDim>>,
     transform: &'static str,
@@ -852,7 +853,7 @@ pub(crate) fn derivative_trace_from_frozen_program(
     };
     let mut inputs_map = (*tensor_inputs_map(primary_tensor)).clone();
     for (input_index, key) in input_keys.iter().enumerate() {
-        if let Some(tensor) = frozen_input_tensor(frozen, input_index) {
+        if let Some(tensor) = frozen_input_value(frozen, input_index) {
             inputs_map.insert(key.clone(), tensor);
         }
     }
@@ -982,7 +983,7 @@ fn program_metadata_to_tensor_meta(
 fn validate_seed_tensor(
     transform: &'static str,
     input_index: usize,
-    tensor: &Tensor,
+    tensor: &RetainedValue,
     expected: &TensorMeta,
 ) -> Result<()> {
     let actual_dtype = tensor.dtype();

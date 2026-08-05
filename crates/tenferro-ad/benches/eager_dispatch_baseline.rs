@@ -30,7 +30,7 @@ fn consume_lazy(output: EagerTensor) {
 }
 
 fn consume_materialized(output: EagerTensor) {
-    let output = output.materialized().expect("output should materialize");
+    let output = output.to_tensor().expect("output should materialize");
     black_box(output.shape());
     black_box(output.as_slice::<f64>().expect("f64 output")[0]);
 }

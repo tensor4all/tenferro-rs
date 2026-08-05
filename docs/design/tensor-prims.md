@@ -31,7 +31,7 @@ tenferro-tensor
     Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, BackendSession
         │
         ├── tenferro_cpu::CpuBackend
-        └── tenferro_gpu::CudaBackend (feature = "cuda")
+        └── tenferro_gpu::cuda::CudaBackend (feature = "cuda")
         ▲
         │
 tenferro-tensor-core
@@ -103,7 +103,7 @@ external TBLIS example clamps TBLIS to one thread for each provider call.
 
 ## CubeCL Backend
 
-`tenferro_gpu::CudaBackend` is the current GPU backend under the `cuda`
+`tenferro_gpu::cuda::CudaBackend` is the current GPU backend under the `cuda`
 feature. It targets NVIDIA CUDA through CubeCL/CubeCL-CUDA and uses runtime-loaded
 cuTENSOR, cuSOLVER, and cuBLAS where needed.
 

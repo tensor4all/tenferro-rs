@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use cubecl::stream_id::StreamId;
+
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
 #[cfg(not(target_family = "wasm"))]
@@ -12,16 +14,43 @@ use tenferro_runtime::{
 };
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::TensorStructural;
-use tenferro_tensor::{BackendBuffer, Buffer, DeviceId, Tensor, TypedTensor};
+use tenferro_tensor::{
+    AllocationId, BackendAllocation, BackendStorage, DeviceId, StorageBuffer, Tensor, TypedTensor,
+};
 
+use super::super::WebGpuBuffer;
 use super::*;
 
-use crate::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
+use crate::webgpu::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
+
+#[test]
+fn webgpu_buffers_keep_domain_and_distinguish_allocations() {
+    let domain = AllocationDomainId::fresh();
+    let first = WebGpuBuffer::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        4,
+        0,
+        domain,
+    );
+    let second = WebGpuBuffer::new(
+        cubecl::server::Handle::new(StreamId::current(), 4),
+        4,
+        0,
+        domain,
+    );
+
+    let first_extent = <WebGpuBuffer as BackendAllocation>::root_extent(&first);
+    let second_extent = <WebGpuBuffer as BackendAllocation>::root_extent(&second);
+    assert_eq!(first_extent.key().domain(), domain);
+    assert_eq!(second_extent.key().domain(), domain);
+    assert_ne!(first_extent.key().local(), second_extent.key().local());
+}
 
 #[derive(Debug)]
 struct TestWebGpuBuffer {
     family: &'static str,
     domain: Option<AllocationDomainId>,
+    allocation: AllocationId,
 }
 
 #[derive(Debug)]
@@ -86,7 +115,7 @@ fn test_event_domain(suffix: &str) -> EventDomainId {
         .event_domain_id()
 }
 
-impl BackendBuffer<f32> for TestWebGpuBuffer {
+impl BackendStorage<f32> for TestWebGpuBuffer {
     fn backend_family(&self) -> &'static str {
         self.family
     }
@@ -99,6 +128,10 @@ impl BackendBuffer<f32> for TestWebGpuBuffer {
         self.domain
     }
 
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -107,7 +140,11 @@ impl BackendBuffer<f32> for TestWebGpuBuffer {
 fn input(family: &'static str, ordinal: usize, domain: Option<AllocationDomainId>) -> Tensor {
     TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(TestWebGpuBuffer { family, domain })),
+        StorageBuffer::Backend(Box::new(TestWebGpuBuffer {
+            family,
+            domain,
+            allocation: AllocationId::from_backend_id(1),
+        })),
         Placement {
             memory_kind: if domain.is_some() {
                 MemoryKind::Managed
@@ -129,29 +166,26 @@ fn input(family: &'static str, ordinal: usize, domain: Option<AllocationDomainId
 fn webgpu_registration_ingress_rejects_forged_family_domain_and_foreign_inputs() {
     let domain = AllocationDomainId::fresh();
     let forged_managed = input("cubecl-webgpu", 2, Some(domain));
-    let forged_device = input("cubecl-webgpu", 2, None);
     let foreign_family = input("foreign-webgpu", 2, Some(domain));
     let foreign_domain = input("cubecl-webgpu", 2, Some(AllocationDomainId::fresh()));
 
     assert!(!webgpu_input_tensor(
         &TensorRead::from_tensor(&forged_managed),
         2,
-        Some(domain)
-    ));
-    assert!(!webgpu_input_tensor(
-        &TensorRead::from_tensor(&forged_device),
-        2,
-        None
+        Some(domain),
+        AllocationDomainId::fresh(),
     ));
     assert!(!webgpu_input_tensor(
         &TensorRead::from_tensor(&foreign_family),
         2,
-        Some(domain)
+        Some(domain),
+        AllocationDomainId::fresh(),
     ));
     assert!(!webgpu_input_tensor(
         &TensorRead::from_tensor(&foreign_domain),
         2,
-        Some(domain)
+        Some(domain),
+        AllocationDomainId::fresh(),
     ));
 }
 
@@ -164,27 +198,30 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).expect("host tensor");
     let input = upload_webgpu_tensor(backend.runtime(), &host).expect("WebGPU upload");
     let ordinal = backend.runtime().device_ordinal();
-    let domain = backend
+    let managed_domain = backend
         .runtime()
         .allocation_domain()
         .map(|domain| domain.id);
+    let allocation_domain = backend.runtime().allocation_domain_id();
 
     assert!(webgpu_input_tensor(
         &TensorRead::from_tensor(&input),
         ordinal,
-        domain
+        managed_domain,
+        allocation_domain,
     ));
 
-    let Tensor::F32(typed) = &input else {
+    let Tensor::F32(_typed) = &input else {
         unreachable!("uploaded f32 tensor")
     };
-    let Buffer::Backend(buffer) = typed.buffer() else {
-        unreachable!("uploaded WebGPU buffer")
-    };
     let foreign_ordinal = ordinal.saturating_add(1);
-    let relabeled = TypedTensor::<f32>::from_buffer_col_major(
+    let relabeled: Tensor = TypedTensor::<f32>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::clone(buffer)),
+        StorageBuffer::Backend(Box::new(TestWebGpuBuffer {
+            family: "cubecl-webgpu",
+            domain: Some(allocation_domain),
+            allocation: AllocationId::from_backend_id(2),
+        })),
         Placement {
             memory_kind: input.placement().memory_kind.clone(),
             device: Some(DeviceId {
@@ -196,10 +233,19 @@ fn webgpu_registration_ingress_accepts_backend_created_tensor() {
     )
     .expect("relabeled WebGPU tensor")
     .into();
+    assert_eq!(
+        relabeled
+            .placement()
+            .device
+            .as_ref()
+            .map(|device| device.ordinal),
+        Some(foreign_ordinal)
+    );
     assert!(!webgpu_input_tensor(
         &TensorRead::from_tensor(&relabeled),
         foreign_ordinal,
-        domain
+        managed_domain,
+        allocation_domain,
     ));
 }
 
@@ -276,13 +322,13 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     let host =
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).expect("host input");
     let input = upload_webgpu_tensor(&runtime, &host).expect("WebGPU upload");
+    let input_for_first = upload_webgpu_tensor(&runtime, &host).expect("WebGPU upload");
     let driver = WebGpuEventDomainDriver::new(runtime.clone());
     let domain = test_event_domain("native");
     let run = driver.begin_run(domain).expect("WebGPU event-domain run");
 
     // A run may cross scheduler worker threads. Its captured CubeCL stream must
     // remain stable rather than following each worker's thread-local stream.
-    let input_for_first = input.clone();
     let (mut run, mut backend, first_output, first_completion, first_launches) =
         std::thread::spawn(move || {
             let mut run = run;

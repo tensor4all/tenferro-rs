@@ -30,6 +30,10 @@ name = "typed_tensor_non_ad"
 path = "src/bin/typed_tensor_non_ad.rs"
 
 [[bin]]
+name = "storage_element_access"
+path = "src/bin/storage_element_access.rs"
+
+[[bin]]
 name = "direct_linalg_quickstart"
 path = "src/bin/direct_linalg_quickstart.rs"
 

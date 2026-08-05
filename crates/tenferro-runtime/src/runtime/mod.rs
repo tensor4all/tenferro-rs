@@ -50,7 +50,12 @@ pub use event_domain::{
     EventDomainDriver, EventDomainError, EventDomainOperation, EventDomainRun, EventToken,
     ImmediateEventDomainDriver,
 };
-pub use execution::{ExecutionHandle, PreparedCompiledGraph};
+pub use execution::{
+    ExecutionBundle, ExecutionHandle, ExecutionInputs, ExecutionOutcome, OutputAccessError,
+    OutputExtractError, OutputMetadata, OutputRef, PreparedCompiledGraph, ScopedExecutionBundle,
+    ScopedExecutionOutcome, ScopedOutput, ScopedOutputExtractError, ScopedReadBinding,
+    ScopedReadInputs, ScopedSubmitRejected, SubmitError,
+};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{

@@ -391,13 +391,13 @@ fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
 
 #[test]
 fn standard_op_analysis_uses_const_exact_parent_metadata_for_shape_validation() {
-    let lhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+    let lhs = TracedTensor::from_tensor_symbolic_shape(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-    ))
+    )
     .unwrap();
-    let rhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+    let rhs = TracedTensor::from_tensor_symbolic_shape(
         Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
-    ))
+    )
     .unwrap();
     let reshape = StdTensorOp::Reshape {
         to_shape: vec![DimExpr::Const(2), DimExpr::Const(1)],

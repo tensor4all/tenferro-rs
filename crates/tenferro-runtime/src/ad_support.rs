@@ -11,7 +11,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
-pub use crate::checkpoint::CheckpointNode;
+pub use crate::checkpoint::{CheckpointNode, RetainedValue};
 use crate::error::ErrorPhase;
 use crate::metadata::MetadataScopeChain;
 pub use crate::metadata::{
@@ -200,9 +200,9 @@ pub struct TracedTensorParts {
     pub dtype: DType,
     pub graph: Arc<Graph<StdTensorOp>>,
     pub val: LocalValueId,
-    pub data: Option<Arc<Tensor>>,
+    pub data: Option<Arc<RetainedValue>>,
     pub shape_hint: Option<Vec<SymDim>>,
-    pub inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
+    pub inputs_map: Arc<HashMap<TensorInputKey, Arc<RetainedValue>>>,
     pub extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
@@ -281,7 +281,7 @@ pub fn shape_hint(tensor: &TracedTensor) -> Option<Vec<SymDim>> {
     tensor.shape_hint.clone()
 }
 
-pub fn inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, Arc<Tensor>>> {
+pub fn inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, Arc<RetainedValue>>> {
     Arc::clone(&tensor.inputs_map)
 }
 
@@ -324,11 +324,14 @@ pub fn compile_ad_source(
 /// registered because the global registry is poisoned. The tensor metadata is
 /// derived from the already-valid `Tensor`; no dtype/shape validation is
 /// deferred by this operation.
-pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result<()> {
+pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<RetainedValue>) -> Result<()> {
     let old_graph = tensor.graph.clone();
     let old_output_key = old_graph.values()[tensor.val].key.clone();
     let old_inputs = Arc::clone(&tensor.inputs_map);
-    let concrete_meta = tensor_meta_from_tensor(data.as_ref());
+    let concrete_meta = tenferro_ops::TensorMeta::exact(
+        data.dtype(),
+        data.shape().iter().copied().map(SymDim::from).collect(),
+    );
     let new_key = next_input_key();
     let mut builder = computegraph::graph::GraphBuilder::new();
     let leaf_val = builder.add_input(new_key.clone());
@@ -375,7 +378,10 @@ pub fn allocate_shape_tensor_id() -> u64 {
     next_traced_id()
 }
 
-pub fn frozen_input_tensor(frozen: &FrozenProgram, input_index: usize) -> Option<Arc<Tensor>> {
+pub fn frozen_input_value(
+    frozen: &FrozenProgram,
+    input_index: usize,
+) -> Option<Arc<RetainedValue>> {
     let input = *frozen.program.inputs().get(input_index)?;
     frozen.bindings.tensor_for_input(input)
 }

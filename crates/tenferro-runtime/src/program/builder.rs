@@ -8,6 +8,8 @@ use tenferro_ops::ext_op::{
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::Tensor;
 
+use crate::checkpoint::RetainedValue;
+
 use super::bindings::PendingBinding;
 use super::identity::SemanticIdentity;
 use super::metadata::SemanticProvenance;
@@ -61,7 +63,22 @@ impl SemanticProgramBuilder {
     pub fn bind_input(
         &mut self,
         input: ProgramValue,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
+    ) -> Result<BindingKey, ProgramBuildError> {
+        self.validate_value(input)?;
+        if !self.inputs.contains(&input) {
+            return Err(ProgramBuildError::BindingTargetNotInput);
+        }
+        if self.bindings.iter().any(|binding| binding.input == input) {
+            return Err(ProgramBuildError::DuplicateBinding);
+        }
+        self.bind_input_retained(input, Arc::new(RetainedValue::from_tensor(tensor)))
+    }
+
+    pub(crate) fn bind_input_retained(
+        &mut self,
+        input: ProgramValue,
+        tensor: Arc<RetainedValue>,
     ) -> Result<BindingKey, ProgramBuildError> {
         self.validate_value(input)?;
         if !self.inputs.contains(&input) {

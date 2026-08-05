@@ -3,11 +3,11 @@ use std::{error::Error as _, sync::Arc};
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
-    col_major_strides, flat_to_multi, AllocationDomainId, AllocationId, BackendBuffer, Buffer,
-    BufferHandle, CpuDomainId, DType, DeviceId, DeviceKind, GpuBackendKind, HostAccessError,
-    HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor,
-    TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead,
-    TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    col_major_strides, flat_to_multi, AllocationDomainId, AllocationId, BackendStorage,
+    BackendStorageHandle, CpuDomainId, DType, DeviceId, DeviceKind, GpuBackendKind,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, StorageBuffer,
+    StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef,
+    TensorStorageRefMut, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
     TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
 };
 use crate::{
@@ -23,7 +23,7 @@ struct HostAccessibleBuffer {
     allocation: AllocationId,
 }
 
-impl BackendBuffer<f32> for HostAccessibleBuffer {
+impl BackendStorage<f32> for HostAccessibleBuffer {
     fn backend_family(&self) -> &'static str {
         "test-host-access"
     }
@@ -48,7 +48,7 @@ impl BackendBuffer<f32> for HostAccessibleBuffer {
         Ok(HostReadGuard::new(self.data.lock().unwrap()))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, f32>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, f32>, HostAccessError> {
         let mut guard = self.data.lock().unwrap();
         let len = guard.len();
         Ok(HostWriteGuard::new(len, move |source| {
@@ -62,7 +62,7 @@ impl BackendBuffer<f32> for HostAccessibleBuffer {
 fn backend_host_access_guards_preserve_domain_identity_and_writeback() {
     let domain = AllocationDomainId::fresh();
     let allocation = AllocationId::from_backend_id(17);
-    let buffer = HostAccessibleBuffer {
+    let mut buffer = HostAccessibleBuffer {
         data: std::sync::Mutex::new(vec![1.0, 2.0]),
         domain,
         allocation,
@@ -80,10 +80,13 @@ fn backend_host_access_guards_preserve_domain_identity_and_writeback() {
 
 #[test]
 fn opaque_backend_buffers_reject_host_mapping_with_a_typed_error() {
-    let buffer = BufferHandle::<f32>::new_with_len(1, 2);
+    let buffer = BackendStorageHandle::<f32>::new_with_len(1, 2);
 
-    assert_eq!(buffer.allocation_domain(), None);
-    assert_eq!(buffer.allocation_id(), None);
+    assert!(buffer.allocation_domain().is_some());
+    assert_eq!(
+        buffer.allocation_id(),
+        Some(crate::AllocationId::from_backend_id(1))
+    );
     assert!(matches!(
         buffer.map_read(),
         Err(HostAccessError::Unsupported { backend: "opaque" })
@@ -224,9 +227,6 @@ fn unsupported_operation_has_a_distinct_coarse_classification() {
     ));
 }
 
-#[derive(Debug)]
-struct NonCloneElement;
-
 fn tensor_scalar_roundtrip<T>(shape: Vec<usize>, data: Vec<T>)
 where
     T: TensorScalar + PartialEq + std::fmt::Debug,
@@ -237,7 +237,7 @@ where
     assert_eq!(T::as_slice(&tensor).unwrap(), data.as_slice());
     assert_eq!(tensor.as_slice::<T>().unwrap(), data.as_slice());
 
-    let mut mutable = tensor.clone();
+    let mut mutable = tensor.duplicate().unwrap();
     assert_eq!(T::as_slice_mut(&mut mutable).unwrap(), data.as_slice());
 
     let typed = T::into_typed(tensor).unwrap();
@@ -286,7 +286,7 @@ fn tensor_value_keeps_owned_transpose_as_view() {
     let tensor = Arc::new(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap(),
     );
-    let value = TensorValue::from_tensor_arc(tensor);
+    let value = TensorValue::from_tensor((*tensor).duplicate().unwrap());
     let transposed = value.transpose_view([1, 0]).unwrap();
 
     assert_eq!(transposed.shape(), &[3, 2]);
@@ -301,7 +301,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     let base = Arc::new(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
-    let owned = TensorOwnedView::from_tensor(Arc::clone(&base));
+    let owned =
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![2, 3], vec![1, 2], 0).unwrap();
 
     assert_eq!(owned.dtype(), DType::F64);
     assert_eq!(owned.shape(), &[2, 3]);
@@ -311,24 +312,23 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         TensorView::F64(view) => assert_eq!(view.get(&[1, 2]), Some(&6.0)),
         other => panic!("expected f64 view, got {other:?}"),
     }
-    match owned.tensor_read() {
-        TensorRead::View(TensorView::F64(view)) => assert_eq!(view.shape(), &[2, 3]),
-        other => panic!("owned view should expose TensorRead::View, got {other:?}"),
-    }
+    assert!(matches!(owned.tensor_read(), TensorRead::Tensor(_)));
 
     let explicit =
-        TensorOwnedView::from_parts(Arc::clone(&base), vec![3, 2], vec![2, 1], 0).unwrap();
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
     assert_eq!(explicit.shape(), &[3, 2]);
     assert_eq!(explicit.strides(), &[2, 1]);
 
-    let transposed = owned.transpose_view([1, 0]).unwrap();
+    let transposed = owned.duplicate().unwrap().transpose_view([1, 0]).unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(transposed.strides(), &[2, 1]);
 
-    let reshaped = owned.reshape_view([6]).unwrap();
+    let reshaped = owned.duplicate().unwrap().reshape_view([6]).unwrap();
     assert_eq!(reshaped.shape(), &[6]);
 
     let sliced = owned
+        .duplicate()
+        .unwrap()
         .slice_view(&SliceConfig {
             starts: vec![0, 1],
             limits: vec![2, 3],
@@ -344,7 +344,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         other => panic!("expected f64 view, got {other:?}"),
     }
 
-    let vector = TensorOwnedView::from_parts(Arc::clone(&base), vec![2], vec![1], 0).unwrap();
+    let vector =
+        TensorValue::from_parts((*base).duplicate().unwrap(), vec![2], vec![1], 0).unwrap();
     let broadcast = vector.broadcast_in_dim_view([2, 3], [0]).unwrap();
     assert_eq!(broadcast.shape(), &[2, 3]);
     assert_eq!(broadcast.strides(), &[1, 0]);
@@ -367,7 +368,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         },
     ] {
         assert!(matches!(
-            owned.slice_view(&bad_config),
+            owned.duplicate().unwrap().slice_view(&bad_config),
             Err(Error::Validation {
                 source: ValidationError::RankMismatch { .. },
                 ..
@@ -375,22 +376,32 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         ));
     }
 
-    let value = TensorValue::from_tensor_arc(Arc::clone(&base));
-    assert!(Arc::ptr_eq(value.as_tensor_arc().unwrap(), &base));
+    let value = TensorValue::from_tensor((*base).duplicate().unwrap());
+    assert!(value.as_tensor().is_some());
     assert_eq!(value.dtype(), DType::F64);
     assert_eq!(value.shape(), &[2, 3]);
     assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
 
-    let view_value = value.transpose_view([1, 0]).unwrap();
-    assert!(view_value.as_tensor_arc().is_none());
+    let view_value = value.duplicate().unwrap().transpose_view([1, 0]).unwrap();
+    assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.dtype(), DType::F64);
     assert_eq!(view_value.shape(), &[3, 2]);
     let original_order = view_value.transpose_view([1, 0]).unwrap();
     assert_eq!(original_order.shape(), &[2, 3]);
 
-    let compact_view = value.reshape_view([6]).unwrap();
-    assert_eq!(compact_view.reshape_view([2, 3]).unwrap().shape(), &[2, 3]);
+    let compact_view = value.duplicate().unwrap().reshape_view([6]).unwrap();
+    assert_eq!(
+        compact_view
+            .duplicate()
+            .unwrap()
+            .reshape_view([2, 3])
+            .unwrap()
+            .shape(),
+        &[2, 3]
+    );
     let sliced_value = compact_view
+        .duplicate()
+        .unwrap()
         .slice_view(&SliceConfig {
             starts: vec![1],
             limits: vec![5],
@@ -400,6 +411,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(sliced_value.shape(), &[2]);
     assert_eq!(
         compact_view
+            .duplicate()
+            .unwrap()
             .broadcast_in_dim_view([6, 2], [0])
             .unwrap()
             .shape(),
@@ -548,7 +561,7 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 3],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(42, 6))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(42, 6))),
         placement.clone(),
     )
     .unwrap();
@@ -559,14 +572,14 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
     assert_eq!(ranked.layout().strides(), &[1, 2]);
     assert_eq!(ranked.placement(), &placement);
     match ranked.buffer() {
-        Buffer::Backend(buffer) => {
+        StorageBuffer::Backend(buffer) => {
             assert_eq!(buffer.len(), 6);
             buffer
                 .as_any()
-                .downcast_ref::<BufferHandle<f64>>()
+                .downcast_ref::<BackendStorageHandle<f64>>()
                 .expect("opaque test handle");
         }
-        Buffer::Host(_) => panic!("expected backend buffer"),
+        StorageBuffer::Host(_) => panic!("expected backend buffer"),
     }
 }
 
@@ -584,7 +597,7 @@ fn typed_tensor_as_view_preserves_rank_and_layout() {
 fn typed_tensor_view_backend_as_slice_returns_runtime_state() {
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(77, 2))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(77, 2))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -655,7 +668,7 @@ fn typed_tensor_owned_layout_is_always_compact() {
 fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
     let err = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(9))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new(9))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -713,18 +726,17 @@ fn tensor_owned_export_reports_dtype_mismatch() {
 
 #[test]
 fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
-    let handle: Arc<dyn crate::types::BackendBuffer<f64>> =
-        Arc::new(BufferHandle::<f64>::new_with_len(42, 2));
+    let handle = BackendStorageHandle::<f64>::new_with_len(42, 2);
 
-    assert_eq!(format!("{handle:?}"), "BufferHandle { id: 42 }");
+    assert_eq!(format!("{handle:?}"), "BackendStorageHandle { id: 42 }");
     assert_eq!(handle.backend_family(), "opaque");
     assert_eq!(handle.len(), 2);
     assert!(!handle.is_empty());
-    assert!(handle.as_any().is::<BufferHandle<f64>>());
+    assert!(handle.as_any().is::<BackendStorageHandle<f64>>());
 
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
-        Buffer::Backend(Arc::clone(&handle)),
+        StorageBuffer::Backend(Box::new(handle)),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -735,7 +747,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
         },
     )
     .unwrap();
-    let col_err = tensor.clone().into_vec_col_major().unwrap_err();
+    let col_err = tensor.into_vec_col_major().unwrap_err();
 
     assert!(matches!(col_err, Error::RuntimeState { .. }));
     assert!(col_err
@@ -745,17 +757,15 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
 
 #[test]
 fn tensor_buffer_refs_cover_backend_metadata() {
-    let read_handle: Arc<dyn crate::types::BackendBuffer<f64>> =
-        Arc::new(BufferHandle::<f64>::new_with_len(7, 0));
-    let read_ref = TensorBufferRef::Backend(Arc::clone(&read_handle));
+    let read_handle = BackendStorageHandle::<f64>::new_with_len(7, 0);
+    let read_ref = TensorStorageRef::Backend(&read_handle);
     let cloned_read_ref = read_ref.clone();
 
     assert_eq!(cloned_read_ref.len(), 0);
     assert!(cloned_read_ref.is_empty());
 
-    let write_handle: Arc<dyn crate::types::BackendBuffer<i32>> =
-        Arc::new(BufferHandle::<i32>::new_with_len(8, 2));
-    let write_ref = TensorBufferRefMut::Backend(write_handle);
+    let mut write_handle = BackendStorageHandle::<i32>::new_with_len(8, 2);
+    let write_ref = TensorStorageRefMut::Backend(&mut write_handle);
 
     assert_eq!(write_ref.len(), 2);
     assert!(!write_ref.is_empty());
@@ -781,7 +791,7 @@ fn typed_tensor_exports_col_major_order() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
             .unwrap();
 
-    let (shape, col) = tensor.clone().into_vec_col_major().unwrap();
+    let (shape, col) = tensor.into_vec_col_major().unwrap();
     assert_eq!(shape, vec![2, 3]);
     assert_eq!(col, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 }
@@ -792,7 +802,7 @@ fn tensor_col_major_roundtrips_dynamic_dtype() {
 
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[1, 3, 2, 4]);
     assert_eq!(
-        tensor.clone().into_vec_col_major::<i64>().unwrap(),
+        tensor.into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
 }
@@ -1050,25 +1060,25 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 1))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(7, 1))),
         placement.clone(),
     )
     .unwrap();
     assert_eq!(tensor.placement().device.as_ref().unwrap().ordinal, 0);
 
     assert!(tensor.host_data().is_err());
-    let erased = Tensor::F64(tensor.clone());
+    let erased = Tensor::F64(tensor);
     assert!(erased.as_slice::<f64>().is_err());
     assert!(erased.get::<f64>(&[0]).is_err());
 
     let mut mutable_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 1))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(8, 1))),
         placement,
     )
     .unwrap();
     assert!(mutable_tensor.host_data_mut().is_err());
-    let mut erased_mut = Tensor::F64(mutable_tensor.clone());
+    let mut erased_mut = Tensor::F64(mutable_tensor);
     assert!(erased_mut.as_slice_mut::<f64>().is_err());
     assert!(erased_mut.get_mut::<f64>(&[0]).is_err());
 }
@@ -1085,7 +1095,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
     };
     let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![2, 2],
-        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(91, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<i32>::new_with_len(91, 4))),
         placement.clone(),
     )
     .unwrap();
@@ -1149,7 +1159,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
 fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
     let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![4],
-        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(92, 4))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<i32>::new_with_len(92, 4))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -1186,17 +1196,15 @@ fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
 }
 
 #[test]
-fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
+fn typed_tensor_metadata_accessors_keep_owned_scalar_storage_rooted() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
         device: None,
         cpu_affinity: None,
     };
-    let tensor = TypedTensor::<NonCloneElement>::from_buffer_col_major(
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 3],
-        Buffer::Backend(Arc::new(BufferHandle::<NonCloneElement>::new_with_len(
-            9, 6,
-        ))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 6))),
         placement,
     )
     .unwrap();
@@ -2037,7 +2045,7 @@ fn n_elements_invariant_checks_do_not_use_unsafe_unreachable() {
 fn backend_tensor_f64(id: u64, len: usize) -> TypedTensor<f64> {
     TypedTensor::<f64>::from_buffer_col_major(
         vec![len],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(id, len))),
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(id, len))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
@@ -2061,8 +2069,8 @@ fn backend_region_view_exposes_layout_and_shared_buffer() {
     assert_eq!(view.strides(), &[1, 4]);
     assert_eq!(view.offset(), 5);
     assert_eq!(view.placement(), tensor.placement());
-    let buffer = view.backend_buffer().expect("backend buffer");
-    assert_eq!(buffer.len(), 16);
+    assert_eq!(view.backend_buffer().map(|buffer| buffer.len()), Some(16));
+    assert_eq!(view.backing_len(), 16);
 }
 
 #[test]
@@ -2120,4 +2128,14 @@ fn backend_region_view_mut_rejects_aliasing_layout() {
     assert!(tensor
         .backend_region_view(vec![2, 2], vec![0, 1], 0)
         .is_ok());
+}
+#[test]
+fn as_view_paths_do_not_allocate_or_clone_storage() {
+    let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]).unwrap();
+    let view = tensor.as_view();
+    assert_eq!(view.shape(), &[2, 2]);
+
+    let mut tensor = tensor.duplicate().unwrap();
+    let view_mut = tensor.as_view_mut();
+    assert_eq!(view_mut.shape(), &[2, 2]);
 }

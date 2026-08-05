@@ -93,7 +93,7 @@ fn test_faer_gemm_identity() {
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
     );
 
-    let ta = TracedTensor::from_tensor_concrete_shape(a.clone()).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a.duplicate().unwrap()).unwrap();
     let ti = TracedTensor::from_tensor_concrete_shape(i).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],

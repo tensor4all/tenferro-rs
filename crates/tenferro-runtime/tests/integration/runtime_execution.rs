@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tenferro_cpu::CpuBackend;
@@ -19,21 +19,22 @@ use tenferro_runtime::{
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
     ErasedExecutionContext, Error, ErrorPhase, EventDomainId, ExecutableEngineRegistrationConfig,
-    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, GraphCompiler, HardwareClassId, IndexingRuntime, InputIngressContract,
-    InputIngressContractError, InputPlacementContract, InputSignatureContract, LayoutRuntime,
-    PreparationOnlyEngineRegistrationConfig, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationPlan,
-    ProviderDeviceIdentity, ProviderId, ReductionRuntime, RegistrationKey, ResidentOutputContract,
-    Runtime, RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError,
-    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
-    TransferProvider, TransferProviderContractError, TransferRequest,
+    ExecutionContextIdentity, ExecutionInputs, ExtensionCacheStore, ExtensionEngine,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
+    ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
+    IndexingRuntime, InputIngressContract, InputIngressContractError, InputPlacementContract,
+    InputSignatureContract, LayoutRuntime, PreparationOnlyEngineRegistrationConfig,
+    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
+    PreparedOperationExecutor, PreparedOperationPlan, ProviderDeviceIdentity, ProviderId,
+    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
+    RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError, SpecializationProjection,
+    StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
+    TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, BackendBuffer, BackendSessionHost, Buffer, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, Tensor, TensorRead,
-    TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
@@ -45,6 +46,12 @@ const ROUTE_HOST_CUDA0_FAMILY: &str = "tenferro-test.route-host-cuda0.v1";
 const ROUTE_HOST_CUDA1_FAMILY: &str = "tenferro-test.route-host-cuda1.v1";
 const ROUTE_CUDA0_HOST_FAMILY: &str = "tenferro-test.route-cuda0-host.v1";
 const ROUTE_CUDA1_HOST_FAMILY: &str = "tenferro-test.route-cuda1-host.v1";
+
+static NEXT_TEST_ALLOCATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_test_allocation_id() -> AllocationId {
+    AllocationId::from_backend_id(NEXT_TEST_ALLOCATION_ID.fetch_add(1, Ordering::Relaxed))
+}
 
 fn test_provider_device_identity(
     engine_id: &str,
@@ -377,8 +384,8 @@ fn tensor_f64_values(tensor: &Tensor) -> tenferro_tensor::Result<Vec<f64>> {
         ));
     };
     match tensor.buffer() {
-        Buffer::Host(values) => Ok(values.clone()),
-        Buffer::Backend(buffer) => buffer
+        StorageBuffer::Host(values) => Ok(values.clone()),
+        StorageBuffer::Backend(buffer) => buffer
             .map_read()
             .map(|values| values.to_vec())
             .map_err(|source| tenferro_tensor::Error::host_access("tensor_f64_values", source)),
@@ -415,10 +422,11 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
                 let buffer = TestDomainBuffer::<$scalar> {
                     values: Arc::new(Mutex::new(vec![<$scalar>::default(); len])),
                     domain: self.0,
+                    allocation: next_test_allocation_id(),
                 };
                 TypedTensor::from_buffer_col_major(
                     shape.to_vec(),
-                    Buffer::Backend(Arc::new(buffer)),
+                    StorageBuffer::Backend(Box::new(buffer)),
                     Placement::default(),
                 )
                 .map(Tensor::$variant)
@@ -440,9 +448,10 @@ impl SharedTensorAllocationDomain for TestAllocationDomain {
 struct TestDomainBuffer<T> {
     values: Arc<Mutex<Vec<T>>>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
-impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendBuffer<T> for TestDomainBuffer<T> {
+impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendStorage<T> for TestDomainBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "tenferro-test.allocation-domain"
     }
@@ -455,13 +464,17 @@ impl<T: Clone + std::fmt::Debug + Send + Sync + 'static> BackendBuffer<T> for Te
         Some(self.domain)
     }
 
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
     fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
         Ok(HostReadGuard::new(
             self.values.lock().expect("domain buffer lock"),
         ))
     }
 
-    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+    fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
         let values = Arc::clone(&self.values);
         let len = self.len();
         Ok(HostWriteGuard::new(len, move |source| {
@@ -498,6 +511,31 @@ struct RecordedTransferRequest {
     destination_provider_device_identity: ProviderDeviceIdentity,
     destination_event_domain_id: EventDomainId,
     destination_storage_class: StorageClass,
+}
+
+fn read_f64_values(input: TensorRead<'_>) -> tenferro_runtime::Result<Vec<f64>> {
+    match input.tensor_view() {
+        TensorView::F64(view) => match view.backend_buffer() {
+            Some(buffer) => buffer
+                .map_read()
+                .map_err(|source| tenferro_tensor::Error::host_access("test-transfer-read", source))
+                .map(|values| values.to_vec())
+                .map_err(Into::into),
+            None => view
+                .as_slice()
+                .map(|values| values.to_vec())
+                .map_err(Into::into),
+        },
+        _ => Err(Error::Internal(
+            "test transfer currently expects f64 tensors".into(),
+        )),
+    }
+}
+
+fn duplicate_f64_read(input: TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
+    let shape = input.shape().to_vec();
+    let values = read_f64_values(input)?;
+    Ok(Tensor::from_vec_col_major(shape, values)?)
 }
 
 impl RecordingTransferProvider {
@@ -569,31 +607,27 @@ impl TransferProvider for RecordingTransferProvider {
                 })?;
                 let mut output =
                     domain.allocate(request.input().dtype(), request.input().shape())?;
-                let source = request.input().as_tensor().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?;
-                let (Tensor::F64(source), Tensor::F64(destination)) = (source, &mut output) else {
+                let source_values = read_f64_values(request.input().clone())?;
+                let Tensor::F64(destination) = &mut output else {
                     return Err(Error::Internal(
                         "materializing test transfer currently expects f64 tensors".into(),
                     ));
                 };
-                let values = match source.buffer() {
-                    Buffer::Host(values) => values.clone(),
-                    Buffer::Backend(buffer) => buffer
-                        .map_read()
-                        .map_err(|source| {
-                            tenferro_tensor::Error::host_access("test-transfer-read", source)
-                        })?
-                        .to_vec(),
-                };
+                let values = source_values;
                 match destination.buffer() {
-                    Buffer::Host(_) => {
+                    StorageBuffer::Host(_) => {
                         return Err(Error::Internal(
                             "test allocation domain returned host storage".into(),
                         ));
                     }
-                    Buffer::Backend(buffer) => {
-                        buffer
+                    StorageBuffer::Backend(_buffer) => {
+                        destination
+                            .backend_buffer_mut()
+                            .ok_or_else(|| {
+                                Error::Internal(
+                                    "test allocation domain returned host storage".into(),
+                                )
+                            })?
                             .map_write()
                             .map_err(|source| {
                                 tenferro_tensor::Error::host_access("test-transfer-write", source)
@@ -606,11 +640,7 @@ impl TransferProvider for RecordingTransferProvider {
                 }
                 output
             }
-            None => {
-                request.input().as_tensor().cloned().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?
-            }
+            None => duplicate_f64_read(request.input().clone())?,
         };
         self.materialized_domains
             .lock()
@@ -659,9 +689,7 @@ impl TransferProvider for FaultyTransferProvider {
             FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
             FaultyTransferOutput::Placement => {
-                let mut tensor = request.input().as_tensor().cloned().ok_or_else(|| {
-                    Error::Internal("test transfer expected an owned tensor".into())
-                })?;
+                let mut tensor = duplicate_f64_read(request.input().clone())?;
                 let Tensor::F64(tensor) = &mut tensor else {
                     return Err(Error::Internal(
                         "test transfer expected an f64 tensor".into(),
@@ -672,12 +700,14 @@ impl TransferProvider for FaultyTransferProvider {
                     device: None,
                     cpu_affinity: None,
                 });
-                Ok(tensor.clone().into())
+                Ok(tensor.duplicate()?.into())
             }
             FaultyTransferOutput::BufferLength => {
                 let len = Arc::new(AtomicUsize::new(2));
-                let buffer = Buffer::Backend(Arc::new(MutableLengthBuffer {
+                let buffer = StorageBuffer::Backend(Box::new(MutableLengthBuffer {
                     len: Arc::clone(&len),
+                    domain: AllocationDomainId::fresh(),
+                    allocation: next_test_allocation_id(),
                 }));
                 let tensor = TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
@@ -689,9 +719,10 @@ impl TransferProvider for FaultyTransferProvider {
             }
             FaultyTransferOutput::Residency => {
                 let domain = AllocationDomainId::fresh();
-                let buffer = Buffer::Backend(Arc::new(TestDomainBuffer::<f64> {
+                let buffer = StorageBuffer::Backend(Box::new(TestDomainBuffer::<f64> {
                     values: Arc::new(Mutex::new(vec![0.0; 2])),
                     domain,
+                    allocation: next_test_allocation_id(),
                 }));
                 Ok(TypedTensor::<f64>::from_buffer_col_major(
                     vec![2],
@@ -711,15 +742,25 @@ struct TestTransferFailure;
 #[derive(Debug)]
 struct MutableLengthBuffer {
     len: Arc<AtomicUsize>,
+    domain: AllocationDomainId,
+    allocation: AllocationId,
 }
 
-impl BackendBuffer<f64> for MutableLengthBuffer {
+impl BackendStorage<f64> for MutableLengthBuffer {
     fn backend_family(&self) -> &'static str {
         "tenferro-test.mutable-length"
     }
 
     fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -732,6 +773,7 @@ struct DropTrackedBuffer {
     len: usize,
     drops: Arc<AtomicUsize>,
     domain: AllocationDomainId,
+    allocation: AllocationId,
     events: Option<Arc<Mutex<Vec<String>>>>,
 }
 
@@ -747,7 +789,7 @@ impl Drop for DropTrackedBuffer {
     }
 }
 
-impl BackendBuffer<f64> for DropTrackedBuffer {
+impl BackendStorage<f64> for DropTrackedBuffer {
     fn backend_family(&self) -> &'static str {
         "tenferro-test.drop-tracked"
     }
@@ -758,6 +800,10 @@ impl BackendBuffer<f64> for DropTrackedBuffer {
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
         Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -941,9 +987,10 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 "shape",
                 &shape,
             )?;
-            let buffer = Buffer::Backend(Arc::new(TestDomainBuffer::<f64> {
+            let buffer = StorageBuffer::Backend(Box::new(TestDomainBuffer::<f64> {
                 values: Arc::new(Mutex::new(vec![0.0; len])),
                 domain,
+                allocation: next_test_allocation_id(),
             }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
                 shape,
@@ -970,10 +1017,11 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 .lock()
                 .expect("tracked output drop event lock")
                 .clone();
-            let buffer = Buffer::Backend(Arc::new(DropTrackedBuffer {
+            let buffer = StorageBuffer::Backend(Box::new(DropTrackedBuffer {
                 len,
                 drops,
                 domain,
+                allocation: next_test_allocation_id(),
                 events,
             }));
             return Ok(vec![TypedTensor::<f64>::from_buffer_col_major(
@@ -983,16 +1031,53 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             )?
             .into()]);
         }
-        if inputs[0].allocation_domain() == backend.allocation_domain() {
-            return inputs[0]
-                .as_tensor()
-                .cloned()
-                .map(|tensor| vec![tensor])
-                .ok_or_else(|| {
-                    Error::Internal(
-                        "allocation-domain test executor expected an owned tensor".into(),
-                    )
-                });
+        let same_domain = match (inputs[0].allocation_domain(), backend.allocation_domain()) {
+            (Some(input_domain), Some(backend_domain)) => input_domain == backend_domain,
+            _ => false,
+        };
+        if same_domain {
+            let shape = inputs[0].shape().to_vec();
+            let source_values = match inputs[0].clone().tensor_view() {
+                TensorView::F64(view) => match view.backend_buffer() {
+                    Some(buffer) => buffer
+                        .map_read()
+                        .map_err(|source| {
+                            tenferro_tensor::Error::host_access(
+                                "allocation-domain-test-read",
+                                source,
+                            )
+                        })?
+                        .to_vec(),
+                    None => view.as_slice()?.to_vec(),
+                },
+                _ => {
+                    return Err(Error::Internal(
+                        "allocation-domain test executor currently expects f64 tensors".into(),
+                    ));
+                }
+            };
+            let domain = backend.shared_allocation_domain().ok_or_else(|| {
+                Error::Internal("allocation-domain test executor requires a shared domain".into())
+            })?;
+            let mut output = domain.allocate(DType::F64, &shape)?;
+            let Tensor::F64(destination) = &mut output else {
+                return Err(Error::Internal(
+                    "allocation-domain test executor produced a non-f64 tensor".into(),
+                ));
+            };
+            let destination_buffer = destination.backend_buffer_mut().ok_or_else(|| {
+                Error::Internal("allocation-domain test executor returned host storage".into())
+            })?;
+            destination_buffer
+                .map_write()
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("allocation-domain-test-write", source)
+                })?
+                .copy_from_slice(&source_values)
+                .map_err(|source| {
+                    tenferro_tensor::Error::host_access("allocation-domain-test-write", source)
+                })?;
+            return Ok(vec![output]);
         }
         Ok(vec![backend.with_backend_session(|session| {
             session.to_contiguous_read(inputs[0].clone())
@@ -1240,10 +1325,12 @@ fn execute_published_route_with_targets(
     .pop()
     .expect("published route extension has one output");
     let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = TestAllocationDomain(fixture.source_domain).allocate(DType::F64, &[2])?;
-    if let Tensor::F64(input) = &input {
-        if let Buffer::Backend(buffer) = input.buffer() {
-            buffer
+    let mut input = TestAllocationDomain(fixture.source_domain).allocate(DType::F64, &[2])?;
+    if let Tensor::F64(input) = &mut input {
+        if input.backend_buffer_mut().is_some() {
+            input
+                .backend_buffer_mut()
+                .expect("backend input buffer")
                 .map_write()
                 .map_err(|source| {
                     tenferro_tensor::Error::host_access("published-route-input", source)
@@ -3659,7 +3746,9 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
-    let submit_error = runtime.submit(&program, &[&input]).unwrap_err();
+    let submit_error = runtime
+        .submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)
+        .unwrap_err();
     let submit_prepare_error = submit_error
         .source()
         .and_then(StdError::source)
@@ -3688,8 +3777,11 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let foreign_domain = AllocationDomainId::fresh();
     let input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
+    let input_placement = input.placement().clone();
 
-    let error = runtime.submit(&program, &[&input]).unwrap_err();
+    let error = runtime
+        .submit(&program, ExecutionInputs::new(vec![input])?)
+        .unwrap_err();
 
     let prepare_error = error
         .source()
@@ -3701,7 +3793,7 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
         PrepareError::NoInputIngress {
             input_index: 0,
             placement,
-        } if placement == input.placement()
+        } if placement == &input_placement
     ));
     Ok(())
 }
@@ -3716,10 +3808,18 @@ fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdE
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let handle = runtime.submit(&program, &[&input])?;
-    let output = handle.wait()?;
+    let handle = runtime.submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)?;
+    let output = match handle.wait()? {
+        tenferro_runtime::ExecutionOutcome::Completed(output) => output,
+        other => panic!("unexpected submission outcome: {other:?}"),
+    };
 
-    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
+    match output.output(0)? {
+        tenferro_runtime::OutputRef::Tensor(tenferro_tensor::TensorView::F64(view)) => {
+            assert_eq!(view.as_slice()?, &[2.0, 4.0])
+        }
+        other => panic!("unexpected output view: {other:?}"),
+    }
     assert!(runtime.cache_stats()?.prepared_plans.entries > 0);
 
     Ok(())

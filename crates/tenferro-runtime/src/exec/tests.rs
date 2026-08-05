@@ -149,7 +149,7 @@ fn exec_instruction_single_output_metadata_stays_inline() {
 }
 
 #[test]
-fn lazy_view_input_conversion_shares_live_owned_tensor() {
+fn lazy_view_input_conversion_duplicates_when_input_remains_live() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let mut slots = vec![Some(ExecSlot::Owned(tensor))];
     let mut backend = CpuBackend::new();
@@ -158,21 +158,22 @@ fn lazy_view_input_conversion_shares_live_owned_tensor() {
         .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
         .unwrap();
 
-    let output = value.as_tensor_arc().unwrap();
+    let output = value.as_tensor().unwrap();
     let stored = match slots[0].as_ref().unwrap() {
-        ExecSlot::Value(value) => value.as_tensor_arc().unwrap(),
+        ExecSlot::Value(value) => value.as_tensor().unwrap(),
         _ => panic!("expected promoted tensor value"),
     };
-    assert!(Arc::ptr_eq(output, stored));
+    assert_eq!(output.shape(), stored.shape());
+    assert!(!std::ptr::eq(output, stored));
 }
 
 #[test]
 fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let value = tenferro_tensor::TensorValue::from_tensor(tensor.clone());
-    let view = value.reshape_view([1, 2]).unwrap();
-    let owned = ExecSlot::Owned(tensor.clone());
-    let stored = ExecSlot::Value(value.clone());
+    let value = tenferro_tensor::TensorValue::from_tensor(tensor.duplicate().unwrap());
+    let view = value.duplicate().unwrap().reshape_view([1, 2]).unwrap();
+    let owned = ExecSlot::Owned(tensor.duplicate().unwrap());
+    let stored = ExecSlot::Value(value.duplicate().unwrap());
     let read = ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor));
 
     assert_eq!(owned.as_tensor("test").unwrap().shape(), &[2]);
@@ -182,7 +183,8 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
     assert_eq!(stored.shape(), &[2]);
     assert_eq!(read.shape(), &[2]);
     assert!(matches!(
-        ExecSlot::Value(view.clone()).as_tensor("test"),
+        ExecSlot::Value(value.duplicate().unwrap().reshape_view([1, 2]).unwrap())
+            .as_tensor("test"),
         Err(crate::Error::Internal(message)) if message.contains("owned TensorValue view")
     ));
     assert!(matches!(
@@ -194,11 +196,15 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
     backend
         .with_backend_session(|exec| {
             assert_eq!(
-                ExecSlot::Owned(tensor.clone()).into_tensor(exec)?.shape(),
+                ExecSlot::Owned(tensor.duplicate()?)
+                    .into_tensor(exec)?
+                    .shape(),
                 &[2]
             );
             assert_eq!(
-                ExecSlot::Value(value.clone()).into_tensor(exec)?.shape(),
+                ExecSlot::Value(value.duplicate()?)
+                    .into_tensor(exec)?
+                    .shape(),
                 &[2]
             );
             assert_eq!(
@@ -208,7 +214,9 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
                 &[2]
             );
             assert_eq!(
-                ExecSlot::Value(view.clone()).into_tensor(exec)?.shape(),
+                ExecSlot::Value(value.duplicate()?.reshape_view([1, 2]).unwrap())
+                    .into_tensor(exec)?
+                    .shape(),
                 &[1, 2]
             );
             assert_eq!(
@@ -218,11 +226,15 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
                 &[1, 2]
             );
             assert_eq!(
-                ExecSlot::Owned(tensor.clone()).into_value(exec)?.shape(),
+                ExecSlot::Owned(tensor.duplicate()?)
+                    .into_value(exec)?
+                    .shape(),
                 &[2]
             );
             assert_eq!(
-                ExecSlot::Value(value.clone()).into_value(exec)?.shape(),
+                ExecSlot::Value(value.duplicate()?)
+                    .into_value(exec)?
+                    .shape(),
                 &[2]
             );
             assert_eq!(

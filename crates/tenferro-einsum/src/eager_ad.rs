@@ -17,7 +17,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{ErrorPhase, ExtensionCacheKey};
-use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, Tensor, ValidationError, ValidationKind};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
@@ -281,11 +281,11 @@ fn try_whole_program_untracked(
     }
 
     let subs = Subscripts::from(subscripts);
-    let tensor_arcs = inputs
+    let tensor_owners = inputs
         .iter()
-        .map(|tensor| tensor.materialized().map_err(Error::Runtime))
-        .collect::<Result<Vec<_>>>()?;
-    let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
+        .map(|tensor| tensor.to_tensor().map_err(Error::Runtime))
+        .collect::<Result<Vec<Tensor>>>()?;
+    let tensors: Vec<_> = tensor_owners.iter().collect();
     let result = runtime.with_execution_session(|backend| {
         crate::eager::eager_einsum_subscripts_with_session(backend, &tensors, &subs)
     })??;
@@ -354,11 +354,11 @@ fn einsum_whole_program_untracked(
             "whole-program eager einsum requires inputs from one runtime",
         ));
     }
-    let tensor_arcs = inputs
+    let tensor_owners = inputs
         .iter()
-        .map(|tensor| tensor.materialized().map_err(Error::Runtime))
-        .collect::<Result<Vec<_>>>()?;
-    let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
+        .map(|tensor| tensor.to_tensor().map_err(Error::Runtime))
+        .collect::<Result<Vec<Tensor>>>()?;
+    let tensors: Vec<_> = tensor_owners.iter().collect();
     let result = runtime.with_execution_session(|backend| {
         crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
     })??;
@@ -778,7 +778,9 @@ fn backend_broadcast_multiply_untracked(
         )
     })??;
 
-    Ok(value.map(|value| adopt_untracked_eager_value(runtime.clone(), value)))
+    Ok(value
+        .map(|value| adopt_untracked_eager_value(runtime.clone(), value))
+        .transpose()?)
 }
 
 fn eval_shape_exprs(

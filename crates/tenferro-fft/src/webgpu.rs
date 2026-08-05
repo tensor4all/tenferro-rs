@@ -1,11 +1,7 @@
-use cubecl::frontend::CubePrimitive;
-use cubecl::std::tensor::TensorHandle;
-use cubecl_wgpu::WgpuRuntime;
-use cubek_fft::{
-    cfft_interleaved_launch, irfft_interleaved_launch_padded, rfft_interleaved_launch_padded,
-    ComplexTensorHandle, FftMode, FftNormalization,
+use tenferro_gpu::webgpu::{
+    interop::{self as webgpu_interop, WebGpuFftMode, WebGpuFftNormalization, WebGpuFftOutput},
+    WebGpuExecSession,
 };
-use tenferro_gpu::{webgpu_interop, WebGpuExecSession};
 use tenferro_tensor::{Error, Tensor};
 
 use crate::{FftBackend, FftExecutionCache, FftNorm, FftOperation, FftPlanSpec};
@@ -43,7 +39,7 @@ struct MetalFftPlan {
     n_fft: usize,
     output_shape: Vec<usize>,
     logical_strides: Vec<usize>,
-    normalization: FftNormalization,
+    normalization: WebGpuFftNormalization,
 }
 
 impl MetalFftPlan {
@@ -71,8 +67,9 @@ impl MetalFftPlan {
             ));
         }
 
-        let max_shared_bytes = webgpu_interop::max_shared_memory_size(backend);
-        let max_units = webgpu_interop::max_units_per_cube(backend);
+        let limits = webgpu_interop::fft_limits(backend);
+        let max_shared_bytes = limits.max_shared_memory_size;
+        let max_units = limits.max_units_per_cube;
         let max_shared_elements = max_shared_bytes / (2 * core::mem::size_of::<f32>());
         if max_shared_elements == 0 || max_units == 0 {
             return Err(Error::runtime_state(
@@ -168,37 +165,21 @@ fn execute_cfft(
     plan: &MetalFftPlan,
 ) -> tenferro_tensor::Result<Tensor> {
     let op = op_name(spec.operation());
-    let (handle, shape, strides) = webgpu_interop::c32_input_parts(backend, input, op)?;
-    let input =
-        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
-            .map_err(|error| Error::backend_source(op, error))?;
-    let output_len = checked_product(&plan.output_shape, op)?;
-    let bytes = output_len
-        .checked_mul(core::mem::size_of::<num_complex::Complex32>())
-        .ok_or_else(|| Error::invalid_argument(op, "shape", "FFT output byte length overflow"))?;
-    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
-        plan.output_shape.clone(),
-        plan.logical_strides.clone(),
-        webgpu_interop::allocate_raw(backend, bytes),
-        f32_storage(),
-    )
-    .map_err(|error| Error::backend_source(op, error))?;
     let mode = if spec.operation() == FftOperation::C2cForward {
-        FftMode::Forward
+        WebGpuFftMode::Forward
     } else {
-        FftMode::Inverse
+        WebGpuFftMode::Inverse
     };
-    cfft_interleaved_launch(
-        webgpu_interop::client(backend),
-        input.binding(),
-        output.binding(),
+    webgpu_interop::execute_c32_fft(
+        backend,
+        input,
+        WebGpuFftOutput::new(plan.output_shape.clone(), plan.logical_strides.clone()),
         plan.axis,
         mode,
         plan.normalization,
+        op,
     )
-    .map_err(|error| Error::backend_source(op, error))?;
-    let handle = output.into_raw_parts().handle;
-    webgpu_interop::finish_c32(backend, plan.output_shape.clone(), handle, op).map(Tensor::C32)
+    .map(Tensor::C32)
 }
 
 fn execute_rfft(
@@ -208,30 +189,17 @@ fn execute_rfft(
     plan: &MetalFftPlan,
 ) -> tenferro_tensor::Result<Tensor> {
     let op = op_name(spec.operation());
-    let input = webgpu_interop::f32_input(backend, input, op)?;
-    let output_len = checked_product(&plan.output_shape, op)?;
-    let bytes = output_len
-        .checked_mul(core::mem::size_of::<num_complex::Complex32>())
-        .ok_or_else(|| Error::invalid_argument(op, "shape", "FFT output byte length overflow"))?;
-    let output = ComplexTensorHandle::<WgpuRuntime>::new_strided(
-        plan.output_shape.clone(),
-        plan.logical_strides.clone(),
-        webgpu_interop::allocate_raw(backend, bytes),
-        f32_storage(),
-    )
-    .map_err(|error| Error::backend_source(op, error))?;
     let signal_len = spec.input_shape()[plan.axis].min(plan.n_fft);
-    rfft_interleaved_launch_padded(
-        webgpu_interop::client(backend),
-        &input,
-        output.binding(),
+    webgpu_interop::execute_f32_rfft(
+        backend,
+        input,
+        WebGpuFftOutput::new(plan.output_shape.clone(), plan.logical_strides.clone()),
         plan.axis,
         signal_len,
         plan.normalization,
+        op,
     )
-    .map_err(|error| Error::backend_source(op, error))?;
-    let handle = output.into_raw_parts().handle;
-    webgpu_interop::finish_c32(backend, plan.output_shape.clone(), handle, op).map(Tensor::C32)
+    .map(Tensor::C32)
 }
 
 fn execute_irfft(
@@ -241,32 +209,17 @@ fn execute_irfft(
     plan: &MetalFftPlan,
 ) -> tenferro_tensor::Result<Tensor> {
     let op = op_name(spec.operation());
-    let (handle, shape, strides) = webgpu_interop::c32_input_parts(backend, input, op)?;
-    let input =
-        ComplexTensorHandle::<WgpuRuntime>::new_strided(shape, strides, handle, f32_storage())
-            .map_err(|error| Error::backend_source(op, error))?;
-    let output_len = checked_product(&plan.output_shape, op)?;
-    let bytes = output_len
-        .checked_mul(core::mem::size_of::<f32>())
-        .ok_or_else(|| Error::invalid_argument(op, "shape", "FFT output byte length overflow"))?;
-    let output = TensorHandle::<WgpuRuntime>::new(
-        webgpu_interop::allocate_raw(backend, bytes),
-        plan.output_shape.clone(),
-        plan.logical_strides.clone(),
-        f32_storage(),
-    );
-    let spec_bins = spec.input_shape()[plan.axis];
-    irfft_interleaved_launch_padded(
-        webgpu_interop::client(backend),
-        input.binding(),
-        &output,
+    let spectrum_len = spec.input_shape()[plan.axis];
+    webgpu_interop::execute_c32_irfft(
+        backend,
+        input,
+        WebGpuFftOutput::new(plan.output_shape.clone(), plan.logical_strides.clone()),
         plan.axis,
-        spec_bins,
+        spectrum_len,
         plan.normalization,
+        op,
     )
-    .map_err(|error| Error::backend_source(op, error))?;
-    webgpu_interop::finish_f32(backend, plan.output_shape.clone(), output.handle, op)
-        .map(Tensor::F32)
+    .map(Tensor::F32)
 }
 
 fn validate_spec_input(input: &Tensor, spec: &FftPlanSpec) -> tenferro_tensor::Result<()> {
@@ -299,11 +252,11 @@ fn column_major_strides(shape: &[usize], op: &'static str) -> tenferro_tensor::R
     Ok(strides)
 }
 
-fn normalization(norm: FftNorm, inverse: bool) -> FftNormalization {
+fn normalization(norm: FftNorm, inverse: bool) -> WebGpuFftNormalization {
     match (norm, inverse) {
-        (FftNorm::Backward, false) | (FftNorm::Forward, true) => FftNormalization::None,
-        (FftNorm::Backward, true) | (FftNorm::Forward, false) => FftNormalization::ByN,
-        (FftNorm::Ortho, _) => FftNormalization::Ortho,
+        (FftNorm::Backward, false) | (FftNorm::Forward, true) => WebGpuFftNormalization::None,
+        (FftNorm::Backward, true) | (FftNorm::Forward, false) => WebGpuFftNormalization::ByN,
+        (FftNorm::Ortho, _) => WebGpuFftNormalization::Ortho,
     }
 }
 
@@ -313,10 +266,6 @@ fn floor_power_of_two(value: usize) -> Option<usize> {
     } else {
         value.checked_next_power_of_two().map(|next| next >> 1)
     }
-}
-
-fn f32_storage() -> cubecl::prelude::StorageType {
-    f32::as_type_native_unchecked().storage_type()
 }
 
 fn unsupported(spec: &FftPlanSpec, message: impl Into<String>) -> Error {

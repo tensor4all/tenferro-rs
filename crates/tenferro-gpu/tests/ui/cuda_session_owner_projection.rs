@@ -1,4 +1,4 @@
-use tenferro_gpu::{CudaBackend, CudaExecSession};
+use tenferro_gpu::{cuda::CudaBackend, cuda::CudaExecSession};
 
 fn owner_accessor<'a>(session: &'a mut CudaExecSession<'a>) -> &'a mut CudaBackend {
     session.backend_mut()

@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use std::error::Error as StdError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 mod support;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::{EagerRuntime, EagerTensor};
@@ -13,8 +12,8 @@ use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, GraphCompiler, PrepareError, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
-    TypedTensor, ValidationError,
+    BackendStorageHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
+    StorageBuffer, TypedTensor, ValidationError,
 };
 
 fn run(output: &TracedTensor) -> Tensor {
@@ -135,7 +134,9 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
     Tensor::C64(
         TypedTensor::from_buffer_col_major(
             shape,
-            Buffer::Backend(Arc::new(BufferHandle::<Complex64>::new_with_len(7, len))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<Complex64>::new_with_len(
+                7, len,
+            ))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {
@@ -504,11 +505,7 @@ fn eager_fft_matches_traced_fft() {
     let eager = eager(input).fft(Some(3), -1, FftNorm::Ortho).unwrap();
 
     assert_c64_close(
-        eager
-            .materialized()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -533,11 +530,7 @@ fn eager_ifft_matches_traced_ifft() {
     let eager = eager(input).ifft(None, 0, FftNorm::Forward).unwrap();
 
     assert_c64_close(
-        eager
-            .materialized()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -553,11 +546,7 @@ fn eager_rfft_matches_traced_rfft() {
     let eager = eager(input).rfft(None, -1, FftNorm::Backward).unwrap();
 
     assert_c64_close(
-        eager
-            .materialized()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -581,7 +570,7 @@ fn eager_irfft_matches_traced_irfft() {
     let eager = eager(input).irfft(Some(4), -1, FftNorm::Backward).unwrap();
 
     assert_f64_close(
-        eager.materialized().unwrap().as_slice::<f64>().unwrap(),
+        eager.value().unwrap().as_slice::<f64>().unwrap(),
         run(&traced).as_slice::<f64>().unwrap(),
     );
 }
@@ -624,7 +613,7 @@ fn eager_fft_reuses_c2c_vjp_rule() {
     let dx = ctx.vjp(&y, &x, &cotangent).unwrap();
 
     assert_c64_close(
-        dx.materialized().unwrap().as_slice::<Complex64>().unwrap(),
+        dx.value().unwrap().as_slice::<Complex64>().unwrap(),
         &[
             Complex64::new(2.25, -1.5),
             Complex64::new(1.0, 2.25),
@@ -1020,25 +1009,21 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
 }
 
 #[test]
-fn webgpu_fft_adapter_keeps_client_ownership_and_raw_output_lifecycle_explicit() {
+fn webgpu_fft_adapter_uses_opaque_session_scoped_provider_operations() {
     let source = include_str!("../src/webgpu.rs");
-    for launch in [
-        "cfft_interleaved_launch(",
-        "rfft_interleaved_launch_padded(",
-        "irfft_interleaved_launch_padded(",
+    for operation in [
+        "webgpu_interop::execute_c32_fft",
+        "webgpu_interop::execute_f32_rfft",
+        "webgpu_interop::execute_c32_irfft",
     ] {
         assert!(
-            source.contains(launch),
-            "missing explicit client launch {launch}"
+            source.contains(operation),
+            "missing opaque WebGPU FFT operation {operation}"
         );
     }
-    assert!(source.contains("webgpu_interop::client(backend)"));
-    assert!(source.contains("output.into_raw_parts().handle"));
-    assert!(source.contains("output.handle"));
-    assert!(source.contains("webgpu_interop::finish_c32"));
-    assert!(source.contains("webgpu_interop::finish_f32"));
+    assert!(source.contains("webgpu_interop::fft_limits"));
+    assert!(!source.contains("Handle"));
     assert!(!source.contains("download_webgpu_tensor"));
     assert!(!source.contains("upload_webgpu_tensor"));
     assert!(source.contains("_cache: FftExecutionCache<'_>"));
-    assert!(source.contains("Error::backend_source(op, error)"));
 }

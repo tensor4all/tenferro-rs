@@ -35,13 +35,20 @@ pub use tenferro_runtime::extension::{
 /// let value = TensorValue::from_tensor(
 ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
 /// );
-/// let eager = adopt_untracked_eager_value(ctx, value);
+/// let eager = adopt_untracked_eager_value(ctx, value)?;
 /// assert_eq!(eager.shape(), &[1]);
 /// assert!(!eager.tracks_grad());
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
-#[must_use]
-pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -> EagerTensor {
+/// # Errors
+///
+/// Returns [`Error::RuntimeState`] when the value cannot be registered in the
+/// supplied runtime, including an invalid or incompatible retained descriptor.
+#[must_use = "the adopted eager tensor carries the runtime value"]
+pub fn adopt_untracked_eager_value(
+    ctx: Arc<EagerRuntime>,
+    value: TensorValue,
+) -> Result<EagerTensor> {
     EagerTensor::new_untracked_value_result(ctx, value)
 }
 
@@ -170,8 +177,8 @@ fn finish_eager_extension_outputs(
             .collect();
     }
 
-    let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-    let recorded = record_eager_outputs(&op, &outputs, inputs)?;
+    let output_refs: Vec<&Tensor> = outputs.iter().collect();
+    let recorded = record_eager_outputs(&op, &output_refs, inputs)?;
     if recorded.traces.len() != outputs.len() {
         return Err(Error::Internal(format!(
             "expected {} eager traces for {:?}, got {}",
@@ -194,7 +201,7 @@ fn finish_eager_extension_outputs(
         .zip(outputs)
         .map(|((trace, semantic_trace), output)| {
             if trace.requires_grad {
-                EagerTensor::new_result_arc_with_semantic_trace(
+                EagerTensor::new_result_with_semantic_trace(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
@@ -204,7 +211,7 @@ fn finish_eager_extension_outputs(
                     metadata_scopes.clone(),
                 )
             } else {
-                EagerTensor::new_unregistered_result_arc_with_semantic_trace(
+                EagerTensor::new_unregistered_result_with_semantic_trace(
                     Arc::clone(&ctx),
                     trace.key,
                     output,

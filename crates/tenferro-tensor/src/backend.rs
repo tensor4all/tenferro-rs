@@ -2,7 +2,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::{
-    Buffer, TensorRank, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
+    TensorRank, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
     TypedTensorViewMut,
 };
 use crate::validate::validate_convert_dtype;
@@ -750,17 +750,16 @@ fn dim_stride(op: &'static str, dim: usize, role: &'static str) -> crate::Result
     })
 }
 
-fn typed_read_storage<'a, T>(
+fn typed_read_storage<'a, T: crate::TensorScalar>(
     tensor: &'a TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<(&'a [T], isize)> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok((data, 0)),
-        Buffer::Backend(_) => Err(crate::Error::runtime_state(
+    tensor.host_data().map(|data| (data, 0)).map_err(|_| {
+        crate::Error::runtime_state(
             op,
             "grouped GEMM default path requires host-backed tensor storage",
-        )),
-    }
+        )
+    })
 }
 
 fn grouped_gemm_default_config() -> DotGeneralConfig {
@@ -1512,27 +1511,33 @@ fn host_storage_identity<T>(data: &[T]) -> StorageIdentity {
     }
 }
 
-fn backend_storage_identity<T: 'static>(
-    buffer: &std::sync::Arc<dyn crate::BackendBuffer<T>>,
-) -> StorageIdentity {
+fn backend_storage_identity<T: 'static>(buffer: &dyn crate::BackendStorage<T>) -> StorageIdentity {
     StorageIdentity::Backend {
         domain: buffer.allocation_domain(),
         allocation: buffer.allocation_id(),
         family: buffer.backend_family(),
-        object: std::sync::Arc::as_ptr(buffer) as *const () as usize,
+        // INVARIANT: every backend buffer is borrowed from the single Box-owned
+        // root allocation; the data pointer of this trait object is stable for
+        // that owner and is used only as a fallback when provider identity is
+        // unavailable.
+        object: buffer as *const dyn crate::BackendStorage<T> as *const () as usize,
     }
 }
 
-fn typed_tensor_storage_identity<T: 'static>(
+fn typed_tensor_storage_identity<T: crate::TensorScalar>(
     tensor: &TypedTensor<T>,
 ) -> crate::Result<StorageIdentity> {
-    match tensor.buffer() {
-        Buffer::Host(data) => Ok(host_storage_identity(data)),
-        Buffer::Backend(buffer) => Ok(backend_storage_identity(buffer)),
+    if tensor.backend_buffer().is_some() {
+        let buffer = tensor.backend_buffer().ok_or_else(|| {
+            crate::Error::runtime_state("typed_tensor_storage_identity", "backend buffer missing")
+        })?;
+        Ok(backend_storage_identity(buffer))
+    } else {
+        Ok(host_storage_identity(tensor.host_data()?))
     }
 }
 
-fn typed_view_storage_identity<T: 'static>(
+fn typed_view_storage_identity<T: crate::TensorScalar + 'static>(
     view: &TypedTensorView<'_, T>,
 ) -> crate::Result<StorageIdentity> {
     match view.backend_buffer() {
@@ -2819,19 +2824,36 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        let input = read_tensor("to_contiguous_read", input)?;
-        if input.is_backend_buffer()
-            || !matches!(
-                input.placement().memory_kind,
-                crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
-            )
-        {
-            return Err(crate::Error::runtime_state(
-                "to_contiguous_read",
-                "default materialization accepts only host-owned tensors; use the storage's owning backend",
-            ));
+        match input {
+            TensorRead::Tensor(input) => {
+                if input.is_backend_buffer()
+                    || !matches!(
+                        input.placement().memory_kind,
+                        crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+                    )
+                {
+                    return Err(crate::Error::runtime_state(
+                        "to_contiguous_read",
+                        "default materialization accepts only host-owned tensors; use the storage's owning backend",
+                    ));
+                }
+                input.duplicate()
+            }
+            TensorRead::View(view) => {
+                if view.backend_family().is_some()
+                    || !matches!(
+                        view.placement().memory_kind,
+                        crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+                    )
+                {
+                    return Err(crate::Error::runtime_state(
+                        "to_contiguous_read",
+                        "default materialization accepts only host-owned tensors; use the storage's owning backend",
+                    ));
+                }
+                view.duplicate()
+            }
         }
-        Ok(input.clone())
     }
 
     /// Overwrite caller-provided storage from a readable tensor or view.
@@ -3793,25 +3815,27 @@ pub trait TensorBuffer {
 /// fn accepts_transfer<B: TensorDeviceTransfer>(_backend: &mut B) {}
 /// ```
 pub trait TensorDeviceTransfer {
+    /// Explicitly copy a provider-owned read target into host storage.
+    ///
+    /// Implementations must not return the input unchanged or stage through an
+    /// unrelated provider. A backend that cannot transfer the requested read
+    /// target returns a typed unsupported error.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        Ok(tensor.clone())
-    }
+    /// Returns [`crate::Error::Unsupported`] when the implementation cannot
+    /// perform the requested transfer, or a typed validation/backend error when
+    /// the source cannot be read.
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 
+    /// Explicitly copy a host read target into provider storage.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
-    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        Ok(tensor.clone())
-    }
+    /// Returns [`crate::Error::Unsupported`] when the implementation cannot
+    /// perform the requested transfer, or a typed validation/backend error when
+    /// the source cannot be read.
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 }
 
 /// Runtime cache associated with a backend.

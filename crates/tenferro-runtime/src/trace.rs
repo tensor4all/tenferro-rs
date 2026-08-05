@@ -52,7 +52,7 @@ impl TraceContext {
     pub fn input_with_default(
         &mut self,
         spec: ProgramInputSpec,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
     ) -> Result<TraceValue, ProgramBuildError> {
         let input = self.input(spec)?;
         self.bind_input(input, tensor)?;
@@ -70,7 +70,7 @@ impl TraceContext {
     pub fn bind_input(
         &mut self,
         input: TraceValue,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
     ) -> Result<BindingKey, ProgramBuildError> {
         self.builder.bind_input(input.value, tensor)
     }

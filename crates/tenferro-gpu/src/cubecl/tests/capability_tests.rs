@@ -8,7 +8,8 @@ use tenferro_tensor::{
 
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
-use crate::{cuda_capabilities, CudaBackend, DotGeneralConfig};
+use crate::cuda::{cuda_capabilities, CudaBackend};
+use crate::DotGeneralConfig;
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,

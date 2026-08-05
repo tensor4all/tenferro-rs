@@ -21,7 +21,7 @@ const OP: &str = "tenferro-ext-sparse";
 /// let sparse = SparseCooTensor::from_parts(vec![1, 1], coords, values).unwrap();
 /// assert_eq!(sparse.shape(), &[1, 1]);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SparseCooTensor {
     shape: Vec<usize>,
     coordinates: Tensor,
@@ -131,7 +131,7 @@ impl SparseCooTensor {
 /// let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values).unwrap();
 /// assert_eq!(sparse.shape(), &[1, 1]);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SparseCooTracedTensor {
     shape: Vec<usize>,
     coordinates: Tensor,

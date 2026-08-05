@@ -9,8 +9,7 @@ use crate::native_permutation::{
 
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d,
-    ensure_placement_resident_on_runtime, ensure_resident_on_runtime, unsupported_dtype,
-    WebGpuBackend, WebGpuBuffer,
+    ensure_placement_resident_on_runtime, prepared_webgpu_view, unsupported_dtype, WebGpuBackend,
 };
 
 const TRANSPOSE_OP: &str = "webgpu_transpose";
@@ -44,17 +43,17 @@ fn view_allocation_len<T, R>(
     op: &'static str,
 ) -> crate::Result<usize>
 where
-    T: 'static,
+    T: crate::TensorScalar + 'static,
     R: TensorRank,
 {
-    view.backend_buffer()
-        .map(|buffer| buffer.len())
-        .ok_or_else(|| {
-            crate::Error::runtime_state(
-                op,
-                "expected WebGPU view, got host view; upload before materializing",
-            )
-        })
+    if view.backend_family().is_some() {
+        Ok(view.backing_len())
+    } else {
+        Err(crate::Error::runtime_state(
+            op,
+            "expected WebGPU view, got host view; upload before materializing",
+        ))
+    }
 }
 
 fn strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
@@ -80,7 +79,7 @@ fn launch_materialization<T>(
     op: &'static str,
 ) -> crate::Result<()>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
 {
     if plan.len == 0 {
         return Ok(());
@@ -187,53 +186,43 @@ fn view_array_arg<T, R>(
     op: &'static str,
 ) -> crate::Result<ArrayArg<WgpuRuntime>>
 where
-    T: CubeElement + Clone + Send + Sync + 'static,
+    T: CubeElement + crate::TensorScalar + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
     ensure_placement_resident_on_runtime(backend.runtime(), view.placement(), op)?;
-    let buffer = view.backend_buffer().ok_or_else(|| {
-        crate::Error::runtime_state(
+    let expected_allocation_domain = backend.runtime().allocation_domain_id();
+    let Some(actual_allocation_domain) = view.allocation_domain() else {
+        return Err(crate::Error::runtime_state(
             op,
             "expected WebGPU view, got host view; upload before materializing",
-        )
-    })?;
-    let buffer = buffer
-        .as_any()
-        .downcast_ref::<WebGpuBuffer<T>>()
-        .ok_or_else(|| {
-            crate::Error::runtime_state(
-                op,
-                format!(
-                    "expected WebGPU backend buffer, got `{}` backend buffer",
-                    buffer.backend_family()
-                ),
-            )
-        })?;
-    if let Some(expected) = backend.runtime().allocation_domain() {
-        match buffer.domain.as_ref().map(|domain| domain.id) {
-            Some(actual) if actual == expected.id => {}
-            Some(actual) => {
-                return Err(crate::Error::host_access(
-                    op,
-                    crate::HostAccessError::ForeignDomain {
-                        expected: expected.id,
-                        actual,
-                    },
-                ));
-            }
-            None => {
-                return Err(crate::Error::runtime_state(
-                    op,
-                    "Apple runtime requires a managed allocation from its domain",
-                ));
-            }
-        }
+        ));
+    };
+    if actual_allocation_domain != expected_allocation_domain {
+        return Err(crate::Error::host_access(
+            op,
+            crate::HostAccessError::ForeignDomain {
+                expected: expected_allocation_domain,
+                actual: actual_allocation_domain,
+            },
+        ));
     }
+    if !matches!(view.backend_family(), Some("webgpu" | "cubecl-webgpu")) {
+        return Err(crate::Error::runtime_state(
+            op,
+            "expected a WebGPU view from the selected provider",
+        ));
+    }
+    let prepared = prepared_webgpu_view(view, op)?;
 
-    // SAFETY: TypedTensorView construction proves every reachable signed
-    // offset is inside the backing allocation. The kernel receives that same
-    // validated layout metadata and indexes only logical output elements.
-    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle().clone(), buffer.element_len()) })
+    // SAFETY: the shared storage root prepared this exact checked view before
+    // the binding is constructed. The kernel receives the same validated
+    // layout metadata and indexes only logical output elements.
+    Ok(unsafe {
+        ArrayArg::from_raw_parts(
+            prepared.handle,
+            prepared.byte_len / core::mem::size_of::<T>(),
+        )
+    })
 }
 
 fn transpose_typed<T>(
@@ -242,10 +231,9 @@ fn transpose_typed<T>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
 {
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
-    ensure_resident_on_runtime(backend.runtime(), input, TRANSPOSE_OP)?;
     let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
     let input_strides = dense_strides(input.shape(), TRANSPOSE_OP)?;
     let plan = NativePermutationPlan::for_transpose(
@@ -269,7 +257,7 @@ fn materialize_typed<T, R>(
     view: &TypedTensorView<'_, T, R>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+    T: CubeElement + CubePrimitive + crate::TensorScalar + Clone + Send + Sync + 'static,
     R: TensorRank,
 {
     let len = view

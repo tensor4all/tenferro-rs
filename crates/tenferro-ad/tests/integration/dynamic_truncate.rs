@@ -1,12 +1,12 @@
 use crate::support;
 use std::error::Error as StdError;
-use std::sync::Arc;
 use tenferro_ad::TracedTensorAdExt;
 
 use support::{cpu_runtime, RunTraced};
 use tenferro_runtime::{DType, PrepareError, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+    BackendStorageHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+    StorageBuffer,
 };
 
 const TOL: f64 = 1.0e-5;
@@ -32,7 +32,7 @@ fn backend_f64_scalar() -> Tensor {
     Tensor::F64(
         TypedTensor::from_buffer_col_major(
             vec![],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(11, 1))),
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(11, 1))),
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: Some(DeviceId {

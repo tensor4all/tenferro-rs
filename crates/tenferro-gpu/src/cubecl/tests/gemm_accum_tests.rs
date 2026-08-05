@@ -35,7 +35,7 @@ fn run_accum_case(
     let mut cpu = cpu_backend();
     let mut gpu = gpu_backend();
 
-    let mut expected = out_init.clone();
+    let mut expected = out_init.duplicate().expect("host output duplication");
     cpu.dot_general_read_into_accum(
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&rhs),

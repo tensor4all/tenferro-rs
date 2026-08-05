@@ -1,8 +1,8 @@
 # GPU Backend Design
 
 This document is developer-facing. Public user docs describe GPU providers as
-explicit backend choices. CUDA is exposed as `tenferro_gpu::CudaBackend`.
-WebGPU is exposed as `tenferro_gpu::WebGpuBackend`. Backend
+explicit backend choices. CUDA is exposed as `tenferro_gpu::cuda::CudaBackend`.
+WebGPU is exposed as `tenferro_gpu::webgpu::WebGpuBackend`. Backend
 features are additive provider choices: `cuda` and `webgpu` are both explicit,
 neither is enabled by default as a GPU provider, and downstream crates may
 enable either or both. Eager and operation crates should propagate the same
@@ -82,8 +82,8 @@ crates/tenferro-gpu/src/webgpu/
     kernels.rs             WebGPU-private dot_general pack kernels
 ```
 
-The provider-specific public backend types are `tenferro_gpu::CudaBackend` and
-`tenferro_gpu::WebGpuBackend`; CubeCL naming is an implementation detail. CUDA is selected by
+The provider-specific public backend types are `tenferro_gpu::cuda::CudaBackend` and
+`tenferro_gpu::webgpu::WebGpuBackend`; CubeCL naming is an implementation detail. CUDA is selected by
 enabling the `cuda` feature, which depends on the workspace-pinned CubeCL fork
 and the CubeCL CUDA runtime. WebGPU is selected by enabling the `webgpu`
 feature, which depends on CubeCL-WGPU and the CubeK matmul provider. Enabling
@@ -291,7 +291,7 @@ shape/buffer validation before unsafe CubeCL launch arguments are constructed.
 Sibling operation crates must not import it directly.
 
 Operation crates that need to launch their own CubeCL kernels, such as
-`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda_interop` module
+`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda::interop` module
 instead. That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:
 
@@ -397,6 +397,14 @@ parts, following the same decomposition used by JAX GPU lowering for complex
 scatter-add. Because floating-point atomic addition does not define a stable
 inter-thread accumulation order, overlapping floating-point scatter updates are
 numerically nondeterministic within normal floating-point roundoff.
+
+## Backend Allocation Ownership
+
+`StorageBuffer::Backend` owns one provider allocation. Tensor views borrow that
+owner, and host writes require an exclusive mutable owner borrow; creating a
+view never clones an allocation handle. CUDA/WebGPU provider objects may retain
+their own runtime or resource state, but tensor-level ownership and aliasing
+must remain represented by Rust borrowing and the provider allocation identity.
 
 ## Device Transfer Policy
 

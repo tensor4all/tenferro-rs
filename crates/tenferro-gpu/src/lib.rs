@@ -4,7 +4,7 @@
 //!
 //! ```rust
 //! #[cfg(feature = "cuda")]
-//! use tenferro_gpu::{cuda_devices, CudaBackend, CudaDeviceError};
+//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaBackend, cuda::CudaDeviceError};
 //!
 //! #[cfg(feature = "cuda")]
 //! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
@@ -35,38 +35,30 @@ mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;
 #[cfg(feature = "webgpu")]
-mod webgpu;
+pub mod webgpu;
 
+/// CUDA provider namespace.
 #[cfg(feature = "cuda")]
-pub use cubecl::{
-    cuda_capabilities, cuda_devices, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
-    device_ptr, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaExecSession, CudaRuntime,
-    CudaRuntimeIdentity,
-};
-#[cfg(feature = "cuda")]
-#[doc(hidden)]
-pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
-#[cfg(feature = "webgpu")]
-pub use webgpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
-    webgpu_runtime_engine_registration, webgpu_runtime_engine_registration_with_id,
-    webgpu_runtime_hardware_class, with_webgpu_exec_session, AppleContext, AppleTransferStats,
-    WebGpuBackend, WebGpuExecSession, WebGpuRuntime, WebGpuRuntimeIdentity,
-};
+pub mod cuda {
+    pub use super::cubecl::{
+        cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
+        cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
+        with_cuda_exec_session, CudaBackend, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
+        CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
+    };
 
-/// Narrow owner-scoped WebGPU handle interop for extension crates.
-#[cfg(feature = "webgpu")]
-#[doc(hidden)]
-pub mod webgpu_interop {
-    pub use crate::webgpu::interop::*;
+    /// Provider-specific CUDA interop scoped to an active execution session.
+    #[doc(hidden)]
+    pub mod interop {
+        pub use super::super::cubecl::interop::*;
+        pub use super::super::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+    }
 }
 
-#[cfg(feature = "cuda")]
-#[doc(hidden)]
-pub mod cuda_interop {
-    pub use crate::cubecl::interop::*;
-    pub use crate::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+/// Apple shared-allocation provider namespace.
+#[cfg(feature = "webgpu")]
+pub mod apple {
+    pub use super::webgpu::{AppleContext, AppleTransferStats};
 }
 
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
@@ -88,38 +80,48 @@ pub(crate) mod types {
     pub use tenferro_tensor::types::*;
 }
 
-/// CubeCL-managed GPU buffer stored behind tensor backend-buffer trait objects.
+/// Scalar-independent CubeCL allocation stored behind tensor backend-buffer
+/// trait objects; dtype is carried by the borrowed tensor descriptor.
 #[cfg(feature = "cuda")]
-#[derive(Clone)]
-pub(crate) struct CubeclBuffer<T> {
+pub(crate) struct CubeclBuffer {
     handle: cubecl_runtime::server::Handle,
-    len: usize,
+    byte_len: usize,
     device_ordinal: usize,
-    pub(crate) _marker: std::marker::PhantomData<T>,
+    allocation_domain: AllocationDomainId,
+    allocation_id: AllocationId,
 }
 
 #[cfg(feature = "cuda")]
-impl<T> std::fmt::Debug for CubeclBuffer<T> {
+static NEXT_CUDA_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(feature = "cuda")]
+impl std::fmt::Debug for CubeclBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
-            .field("len", &self.len)
+            .field("byte_len", &self.byte_len)
             .field("device_ordinal", &self.device_ordinal)
+            .field("allocation_domain", &self.allocation_domain)
+            .field("allocation_id", &self.allocation_id)
             .finish()
     }
 }
 
 #[cfg(feature = "cuda")]
-impl<T> CubeclBuffer<T> {
+impl CubeclBuffer {
     pub(crate) fn new(
         handle: cubecl_runtime::server::Handle,
-        len: usize,
+        byte_len: usize,
         device_ordinal: usize,
+        allocation_domain: AllocationDomainId,
     ) -> Self {
         Self {
             handle,
-            len,
+            byte_len,
             device_ordinal,
-            _marker: std::marker::PhantomData,
+            allocation_domain,
+            allocation_id: AllocationId::from_backend_id(
+                NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ),
         }
     }
 
@@ -127,23 +129,46 @@ impl<T> CubeclBuffer<T> {
         &self.handle
     }
 
-    pub(crate) fn element_len(&self) -> usize {
-        self.len
+    pub(crate) fn element_len<T: 'static>(&self) -> usize {
+        let element_size = std::mem::size_of::<T>();
+        debug_assert!(element_size != 0 && self.byte_len.is_multiple_of(element_size));
+        self.byte_len / element_size
     }
 
     pub(crate) fn device_ordinal(&self) -> usize {
         self.device_ordinal
     }
+
+    pub(crate) fn allocation_domain(&self) -> AllocationDomainId {
+        self.allocation_domain
+    }
 }
 
 #[cfg(feature = "cuda")]
-impl<T: Send + Sync + 'static> BackendBuffer<T> for CubeclBuffer<T> {
+impl<T: Send + Sync + 'static> BackendStorage<T> for CubeclBuffer {
     fn backend_family(&self) -> &'static str {
         "cubecl"
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.element_len::<T>()
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.allocation_domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation_id)
+    }
+
+    fn prepare_device_access(
+        &self,
+        request: DeviceAccessRequest<'_>,
+    ) -> std::result::Result<Box<dyn PreparedDeviceAccess>, DeviceAccessError> {
+        Ok(Box::new(crate::cubecl::dispatch::prepare_cubecl_access(
+            self, request,
+        )?))
     }
 
     fn as_any(&self) -> &dyn Any {

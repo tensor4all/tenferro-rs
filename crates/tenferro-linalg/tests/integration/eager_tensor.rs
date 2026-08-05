@@ -5,7 +5,9 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::{
+    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend,
+};
 use tenferro_linalg::{
     EagerTensorLinalgExt, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
 };
@@ -178,7 +180,7 @@ fn svd_vector_observable_backward_grad_is_finite() {
     loss.backward().unwrap();
 
     let grad = a.grad().unwrap().unwrap();
-    assert_finite_f64_tensor(grad.as_ref());
+    assert_finite_f64_tensor(&grad.to_tensor().unwrap());
 }
 
 #[test]
@@ -204,10 +206,7 @@ fn cholesky_of_identity() {
     let l = a.cholesky().unwrap();
 
     assert_eq!(l.shape(), &[2, 2]);
-    assert_eq!(
-        f64_data(l.materialized().unwrap().as_ref()),
-        &[1.0, 0.0, 0.0, 1.0]
-    );
+    assert_eq!(f64_data(&l.to_tensor().unwrap()), &[1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]
@@ -224,19 +223,10 @@ fn lu_returns_expected_factors_for_swap_matrix() {
     assert_eq!(u.shape(), &[2, 2]);
     assert_eq!(parity.shape(), &[] as &[usize]);
 
-    assert_eq!(
-        f64_data(p.materialized().unwrap().as_ref()),
-        &[0.0, 1.0, 1.0, 0.0]
-    );
-    assert_eq!(
-        f64_data(l.materialized().unwrap().as_ref()),
-        &[1.0, 0.0, 0.0, 1.0]
-    );
-    assert_eq!(
-        f64_data(u.materialized().unwrap().as_ref()),
-        &[1.0, 0.0, 0.0, 1.0]
-    );
-    assert_eq!(f64_data(parity.materialized().unwrap().as_ref()), &[-1.0]);
+    assert_eq!(f64_data(&p.to_tensor().unwrap()), &[0.0, 1.0, 1.0, 0.0]);
+    assert_eq!(f64_data(&l.to_tensor().unwrap()), &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(f64_data(&u.to_tensor().unwrap()), &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(f64_data(&parity.to_tensor().unwrap()), &[-1.0]);
 }
 
 #[test]
@@ -254,7 +244,7 @@ fn full_piv_lu_solve_returns_expected_solution() {
     let x = a.full_piv_lu_solve(&b).unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
-    assert_eq!(f64_data(x.materialized().unwrap().as_ref()), &[4.0, -1.0]);
+    assert_eq!(f64_data(&x.to_tensor().unwrap()), &[4.0, -1.0]);
 }
 
 #[test]
@@ -273,13 +263,13 @@ fn full_piv_lu_reconstructs_input() {
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(parity.shape(), &[] as &[usize]);
 
-    let p = p.materialized().unwrap();
-    let l = l.materialized().unwrap();
-    let u = u.materialized().unwrap();
-    let q = q.materialized().unwrap();
-    let lu = matmul2(f64_data(l.as_ref()), f64_data(u.as_ref()));
-    let luq = matmul2(&lu, f64_data(q.as_ref()));
-    let reconstructed = matmul2(&transpose2(f64_data(p.as_ref())), &luq);
+    let p = p.to_tensor().unwrap();
+    let l = l.to_tensor().unwrap();
+    let u = u.to_tensor().unwrap();
+    let q = q.to_tensor().unwrap();
+    let lu = matmul2(f64_data(&l), f64_data(&u));
+    let luq = matmul2(&lu, f64_data(&q));
+    let reconstructed = matmul2(&transpose2(f64_data(&p)), &luq);
     assert_close_slice(&reconstructed, &data, 1.0e-12);
 }
 
@@ -298,7 +288,7 @@ fn solve_returns_expected_solution() {
     let x = a.solve(&b).unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
-    assert_eq!(f64_data(x.materialized().unwrap().as_ref()), &[2.0, 2.0]);
+    assert_eq!(f64_data(&x.to_tensor().unwrap()), &[2.0, 2.0]);
 }
 
 #[test]
@@ -326,7 +316,7 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
 
     assert_eq!(grad.shape(), &[2, 2, 2]);
     assert_close_slice(
-        f64_data(grad.as_ref()),
+        f64_data(&grad.to_tensor().unwrap()),
         &[-1.0, -0.5, -1.0, -0.5, -2.0 / 3.0, -0.4, -2.0 / 3.0, -0.4],
         1.0e-12,
     );
@@ -343,11 +333,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
 
     assert_eq!(values.shape(), &[2]);
     assert_eq!(vectors.shape(), &[2, 2]);
-    assert_close_slice(
-        f64_data(values.materialized().unwrap().as_ref()),
-        &[1.0, 3.0],
-        1.0e-12,
-    );
+    assert_close_slice(f64_data(&values.to_tensor().unwrap()), &[1.0, 3.0], 1.0e-12);
 }
 
 #[test]
@@ -364,7 +350,7 @@ fn eigh_vector_observable_backward_grad_is_finite() {
     loss.backward().unwrap();
 
     let grad = a.grad().unwrap().unwrap();
-    assert_finite_f64_tensor(grad.as_ref());
+    assert_finite_f64_tensor(&grad.to_tensor().unwrap());
 }
 
 #[test]
@@ -379,7 +365,7 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     assert_eq!(values.shape(), &[2]);
     assert_eq!(vectors.shape(), &[2, 2]);
 
-    let mut sorted = c64_data(values.materialized().unwrap().as_ref()).to_vec();
+    let mut sorted = c64_data(&values.to_tensor().unwrap()).to_vec();
     sorted.sort_by(|lhs, rhs| {
         lhs.re
             .partial_cmp(&rhs.re)
@@ -406,11 +392,7 @@ fn triangular_solve_returns_expected_solution() {
     let x = a.triangular_solve(&b, true, true, false, false).unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
-    assert_close_slice(
-        f64_data(x.materialized().unwrap().as_ref()),
-        &[1.0, 2.0],
-        1.0e-12,
-    );
+    assert_close_slice(f64_data(&x.to_tensor().unwrap()), &[1.0, 2.0], 1.0e-12);
 }
 
 #[cfg(feature = "cuda")]
@@ -424,7 +406,8 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]).unwrap();
     let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]).unwrap();
-    let upload_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
+    let upload_backend =
+        CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
@@ -433,12 +416,9 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let x = a.solve(&b).unwrap();
 
-    let download_backend = CudaBackend::new(tenferro_gpu::CudaDeviceId::from_ordinal(0)).unwrap();
-    let x_host = download_tensor(
-        download_backend.runtime(),
-        x.materialized().unwrap().as_ref(),
-    )
-    .unwrap();
+    let download_backend =
+        CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let x_host = download_tensor(download_backend.runtime(), x.to_tensor().unwrap()).unwrap();
     assert_eq!(x_host.shape(), &[2, 1]);
     assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);
 }

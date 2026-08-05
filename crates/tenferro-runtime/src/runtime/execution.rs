@@ -12,7 +12,10 @@ use std::thread::{self, ThreadId};
 
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{
+    AllocationGroup, DType, DescriptorSlot, GroupError, MemoryKind, Tensor, TensorBackend,
+    TensorRead, TensorValue, TensorView,
+};
 
 use crate::error::ErrorPhase;
 use crate::exec::{
@@ -32,7 +35,6 @@ use crate::runtime::{
 };
 use crate::{Error, Result};
 
-type RuntimeInputRefs<'a> = SmallVec<[&'a Tensor; 8]>;
 type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
 type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = SmallVec<[usize; 8]>;
@@ -61,6 +63,490 @@ pub struct ExecutionHandle {
     submission: Arc<InFlightSubmission>,
 }
 
+/// Move-only input package for detached runtime submission.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::runtime::ExecutionInputs;
+///
+/// let inputs = ExecutionInputs::new(Vec::new())?;
+/// assert!(format!("{inputs:?}").contains("ExecutionInputs"));
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+pub struct ExecutionInputs {
+    group: AllocationGroup,
+    bindings: Box<[DescriptorSlot]>,
+}
+
+impl ExecutionInputs {
+    /// Construct a package from already-owned tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when a tensor binding cannot be
+    /// registered in the allocation group.
+    pub fn new(tensors: Vec<Tensor>) -> Result<Self> {
+        let (group, bindings) = AllocationGroup::from_tensors(tensors).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionInputs::new",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+        Ok(Self { group, bindings })
+    }
+
+    pub(crate) fn as_reads(&self) -> Result<Vec<TensorRead<'_>>> {
+        self.group.read_views(&self.bindings).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionInputs::as_reads",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })
+    }
+}
+
+impl fmt::Debug for ExecutionInputs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionInputs")
+            .field("len", &self.bindings.len())
+            .finish()
+    }
+}
+
+/// Borrowed immutable inputs for synchronous, retirement-before-return execution.
+pub struct ScopedReadInputs<'env> {
+    bindings: Box<[ScopedReadBinding<'env>]>,
+}
+
+impl<'env> ScopedReadInputs<'env> {
+    /// Build a scoped input package from borrowed dtype-erased views.
+    pub fn new(bindings: Vec<TensorView<'env>>) -> Self {
+        Self {
+            bindings: bindings
+                .into_iter()
+                .map(|tensor| ScopedReadBinding { tensor })
+                .collect(),
+        }
+    }
+
+    fn as_reads(&self) -> Vec<TensorRead<'env>> {
+        self.bindings
+            .iter()
+            .map(|binding| TensorRead::from_view(binding.tensor.clone()))
+            .collect()
+    }
+
+    fn has_non_host_provider(&self) -> bool {
+        self.bindings.iter().any(|binding| {
+            !matches!(
+                binding.tensor.placement().memory_kind,
+                MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+            )
+        })
+    }
+
+    /// Return the number of borrowed bindings.
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Return whether no borrowed bindings were supplied.
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+}
+
+/// One immutable borrowed binding in a scoped input package.
+pub struct ScopedReadBinding<'env> {
+    tensor: TensorView<'env>,
+}
+
+impl<'env> ScopedReadBinding<'env> {
+    /// Wrap one immutable dtype-erased view.
+    pub fn new(tensor: TensorView<'env>) -> Self {
+        Self { tensor }
+    }
+
+    /// Borrow the binding's dtype-erased view.
+    pub fn tensor(&self) -> &TensorView<'env> {
+        &self.tensor
+    }
+}
+
+impl fmt::Debug for ScopedReadInputs<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScopedReadInputs")
+            .field("len", &self.bindings.len())
+            .finish()
+    }
+}
+
+/// A synchronous scoped execution result.
+// INVARIANT: these variants keep the borrowed execution contract allocation-free
+// at the API boundary; boxing would add an avoidable ownership allocation.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum ScopedExecutionOutcome<'env> {
+    /// All provider work retired before this call returned.
+    Completed(ScopedExecutionBundle<'env>),
+    /// Execution retired with an ordinary error and the original borrows remain available.
+    RetiredFailed {
+        error: Error,
+        inputs: ScopedReadInputs<'env>,
+    },
+}
+
+/// Metadata for a storage-free scoped output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputMetadata {
+    /// Scalar dtype of the logical output.
+    pub dtype: DType,
+    /// Logical shape of the output.
+    pub shape: Box<[usize]>,
+}
+
+/// Owned outputs and borrowed identity views from one completed scoped call.
+pub struct ScopedExecutionBundle<'env> {
+    owned: AllocationGroup,
+    outputs: Box<[ScopedOutput<'env>]>,
+}
+
+impl fmt::Debug for ScopedExecutionBundle<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScopedExecutionBundle")
+            .field("len", &self.outputs.len())
+            .finish()
+    }
+}
+
+impl<'env> ScopedExecutionBundle<'env> {
+    /// Borrow one completed output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
+    /// index or [`OutputAccessError::Group`] when the completed descriptor
+    /// group reports an output access failure.
+    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
+        let output = self
+            .outputs
+            .get(index)
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        match output {
+            ScopedOutput::Borrowed(view) => Ok(OutputRef::Tensor(view.clone())),
+            ScopedOutput::Owned(slot) => output_ref_from_group(&self.owned, *slot),
+            ScopedOutput::Metadata(metadata) => Ok(OutputRef::Metadata(metadata)),
+        }
+    }
+
+    /// Consume the bundle and extract a fresh owned output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScopedOutputExtractError::InvalidOutput`],
+    /// [`ScopedOutputExtractError::BorrowedOutput`], or
+    /// [`ScopedOutputExtractError::MetadataOutput`] for an output that cannot
+    /// be consumed, and [`ScopedOutputExtractError::Output`] for a structural
+    /// group extraction failure. Each error returns the unchanged bundle.
+    #[allow(clippy::result_large_err)]
+    pub fn into_owned_output(
+        self,
+        index: usize,
+    ) -> std::result::Result<Tensor, (Self, ScopedOutputExtractError)> {
+        let slot = match self.outputs.get(index) {
+            Some(ScopedOutput::Owned(slot)) => *slot,
+            Some(ScopedOutput::Borrowed(_)) => {
+                return Err((self, ScopedOutputExtractError::BorrowedOutput))
+            }
+            Some(ScopedOutput::Metadata(_)) => {
+                return Err((self, ScopedOutputExtractError::MetadataOutput))
+            }
+            None => return Err((self, ScopedOutputExtractError::InvalidOutput { index })),
+        };
+        let Self { owned, outputs } = self;
+        match owned.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((owned, error)) => Err((
+                Self { owned, outputs },
+                ScopedOutputExtractError::Output(OutputExtractError::Group(error)),
+            )),
+        }
+    }
+}
+
+/// Output classification used by scoped providers.
+// INVARIANT: borrowed views stay inline so scoped output classification does
+// not materialize an extra owner or heap allocation.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum ScopedOutput<'env> {
+    /// A result that aliases an immutable caller input.
+    Borrowed(TensorView<'env>),
+    /// A fresh result owned by the scoped bundle's allocation group.
+    Owned(DescriptorSlot),
+    /// Metadata-only output with no tensor payload.
+    Metadata(OutputMetadata),
+}
+
+/// Failure while consuming a scoped output.
+#[derive(Debug, thiserror::Error)]
+pub enum ScopedOutputExtractError {
+    #[error("scoped output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("scoped output is borrowed from the caller")]
+    BorrowedOutput,
+    #[error("scoped output contains metadata only")]
+    MetadataOutput,
+    #[error("scoped owned output cannot be extracted: {0}")]
+    Output(#[from] OutputExtractError),
+}
+
+/// A pre-admission scoped submission rejection. The original borrows remain available.
+#[derive(Debug)]
+pub struct ScopedSubmitRejected<'env> {
+    source: Box<Error>,
+    inputs: ScopedReadInputs<'env>,
+}
+
+impl<'env> ScopedSubmitRejected<'env> {
+    /// Consume the rejection and preserve its original environment lifetime.
+    pub fn into_parts(self) -> (Error, ScopedReadInputs<'env>) {
+        (*self.source, self.inputs)
+    }
+}
+
+impl fmt::Display for ScopedSubmitRejected<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "scoped submission rejected before admission: {}",
+            self.source
+        )
+    }
+}
+
+impl StdError for ScopedSubmitRejected<'_> {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+/// A detached execution result retaining one allocation group for all outputs.
+#[derive(Debug)]
+pub struct ExecutionBundle {
+    group: AllocationGroup,
+    outputs: Box<[DescriptorSlot]>,
+}
+
+/// A borrowed output view from an [`ExecutionBundle`].
+// INVARIANT: this read-only result is a zero-allocation projection of an
+// already-prepared view; boxing would add work on the output hot path.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum OutputRef<'a> {
+    Tensor(TensorView<'a>),
+    Metadata(&'a OutputMetadata),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OutputAccessError {
+    #[error("execution output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("execution output group is invalid: {0}")]
+    Group(#[from] GroupError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OutputExtractError {
+    #[error("execution output index {index} is outside the output set")]
+    InvalidOutput { index: usize },
+    #[error("execution output cannot be extracted: {0}")]
+    Group(#[from] GroupError),
+}
+
+impl ExecutionBundle {
+    fn from_inputs_and_outputs(inputs: ExecutionInputs, outputs: Vec<Tensor>) -> Result<Self> {
+        let mut group = inputs.group;
+        let mut output_slots = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let slot = group.append_tensor(output).map_err(|error| {
+                Error::runtime_state(
+                    "ExecutionBundle::from_inputs_and_outputs",
+                    ErrorPhase::Execution,
+                    error.to_string(),
+                )
+            })?;
+            output_slots.push(slot);
+        }
+        Ok(Self {
+            group,
+            outputs: output_slots.into_boxed_slice(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_outputs(outputs: Vec<Tensor>) -> Result<Self> {
+        let (group, bindings) = AllocationGroup::from_tensors(outputs).map_err(|error| {
+            Error::runtime_state(
+                "ExecutionBundle::from_outputs",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+        Ok(Self {
+            group,
+            outputs: bindings,
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
+    /// index or [`OutputAccessError::Group`] when the output descriptor group
+    /// reports an access failure.
+    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
+        let slot = *self
+            .outputs
+            .get(index)
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        let mut views = self.group.read_views(std::slice::from_ref(&slot))?;
+        let view = views
+            .pop()
+            .ok_or(OutputAccessError::InvalidOutput { index })?;
+        match view {
+            TensorRead::View(view) => Ok(OutputRef::Tensor(view)),
+            TensorRead::Tensor(_) => Err(OutputAccessError::InvalidOutput { index }),
+        }
+    }
+
+    // INVARIANT: extraction errors return the unchanged move-only bundle so
+    // callers can retry or inspect it without a hidden copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputExtractError::InvalidOutput`] for an invalid index or
+    /// [`OutputExtractError::Group`] for a structural group extraction
+    /// failure. Each error returns the unchanged bundle without copying.
+    #[allow(clippy::result_large_err)]
+    pub fn into_output(
+        self,
+        index: usize,
+    ) -> std::result::Result<Tensor, (Self, OutputExtractError)> {
+        let slot = match self.outputs.get(index).copied() {
+            Some(slot) => slot,
+            None => return Err((self, OutputExtractError::InvalidOutput { index })),
+        };
+        let ExecutionBundle { group, outputs } = self;
+        match group.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((group, error)) => Err((Self { group, outputs }, OutputExtractError::Group(error))),
+        }
+    }
+}
+
+/// The result of a detached submission after the provider retirement point.
+#[derive(Debug)]
+pub enum ExecutionOutcome {
+    /// The scheduled graph completed and produced one alias-safe output bundle.
+    Completed(Box<ExecutionBundle>),
+    /// The graph retired with an ordinary execution error; the input owner is
+    /// available again because retirement was observed.
+    RetiredFailed {
+        error: Error,
+        inputs: Box<ExecutionInputs>,
+    },
+    /// Completion could not be proven. No owner is exposed and the private
+    /// in-flight record retains all provider state permanently.
+    CompletionUnproven {
+        error: Error,
+        diagnostic_keys: Box<[String]>,
+    },
+}
+
+/// A detached submission failed before ownership could be transferred to the
+/// in-flight worker.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
+///
+/// let error = SubmitError::PreAdmission {
+///     source: Box::new(Error::Internal("input rejected".into())),
+///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
+/// };
+/// assert!(error.to_string().contains("before admission"));
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+#[derive(Debug)]
+pub enum SubmitError {
+    /// Preparation/admission rejected the request. The exact input package is
+    /// returned unchanged to the caller.
+    PreAdmission {
+        source: Box<Error>,
+        inputs: Box<ExecutionInputs>,
+    },
+}
+
+impl SubmitError {
+    /// Recover the unchanged package from a pre-admission rejection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
+    ///
+    /// let error = SubmitError::PreAdmission {
+    ///     source: Box::new(Error::Internal("input rejected".into())),
+    ///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
+    /// };
+    /// assert!(error.into_pre_admission().is_some());
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
+        match self {
+            Self::PreAdmission { source, inputs } => Some((*source, *inputs)),
+        }
+    }
+}
+
+impl fmt::Display for SubmitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PreAdmission { source, .. } => {
+                write!(formatter, "submission rejected before admission: {source}")
+            }
+        }
+    }
+}
+
+impl StdError for SubmitError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::PreAdmission { source, .. } => {
+                // Keep the pre-admission typed source at the same depth as the
+                // historical runtime error chain while the owner travels in
+                // this wrapper.
+                source.source().or(Some(source.as_ref()))
+            }
+        }
+    }
+}
+
+impl From<SubmitError> for Error {
+    fn from(error: SubmitError) -> Self {
+        match error {
+            SubmitError::PreAdmission { source, .. } => *source,
+        }
+    }
+}
+
 impl ExecutionHandle {
     /// Wait for submitted work to finish and return its tensor outputs.
     ///
@@ -69,7 +555,7 @@ impl ExecutionHandle {
     /// Returns the submitted runtime execution [`Error`], including
     /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
     /// when the handle was already consumed or the worker panicked.
-    pub fn wait(self) -> Result<Vec<Tensor>> {
+    pub fn wait(self) -> Result<ExecutionOutcome> {
         self.submission.wait()
     }
 }
@@ -85,28 +571,31 @@ impl fmt::Debug for ExecutionHandle {
 
 pub(super) struct InFlightSubmission {
     work: Mutex<Option<InFlightWork>>,
-    completion: Mutex<Option<Result<Vec<Tensor>>>>,
+    completion: Mutex<Option<Result<ExecutionOutcome>>>,
     completed: Condvar,
 }
 
 struct AdmittedExecution {
     prepared: PreparedCompiledGraph,
-    inputs: Vec<Tensor>,
+    inputs: ExecutionInputs,
 }
 
 enum InFlightWork {
-    Admitted(AdmittedExecution),
+    Admitted(Box<AdmittedExecution>),
     #[cfg(test)]
-    Test(Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>),
+    Test {
+        inputs: Box<ExecutionInputs>,
+        work: Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>,
+    },
 }
 
 impl InFlightSubmission {
-    fn new(prepared: PreparedCompiledGraph, inputs: Vec<Tensor>) -> Self {
+    fn new(prepared: PreparedCompiledGraph, inputs: ExecutionInputs) -> Self {
         Self {
-            work: Mutex::new(Some(InFlightWork::Admitted(AdmittedExecution {
+            work: Mutex::new(Some(InFlightWork::Admitted(Box::new(AdmittedExecution {
                 prepared,
                 inputs,
-            }))),
+            })))),
             completion: Mutex::new(None),
             completed: Condvar::new(),
         }
@@ -115,9 +604,25 @@ impl InFlightSubmission {
     #[cfg(test)]
     pub(super) fn for_test(work: impl FnOnce() -> Result<Vec<Tensor>> + Send + 'static) -> Self {
         Self {
-            work: Mutex::new(Some(InFlightWork::Test(Box::new(work)))),
+            work: Mutex::new(Some(InFlightWork::Test {
+                inputs: Box::new(ExecutionInputs::new(Vec::new()).expect("empty test inputs")),
+                work: Box::new(work),
+            })),
             completion: Mutex::new(None),
             completed: Condvar::new(),
+        }
+    }
+
+    fn into_unstarted_inputs(self) -> ExecutionInputs {
+        let work = match self.work.into_inner() {
+            Ok(work) => work,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match work {
+            Some(InFlightWork::Admitted(admitted)) => admitted.inputs,
+            #[cfg(test)]
+            Some(InFlightWork::Test { inputs, .. }) => *inputs,
+            None => unreachable!("unstarted submission must still contain its owner"),
         }
     }
 
@@ -126,26 +631,31 @@ impl InFlightSubmission {
             Ok(mut work) => work.take(),
             Err(poisoned) => poisoned.into_inner().take(),
         };
-        let result = catch_unwind(AssertUnwindSafe(|| match work {
-            Some(InFlightWork::Admitted(admitted)) => {
-                let input_refs = admitted.inputs.iter().collect::<Vec<_>>();
-                execute_admitted(&admitted.prepared, &input_refs)
-            }
+        let result = match work {
+            Some(InFlightWork::Admitted(admitted)) => run_admitted_work(admitted),
             #[cfg(test)]
-            Some(InFlightWork::Test(work)) => work(),
+            Some(InFlightWork::Test { work, .. }) => {
+                let result = catch_unwind(AssertUnwindSafe(work));
+                match result {
+                    Ok(Ok(outputs)) => ExecutionBundle::from_outputs(outputs)
+                        .map(|bundle| ExecutionOutcome::Completed(Box::new(bundle))),
+                    Ok(Err(error)) => Err(error),
+                    Err(payload) => Ok(ExecutionOutcome::CompletionUnproven {
+                        error: Error::runtime_state(
+                            "ExecutionHandle::wait",
+                            ErrorPhase::Execution,
+                            panic_payload_message(payload),
+                        ),
+                        diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
+                    }),
+                }
+            }
             None => Err(Error::runtime_state(
                 "Runtime::submit",
                 ErrorPhase::Execution,
                 "in-flight submission work was already consumed",
             )),
-        }))
-        .unwrap_or_else(|payload| {
-            Err(Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                panic_payload_message(payload),
-            ))
-        });
+        };
         match self.completion.lock() {
             Ok(mut completion) => {
                 *completion = Some(result);
@@ -161,7 +671,7 @@ impl InFlightSubmission {
         self.completed.notify_all();
     }
 
-    fn wait(&self) -> Result<Vec<Tensor>> {
+    fn wait(&self) -> Result<ExecutionOutcome> {
         let mut completion = self.completion.lock().map_err(|_| {
             Error::runtime_state(
                 "ExecutionHandle::wait",
@@ -190,6 +700,47 @@ impl InFlightSubmission {
     }
 }
 
+fn run_admitted_work(admitted: Box<AdmittedExecution>) -> Result<ExecutionOutcome> {
+    let execution = catch_unwind(AssertUnwindSafe(|| {
+        let input_reads = admitted.inputs.as_reads()?;
+        execute_admitted(&admitted.prepared, &input_reads)
+    }));
+    match execution {
+        Ok(Ok(outputs)) => {
+            let AdmittedExecution { inputs, .. } = *admitted;
+            match ExecutionBundle::from_inputs_and_outputs(inputs, outputs) {
+                Ok(bundle) => Ok(ExecutionOutcome::Completed(Box::new(bundle))),
+                Err(error) => Ok(ExecutionOutcome::CompletionUnproven {
+                    error,
+                    diagnostic_keys: Box::from(["execution.bundle-build".to_owned()]),
+                }),
+            }
+        }
+        Ok(Err(error)) => {
+            let AdmittedExecution { inputs, .. } = *admitted;
+            Ok(ExecutionOutcome::RetiredFailed {
+                error,
+                inputs: Box::new(inputs),
+            })
+        }
+        Err(payload) => {
+            let error = Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            );
+            // The completion witness was lost after admission. Leak the
+            // private record deliberately: no owner or provider state may be
+            // exposed while retirement is unproven.
+            Box::leak(admitted);
+            Ok(ExecutionOutcome::CompletionUnproven {
+                error,
+                diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
+            })
+        }
+    }
+}
+
 pub(super) trait SubmissionSpawner {
     fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()>;
 }
@@ -197,14 +748,23 @@ pub(super) trait SubmissionSpawner {
 pub(super) fn spawn_in_flight(
     submission: Arc<InFlightSubmission>,
     spawner: &dyn SubmissionSpawner,
-) -> Result<ExecutionHandle> {
-    spawner.spawn(Arc::clone(&submission)).map_err(|source| {
-        Error::runtime_state_source(
+) -> std::result::Result<ExecutionHandle, Box<(ExecutionInputs, Error)>> {
+    if let Err(source) = spawner.spawn(Arc::clone(&submission)) {
+        // INVARIANT: a SubmissionSpawner error means it did not take or start
+        // the submission, so the sole Arc can be unwrapped and the exact
+        // pre-admission owner recovered.
+        let submission = match Arc::try_unwrap(submission) {
+            Ok(submission) => submission,
+            Err(_) => unreachable!("failed spawner must not retain submission"),
+        };
+        let inputs = submission.into_unstarted_inputs();
+        let error = Error::runtime_state_source(
             "Runtime::submit",
             ErrorPhase::Execution,
             SubmissionError::WorkerSpawn { source },
-        )
-    })?;
+        );
+        return Err(Box::new((inputs, error)));
+    }
     Ok(ExecutionHandle { submission })
 }
 
@@ -706,15 +1266,175 @@ pub(super) fn run_compiled(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
-    execute_scheduled_tensor_refs(
+    execute_scheduled_reads(
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
         &inputs,
     )
+}
+
+/// Execute one immutable borrowed package synchronously through provider retirement.
+///
+/// Asynchronous or non-host providers are rejected before preparation can enqueue
+/// work. CPU/host execution returns only after the schedule has retired.
+pub(super) fn execute_scoped_read_only<'env>(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: ScopedReadInputs<'env>,
+) -> std::result::Result<ScopedExecutionOutcome<'env>, ScopedSubmitRejected<'env>> {
+    if inputs.has_non_host_provider() {
+        return Err(ScopedSubmitRejected {
+            source: Box::new(Error::unsupported(
+                "Runtime::execute_scoped_read_only",
+                ErrorPhase::Execution,
+                "scoped borrowed execution requires host/CPU storage",
+            )),
+            inputs,
+        });
+    }
+
+    let reads = inputs.as_reads();
+    let prepared = match prepare_compiled_reads(runtime, program, &reads) {
+        Ok(prepared) => prepared,
+        Err(source) => {
+            return Err(ScopedSubmitRejected {
+                source: Box::new(source),
+                inputs,
+            })
+        }
+    };
+    if !schedule_supports_scoped_execution(prepared.prepared.root().schedule()) {
+        return Err(ScopedSubmitRejected {
+            source: Box::new(Error::unsupported(
+                "Runtime::execute_scoped_read_only",
+                ErrorPhase::Execution,
+                "the selected provider does not prove retirement before scoped return",
+            )),
+            inputs,
+        });
+    }
+
+    match execute_scoped_admitted(
+        prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
+        prepared.prepared.operations(),
+        &reads,
+    ) {
+        Ok(bundle) => Ok(ScopedExecutionOutcome::Completed(bundle)),
+        Err(error) => Ok(ScopedExecutionOutcome::RetiredFailed { error, inputs }),
+    }
+}
+
+fn execute_scoped_admitted<'env>(
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationPlan],
+    inputs: &[TensorRead<'env>],
+) -> Result<ScopedExecutionBundle<'env>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scoped tensor executor")?;
+    let input_slots = inputs.iter().cloned().map(ExecSlot::Read).collect();
+    let mut located = execute_scheduled_slots(
+        program,
+        schedule,
+        operations,
+        input_slots,
+        RuntimeOutputMode::Tensor,
+    )?;
+    collect_scoped_outputs(program, &mut located)
+}
+
+pub(crate) fn collect_scoped_outputs<'env>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'env>>],
+) -> Result<ScopedExecutionBundle<'env>> {
+    let mut owned = AllocationGroup::from_tensors(Vec::new())
+        .map(|(group, _)| group)
+        .map_err(|error| {
+            Error::runtime_state(
+                "Runtime::collect_scoped_outputs",
+                ErrorPhase::Execution,
+                error.to_string(),
+            )
+        })?;
+    let mut scoped = Vec::with_capacity(program.output_slots.len());
+    for &slot in &program.output_slots {
+        let located = outputs
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        let output = match located.value {
+            ExecSlot::Read(read) => ScopedOutput::Borrowed(read.tensor_view()),
+            ExecSlot::Owned(tensor) => {
+                let slot = owned.append_tensor(tensor).map_err(|error| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        error.to_string(),
+                    )
+                })?;
+                ScopedOutput::Owned(slot)
+            }
+            ExecSlot::Value(value) => {
+                let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        "scoped value output was retained by another owner",
+                    )
+                })?;
+                let slot = owned.append_group(group, slot).map_err(|error| {
+                    Error::runtime_state(
+                        "Runtime::collect_scoped_outputs",
+                        ErrorPhase::Execution,
+                        error.to_string(),
+                    )
+                })?;
+                let _ = (dtype, shape);
+                ScopedOutput::Owned(slot)
+            }
+        };
+        scoped.push(output);
+    }
+    outputs.iter_mut().for_each(|output| *output = None);
+    Ok(ScopedExecutionBundle {
+        owned,
+        outputs: scoped.into_boxed_slice(),
+    })
+}
+
+fn output_ref_from_group<'a>(
+    group: &'a AllocationGroup,
+    slot: DescriptorSlot,
+) -> std::result::Result<OutputRef<'a>, OutputAccessError> {
+    let mut views = group.read_views(std::slice::from_ref(&slot))?;
+    match views.pop() {
+        Some(TensorRead::View(view)) => Ok(OutputRef::Tensor(view)),
+        Some(TensorRead::Tensor(_)) | None => Err(OutputAccessError::InvalidOutput {
+            index: slot.index(),
+        }),
+    }
+}
+
+fn schedule_supports_scoped_execution(schedule: &ScheduledGraph) -> bool {
+    let supports = |location: &ExecutionLocation| {
+        location
+            .witness()
+            .event_domain_driver()
+            .supports_scoped_read_only()
+    };
+    supports(schedule.root_location())
+        && schedule.input_locations().iter().all(supports)
+        && schedule.operation_locations().iter().all(supports)
+        && schedule.nodes().iter().all(|node| {
+            node.event_domain_witness()
+                .event_domain_driver()
+                .supports_scoped_read_only()
+        })
 }
 
 pub(super) fn prepare_compiled(
@@ -723,7 +1443,7 @@ pub(super) fn prepare_compiled(
     inputs: &[&Tensor],
 ) -> Result<PreparedCompiledGraph> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
         runtime,
@@ -741,25 +1461,37 @@ pub(super) fn prepare_compiled(
 pub(super) fn submit(
     runtime: &Runtime,
     program: &CompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<ExecutionHandle> {
+    inputs: ExecutionInputs,
+) -> std::result::Result<ExecutionHandle, SubmitError> {
     submit_with_spawner(runtime, program, inputs, &OsThreadSpawner)
 }
 
 pub(super) fn submit_with_spawner(
     runtime: &Runtime,
     program: &CompiledGraph,
-    inputs: &[&Tensor],
+    inputs: ExecutionInputs,
     spawner: &dyn SubmissionSpawner,
-) -> Result<ExecutionHandle> {
-    let inputs = resolve_input_refs(program, inputs)?
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let input_refs = inputs.iter().collect::<Vec<_>>();
-    let prepared = prepare_compiled(runtime, program, &input_refs)?;
+) -> std::result::Result<ExecutionHandle, SubmitError> {
+    let prepared = match prepare_submission(runtime, program, &inputs) {
+        Ok(prepared) => prepared,
+        Err(source) => {
+            return Err(SubmitError::PreAdmission {
+                source: Box::new(source),
+                inputs: Box::new(inputs),
+            })
+        }
+    };
     let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
-    spawn_in_flight(submission, spawner)
+    match spawn_in_flight(submission, spawner) {
+        Ok(handle) => Ok(handle),
+        Err(failure) => {
+            let (inputs, source) = *failure;
+            Err(SubmitError::PreAdmission {
+                source: Box::new(source),
+                inputs: Box::new(inputs),
+            })
+        }
+    }
 }
 
 pub(super) fn run_prepared(
@@ -769,7 +1501,7 @@ pub(super) fn run_prepared(
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    execute_scheduled_tensor_refs(
+    execute_scheduled_reads(
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
@@ -777,13 +1509,41 @@ pub(super) fn run_prepared(
     )
 }
 
-fn execute_admitted(prepared: &PreparedCompiledGraph, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-    let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    execute_scheduled_tensor_refs(
+fn prepare_submission(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &ExecutionInputs,
+) -> Result<PreparedCompiledGraph> {
+    let input_reads = inputs.as_reads()?;
+    prepare_compiled_reads(runtime, program, &input_reads)
+}
+
+fn prepare_compiled_reads(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<PreparedCompiledGraph> {
+    validate_ordered_input_metadata_reads(program, inputs)?;
+    let signature = input_signature_reads(inputs)?;
+    let prepared = prepare(runtime, program, &signature)?;
+    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::submit")?;
+    Ok(PreparedCompiledGraph {
+        runtime_id: runtime.id(),
+        epoch: prepared.root().epoch(),
+        program: program.clone(),
+        prepared,
+    })
+}
+
+fn execute_admitted(
+    prepared: &PreparedCompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<Vec<Tensor>> {
+    execute_scheduled_reads(
         prepared.prepared.root().staging(),
         prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
-        &inputs,
+        inputs,
     )
 }
 
@@ -793,14 +1553,14 @@ pub(super) fn run_compiled_values(
     inputs: &[&Tensor],
 ) -> Result<Vec<TensorValue>> {
     let inputs = resolve_input_refs(program, inputs)?;
-    let signature = input_signature(&inputs)?;
+    let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
         runtime,
         prepared.root().epoch(),
         "Runtime::run_compiled_values",
     )?;
-    execute_scheduled_value_refs(
+    execute_scheduled_value_reads(
         prepared.root().staging(),
         prepared.root().schedule(),
         prepared.operations(),
@@ -867,18 +1627,15 @@ fn validate_prepared_epoch(
     Ok(())
 }
 
-fn execute_scheduled_tensor_refs(
+fn execute_scheduled_reads(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
-    inputs: &[&Tensor],
+    inputs: &[TensorRead<'_>],
 ) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
-    let inputs = inputs
-        .iter()
-        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-        .collect();
+    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
     execute_scheduled_slots(
         program,
         schedule,
@@ -893,18 +1650,15 @@ fn execute_scheduled_tensor_refs(
     })
 }
 
-fn execute_scheduled_value_refs(
+fn execute_scheduled_value_reads(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     operations: &[PreparedOperationPlan],
-    inputs: &[&Tensor],
+    inputs: &[TensorRead<'_>],
 ) -> Result<Vec<TensorValue>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    let inputs = inputs
-        .iter()
-        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-        .collect();
+    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
     execute_scheduled_slots(
         program,
         schedule,
@@ -1874,96 +2628,138 @@ fn collect_value_outputs_with<'input>(
         .collect()
 }
 
-fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {
-    let reads: RuntimeInputReads<'_> = inputs
-        .iter()
-        .map(|tensor| TensorRead::from_tensor(tensor))
-        .collect();
-    InputSignature::from_reads(&reads).map_err(|source| prepare_error(Arc::new(source)))
+fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
+    InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }
 
 fn resolve_input_refs<'a>(
     program: &'a CompiledGraph,
     inputs: &'a [&'a Tensor],
-) -> Result<RuntimeInputRefs<'a>> {
+) -> Result<RuntimeInputReads<'a>> {
+    let expected = program.program().inputs().len();
+    if inputs.len() > expected {
+        return Err(Error::GraphInputCountMismatch {
+            expected,
+            actual: inputs.len(),
+        });
+    }
     let resolved = if inputs.is_empty() {
         semantic_default_inputs(program)?
+    } else if inputs.len() == expected {
+        inputs
+            .iter()
+            .map(|tensor| TensorRead::from_tensor(tensor))
+            .collect()
     } else {
-        inputs.iter().copied().collect()
+        let mut explicit = inputs.iter();
+        let mut resolved = RuntimeInputReads::new();
+        for value in program.program().inputs() {
+            if let Some(retained) = program.bindings().tensor_ref_for_input(*value) {
+                resolved.push(retained.tensor_read()?);
+            } else {
+                let tensor = explicit.next().ok_or_else(|| {
+                    Error::invalid_argument(
+                        "Runtime::resolve_input_refs",
+                        ErrorPhase::Execution,
+                        "inputs",
+                        format!(
+                            "expected {expected} inputs, or one explicit input for each unbound placeholder"
+                        ),
+                    )
+                })?;
+                resolved.push(TensorRead::from_tensor(tensor));
+            }
+        }
+        if explicit.next().is_some() {
+            return Err(Error::invalid_argument(
+                "Runtime::resolve_input_refs",
+                ErrorPhase::Execution,
+                "inputs",
+                format!("expected {expected} inputs, received {}", inputs.len()),
+            ));
+        }
+        resolved
     };
-    validate_ordered_input_metadata(program, &resolved)?;
+    validate_ordered_input_metadata_reads(program, &resolved)?;
     Ok(resolved)
 }
 
-fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputRefs<'_>> {
+fn semantic_default_inputs(program: &CompiledGraph) -> Result<RuntimeInputReads<'_>> {
     program
         .program()
         .inputs()
         .iter()
         .enumerate()
         .map(|(input_index, value)| {
-            program
+            let retained = program
                 .bindings()
                 .tensor_ref_for_input(*value)
-                .map(AsRef::as_ref)
                 .ok_or_else(|| Error::UnboundPlaceholder {
                     input_key: format!("semantic input {input_index}"),
-                })
+                })?;
+            retained.tensor_read()
         })
         .collect()
 }
 
-fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) -> Result<()> {
+fn validate_ordered_input_metadata_reads(
+    program: &CompiledGraph,
+    inputs: &[TensorRead<'_>],
+) -> Result<()> {
+    let actuals = inputs
+        .iter()
+        .map(|input| (input.dtype(), input.shape().to_vec()))
+        .collect::<Vec<_>>();
+    validate_ordered_input_metadata_values(program, &actuals, "Runtime::submit")
+}
+
+fn validate_ordered_input_metadata_values(
+    program: &CompiledGraph,
+    actuals: &[(tenferro_tensor::DType, Vec<usize>)],
+    caller: &'static str,
+) -> Result<()> {
     let expected = program.input_count();
-    if inputs.len() != expected {
+    if actuals.len() != expected {
         return Err(Error::GraphInputCountMismatch {
             expected,
-            actual: inputs.len(),
+            actual: actuals.len(),
         });
     }
-    let input_shapes: RuntimeInputShapes<'_> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    for (input_value, actual) in program.program().inputs().iter().zip(inputs) {
+    let input_shapes: RuntimeInputShapes<'_> =
+        actuals.iter().map(|(_, shape)| shape.as_slice()).collect();
+    for (input_value, (actual_dtype, actual_shape)) in
+        program.program().inputs().iter().zip(actuals)
+    {
         let metadata = program
             .program()
             .value_metadata(*input_value)
-            .map_err(|source| {
-                Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
-            })?;
-        if metadata.dtype() != actual.dtype() {
+            .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
+        if metadata.dtype() != *actual_dtype {
             return Err(Error::PlaceholderDtypeMismatch {
                 expected: metadata.dtype(),
-                actual: actual.dtype(),
+                actual: *actual_dtype,
             });
         }
-        if metadata.shape().len() != actual.shape().len() {
+        if metadata.shape().len() != actual_shape.len() {
             return Err(Error::PlaceholderRankMismatch {
                 expected: metadata.shape().len(),
-                actual: actual.shape().len(),
+                actual: actual_shape.len(),
             });
         }
-        let mut expected_shape: RuntimeShapeScratch = actual.shape().iter().copied().collect();
+        let mut expected_shape: RuntimeShapeScratch = actual_shape.iter().copied().collect();
         let mut exact_mismatch = false;
-        for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual.shape()).enumerate()
-        {
+        for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual_shape).enumerate() {
             match extent {
                 ShapeExtent::Exact(expression) => {
                     let expected = expression.eval(&input_shapes).map_err(|source| {
-                        Error::runtime_state_source(
-                            "Runtime::run_compiled",
-                            ErrorPhase::Execution,
-                            source,
-                        )
+                        Error::runtime_state_source(caller, ErrorPhase::Execution, source)
                     })?;
                     expected_shape[axis] = expected;
                     exact_mismatch |= expected != *actual_size;
                 }
                 ShapeExtent::UpperBound(expression) => {
                     let bound = expression.eval(&input_shapes).map_err(|source| {
-                        Error::runtime_state_source(
-                            "Runtime::run_compiled",
-                            ErrorPhase::Execution,
-                            source,
-                        )
+                        Error::runtime_state_source(caller, ErrorPhase::Execution, source)
                     })?;
                     if *actual_size > bound {
                         return Err(Error::PlaceholderShapeBoundExceeded {
@@ -1979,7 +2775,7 @@ fn validate_ordered_input_metadata(program: &CompiledGraph, inputs: &[&Tensor]) 
         if exact_mismatch {
             return Err(Error::PlaceholderShapeMismatch {
                 expected: expected_shape.into_vec(),
-                actual: actual.shape().to_vec(),
+                actual: actual_shape.clone(),
             });
         }
     }
@@ -2289,7 +3085,7 @@ mod tests {
                 })?;
             let materialized =
                 backend.with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))?;
-            self.probe_reentrant_call(materialized.clone());
+            self.probe_reentrant_call(materialized.duplicate()?);
             Ok(vec![materialized])
         }
     }

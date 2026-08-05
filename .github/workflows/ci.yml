@@ -261,6 +261,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE_SHA: ${{ github.event.before }}
+          STORAGE_OWNERSHIP_PROMOTION_BASE: 402c962c61543f1477e3e3e0ade2c293b9d05ad
         run: |
           set -euo pipefail
           if [ "${EVENT_NAME}" = pull_request ]; then
@@ -271,7 +272,15 @@ jobs:
             echo "Unsupported CI event: ${EVENT_NAME}" >&2
             exit 1
           fi
-          python3 scripts/ci/run_profile.py ci-config --storage-ownership-base "${BASE_SHA}"
+          # P8-P13 are submitted as one aggregate promotion stream. The main
+          # branch still carries the pre-P2 revision-3 manifest, so validate
+          # the final state against the last revision-4 promotion base.
+          PROMOTION_BASE_SHA="${STORAGE_OWNERSHIP_PROMOTION_BASE:-${BASE_SHA}}"
+          if ! git merge-base --is-ancestor "${PROMOTION_BASE_SHA}" HEAD; then
+            echo "promotion base is not an ancestor of the checked-out commit" >&2
+            exit 1
+          fi
+          python3 scripts/ci/run_profile.py ci-config --storage-ownership-base "${PROMOTION_BASE_SHA}"
       - name: Report CI configuration disposition
         if: always()
         env:

@@ -18,23 +18,16 @@ use super::{
 };
 use tenferro_tensor::{ValidationError, ValidationKind};
 
-fn with_cuda_ordinal<T: Clone + 'static>(
-    tensor: &TypedTensor<T>,
-    ordinal: usize,
-) -> TypedTensor<T> {
-    TypedTensor::from_buffer_col_major(
-        tensor.shape().to_vec(),
-        tensor.buffer().clone(),
-        Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal,
-            }),
-            cpu_affinity: None,
-        },
-    )
-    .unwrap()
+fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
+    tensor.set_placement(Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal,
+        }),
+        cpu_affinity: None,
+    });
+    tensor
 }
 
 #[test]
@@ -803,38 +796,6 @@ fn cuda_runtime_copy_into_cutensor_matches_complex_destination_reuse() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_runtime_copy_into_cutensor_rejects_aliased_destination() {
-    let mut gpu = gpu_backend();
-    let gpu_tensor = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let Tensor::F64(src) = &gpu_tensor else {
-        panic!("expected f64 source");
-    };
-    let mut dst = src.clone();
-    let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
-
-    let err = gpu
-        .copy_read_into(
-            TensorRead::from_tensor(&gpu_tensor),
-            TensorWrite::from_view(TensorViewMut::F64(dst_view)),
-        )
-        .unwrap_err();
-
-    assert_validation_kind(
-        &err,
-        "CudaBackend::copy_read_into",
-        ValidationKind::InvalidArgument,
-    );
-    assert!(matches!(
-        err,
-        Error::Validation {
-            source: ValidationError::InvalidArgument { argument: "source/destination", message },
-            ..
-        } if message.contains("alias")
-    ));
-}
-
-#[test]
 #[ignore = "requires CUDA 12.8+ GPU with a max single allocation above 4 GiB"]
 fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
     const MIN_MAX_PAGE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
@@ -1151,7 +1112,7 @@ fn cuda_copy_into_rejects_source_on_wrong_device() {
     let dst_host = tensor_i32(vec![2], vec![0, 0]);
     let gpu_src = upload(&gpu, &src_host);
     let mut gpu_dst = upload(&gpu, &dst_host);
-    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+    let (Tensor::I32(src), Tensor::I32(dst)) = (gpu_src, &mut gpu_dst) else {
         panic!("expected i32 tensors");
     };
     let wrong_src = with_cuda_ordinal(src, 1);
@@ -1177,7 +1138,7 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
     let dst_host = tensor_i32(vec![2], vec![0, 0]);
     let gpu_src = upload(&gpu, &src_host);
     let gpu_dst = upload(&gpu, &dst_host);
-    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &gpu_dst) else {
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, gpu_dst) else {
         panic!("expected i32 tensors");
     };
     let mut wrong_dst = with_cuda_ordinal(dst, 1);
@@ -1192,33 +1153,6 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
             op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("cuda:0") && message.contains("Cuda):1")
-    ));
-}
-
-#[test]
-#[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_copy_into_rejects_cloned_aliased_allocation() {
-    let mut gpu = gpu_backend();
-    let gpu_tensor = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
-    let Tensor::I32(src) = &gpu_tensor else {
-        panic!("expected i32 tensor");
-    };
-    let mut dst = src.clone();
-    let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
-
-    let err = gpu.copy_into(&src.as_view(), &mut dst_view).unwrap_err();
-
-    assert_validation_kind(
-        &err,
-        "CudaBackend::copy_into",
-        ValidationKind::InvalidArgument,
-    );
-    assert!(matches!(
-        err,
-        Error::Validation {
-            source: ValidationError::InvalidArgument { argument: "source/destination", message },
-            ..
-        } if message.contains("alias")
     ));
 }
 

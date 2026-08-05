@@ -79,8 +79,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
             let owned = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(other.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(other.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
@@ -93,7 +93,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
             let broadcast = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
                 &[],
                 &[],
                 TensorRead::from_tensor(&Tensor::$variant(other)),
@@ -112,8 +112,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             ];
             let owned_scalar_vector = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned_scalar_vector.shape(), &[3]);
@@ -123,8 +123,8 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let owned_vector_scalar = mul_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
             )
             .unwrap();
             assert_eq!(owned_vector_scalar.shape(), &[3]);
@@ -158,10 +158,10 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                TensorRead::from_tensor(&Tensor::$variant(scalar.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(scalar.duplicate().unwrap())),
                 &[3],
                 &[],
-                TensorRead::from_tensor(&Tensor::$variant(vector.clone())),
+                TensorRead::from_tensor(&Tensor::$variant(vector.duplicate().unwrap())),
                 &[3],
                 &[0],
             )
@@ -1157,12 +1157,12 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     )
     .unwrap();
 
-    let f32_b_tensor = Tensor::F32(f32_b.clone());
-    let f64_b_tensor = Tensor::F64(f64_b.clone());
-    let c32_b_tensor = Tensor::C32(c32_b.clone());
-    let c64_b_tensor = Tensor::C64(c64_b.clone());
-    let f32_scalar_tensor = Tensor::F32(f32_scalar.clone());
-    let f64_scalar_tensor = Tensor::F64(f64_scalar.clone());
+    let f32_b_tensor = Tensor::F32(f32_b.duplicate().unwrap());
+    let f64_b_tensor = Tensor::F64(f64_b.duplicate().unwrap());
+    let c32_b_tensor = Tensor::C32(c32_b.duplicate().unwrap());
+    let c64_b_tensor = Tensor::C64(c64_b.duplicate().unwrap());
+    let f32_scalar_tensor = Tensor::F32(f32_scalar.duplicate().unwrap());
+    let f64_scalar_tensor = Tensor::F64(f64_scalar.duplicate().unwrap());
 
     let add_f32 = add_read_with_pool(
         &mut buffers,
@@ -1542,7 +1542,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical f32 outer product should stay lazy");
-    assert!(matches!(value_f32, TensorValue::View(_)));
+    assert!(value_f32.is_view());
     assert_eq!(
         crate::materialize_tensor_read(&mut buffers, "test", value_f32.tensor_read())
             .unwrap()
@@ -1565,7 +1565,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical i32 outer product should stay lazy");
-    assert!(matches!(value_i32, TensorValue::View(_)));
+    assert!(value_i32.is_view());
 
     let lhs_i64_data = [1_i64, 2, 3, 4, 5, 6];
     let rhs_i64_data = [2_i64, 3, 4, 5];
@@ -1582,7 +1582,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical i64 outer product should stay lazy");
-    assert!(matches!(value_i64, TensorValue::View(_)));
+    assert!(value_i64.is_view());
 
     let lhs_c32_data = [
         c32(1.0, 0.0),
@@ -1606,7 +1606,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical c32 outer product should stay lazy");
-    assert!(matches!(value_c32, TensorValue::View(_)));
+    assert!(value_c32.is_view());
 
     let lhs_c64_data = [
         c64(1.0, 0.0),
@@ -1630,7 +1630,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("non-canonical c64 outer product should stay lazy");
-    assert!(matches!(value_c64, TensorValue::View(_)));
+    assert!(value_c64.is_view());
 
     let same_shape_i64_lhs =
         Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![2, 3]).unwrap());
@@ -1647,7 +1647,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     )
     .unwrap()
     .expect("same-shape multiply should materialize");
-    assert!(matches!(materialized, TensorValue::Tensor(_)));
+    assert!(materialized.as_tensor().is_some());
     assert_eq!(
         crate::materialize_tensor_read(&mut buffers, "test", materialized.tensor_read())
             .unwrap()

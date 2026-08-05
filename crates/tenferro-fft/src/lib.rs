@@ -3,11 +3,11 @@
 //! This crate is an out-of-tree `ExtensionOp` package with an explicit
 //! [`FftBackend`] capability. [`tenferro_cpu::CpuBackend`] implements the
 //! capability through RustFFT. With the `webgpu` feature,
-//! `tenferro_gpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
+//! `tenferro_gpu::webgpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! On macOS, `tenferro_gpu::AppleContext` pairs that Metal backend with a
+//! On macOS, `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
 //! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
 //! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses
@@ -58,7 +58,7 @@
 //! use num_complex::Complex32;
 //! use tenferro_cpu::with_cpu_exec_session;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_gpu::{with_webgpu_exec_session, AppleContext};
+//! use tenferro_gpu::{webgpu::with_webgpu_exec_session, apple::AppleContext};
 //! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! if let Ok(context) = AppleContext::new() {
@@ -136,7 +136,7 @@ use tenferro_ad::semantic_extension::{
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::with_webgpu_exec_session;
+use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{
     apply, ExtensionCacheStore, ExtensionExecutionContext, ExtensionOp,

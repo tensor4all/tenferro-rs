@@ -19,13 +19,13 @@ use computegraph::ValueKey;
 use computegraph::ValueRef;
 use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
 #[cfg(feature = "cuda")]
-use tenferro_gpu::CudaBackend;
+use tenferro_gpu::cuda::CudaBackend;
 #[cfg(feature = "webgpu")]
-use tenferro_gpu::WebGpuBackend;
+use tenferro_gpu::webgpu::WebGpuBackend;
 #[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
-use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor};
+use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor, RetainedValue};
 use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{
     CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
@@ -34,11 +34,11 @@ use tenferro_runtime::{
 };
 #[cfg(test)]
 use tenferro_tensor::TypedTensor;
-use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
-    CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
-    TensorScalar, TensorValue,
+    AllocationGroup, CacheStats, DType, DescriptorSlot, GroupError, IntoShapeVec, Tensor,
+    TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
 };
+use tenferro_tensor::{BackendSession, BackendSessionHost};
 
 use crate::eager_backend::{
     cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_runtime_for_backend, EagerBackend,
@@ -59,8 +59,8 @@ use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
 
 use crate::AdContext;
 
-pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
-pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
+pub(crate) type GradSlot = Arc<Mutex<Option<Arc<AdValueRecord>>>>;
+pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<AdValueRecord>>>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct EagerTrace;
@@ -360,7 +360,385 @@ pub struct EagerRuntimeCacheStats {
 
 #[cfg(test)]
 pub(crate) struct EagerGraphExecution {
-    pub(crate) outputs: Vec<Arc<Tensor>>,
+    pub(crate) outputs: Vec<Tensor>,
+}
+
+/// A read-only value view retained by an eager tensor record.
+///
+/// The guard borrows the record's allocation group. It never owns a tensor and
+/// cannot be converted into a mutable view.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let value = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
+///     ctx,
+/// )?;
+/// let view = value.value()?;
+/// assert_eq!(view.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct ValueGuard<'a> {
+    view: TensorView<'a>,
+}
+
+impl<'a> ValueGuard<'a> {
+    /// Return the scalar dtype of the retained value.
+    pub fn dtype(&self) -> DType {
+        self.view.dtype()
+    }
+
+    /// Return the logical shape of the retained value.
+    pub fn shape(&self) -> &[usize] {
+        self.view.shape()
+    }
+
+    /// Borrow the dtype-erased tensor view.
+    pub fn as_tensor_view(&self) -> &TensorView<'_> {
+        &self.view
+    }
+
+    /// Borrow compact host bytes through the tensor's explicit scalar type.
+    ///
+    /// Backend-resident values return the backend's typed host-access error;
+    /// this method does not download storage implicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::DTypeMismatch`] when
+    /// `T` does not match the view dtype, [`tenferro_tensor::ValidationError::NonContiguousViewAsSlice`]
+    /// for a non-contiguous view, or [`tenferro_tensor::Error::HostAccess`]
+    /// when backend storage cannot be mapped as a host slice.
+    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&'a [T]> {
+        self.view.as_slice()
+    }
+
+    fn duplicate_host_tensor(&self) -> tenferro_tensor::Result<Tensor> {
+        match &self.view {
+            TensorView::F32(view) => {
+                <f32 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::F64(view) => {
+                <f64 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::I32(view) => {
+                <i32 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::I64(view) => {
+                <i64 as TensorScalar>::into_tensor(view.shape().to_vec(), view.as_slice()?.to_vec())
+            }
+            TensorView::Bool(view) => <bool as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+            TensorView::C32(view) => <num_complex::Complex32 as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+            TensorView::C64(view) => <num_complex::Complex64 as TensorScalar>::into_tensor(
+                view.shape().to_vec(),
+                view.as_slice()?.to_vec(),
+            ),
+        }
+    }
+}
+
+/// Read-only retained gradient value.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
+///     ctx,
+/// )?;
+/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let _gradients = loss.backward()?;
+/// let gradient = x.grad()?.expect("tracked leaf has a gradient");
+/// assert_eq!(gradient.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct GradientValue {
+    record: Arc<AdValueRecord>,
+    ctx: Arc<EagerRuntime>,
+}
+
+impl GradientValue {
+    /// Return the scalar dtype of the gradient.
+    pub fn dtype(&self) -> DType {
+        self.record.dtype()
+    }
+
+    /// Return the logical shape of the gradient.
+    pub fn shape(&self) -> &[usize] {
+        self.record.shape()
+    }
+
+    /// Borrow the gradient's value guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained gradient record is
+    /// unavailable or its allocation-group descriptor is invalid.
+    pub fn value(&self) -> Result<ValueGuard<'_>> {
+        self.record.value("GradientValue::value")
+    }
+
+    /// Borrow the gradient as a dtype-erased read target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained gradient record or
+    /// its allocation-group descriptor is unavailable.
+    pub fn tensor_read(&self) -> Result<TensorRead<'_>> {
+        self.record.tensor_read("GradientValue::tensor_read")
+    }
+
+    /// Borrow a compact host slice without downloading backend storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value is unavailable,
+    /// [`tenferro_tensor::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the gradient dtype, or [`tenferro_tensor::Error::HostAccess`]
+    /// when backend storage cannot be mapped as a host slice.
+    pub fn as_slice<T: TensorScalar>(&self) -> tenferro_tensor::Result<&[T]> {
+        self.record
+            .value("GradientValue::as_slice")
+            .map_err(|error| {
+                tenferro_tensor::Error::runtime_state_source("GradientValue::as_slice", error)
+            })?
+            .as_slice()
+    }
+
+    /// Explicitly copy a host-resident gradient into a standalone tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value or execution
+    /// session is unavailable, or a typed backend/host-access error when the
+    /// gradient cannot be materialized as a contiguous tensor.
+    pub fn to_tensor(&self) -> Result<Tensor> {
+        let value = self
+            .record
+            .value("GradientValue::to_tensor")
+            .map_err(|error| {
+                Error::runtime_state_source(
+                    "GradientValue::to_tensor",
+                    ErrorPhase::Execution,
+                    error,
+                )
+            })?;
+        match value.duplicate_host_tensor() {
+            Ok(tensor) => Ok(tensor),
+            Err(_) => {
+                let read = self.record.tensor_read("GradientValue::to_tensor")?;
+                self.ctx
+                    .with_execution_session(|session| session.to_contiguous_read(read))?
+                    .map_err(Error::from)
+            }
+        }
+    }
+}
+
+/// Move-only accumulated gradient bundle backed by one allocation group.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::requires_grad_in(
+///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
+///     ctx,
+/// )?;
+/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let gradients = loss.backward()?;
+/// assert!(!gradients.is_empty());
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct Gradients {
+    group: AllocationGroup,
+    slots: HashMap<ValueKey<StdTensorOp>, DescriptorSlot>,
+}
+
+impl Gradients {
+    fn from_tensors(tensors: HashMap<ValueKey<StdTensorOp>, Tensor>) -> Result<Self> {
+        let (keys, values): (Vec<_>, Vec<_>) = tensors.into_iter().unzip();
+        let (group, bindings) = AllocationGroup::from_tensors(values).map_err(|error| {
+            Error::runtime_state_source("Gradients::from_tensors", ErrorPhase::Execution, error)
+        })?;
+        let slots = keys.into_iter().zip(bindings).collect();
+        Ok(Self { group, slots })
+    }
+
+    /// Return the number of retained gradient descriptors.
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Return whether no gradient was produced.
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// Borrow one gradient view by its local value key.
+    pub fn grad(&self, key: &ValueKey<StdTensorOp>) -> Option<TensorView<'_>> {
+        let slot = self.slots.get(key).copied()?;
+        let mut reads = self.group.read_views(std::slice::from_ref(&slot)).ok()?;
+        match reads.pop()? {
+            TensorRead::View(view) => Some(view),
+            TensorRead::Tensor(_) => None,
+        }
+    }
+
+    /// Consume one gradient owner while leaving the bundle unchanged on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::RuntimeState`] when the descriptor is
+    /// invalid or its allocation is aliased. A missing key is reported as
+    /// `Ok(None)`.
+    pub fn take_grad(
+        &mut self,
+        key: &ValueKey<StdTensorOp>,
+    ) -> tenferro_tensor::Result<Option<Tensor>> {
+        let Some(&slot) = self.slots.get(key) else {
+            return Ok(None);
+        };
+        let tensor = self.group.take_tensor(slot).map_err(|error| {
+            tenferro_tensor::Error::runtime_state_source("Gradients::take_grad", error)
+        })?;
+        self.slots.remove(key);
+        Ok(Some(tensor))
+    }
+}
+
+/// Error returned when a value cannot be consumed without changing its owner.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, IntoValueError, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let value = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
+///     ctx,
+/// )?;
+/// let _shared = value.clone();
+/// assert!(matches!(
+///     value.into_value(),
+///     Err(IntoValueError::NotUnique(_))
+/// ));
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Debug)]
+pub enum IntoValueError<H> {
+    /// Another eager handle, tape record, or checkpoint retains the value.
+    NotUnique(H),
+    /// Group extraction failed after the handle was uniquely acquired.
+    Extract { value: H, error: GroupError },
+}
+
+impl<H> std::fmt::Display for IntoValueError<H> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotUnique(_) => formatter.write_str("eager value is retained by another handle"),
+            Self::Extract { error, .. } => {
+                write!(formatter, "eager value extraction failed: {error}")
+            }
+        }
+    }
+}
+
+impl<H: std::fmt::Debug + Send + Sync + 'static> std::error::Error for IntoValueError<H> {}
+
+/// One direct retention container owns the physical allocation group.
+#[derive(Debug)]
+struct RetentionContainer {
+    group: AllocationGroup,
+}
+
+/// Read-only descriptor record used by eager handles and the AD registries.
+#[derive(Debug)]
+pub(crate) struct AdValueRecord {
+    container: Arc<RetentionContainer>,
+    slot: DescriptorSlot,
+    dtype: DType,
+    shape: Box<[usize]>,
+}
+
+impl AdValueRecord {
+    fn from_group(
+        group: AllocationGroup,
+        slot: DescriptorSlot,
+        dtype: DType,
+        shape: Vec<usize>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            container: Arc::new(RetentionContainer { group }),
+            slot,
+            dtype,
+            shape: shape.into_boxed_slice(),
+        })
+    }
+
+    fn from_tensor(tensor: Tensor, op: &'static str) -> Result<Arc<Self>> {
+        let dtype = tensor.dtype();
+        let shape = tensor.shape().to_vec();
+        let (group, bindings) = AllocationGroup::from_tensors(vec![tensor])
+            .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
+        let slot = bindings.first().copied().ok_or_else(|| {
+            Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
+        })?;
+        Ok(Self::from_group(group, slot, dtype, shape))
+    }
+
+    fn tensor_read(&self, op: &'static str) -> Result<TensorRead<'_>> {
+        let mut reads = self
+            .container
+            .group
+            .read_views(std::slice::from_ref(&self.slot))
+            .map_err(|error| Error::runtime_state_source(op, ErrorPhase::Execution, error))?;
+        reads.pop().ok_or_else(|| {
+            Error::runtime_state(op, ErrorPhase::Execution, "empty allocation-group binding")
+        })
+    }
+
+    fn value(&self, op: &'static str) -> Result<ValueGuard<'_>> {
+        match self.tensor_read(op)? {
+            TensorRead::View(view) => Ok(ValueGuard { view }),
+            TensorRead::Tensor(_) => Err(Error::runtime_state(
+                op,
+                ErrorPhase::Execution,
+                "allocation-group value did not produce a borrowed descriptor view",
+            )),
+        }
+    }
+
+    fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
 }
 
 /// Placement-selected CPU view of one [`EagerRuntime`].
@@ -529,7 +907,7 @@ impl CpuPlacementBoundEager {
 /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
 /// let z = x.add(&y).unwrap();
 ///
-/// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
+/// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 pub struct EagerRuntime {
@@ -544,7 +922,6 @@ pub struct EagerRuntime {
     semantic_extension_rules: SemanticExtensionRuleSet,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
-    value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
     /// S2: prepared derivative programs keyed by semantic structure, wrt input,
     /// and concrete bound input metadata. Avoids re-running freeze+AD
@@ -600,14 +977,6 @@ impl fmt::Debug for EagerRuntime {
             }
             Err(_) => {
                 debug.field("value_records_len", &"<locked>");
-            }
-        }
-        match self.value_ptr_records.try_lock() {
-            Ok(records) => {
-                debug.field("value_ptr_records_len", &records.len());
-            }
-            Err(_) => {
-                debug.field("value_ptr_records_len", &"<locked>");
             }
         }
         match self.ad_transform_cache.stats() {
@@ -691,18 +1060,6 @@ impl EagerRuntime {
         })
     }
 
-    fn lock_value_ptr_records(
-        &self,
-    ) -> Result<MutexGuard<'_, HashMap<usize, Weak<EagerTensorRecord>>>> {
-        self.value_ptr_records.lock().map_err(|_| {
-            Error::runtime_state(
-                "eager_value_pointer_registry",
-                ErrorPhase::Execution,
-                "lock poisoned",
-            )
-        })
-    }
-
     fn from_backend(backend: EagerBackend) -> Result<Self> {
         Self::from_backend_with_rules_and_cache(
             backend,
@@ -727,7 +1084,6 @@ impl EagerRuntime {
             semantic_extension_rules,
             grad_slots: Mutex::new(HashMap::new()),
             value_records: Mutex::new(HashMap::new()),
-            value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
             prepared_derivative_cache: Mutex::new(PreparedDerivativeCache::default()),
         })
@@ -867,7 +1223,7 @@ impl EagerRuntime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
     /// let _ctor: fn(CudaBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
@@ -890,7 +1246,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaBackend;
     ///
     /// let _ctor: fn(CudaBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_cuda_backend_and_ad_context;
@@ -919,7 +1275,7 @@ impl EagerRuntime {
     ///
     /// ```
     /// use tenferro_ad::EagerRuntime;
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn(WebGpuBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend;
@@ -941,7 +1297,7 @@ impl EagerRuntime {
     ///
     /// ```rust
     /// use tenferro_ad::{AdContext, EagerRuntime};
-    /// use tenferro_gpu::WebGpuBackend;
+    /// use tenferro_gpu::webgpu::WebGpuBackend;
     ///
     /// let _ctor: fn(WebGpuBackend, &AdContext) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
     ///     EagerRuntime::with_webgpu_backend_and_ad_context;
@@ -1364,17 +1720,6 @@ impl EagerRuntime {
         }))
     }
 
-    pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
-        if let Some(tensor) = value.as_tensor_arc() {
-            return Ok(tensor.as_ref().clone());
-        }
-
-        let mut backend = self.lock_backend()?;
-        backend
-            .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
-            .map_err(Error::from)
-    }
-
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
     /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
@@ -1440,11 +1785,11 @@ impl EagerRuntime {
     pub(crate) fn exec_standard_graph_outputs(
         &self,
         graph: &Graph<StdTensorOp>,
-        initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+        initial_data: HashMap<ValueKey<StdTensorOp>, Tensor>,
     ) -> Result<EagerGraphExecution> {
         let mut backend =
             profile_eager_op_section("exec_graph.lock_backend", || self.lock_backend())?;
-        let mut all_values = initial_data.clone();
+        let mut all_values = initial_data;
 
         profile_eager_op_section("exec_graph.with_backend_session", || {
             backend.with_backend_session(|exec| -> Result<()> {
@@ -1458,7 +1803,7 @@ impl EagerRuntime {
                                     ValueRef::Local(local_id) => &graph.values()[*local_id].key,
                                     ValueRef::External(key) => key,
                                 };
-                                all_values.get(key).cloned().ok_or_else(|| {
+                                all_values.get(key).ok_or_else(|| {
                                     Error::Internal(format!(
                                         "standard graph eager execution missing value for {key:?}"
                                     ))
@@ -1467,7 +1812,7 @@ impl EagerRuntime {
                             .collect::<Result<Vec<_>>>()?;
                         let input_reads = input_values
                             .iter()
-                            .map(|value| TensorRead::from_tensor(value.as_ref()))
+                            .map(|value| TensorRead::from_tensor(value))
                             .collect::<Vec<_>>();
                         exec_standard_op_on_tensor_reads_in_session(
                             &op_node.operation,
@@ -1487,7 +1832,7 @@ impl EagerRuntime {
 
                     for (output_id, output) in op_node.outputs.iter().zip(outputs) {
                         let key = graph.values()[*output_id].key.clone();
-                        all_values.insert(key, Arc::new(output));
+                        all_values.insert(key, output);
                     }
                 }
                 Ok(())
@@ -1499,11 +1844,15 @@ impl EagerRuntime {
             .iter()
             .map(|&output_id| {
                 let key = &graph.values()[output_id].key;
-                all_values.get(key).cloned().ok_or_else(|| {
-                    Error::Internal(format!(
-                        "standard graph eager execution missing graph output {key:?}"
-                    ))
-                })
+                all_values
+                    .get(key)
+                    .ok_or_else(|| {
+                        Error::Internal(format!(
+                            "standard graph eager execution missing graph output {key:?}"
+                        ))
+                    })?
+                    .duplicate()
+                    .map_err(Error::from)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1527,23 +1876,6 @@ impl EagerRuntime {
     ) -> Result<()> {
         self.lock_value_records()?
             .insert(key.clone(), Arc::downgrade(record));
-        self.try_register_value_record_ptr(record)?;
-        Ok(())
-    }
-
-    pub(crate) fn try_register_value_record_ptr(
-        &self,
-        record: &Arc<EagerTensorRecord>,
-    ) -> Result<()> {
-        let tensor = match record.value.as_tensor_arc() {
-            Some(tensor) => Some(Arc::clone(tensor)),
-            None => record.materialized_cache.get().cloned(),
-        };
-        let Some(tensor) = tensor else {
-            return Ok(());
-        };
-        self.lock_value_ptr_records()?
-            .insert(tensor_ptr(&tensor), Arc::downgrade(record));
         Ok(())
     }
 
@@ -1644,7 +1976,7 @@ impl EagerRuntime {
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx)?;
     /// let z = x.add(&c).unwrap();
     ///
-    /// assert_eq!(z.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(z.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1704,7 +2036,7 @@ impl EagerRuntime {
     /// )?;
     /// let loss = x.mul(&x)?;
     /// let dx = ctx.grad(&loss, &x)?;
-    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1757,15 +2089,15 @@ impl EagerRuntime {
             });
         }
 
-        let value = output.materialized_arc()?;
+        let value = output.to_tensor()?;
         let seed = {
             let mut backend = self.lock_backend()?;
-            one_like_tensor(value.as_ref(), &mut *backend)?
+            one_like_tensor(&value, &mut *backend)?
         };
-        let seed = EagerTensor::new_result_arc(
+        let seed = EagerTensor::new_result(
             Arc::clone(self),
             eager_val_key(),
-            Arc::new(seed),
+            seed,
             false,
             None,
             Vec::new(),
@@ -1792,7 +2124,7 @@ impl EagerRuntime {
     ///     ctx.clone(),
     /// )?;
     /// let dx = ctx.vjp(&y, &x, &seed)?;
-    /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1880,7 +2212,7 @@ impl EagerRuntime {
     /// )?;
     /// let y = x.mul(&x)?;
     /// let dy = ctx.jvp(&y, &x, &tangent)?;
-    /// assert_eq!(dy.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
+    /// assert_eq!(dy.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -1951,7 +2283,7 @@ impl EagerRuntime {
 
     fn store_grads(
         &self,
-        cotangents: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+        cotangents: &HashMap<ValueKey<StdTensorOp>, Tensor>,
         backend: &mut EagerBackend,
     ) -> Result<()> {
         let mut updates = Vec::new();
@@ -1964,7 +2296,7 @@ impl EagerRuntime {
                 };
 
                 if let Some(incoming) = cotangents.get(key) {
-                    updates.push((slot, Arc::clone(incoming)));
+                    updates.push((slot, incoming));
                 }
 
                 true
@@ -1980,8 +2312,24 @@ impl EagerRuntime {
                 )
             })?;
             let next = match current.as_ref() {
-                Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
-                None => incoming,
+                Some(existing) => {
+                    let existing_read = existing.tensor_read("EagerRuntime::store_grads")?;
+                    let incoming_read = TensorRead::from_tensor(incoming);
+                    let tensor = backend
+                        .with_backend_session(|session| {
+                            session.add_read(existing_read, incoming_read)
+                        })
+                        .map_err(Error::from)?;
+                    AdValueRecord::from_tensor(tensor, "EagerRuntime::store_grads")?
+                }
+                None => {
+                    let duplicate = backend
+                        .with_backend_session(|session| {
+                            session.to_contiguous_read(TensorRead::from_tensor(incoming))
+                        })
+                        .map_err(Error::from)?;
+                    AdValueRecord::from_tensor(duplicate, "EagerRuntime::store_grads")?
+                }
             };
             *current = Some(next);
         }
@@ -2246,16 +2594,16 @@ fn semantic_eager_vjp_optional(
             (seed_input_index, derivative_output_index, program, None)
         };
 
-    let cotangent_tensor = cotangent.materialized_arc()?;
+    let cotangent_tensor = Arc::new(RetainedValue::from_tensor(cotangent.to_tensor()?));
     let input_count = derivative_program.input_count();
-    let mut owned_inputs = vec![None; input_count];
+    let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
         let Some(slot) = owned_inputs.get_mut(source_input_index) else {
             return Err(Error::Internal(format!(
                 "semantic eager VJP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.clone());
+        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2263,7 +2611,7 @@ fn semantic_eager_vjp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(cotangent_tensor.as_ref().clone());
+    *slot = Some(copy_value_for_runtime(ctx, cotangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2293,14 +2641,15 @@ fn semantic_eager_vjp_optional(
         prepared_runtime
     };
     let outputs = ctx.runtime.run_prepared(&prepared_runtime, &input_refs)?;
-    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+    let output_count = outputs.len();
+    let Some(result) = outputs.into_iter().nth(derivative_output_index) else {
         return Err(Error::Internal(format!(
             "semantic eager VJP derivative output index {derivative_output_index} is outside {} outputs",
-            outputs.len()
+            output_count
         )));
     };
     let cotangent_trace =
-        TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&cotangent_tensor))?;
+        TracedTensor::from_shared_tensor_value_symbolic_shape(Arc::clone(&cotangent_tensor))?;
     let semantic_trace = derivative_trace_from_frozen_program(
         &source,
         derivative_program.frozen_program(),
@@ -2314,10 +2663,10 @@ fn semantic_eager_vjp_optional(
     #[cfg(test)]
     EAGER_SEMANTIC_VJP_EXECUTIONS.fetch_add(1, Ordering::Relaxed);
 
-    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
         Arc::clone(ctx),
         eager_val_key(),
-        Arc::new(result),
+        result,
         true,
         None,
         Some(semantic_trace),
@@ -2394,16 +2743,16 @@ fn semantic_eager_jvp_optional(
     };
 
     let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
-    let tangent_tensor = tangent.materialized_arc()?;
+    let tangent_tensor = Arc::new(RetainedValue::from_tensor(tangent.to_tensor()?));
     let input_count = derivative_program.input_count();
-    let mut owned_inputs = vec![None; input_count];
+    let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
         let Some(slot) = owned_inputs.get_mut(source_input_index) else {
             return Err(Error::Internal(format!(
                 "semantic eager JVP derivative program has no primal input slot {source_input_index}"
             )));
         };
-        *slot = Some(tensor.clone());
+        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
     }
     let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
         return Err(Error::Internal(format!(
@@ -2411,7 +2760,7 @@ fn semantic_eager_jvp_optional(
             owned_inputs.len()
         )));
     };
-    *slot = Some(tangent_tensor.as_ref().clone());
+    *slot = Some(copy_value_for_runtime(ctx, tangent_tensor.as_ref())?);
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -2424,13 +2773,15 @@ fn semantic_eager_jvp_optional(
         })
         .collect::<Result<Vec<_>>>()?;
     let outputs = ctx.runtime.run_compiled(&derivative_program, &input_refs)?;
-    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+    let output_count = outputs.len();
+    let Some(result) = outputs.into_iter().nth(derivative_output_index) else {
         return Err(Error::Internal(format!(
             "semantic eager JVP derivative output index {derivative_output_index} is outside {} outputs",
-            outputs.len()
+            output_count
         )));
     };
-    let tangent_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tangent_tensor))?;
+    let tangent_trace =
+        TracedTensor::from_shared_tensor_value_symbolic_shape(Arc::clone(&tangent_tensor))?;
     let semantic_trace = derivative_trace_from_frozen_program(
         &source,
         derivative.frozen(),
@@ -2441,10 +2792,10 @@ fn semantic_eager_jvp_optional(
         "semantic_eager_jvp",
     )?;
 
-    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
         Arc::clone(ctx),
         eager_val_key(),
-        Arc::new(result),
+        result,
         true,
         None,
         Some(semantic_trace),
@@ -2467,8 +2818,12 @@ fn validate_same_runtime(
     Ok(())
 }
 
-pub(crate) fn tensor_ptr(tensor: &Arc<Tensor>) -> usize {
-    Arc::as_ptr(tensor) as usize
+fn copy_value_for_runtime(ctx: &EagerRuntime, value: &RetainedValue) -> Result<Tensor> {
+    let read = value.tensor_read().map_err(|error| {
+        Error::runtime_state_source("copy_value_for_runtime", ErrorPhase::Execution, error)
+    })?;
+    ctx.with_execution_session(|session| session.to_contiguous_read(read))?
+        .map_err(Error::from)
 }
 
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
@@ -2512,8 +2867,6 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor {
-    pub(crate) value: Arc<TensorValue>,
-    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
     pub(crate) key: ValueKey<StdTensorOp>,
     pub(crate) trace: Option<EagerTrace>,
     pub(crate) semantic_trace: Option<TracedTensor>,
@@ -2525,8 +2878,7 @@ pub struct EagerTensor {
 }
 
 pub(crate) struct EagerTensorRecord {
-    value: Arc<TensorValue>,
-    materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
+    value: Arc<AdValueRecord>,
     key: ValueKey<StdTensorOp>,
     trace: Option<EagerTrace>,
     semantic_trace: Option<TracedTensor>,
@@ -2542,7 +2894,7 @@ struct EagerTensorParts {
     requires_grad: bool,
     trace: Option<EagerTrace>,
     semantic_trace: Option<TracedTensor>,
-    value: Arc<TensorValue>,
+    value: Arc<AdValueRecord>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     register_value: bool,
 }
@@ -2573,7 +2925,7 @@ impl EagerTensor {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     ///
-    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(x.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
@@ -2635,34 +2987,41 @@ impl EagerTensor {
         requires_grad: bool,
     ) -> Result<Self> {
         let key = eager_val_key();
-        let tensor = Arc::new(tensor);
-        let semantic_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tensor))?;
+        let semantic_tensor = ctx
+            .with_execution_session(|session| {
+                session.to_contiguous_read(TensorRead::from_tensor(&tensor))
+            })?
+            .map_err(Error::from)?;
+        let semantic_value = Arc::new(RetainedValue::from_tensor(semantic_tensor));
+        let semantic_trace = TracedTensor::from_shared_tensor_value_symbolic_shape(semantic_value)?;
         let metadata_scope =
-            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(tensor.as_ref()))
-                .map_err(|err| {
-                Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
-            })?;
+            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
+                |err| {
+                    Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
+                },
+            )?;
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_leaf")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace: None,
             semantic_trace: Some(semantic_trace),
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value,
             metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             register_value: true,
         })
     }
 
-    pub(crate) fn new_result_arc(
+    pub(crate) fn new_result(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::new_result_arc_with_semantic_trace(
+        Self::new_result_with_semantic_trace(
             ctx,
             key,
             tensor,
@@ -2673,43 +3032,45 @@ impl EagerTensor {
         )
     }
 
-    pub(crate) fn new_result_arc_with_semantic_trace(
+    pub(crate) fn new_result_with_semantic_trace(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value,
             metadata_scopes,
             register_value: true,
         })
     }
 
-    pub(crate) fn new_unregistered_result_arc_with_semantic_trace(
+    pub(crate) fn new_unregistered_result_with_semantic_trace(
         ctx: Arc<EagerRuntime>,
         key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
+        tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_unregistered_result")?;
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value,
             metadata_scopes,
             register_value: false,
         })
@@ -2724,13 +3085,21 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
+        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+            Error::runtime_state(
+                "EagerTensor::new_result_value",
+                ErrorPhase::Execution,
+                "a TensorValue could not be transferred into its allocation group",
+            )
+        })?;
+        let value = AdValueRecord::from_group(group, slot, dtype, shape);
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            value: Arc::new(value),
+            value,
             metadata_scopes,
             register_value: true,
         })
@@ -2751,10 +3120,8 @@ impl EagerTensor {
         if requires_grad {
             ctx.try_register_grad_slot(&key, &grad_slot)?;
         }
-        let materialized_cache = Arc::new(OnceLock::new());
         let record = Arc::new(EagerTensorRecord {
             value: Arc::clone(&value),
-            materialized_cache: Arc::clone(&materialized_cache),
             key: key.clone(),
             trace: trace.clone(),
             semantic_trace: semantic_trace.clone(),
@@ -2768,8 +3135,6 @@ impl EagerTensor {
         }
 
         Ok(Self {
-            value,
-            materialized_cache,
             key,
             trace,
             semantic_trace,
@@ -2782,13 +3147,14 @@ impl EagerTensor {
     }
 
     pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Result<Self> {
-        Ok(Self::new_untracked_value_result(
-            ctx,
-            TensorValue::from_tensor(tensor),
-        ))
+        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_untracked_result")?;
+        Ok(Self::new_untracked_value_record(ctx, value, None))
     }
 
-    pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue) -> Self {
+    pub(crate) fn new_untracked_value_result(
+        ctx: Arc<EagerRuntime>,
+        value: TensorValue,
+    ) -> Result<Self> {
         Self::new_untracked_value_result_with_semantic_trace(ctx, value, None)
     }
 
@@ -2796,14 +3162,27 @@ impl EagerTensor {
         ctx: Arc<EagerRuntime>,
         value: TensorValue,
         semantic_trace: Option<TracedTensor>,
+    ) -> Result<Self> {
+        let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
+            Error::runtime_state(
+                "EagerTensor::new_untracked_value_result",
+                ErrorPhase::Execution,
+                "a TensorValue could not be transferred into its allocation group",
+            )
+        })?;
+        let value = AdValueRecord::from_group(group, slot, dtype, shape);
+        Ok(Self::new_untracked_value_record(ctx, value, semantic_trace))
+    }
+
+    fn new_untracked_value_record(
+        ctx: Arc<EagerRuntime>,
+        value: Arc<AdValueRecord>,
+        semantic_trace: Option<TracedTensor>,
     ) -> Self {
-        let value = Arc::new(value);
-        let materialized_cache = Arc::new(OnceLock::new());
         let key = eager_val_key();
         let grad_slot = Arc::new(Mutex::new(None));
         let record = Arc::new(EagerTensorRecord {
-            value: Arc::clone(&value),
-            materialized_cache: Arc::clone(&materialized_cache),
+            value,
             key: key.clone(),
             trace: None,
             semantic_trace: semantic_trace.clone(),
@@ -2813,8 +3192,6 @@ impl EagerTensor {
             ctx: Arc::clone(&ctx),
         });
         Self {
-            value,
-            materialized_cache,
             key,
             trace: None,
             semantic_trace,
@@ -2828,8 +3205,6 @@ impl EagerTensor {
 
     pub(crate) fn from_record(record: Arc<EagerTensorRecord>) -> Self {
         Self {
-            value: Arc::clone(&record.value),
-            materialized_cache: Arc::clone(&record.materialized_cache),
             key: record.key.clone(),
             trace: record.trace.clone(),
             semantic_trace: record.semantic_trace.clone(),
@@ -2856,17 +3231,18 @@ impl EagerTensor {
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
     /// let y = x.detach();
     ///
-    /// assert_eq!(y.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(y.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// assert!(y.grad().unwrap().is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn detach(&self) -> Self {
-        let semantic_trace = self.value.as_tensor_arc().and_then(|tensor| {
-            TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(tensor)).ok()
-        });
-        Self::new_untracked_value_result_with_semantic_trace(
+        let semantic_trace = self
+            .duplicate_value()
+            .ok()
+            .and_then(|tensor| TracedTensor::from_tensor_symbolic_shape(tensor).ok());
+        Self::new_untracked_value_record(
             self.ctx.clone(),
-            self.value.as_ref().clone(),
+            Arc::clone(&self._record.value),
             semantic_trace,
         )
     }
@@ -2898,47 +3274,202 @@ impl EagerTensor {
         Self::from_tensor_in(self.to_tensor()?, Arc::clone(ctx))
     }
 
-    /// Materialize and share the concrete tensor value.
+    /// Borrow the retained value without creating an owner or copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained allocation-group
+    /// descriptor is unavailable or invalid.
+    pub fn value(&self) -> Result<ValueGuard<'_>> {
+        self._record.value.value("EagerTensor::value")
+    }
+
+    /// Explicitly duplicate this value into a fresh standalone allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when the retained value or execution
+    /// session is unavailable, or a typed host/backend error when the value
+    /// cannot be materialized as a contiguous tensor.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(), ctx)?;
-    /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[3.0]);
+    /// let value = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
+    ///     ctx,
+    /// )?;
+    /// let duplicate = value.duplicate_value()?;
+    /// assert_eq!(duplicate.as_slice::<f64>()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    pub fn duplicate_value(&self) -> Result<Tensor> {
+        let value = self.value()?;
+        match value.duplicate_host_tensor() {
+            Ok(tensor) => Ok(tensor),
+            Err(_) => {
+                let read = self
+                    ._record
+                    .value
+                    .tensor_read("EagerTensor::duplicate_value")?;
+                self.ctx
+                    .with_execution_session(|session| session.to_contiguous_read(read))?
+                    .map_err(Error::from)
+            }
+        }
+    }
+
+    // INVARIANT: the error variants return the unchanged eager handle so a
+    // caller can retry ownership extraction without an implicit copy.
+    #[allow(clippy::result_large_err)]
+    /// Consume this handle and structurally extract its retained allocation.
+    ///
+    /// A shared handle is returned unchanged as [`IntoValueError::NotUnique`].
+    /// Group extraction failures return the unchanged handle and typed group
+    /// error; no copy or fallback materialization is attempted.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] when lazy/backend-resident storage cannot
-    /// be materialized, or when eager value-record state is poisoned.
-    pub fn materialized(&self) -> Result<Arc<Tensor>> {
-        self.materialized_arc()
+    /// Returns [`IntoValueError::NotUnique`] when another handle retains the
+    /// value, or [`IntoValueError::Extract`] when structural group extraction
+    /// fails because the allocation is aliased or its descriptor is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let value = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
+    ///     ctx,
+    /// )?;
+    /// let owner = value
+    ///     .into_value()
+    ///     .expect("a uniquely owned value should be extractable");
+    /// assert_eq!(owner.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
+        if Arc::strong_count(&self._record) != 1 {
+            return Err(IntoValueError::NotUnique(self));
+        }
+        let Self { _record, .. } = self;
+        let record = match Arc::try_unwrap(_record) {
+            Ok(record) => record,
+            Err(record) => return Err(IntoValueError::NotUnique(Self::from_record(record))),
+        };
+        let EagerTensorRecord {
+            value,
+            key,
+            trace,
+            semantic_trace,
+            requires_grad,
+            grad_slot,
+            metadata_scopes,
+            ctx,
+        } = record;
+        let value = match Arc::try_unwrap(value) {
+            Ok(value) => value,
+            Err(value) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value,
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                return Err(IntoValueError::NotUnique(Self::from_record(record)));
+            }
+        };
+        let AdValueRecord {
+            container,
+            slot,
+            dtype,
+            shape,
+        } = value;
+        let container = match Arc::try_unwrap(container) {
+            Ok(container) => container,
+            Err(container) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value: Arc::new(AdValueRecord {
+                        container,
+                        slot,
+                        dtype,
+                        shape,
+                    }),
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                return Err(IntoValueError::NotUnique(Self::from_record(record)));
+            }
+        };
+        match container.group.into_tensor(slot) {
+            Ok(tensor) => Ok(tensor),
+            Err((group, error)) => {
+                let record = Arc::new(EagerTensorRecord {
+                    value: Arc::new(AdValueRecord {
+                        container: Arc::new(RetentionContainer { group }),
+                        slot,
+                        dtype,
+                        shape,
+                    }),
+                    key,
+                    trace,
+                    semantic_trace,
+                    requires_grad,
+                    grad_slot,
+                    metadata_scopes,
+                    ctx,
+                });
+                Err(IntoValueError::Extract {
+                    value: Self::from_record(record),
+                    error,
+                })
+            }
+        }
     }
 
     /// Return this tensor's scalar dtype without materializing through
-    /// [`materialized`](Self::materialized).
+    /// [`value`](Self::value).
     pub fn dtype(&self) -> DType {
-        self.value.dtype()
+        self._record.value.dtype()
     }
 
     /// Return this tensor's logical shape without materializing through
-    /// [`materialized`](Self::materialized).
+    /// [`value`](Self::value).
     pub fn shape(&self) -> &[usize] {
-        self.value.shape()
+        self._record.value.shape()
     }
 
     /// Borrow this tensor value as a [`TensorRead`].
     ///
     /// This is the preferred borrowed input boundary for executor calls. It
     /// preserves the option to replace eager storage with non-contiguous views
-    /// without forcing callers through [`materialized`](Self::materialized).
+    /// without forcing callers through [`value`](Self::value).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a validated eager value record becomes unavailable, which
+    /// indicates an internal invariant violation.
     pub fn tensor_read(&self) -> TensorRead<'_> {
-        self.value.tensor_read()
+        self._record
+            .value
+            .tensor_read("EagerTensor::tensor_read")
+            .expect("validated eager value record")
     }
 
     /// Materialize this eager tensor as an owned [`Tensor`].
@@ -2952,32 +3483,7 @@ impl EagerTensor {
     /// Returns [`Error::RuntimeState`] if backend state is unavailable, or a
     /// typed tensor backend error when contiguous materialization fails.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        self.ctx.materialize_value(self.value.as_ref())
-    }
-
-    pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
-        if let Some(tensor) = self.value.as_tensor_arc() {
-            self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(Arc::clone(tensor));
-        }
-        if let Some(tensor) = self.materialized_cache.get() {
-            self.ctx.try_register_value_record_ptr(&self._record)?;
-            return Ok(Arc::clone(tensor));
-        }
-
-        let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
-        let _ = self.materialized_cache.set(Arc::clone(&materialized));
-        self.ctx.try_register_value_record_ptr(&self._record)?;
-        Ok(self
-            .materialized_cache
-            .get()
-            .map(Arc::clone)
-            .unwrap_or(materialized))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn materialized_cache_is_initialized(&self) -> bool {
-        self.materialized_cache.get().is_some()
+        self.duplicate_value()
     }
 
     /// Return the accumulated gradient currently stored for this tensor.
@@ -3009,7 +3515,7 @@ impl EagerTensor {
     ///
     /// Returns [`Error::RuntimeState`] if the gradient slot is poisoned or no
     /// longer available.
-    pub fn grad(&self) -> Result<Option<Arc<Tensor>>> {
+    pub fn grad(&self) -> Result<Option<GradientValue>> {
         self.grad_slot
             .lock()
             .map_err(|_| {
@@ -3019,7 +3525,12 @@ impl EagerTensor {
                     "lock poisoned",
                 )
             })
-            .map(|slot| slot.clone())
+            .map(|slot| {
+                slot.as_ref().map(|record| GradientValue {
+                    record: Arc::clone(record),
+                    ctx: Arc::clone(&self.ctx),
+                })
+            })
     }
 
     /// Clear the accumulated gradient stored for this tensor.
@@ -3160,9 +3671,9 @@ impl EagerTensor {
         let initial_data = graph_input_keys
             .iter()
             .zip(inputs.iter())
-            .map(|(key, tensor)| Ok((ValueKey::Input(key.clone()), tensor.materialized_arc()?)))
+            .map(|(key, tensor)| Ok((ValueKey::Input(key.clone()), tensor.to_tensor()?)))
             .collect::<Result<HashMap<_, _>>>()?;
-        let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), &initial_data)?;
+        let execution = ctx.exec_standard_graph_outputs(graph.as_ref(), initial_data)?;
         if execution.outputs.len() != graph.outputs().len() {
             return Err(Error::Internal(format!(
                 "standard eager graph op expected {} graph outputs, got {}",
@@ -3176,7 +3687,7 @@ impl EagerTensor {
                 .outputs
                 .into_iter()
                 .map(|output| {
-                    Self::new_unregistered_result_arc_with_semantic_trace(
+                    Self::new_unregistered_result_with_semantic_trace(
                         Arc::clone(&ctx),
                         eager_val_key(),
                         output,
@@ -3216,7 +3727,7 @@ impl EagerTensor {
             .zip(recorded.semantic_traces)
             .zip(execution.outputs)
             .map(|((trace, semantic_trace), output)| {
-                Self::new_result_arc_with_semantic_trace(
+                Self::new_result_with_semantic_trace(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
@@ -3261,17 +3772,17 @@ impl EagerTensor {
     /// Returns [`Error::NonScalarGrad`] when this output is not scalar,
     /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
     /// or a typed validation/backend/runtime-state error during the reverse pass.
-    pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+    pub fn backward(&self) -> Result<Gradients> {
         if !self.shape().is_empty() {
             return Err(Error::NonScalarGrad {
                 shape: self.shape().to_vec(),
             });
         }
 
-        let value = self.materialized_arc()?;
+        let value = self.to_tensor()?;
         let seed = {
             let mut backend = self.ctx.lock_backend()?;
-            Arc::new(one_like_tensor(value.as_ref(), &mut *backend)?)
+            one_like_tensor(&value, &mut *backend)?
         };
         self.backward_from_seed(seed)
     }
@@ -3310,10 +3821,7 @@ impl EagerTensor {
     /// eager runtime, [`Error::Validation`] when its shape or dtype is not a
     /// valid seed, [`Error::UnsupportedAdRule`] for an unavailable reverse
     /// rule, or a typed backend/runtime-state error during execution.
-    pub fn backward_with(
-        &self,
-        cotangent: &EagerTensor,
-    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
+    pub fn backward_with(&self, cotangent: &EagerTensor) -> Result<Gradients> {
         if !self.same_context(cotangent) {
             return Err(Error::ContextMismatch {
                 lhs: self.ctx_id(),
@@ -3321,14 +3829,11 @@ impl EagerTensor {
             });
         }
         validate_seed_tensor("backward", self, cotangent)?;
-        self.backward_from_seed(cotangent.materialized_arc()?)
+        self.backward_from_seed(cotangent.to_tensor()?)
     }
 
-    fn backward_from_seed(
-        &self,
-        seed: Arc<Tensor>,
-    ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
-        let cotangent = EagerTensor::new_result_arc(
+    fn backward_from_seed(&self, seed: Tensor) -> Result<Gradients> {
+        let cotangent = EagerTensor::new_result(
             Arc::clone(&self.ctx),
             eager_val_key(),
             seed,
@@ -3362,11 +3867,22 @@ impl EagerTensor {
             let Some(grad) = self.ctx.vjp_optional(self, &wrt, &cotangent)? else {
                 continue;
             };
-            cotangents.insert(key, grad.materialized_arc()?);
+            let tensor = match grad.into_value() {
+                Ok(tensor) => tensor,
+                Err(IntoValueError::NotUnique(handle)) => handle.duplicate_value()?,
+                Err(IntoValueError::Extract { error, .. }) => {
+                    return Err(Error::runtime_state_source(
+                        "EagerTensor::backward",
+                        ErrorPhase::Execution,
+                        error,
+                    ));
+                }
+            };
+            cotangents.insert(key, tensor);
         }
         let mut backend = self.ctx.lock_backend()?;
         self.ctx.store_grads(&cotangents, &mut backend)?;
-        Ok(cotangents)
+        Gradients::from_tensors(cotangents)
     }
 }
 
@@ -3388,13 +3904,11 @@ pub(crate) struct RecordedEagerOutputs {
 
 pub(crate) fn record_eager_outputs(
     op: &StdTensorOp,
-    outputs: &[Arc<Tensor>],
+    outputs: &[&Tensor],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
     let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
-    let output_metadata = outputs
-        .iter()
-        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    let output_metadata = outputs.iter().map(|output| tensor_meta_from_tensor(output));
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
@@ -3439,13 +3953,11 @@ fn record_semantic_eager_outputs(
 fn record_eager_graph_outputs(
     graph: &Graph<StdTensorOp>,
     graph_input_keys: &[TensorInputKey],
-    outputs: &[Arc<Tensor>],
+    outputs: &[Tensor],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
     let semantic_traces = record_semantic_eager_graph_outputs(graph, graph_input_keys, inputs)?;
-    let output_metadata = outputs
-        .iter()
-        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    let output_metadata = outputs.iter().map(tensor_meta_from_tensor);
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
@@ -3623,12 +4135,16 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())?),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())?),
     };
-    backend.upload_host_tensor(&host).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&host))
+        .map_err(Error::from)
 }
 
 pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Result<Tensor> {
     let host = ones_tensor(input.dtype(), input.shape().to_vec())?;
-    backend.upload_host_tensor(&host).map_err(Error::from)
+    backend
+        .upload_host_tensor(TensorRead::from_tensor(&host))
+        .map_err(Error::from)
 }
 
 #[cfg(test)]

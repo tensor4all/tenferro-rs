@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tenferro_einsum::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, Subscripts, TensorDotAxes,
     TraceContextEinsumExt, TracedTensorEinsumExt,
@@ -17,7 +15,7 @@ fn spec(tensor: &Tensor) -> ProgramInputSpec {
 
 fn trace_default(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
     trace
-        .input_with_default(spec(tensor), Arc::new(tensor.clone()))
+        .input_with_default(spec(tensor), tensor.duplicate().unwrap())
         .unwrap()
 }
 

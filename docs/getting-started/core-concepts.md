@@ -13,7 +13,7 @@ transform workflows plus compile/run reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::CudaBackend` |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::cuda::CudaBackend` |
 
 CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
 can run supported operations on CUDA tensors when data is explicitly uploaded
@@ -207,6 +207,15 @@ needs to make fallible control flow and deferred graph errors easy to review.
 Traced mode is the right API when `grad`, `vjp`, `jvp`, or HVP-style
 composition should run on traced graphs with symbolic inputs, graph
 optimization, and repeated execution.
+
+## Ownership and views
+
+Concrete tensors have one physical allocation owner. `as_view()` and
+`as_view_mut()` are allocation-free borrows that preserve layout metadata;
+`duplicate()`, upload, and download are explicit copy boundaries. Mapping and
+synchronization make existing storage visible or ordered and are not transfers.
+See [Storage ownership](../storage-ownership.md) and [Views and slicing](../guides/views-and-slicing.md)
+for the complete owner/view/mutable-view contract.
 Core primitive AD rules are available by default. Extension operation families
 that provide AD rules, such as `tenferro-linalg`, require enabling that crate's
 `autodiff` feature and registering the extension rule set with
