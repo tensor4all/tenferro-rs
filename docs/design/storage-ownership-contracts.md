@@ -381,6 +381,18 @@ alias. Neither tool may infer a different manifest or command target from the
 current working directory. A receipt written by the runner is the only
 execution proof consumed by the checker.
 
+The storage redesign closure checker has two modes. Its default invocation
+validates the tracked freeze, performance, static-rank, hardware, and
+source-blind documentation records without rerunning their commands; ordinary
+hosted `ci-config` uses this receipt/report-only mode. Final closure or an
+explicit release-candidate audit may pass `--reproduce --receipt <path>`.
+That mode first invokes the existing ownership checker on the supplied receipt,
+then runs only its fixed public API, traversal-resolution, static-rank,
+compile-contract, CPU scoped-read, and coverage commands. It records their
+argv and exit statuses and writes a passing closure report only after every
+command exits zero. It does not add a command-selection API, checksum,
+digest, attestation, or hostile-runner defense.
+
 Hosted `ci-config` checks fetch full Git history and pass one canonical
 promotion base to the existing production checker. Ordinary changes use
 `pull_request.base.sha` for a pull request and `github.event.before` for a
