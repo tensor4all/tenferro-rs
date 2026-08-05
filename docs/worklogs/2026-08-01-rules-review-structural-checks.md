@@ -91,9 +91,10 @@ judgment.
 - The diagram-sync check only runs when a `crates/*/Cargo.toml` or the
   architecture doc changes, so pre-existing drift (issue #1578) surfaces on
   the next touching PR rather than immediately.
-- `missing-doc-examples` treats a trait-level example as satisfying the
-  mandate for the trait item; per-method gaps inside traits remain LLM-only
-  (issue #1575 tracks the current backlog).
+- Issue #1605 is resolved: `missing-doc-examples` now checks diff-added
+  methods inside reachable public traits. The check remains diff-scoped, so
+  unchanged methods and non-public traits remain outside the deterministic
+  audit.
 
 ## Review Follow-ups (Codex on PR #1582)
 

@@ -1476,8 +1476,8 @@ def strip_code_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
 
 
 def strip_code_comments_and_literals(
-    line: str, state: tuple[bool, bool, int | None]
-) -> tuple[str, tuple[bool, bool, int | None]]:
+    line: str, state: tuple[int, bool, int | None]
+) -> tuple[str, tuple[int, bool, int | None]]:
     """Drop comments AND string/char literal contents, for brace counting.
 
     A brace inside a literal is not structural: `let expected = "}";` inside an
@@ -1487,27 +1487,38 @@ def strip_code_comments_and_literals(
     `strip_code_comments`, because a forbidden symbol appearing inside a string
     is still worth reporting there.
 
-    `state` is `(in_block_comment, in_string, raw_hashes)`; `raw_hashes` is the
-    `#` count of an open raw string (`r#"..."#`), or `None` when not in one.
-    Rust normal strings and raw strings may span lines, hence the carried state.
+    `state` is `(block_comment_depth, in_string, raw_hashes)`;
+    `raw_hashes` is the `#` count of an open raw string (`r#"..."#`), or `None`
+    when not in one. Rust normal strings and raw strings may span lines, hence
+    the carried state. Rust block comments may nest, so the depth is carried
+    rather than reduced to a boolean.
     """
-    in_block_comment, in_string, raw_hashes = state
+    block_comment_depth, in_string, raw_hashes = state
     result: list[str] = []
     index = 0
     length = len(line)
     while index < length:
-        if in_block_comment:
-            end = line.find("*/", index)
-            if end == -1:
-                return "".join(result), (True, False, None)
-            index = end + 2
-            in_block_comment = False
+        if block_comment_depth:
+            opening = line.find("/*", index)
+            closing = line.find("*/", index)
+            if closing == -1:
+                if opening == -1:
+                    return "".join(result), (block_comment_depth, False, None)
+                block_comment_depth += 1
+                index = opening + 2
+                continue
+            if opening != -1 and opening < closing:
+                block_comment_depth += 1
+                index = opening + 2
+                continue
+            block_comment_depth -= 1
+            index = closing + 2
             continue
         if raw_hashes is not None:
             closer = '"' + "#" * raw_hashes
             end = line.find(closer, index)
             if end == -1:
-                return "".join(result), (False, False, raw_hashes)
+                return "".join(result), (0, False, raw_hashes)
             index = end + len(closer)
             raw_hashes = None
             continue
@@ -1515,17 +1526,19 @@ def strip_code_comments_and_literals(
             index, in_string = _scan_string_body(line, index)
             continue
         if line.startswith("/*", index):
-            in_block_comment = True
+            block_comment_depth = 1
             index += 2
             continue
         if line.startswith("//", index):
             break
         raw = RAW_STRING_OPEN.match(line, index)
         if raw:
+            result.append('""')
             raw_hashes = len(raw.group(1))
             index = raw.end()
             continue
         if line[index] == '"':
+            result.append('""')
             index, in_string = _scan_string_body(line, index + 1)
             continue
         if line[index] == "'":
@@ -1539,7 +1552,18 @@ def strip_code_comments_and_literals(
             continue
         result.append(line[index])
         index += 1
-    return "".join(result), (in_block_comment, in_string, raw_hashes)
+    return "".join(result), (block_comment_depth, in_string, raw_hashes)
+
+
+def rust_code_lines(text: str) -> tuple[list[str], list[str]]:
+    """Return source lines and their comment/string-stripped counterparts."""
+    lines = text.splitlines()
+    code_lines: list[str] = []
+    scan_state: tuple[int, bool, int | None] = (0, False, None)
+    for line in lines:
+        code, scan_state = strip_code_comments_and_literals(line, scan_state)
+        code_lines.append(code)
+    return lines, code_lines
 
 
 def _scan_string_body(line: str, index: int) -> tuple[int, bool]:
@@ -1614,6 +1638,13 @@ INLINE_TEST_MOD = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
 PUB_ITEM = re.compile(
     r"^\s*pub\s+(?:async\s+|unsafe\s+|const\s+|extern\s+\"[^\"]*\"\s+)*"
     r"(fn|struct|enum|union|trait|type)\s+([A-Za-z_]\w*)"
+)
+PUB_TRAIT = re.compile(
+    r"^\s*pub\s+(?:(?:unsafe|auto)\s+)*trait\s+([A-Za-z_]\w*)\b"
+)
+TRAIT_METHOD = re.compile(
+    r"^\s*(?:(?:async|unsafe|const)\s+|extern\s+\"[^\"]*\"\s+)*"
+    r"fn\s+([A-Za-z_]\w*)\b"
 )
 AI_REPORT_PATH = re.compile(r"(^|/)\.superpowers/|-report\.md$")
 RUST_MOD_OPEN = re.compile(r"^(?:pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{")
@@ -1930,6 +1961,30 @@ def rust_private_mod_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+def rust_public_trait_spans(text: str) -> list[tuple[int, int, str]]:
+    """Return 1-based (start, end, name) spans for public trait bodies."""
+    _, code_lines = rust_code_lines(text)
+    total = len(code_lines)
+    spans: list[tuple[int, int, str]] = []
+    for index, code_line in enumerate(code_lines):
+        match = PUB_TRAIT.match(code_line)
+        if not match:
+            continue
+        depth = 0
+        opened = False
+        end = total - 1
+        for cursor in range(index, total):
+            code = code_lines[cursor]
+            depth += code.count("{") - code.count("}")
+            opened = opened or "{" in code
+            if opened and depth <= 0:
+                end = cursor
+                break
+        if opened:
+            spans.append((index + 1, end + 1, match.group(1)))
+    return spans
+
+
 def doc_block_above(lines: list[str], item_index: int) -> tuple[bool, bool]:
     """Return (has_examples, is_doc_hidden) for the doc/attr block above an item."""
     has_examples = False
@@ -2099,14 +2154,14 @@ def missing_doc_example_findings(
         )
         if not reachable:
             continue
-        lines = text.splitlines()
+        lines, code_lines = rust_code_lines(text)
         skip_spans = rust_inline_test_blocks(text) + rust_private_mod_spans(text)
         missing: list[str] = []
         first_line: int | None = None
         for line_no in sorted(touched):
             if line_no > len(lines):
                 continue
-            match = PUB_ITEM.match(lines[line_no - 1])
+            match = PUB_ITEM.match(code_lines[line_no - 1])
             if not match:
                 continue
             if any(start <= line_no <= end for start, end in skip_spans):
@@ -2121,6 +2176,35 @@ def missing_doc_example_findings(
             missing.append(f"{match.group(1)} {match.group(2)} (line {line_no})")
             if first_line is None:
                 first_line = line_no
+
+        for trait_start, trait_end, trait_name in rust_public_trait_spans(text):
+            if item_filter is not None and trait_name not in item_filter:
+                # A selective module re-export exposes the trait name, not its
+                # individual associated methods.
+                continue
+            depth = 0
+            for line_no in range(trait_start, trait_end + 1):
+                code_line = code_lines[line_no - 1]
+                if (
+                    depth == 1
+                    and line_no in touched
+                    and not any(
+                        start <= line_no <= end for start, end in skip_spans
+                    )
+                ):
+                    method = TRAIT_METHOD.match(code_line)
+                    if method:
+                        has_examples, hidden = doc_block_above(
+                            lines, line_no - 1
+                        )
+                        if not has_examples and not hidden:
+                            missing.append(
+                                f"{trait_name}::{method.group(1)} "
+                                f"(line {line_no})"
+                            )
+                            if first_line is None:
+                                first_line = line_no
+                depth += code_line.count("{") - code_line.count("}")
         if missing:
             shown = ", ".join(missing[:10])
             extra = f", +{len(missing) - 10} more" if len(missing) > 10 else ""
