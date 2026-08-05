@@ -160,12 +160,12 @@ After C is fixed, run all evidence producers against C and generate evidence-onl
 3. static-rank codegen;
 4. Linux/CUDA and Apple WebGPU/Metal hardware captures and merged matrix;
 5. rendered documentation checks and source-blind audit candidate binding;
-6. commit those reports as a clean pre-closure evidence head;
+6. generate the default recorded-evidence closure report and commit all reports as a clean pre-reproduction evidence head;
 7. generate a receipt bound to that clean head and run the closure checker in `--reproduce` mode;
-8. commit the closure report and independent integration audit as final evidence HEAD E;
+8. commit the reproduced closure report and independent integration audit as final evidence HEAD E;
 9. generate and validate a fresh final ownership receipt bound to clean E, then rerun the default closure validation without rewriting the report.
 
-This order avoids a receipt/report self-reference: the receipt consumed by reproduction proves the clean pre-closure head, while the final receipt proves clean E. Every applicable report records C. The final work log records C, both receipt roles, hardware/toolchain facts, exact commands, finding dispositions, and limitations; it does not attempt to contain the hash of its own commit.
+The default closure report in step 6 is the low-cost recorded-evidence result needed by the already-active closure obligation. The reproduction in step 7 replaces it with fresh command outcomes before final promotion. This order avoids a receipt/report self-reference: the receipt consumed by reproduction proves the clean pre-reproduction head, while the final receipt proves clean E. Every applicable report records C. The final work log records C, both receipt roles, hardware/toolchain facts, exact commands, finding dispositions, and limitations; it does not attempt to contain the hash of its own commit.
 
 After E exists, Issue #1555 receives a correction comment naming C, E, the merged PR, and the final evidence paths. Issue #1617 records each T0–T5 disposition, including the retained `sha2` dependency evidence.
 
