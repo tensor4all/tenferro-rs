@@ -341,30 +341,7 @@ impl CutensorLibrary {
 }
 
 #[cfg(test)]
-// INVARIANT: the loader contract test is kept beside the private FFI loader;
-// the production handle types intentionally remain below this test module.
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    #[test]
-    fn cutensor_loader_missing_library_is_typed_io_error() {
-        let err = match super::CutensorLibrary::load_from_paths(vec![
-            "/definitely/not/libcutensor.so".to_string(),
-        ]) {
-            Ok(_) => panic!("unexpectedly loaded cuTENSOR from a nonexistent path"),
-            Err(err) => err,
-        };
-
-        match err {
-            crate::Error::IoSource { op, source } => {
-                assert_eq!(op, "cuda_cutensor");
-                assert!(source
-                    .to_string()
-                    .contains("failed to load cuTENSOR library"));
-            }
-            other => panic!("expected typed cuTENSOR IoSource, got {other:?}"),
-        }
-    }
-}
+mod tests;
 
 #[cold]
 fn report_cutensor_destroy_status(
