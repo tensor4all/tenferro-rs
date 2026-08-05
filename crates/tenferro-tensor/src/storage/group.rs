@@ -1238,7 +1238,7 @@ impl AllocationGroup {
                 slot: descriptor.allocation.index(),
             })?;
         Ok(GroupWriteView {
-            owner: NonNull::from(&mut *owner),
+            owner: NonNull::from(owner),
             descriptor: descriptor.clone(),
             _borrow: PhantomData,
         })
@@ -1286,7 +1286,7 @@ impl AllocationGroup {
                 slot: descriptor.allocation.index(),
             })?;
         Ok(GroupWriteView {
-            owner: NonNull::from(&mut *owner),
+            owner: NonNull::from(owner),
             descriptor,
             _borrow: PhantomData,
         })
@@ -1356,7 +1356,7 @@ impl AllocationGroup {
                     slot: descriptor.allocation.index(),
                 })?;
             children.push(GroupWriteView {
-                owner: NonNull::from(&mut *owner),
+                owner: NonNull::from(owner),
                 descriptor,
                 _borrow: PhantomData,
             });

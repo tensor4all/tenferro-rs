@@ -558,8 +558,8 @@ pub(crate) trait HostRoot: TensorScalar {
 }
 
 fn cast_host_vec<T: TensorScalar, U: TensorScalar>(data: Vec<T>) -> Vec<U> {
-    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
-    debug_assert_eq!(std::mem::align_of::<T>(), std::mem::align_of::<U>());
+    assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+    assert_eq!(std::mem::align_of::<T>(), std::mem::align_of::<U>());
     let mut data = std::mem::ManuallyDrop::new(data);
     // SAFETY: TensorScalar is sealed to the seven scalar types below. The
     // matching dtype branch preserves size, alignment, and representation.
