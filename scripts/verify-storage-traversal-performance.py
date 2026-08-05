@@ -94,12 +94,14 @@ def main() -> int:
     parser.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
     output = args.report if args.report.is_absolute() else ROOT / args.report
+    saved = None
     if output.is_file() and not args.refresh:
         text = output.read_text(encoding="utf-8")
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if not match:
             raise ValueError("existing performance report has no JSON record")
-        saved = json.loads(match.group(1))
+        saved = select_existing_record(json.loads(match.group(1)), refresh=args.refresh)
+    if saved is not None:
         if saved.get("candidate_commit") != frozen_candidate():
             raise ValueError("existing performance report does not match frozen candidate")
         if saved.get("result") != "pass":
