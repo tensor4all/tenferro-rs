@@ -42,13 +42,15 @@ commit; evidence descendants may change only the closed evidence allowlist.
 
 ## Candidate and pre-Mac evidence state
 
-- Product candidate C: `506e22dd9138585787723abe9dc20e05c8da0ade`.
+- Product candidate C: `652b5c45f753f04425d71541b387acedc39cfa04`.
 - Candidate branch pushed as `origin/codex/issue-1617-remediation-plan`.
-- Evidence checkout: `c4ef3eec65164b6a11d73cc2c6f20c8ff45a3e1b`.
+- Current evidence checkout: `b4704a79`.
 - Candidate-bound freeze, static-rank codegen, traversal, and documentation
   audit reports all name C.
 - Linux partial report `/tmp/storage-hardware-linux.md` records CPU 3/3,
   CUDA provider 4/4, and CUDA-AD 2/2 passing tests for C.
+- The generated remediation plan was removed from the PR after the repository
+  rules review identified it as prohibited standalone AI content.
 - Apple handoff `/tmp/issue-1617-mac-test-handoff.md` contains the exact
   checkout, command, and merge steps.
 
