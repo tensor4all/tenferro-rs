@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Graph op vocabulary and AD rule implementations for the tenferro workspace."
+rust-version.workspace = true
+keywords = ["tensor", "operations", "autodiff", "graph"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-internal-ops"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_ops"

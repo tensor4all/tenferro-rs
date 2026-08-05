@@ -38,3 +38,46 @@ cleanup, the branch was pushed, `v0.2.0` was tagged on the publish commit
   verified live during Phase 3.
 - Test suite not rerun locally for this docs-only branch (code tree
   identical to `origin/main`); PR CI gates the merge.
+
+## #1608 follow-up: published crate metadata
+
+Added the accepted 14-crate metadata contract: workspace MSRV `1.96`, inherited
+`rust-version`, crates.io keywords/categories, exact docs.rs URLs, and docs.rs
+`rustdoc-args`. The checker and focused importlib tests reject missing metadata,
+invalid counts or keyword syntax, invalid URLs, invalid docs.rs feature modes,
+and undefined explicit docs.rs features. Published discovery uses Cargo
+metadata's `package.publish` semantics, with the 14-crate order above as the
+allowlisted publishable set.
+
+| Crate | Keywords | Categories | docs.rs mode |
+| --- | --- | --- | --- |
+| tenferro-tensor | tensor, numerical, array | science, mathematics, data-structures | all features |
+| tenferro-cpu | tensor, cpu, linear-algebra, numerical | science, mathematics, hardware-support | `cpu-faer` |
+| tenferro-gpu | tensor, gpu, cuda, webgpu | science, hardware-support, mathematics | `cpu-faer`, `cuda`, `webgpu` |
+| tenferro-runtime | tensor, runtime, graph, numerical | science, mathematics, data-structures | `cpu-faer` |
+| tenferro-ad | tensor, autodiff, numerical, graph | science, mathematics, algorithms | `cpu-faer`, `cuda`, `webgpu` |
+| tenferro-xla | tensor, xla, stablehlo, compiler | science, mathematics, development-tools | all features |
+| tenferro-linalg | linear-algebra, tensor, mathematics, numerical | science, mathematics, algorithms | `autodiff`, `cpu-faer`, `cuda`, `webgpu` |
+| tenferro-einsum | tensor, einsum, contraction, numerical | science, mathematics, algorithms | `autodiff`, `cpu-faer`, `cuda`, `webgpu` |
+| tenferro-fft | tensor, fft, signal-processing, numerical | science, mathematics | `autodiff`, `cpu-faer`, `cuda`, `webgpu` |
+| tenferro-tensor-core | tensor, data-structures, numerical | science, mathematics, data-structures | all features |
+| tenferro-core-ops | tensor, operations, graph | science, mathematics, algorithms | all features |
+| tenferro-internal-cpu-kernels | tensor, kernels, cpu, numerical | science, mathematics, hardware-support | all features |
+| tenferro-internal-ops | tensor, operations, autodiff, graph | science, mathematics, algorithms | all features |
+| tenferro-internal-extension-macros | tensor, macros, code-generation | development-tools, development-tools::procedural-macro-helpers | all features |
+
+The explicit docs.rs lists avoid mutually exclusive CPU/BLAS providers and
+rocm/provider-inject features. The CUDA/WebGPU combinations for GPU, AD, and
+all three public extensions compile in hardware-free nightly documentation
+builds, so those extension APIs remain discoverable. Faer is the only CPU
+provider selected for docs. The exact `cargo +1.96.0 check --workspace`,
+metadata discovery (14 manifests), focused checker tests/check, and nightly
+GPU/AD/extension docs builds passed. `cargo package` produced and inspected the
+tensor, runtime, linalg, tensor-core, and internal-ops package manifests;
+metadata survived and packaged manifests had no git-only dependency entries.
+Verification of tensor/runtime/linalg and internal-ops tarballs is blocked by
+registry drift: their existing published 0.2.0 dependency artifacts lack
+current workspace symbols; tensor-core verification passed. No dependency,
+README, service, facade, feature-default, or MSRV-matrix change was made.
+Residual: publish deep crates only after matching dependencies are available on
+crates.io; package verification should then be rerun.

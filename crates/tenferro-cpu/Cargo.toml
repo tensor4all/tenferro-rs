@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "CPU backend, kernels, provider selection, and CPU resource pools for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "cpu", "linear-algebra", "numerical"]
+categories = ["science", "mathematics", "hardware-support"]
+documentation = "https://docs.rs/tenferro-cpu"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["cpu-faer"]
 
 [lib]
 name = "tenferro_cpu"

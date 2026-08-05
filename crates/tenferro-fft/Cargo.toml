@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "FFT extension runtime and public concrete/traced FFT APIs for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "fft", "signal-processing", "numerical"]
+categories = ["science", "mathematics"]
+documentation = "https://docs.rs/tenferro-fft"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["autodiff", "cpu-faer", "cuda", "webgpu"]
 
 [features]
 default = ["cpu-faer"]

@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Experimental StableHLO lowering and runtime PJRT plugin loading for tenferro static graph programs."
+rust-version.workspace = true
+keywords = ["tensor", "xla", "stablehlo", "compiler"]
+categories = ["science", "mathematics", "development-tools"]
+documentation = "https://docs.rs/tenferro-xla"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_xla"

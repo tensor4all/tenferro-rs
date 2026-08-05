@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "CubeCL-backed CUDA and WebGPU provider backends for tenferro tensors."
+rust-version.workspace = true
+keywords = ["tensor", "gpu", "cuda", "webgpu"]
+categories = ["science", "hardware-support", "mathematics"]
+documentation = "https://docs.rs/tenferro-gpu"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["cpu-faer", "cuda", "webgpu"]
 
 [lib]
 name = "tenferro_gpu"

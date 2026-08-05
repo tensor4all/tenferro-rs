@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Host-only tensor data model, dtype tags, scalar trait, and metadata-only views for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "data-structures", "numerical"]
+categories = ["science", "mathematics", "data-structures"]
+documentation = "https://docs.rs/tenferro-tensor-core"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_tensor_core"

@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Dense runtime tensors, views, backend traits, and backend-independent contracts for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "numerical", "array"]
+categories = ["science", "mathematics", "data-structures"]
+documentation = "https://docs.rs/tenferro-tensor"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_tensor"
