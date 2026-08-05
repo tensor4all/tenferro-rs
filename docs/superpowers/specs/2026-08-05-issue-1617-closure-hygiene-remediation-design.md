@@ -88,10 +88,10 @@ python3 scripts/check-storage-redesign-closure.py \
 python3 scripts/check-storage-redesign-closure.py \
   --report docs/worklogs/storage-redesign-closure.md \
   --reproduce \
-  --receipt /path/to/storage-ownership-receipt.json
+  --receipt /tmp/storage-ownership-receipt.json
 ```
 
-Default mode remains low-cost: it validates the tracked freeze, performance, static-rank, hardware, documentation-audit, closure, and receipt records without rerunning heavy commands.
+Default mode remains low-cost: it validates the tracked freeze, performance, static-rank, hardware, documentation-audit, and closure records without rerunning heavy commands. The existing ownership checker remains responsible for receipt-only validation in ordinary CI.
 
 `--reproduce` runs only this fixed set of existing commands:
 
@@ -160,13 +160,14 @@ After C is fixed, run all evidence producers against C and generate evidence-onl
 3. static-rank codegen;
 4. Linux/CUDA and Apple WebGPU/Metal hardware captures and merged matrix;
 5. rendered documentation checks and source-blind audit candidate binding;
-6. ownership runner receipt on E;
-7. closure checker in `--reproduce` mode;
-8. independent integration audit and final closure record.
+6. commit those reports as a clean pre-closure evidence head;
+7. generate a receipt bound to that clean head and run the closure checker in `--reproduce` mode;
+8. commit the closure report and independent integration audit as final evidence HEAD E;
+9. generate and validate a fresh final ownership receipt bound to clean E, then rerun the default closure validation without rewriting the report.
 
-Every applicable report records C. The final work log records C, E, hardware/toolchain facts, exact commands, finding dispositions, and limitations.
+This order avoids a receipt/report self-reference: the receipt consumed by reproduction proves the clean pre-closure head, while the final receipt proves clean E. Every applicable report records C. The final work log records C, both receipt roles, hardware/toolchain facts, exact commands, finding dispositions, and limitations; it does not attempt to contain the hash of its own commit.
 
-Issue #1555 receives a correction comment naming C, E, the merged PR, and the final evidence paths. Issue #1617 records each T0–T5 disposition, including the retained `sha2` dependency evidence.
+After E exists, Issue #1555 receives a correction comment naming C, E, the merged PR, and the final evidence paths. Issue #1617 records each T0–T5 disposition, including the retained `sha2` dependency evidence.
 
 ## Failure behavior
 
