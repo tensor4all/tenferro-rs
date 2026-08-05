@@ -104,7 +104,7 @@ cargo test -p tenferro-runtime scoped_immediate_provider_returns_borrowed_output
 python3 scripts/ci/run_profile.py coverage
 ```
 
-For commands represented by active storage obligations, the checker requires the existing receipt to contain matching argv, cwd, artifact binding, and zero exit status before executing them. It delegates full receipt validation to the existing ownership checker rather than duplicating receipt semantics. The focused runtime command and coverage command are closure-only reproductions and must exit zero.
+Before reproduction, the closure checker delegates the complete receipt, including obligation, argv, cwd, artifact, candidate, and exit-status validation, to the existing ownership checker. It does not duplicate receipt parsing or validation. The focused runtime command and coverage command are closure-only reproductions and must exit zero.
 
 The checker collects results in memory and writes a passing closure report only after every command succeeds. The report records exact argv and exit status, not full logs or new attestations. A nonzero result, receipt mismatch, missing command, or interrupted run returns failure and does not write a passing report.
 
