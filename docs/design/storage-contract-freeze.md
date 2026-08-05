@@ -5,7 +5,7 @@ The record below identifies the clean product candidate. Evidence-only commits m
 ```json
 {
   "schema": "tenferro.storage-contract-freeze.v1",
-  "candidate_commit": "71222c11ce54af81e553574c2977feaeda39c14c",
+  "candidate_commit": "506e22dd9138585787723abe9dc20e05c8da0ade",
   "base_commit": "dba2f8ceec43ec6845cc5920c3f4ee5dacf8a0ed",
   "status": "pass",
   "checks": {
