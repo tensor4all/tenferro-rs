@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -37,17 +38,20 @@ IMPLEMENTATION_CRATE_ORDER = [
 TENFERRO_CRATES = (
     USER_CRATE_ORDER + EXTENSION_CRATE_ORDER + IMPLEMENTATION_CRATE_ORDER
 )
-PUBLISHED_CRATES = set(
-    USER_CRATE_ORDER
-    + EXTENSION_CRATE_ORDER
-    + [
-        "tenferro-tensor-core",
-        "tenferro-core-ops",
-        "tenferro-internal-cpu-kernels",
-        "tenferro-internal-ops",
-        "tenferro-internal-extension-macros",
-    ]
-)
+VALID_CATEGORIES = {
+    "algorithms",
+    "api-bindings",
+    "data-structures",
+    "development-tools",
+    "development-tools::procedural-macro-helpers",
+    "external-ffi-bindings",
+    "hardware-support",
+    "mathematics",
+    "no-std",
+    "rust-patterns",
+    "science",
+    "simulation",
+}
 
 
 def rel(path: Path) -> str:
@@ -90,11 +94,30 @@ def markdown_section(text: str, heading: str) -> str:
     return rest
 
 
+def publishable_crates(metadata: dict) -> set[str]:
+    return {
+        package["name"]
+        for package in metadata["packages"]
+        if Path(package["manifest_path"]).parent.parent == ROOT / "crates"
+        and package["name"].startswith("tenferro-")
+        and package.get("publish") != []
+    }
+
+
 def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -> None:
     packages = {package["name"]: package for package in metadata["packages"]}
 
     if "tenferro" in packages:
         errors.append("workspace must not include a root tenferro facade crate")
+
+    workspace_crates = publishable_crates(metadata)
+    expected_crates = set(TENFERRO_CRATES)
+    missing_crates = sorted(expected_crates - workspace_crates)
+    unexpected_crates = sorted(workspace_crates - expected_crates)
+    if missing_crates:
+        errors.append(f"workspace missing published crates: {missing_crates}")
+    if unexpected_crates:
+        errors.append(f"workspace has unexpected published crates: {unexpected_crates}")
 
     for crate in TENFERRO_CRATES:
         package = packages.get(crate)
@@ -122,6 +145,7 @@ def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -
 def check_workspace_metadata(root_text: str, errors: list[str]) -> None:
     package_section = section(root_text, "workspace.package")
     required_lines = [
+        'rust-version = "1.96"',
         'publish = true',
         'readme = "README.md"',
         'repository = "https://github.com/tensor4all/tenferro-rs"',
@@ -153,6 +177,97 @@ def workspace_version(root_text: str) -> str:
     raise ValueError("workspace.package missing version")
 
 
+def check_crate_metadata(
+    crate: str, manifest_text: str, errors: list[str], manifest_name: str
+) -> None:
+    try:
+        manifest = tomllib.loads(manifest_text)
+    except tomllib.TOMLDecodeError as error:
+        errors.append(f"{manifest_name} has invalid TOML: {error}")
+        return
+
+    package = manifest.get("package", {})
+    if package.get("rust-version") != {"workspace": True}:
+        errors.append(
+            f"{manifest_name} package.rust-version must inherit workspace metadata"
+        )
+
+    for key in ("keywords", "categories"):
+        values = package.get(key)
+        if not isinstance(values, list) or not 1 <= len(values) <= 5:
+            errors.append(f"{manifest_name} package.{key} must contain 1-5 entries")
+        elif any(not isinstance(value, str) or not value for value in values):
+            errors.append(f"{manifest_name} package.{key} entries must be non-empty strings")
+        elif key == "keywords":
+            if len(set(values)) != len(values):
+                errors.append(f"{manifest_name} package.keywords must be unique")
+            invalid_keywords = [
+                value
+                for value in values
+                if len(value) > 20
+                or not value[0].isascii()
+                or not value[0].isalnum()
+                or any(
+                    not character.isascii()
+                    or not (character.isalnum() or character in "_+-")
+                    for character in value[1:]
+                )
+            ]
+            if invalid_keywords:
+                errors.append(
+                    f"{manifest_name} package.keywords contain invalid crates.io syntax: "
+                    f"{invalid_keywords}"
+                )
+
+    categories = package.get("categories")
+    if isinstance(categories, list):
+        invalid = sorted(set(categories) - VALID_CATEGORIES)
+        if invalid:
+            errors.append(
+                f"{manifest_name} package.categories has invalid crates.io slugs: {invalid}"
+            )
+
+    expected_documentation = f"https://docs.rs/{crate}"
+    if package.get("documentation") != expected_documentation:
+        errors.append(
+            f"{manifest_name} package.documentation must be {expected_documentation!r}"
+        )
+
+    docs_rs = package.get("metadata", {}).get("docs", {}).get("rs")
+    if not isinstance(docs_rs, dict):
+        errors.append(f"{manifest_name} missing [package.metadata.docs.rs]")
+        return
+    if docs_rs.get("rustdoc-args") != ["--cfg", "docsrs"]:
+        errors.append(
+            f"{manifest_name} docs.rs rustdoc-args must be ['--cfg', 'docsrs']"
+        )
+
+    has_all_features = "all-features" in docs_rs
+    has_explicit_features = "features" in docs_rs
+    if has_all_features == has_explicit_features:
+        errors.append(
+            f"{manifest_name} docs.rs must set exactly one of all-features or features"
+        )
+    elif has_all_features:
+        if docs_rs["all-features"] is not True:
+            errors.append(f"{manifest_name} docs.rs all-features must be true")
+    else:
+        features = docs_rs["features"]
+        if not isinstance(features, list) or not features:
+            errors.append(f"{manifest_name} docs.rs features must be a non-empty list")
+        elif any(not isinstance(feature, str) or not feature for feature in features):
+            errors.append(f"{manifest_name} docs.rs features must be non-empty strings")
+        else:
+            defined_features = manifest.get("features", {})
+            if not isinstance(defined_features, dict):
+                defined_features = {}
+            missing_features = sorted(set(features) - set(defined_features))
+            if missing_features:
+                errors.append(
+                    f"{manifest_name} docs.rs features are not defined: {missing_features}"
+                )
+
+
 def check_package_metadata(root_text: str, errors: list[str]) -> None:
     expected_version = workspace_version(root_text)
     for crate in TENFERRO_CRATES:
@@ -163,19 +278,17 @@ def check_package_metadata(root_text: str, errors: list[str]) -> None:
 
         manifest_text = manifest_path.read_text(encoding="utf-8")
         package_section = section(manifest_text, "package")
-        if crate in PUBLISHED_CRATES:
-            if "publish.workspace = true" not in package_section:
-                errors.append(
-                    f"{rel(manifest_path)} package.publish must inherit workspace metadata"
-                )
-        else:
-            errors.append(f"no publish-layout classification for crate {crate!r}")
+        if "publish.workspace = true" not in package_section:
+            errors.append(
+                f"{rel(manifest_path)} package.publish must inherit workspace metadata"
+            )
 
         for key in ("readme", "repository", "homepage"):
             if f"{key}.workspace = true" not in package_section:
                 errors.append(
                     f"{rel(manifest_path)} package.{key} must inherit workspace metadata"
                 )
+        check_crate_metadata(crate, manifest_text, errors, rel(manifest_path))
         for line_no, line in enumerate(manifest_text.splitlines(), start=1):
             version_fragment = f'version = "{expected_version}"'
             if 'path = "../tenferro-' in line and version_fragment not in line:
