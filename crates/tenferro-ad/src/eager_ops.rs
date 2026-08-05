@@ -417,6 +417,20 @@ impl EagerTensor {
     /// [`tenferro_tensor::ValidationError::InvalidArgument`] when an integer or
     /// boolean factor is non-finite or outside the input dtype's range. Backend
     /// and runtime execution failures retain their typed source variants.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let x = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let scaled = x.scale_real(2.0)?;
+    /// assert_eq!(scaled.value()?.as_slice::<f64>()?, &[2.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     pub fn scale_real(&self, factor: f64) -> Result<Self> {
         let scalar = match self.dtype() {
             DType::F64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
@@ -441,6 +455,28 @@ impl EagerTensor {
     /// [`tenferro_tensor::ValidationError::InvalidArgument`] for a non-complex
     /// input dtype. Backend and runtime execution failures retain their typed
     /// source variants.
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use num_complex::Complex64;
+    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// # use tenferro_cpu::CpuBackend;
+    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let x = EagerTensor::from_tensor_in(
+    /// #     Tensor::from_vec_col_major(
+    /// #         vec![2],
+    /// #         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    /// #     )
+    /// #     .unwrap(),
+    /// #     ctx,
+    /// # )?;
+    /// let scaled = x.scale_complex(Complex64::new(0.0, 1.0))?;
+    /// assert_eq!(
+    ///     scaled.value()?.as_slice::<Complex64>()?,
+    ///     &[Complex64::new(-2.0, 1.0), Complex64::new(-4.0, 3.0)],
+    /// );
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     pub fn scale_complex(&self, factor: Complex64) -> Result<Self> {
         let scalar = match self.dtype() {
             DType::C64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
