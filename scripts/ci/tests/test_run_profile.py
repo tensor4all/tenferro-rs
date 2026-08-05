@@ -257,6 +257,58 @@ class RunProfileTests(unittest.TestCase):
         run.assert_not_called()
         self.assertIn("+ cargo test -p tenferro-cpu", output.getvalue())
 
+    def test_python_children_use_selected_interpreter_not_path_python3(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            marker = temp / "selected-marker"
+            selected = temp / "selected interpreter"
+            selected.write_text(
+                "#!/bin/sh\n"
+                "printf 'selected\\n' > \"$PYTHON_MARKER\"\n"
+            )
+            selected.chmod(0o755)
+            path_python = temp / "python3"
+            path_python.write_text(
+                "#!/bin/sh\n"
+                "printf 'path-python3\\n' > \"$PYTHON_MARKER\"\n"
+                "exit 1\n"
+            )
+            path_python.chmod(0o755)
+            output = io.StringIO()
+
+            with patch.dict(
+                "scripts.ci.run_profile.PROFILE_COMMANDS",
+                {"probe": ("python3 -c 'print(1)'",)},
+            ), patch(
+                "scripts.ci.run_profile.sys.executable", str(selected)
+            ), patch.dict(
+                "os.environ",
+                {"PATH": str(temp), "PYTHON_MARKER": str(marker)},
+                clear=True,
+            ):
+                run_profiles(["probe"], dry_run=False, output=output)
+
+            self.assertEqual(marker.read_text(), "selected\n")
+            self.assertEqual(output.getvalue(), "+ python3 -c 'print(1)'\n")
+
+    def test_shell_profile_children_receive_selected_interpreter(self) -> None:
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        def record_run(command: str, **kwargs: object) -> None:
+            calls.append((command, kwargs["env"]))  # type: ignore[arg-type]
+
+        with patch.dict(
+            "scripts.ci.run_profile.PROFILE_COMMANDS",
+            {"docs": ("bash scripts/build_docs_site.sh",)},
+        ), patch.dict("os.environ", {}, clear=True), patch(
+            "scripts.ci.run_profile.subprocess.run", side_effect=record_run
+        ):
+            run_profiles(["docs"], dry_run=False, output=io.StringIO())
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "bash scripts/build_docs_site.sh")
+        self.assertEqual(calls[0][1]["PYTHON"], sys.executable)
+
     def test_workspace_blas_uses_linker_flags_only_for_that_profile(self) -> None:
         calls: list[dict[str, str]] = []
 
@@ -397,14 +449,14 @@ Path(os.environ["TRYBUILD_CARGO_CAPTURE"]).write_text(
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
         self.assertIn("--ci-profile", source)
-        self.assertIn("python3 scripts/ci/run_profile.py fmt", source)
-        self.assertIn('python3 scripts/ci/run_profile.py "${profile_args[@]}"', source)
+        self.assertIn("run_python scripts/ci/run_profile.py fmt", source)
+        self.assertIn('run_python scripts/ci/run_profile.py "${profile_args[@]}"', source)
         self.assertNotIn("cargo nextest run --workspace", source)
 
     def test_fast_preflight_runs_ci_parity_clippy_for_code_changes(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
         self.assertIn('if [[ "${change_class}" == "code" ]]; then', source)
-        self.assertIn("python3 scripts/ci/run_profile.py clippy", source)
+        self.assertIn("run_python scripts/ci/run_profile.py clippy", source)
         self.assertIn("has_ci_profile clippy || has_ci_profile full", source)
 
     def test_fast_preflight_avoids_bash4_only_mapfile(self) -> None:

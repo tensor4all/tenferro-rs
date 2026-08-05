@@ -173,6 +173,7 @@ class LocalGateTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp_dir.name)
         (self.repo / "scripts" / "ci").mkdir(parents=True)
+        (self.repo / "scripts" / "lib").mkdir(parents=True)
         shutil.copy2(ROOT / "scripts" / "check-pr-fast.sh", self.repo / "scripts")
         shutil.copy2(
             ROOT / "scripts" / "ci" / "change_policy.py",
@@ -181,6 +182,10 @@ class LocalGateTests(unittest.TestCase):
         shutil.copy2(
             ROOT / "scripts" / "ci" / "run_profile.py",
             self.repo / "scripts" / "ci",
+        )
+        shutil.copy2(
+            ROOT / "scripts" / "lib" / "python.sh",
+            self.repo / "scripts" / "lib",
         )
         bin_dir = self.repo / "bin"
         bin_dir.mkdir()

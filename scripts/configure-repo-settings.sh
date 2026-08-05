@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$SCRIPT_DIR/lib/python.sh"
+
 REPO=""
 SETTINGS_PATH="ai/repo-settings.json"
 
@@ -34,7 +37,7 @@ resolve_settings_path() {
 }
 
 json_get() {
-  python3 - "$1" "$2" <<'PY'
+  run_python - "$1" "$2" <<'PY'
 import json
 import sys
 
@@ -50,7 +53,7 @@ PY
 }
 
 json_get_optional() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  run_python - "$1" "$2" "$3" <<'PY'
 import json
 import sys
 
@@ -69,7 +72,7 @@ PY
 }
 
 json_field() {
-  python3 - "$1" "$2" <<'PY'
+  run_python - "$1" "$2" <<'PY'
 import json
 import sys
 
@@ -83,7 +86,7 @@ print(data)
 PY
 }
 build_branch_protection_payload() {
-  python3 - "$1" <<'PY'
+  run_python - "$1" <<'PY'
 import json
 import sys
 

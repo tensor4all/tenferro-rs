@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$SCRIPT_DIR/lib/python.sh"
+
 PR_REF=""
 INTERVAL=30
 REPO=""
@@ -32,7 +35,7 @@ gh_pr_checks() {
 }
 
 classify_checks() {
-  python3 -c '
+  run_python -c '
 import json
 import re
 import sys

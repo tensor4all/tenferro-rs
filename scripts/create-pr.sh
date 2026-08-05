@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$SCRIPT_DIR/lib/python.sh"
+
 BASE_BRANCH="main"
 TITLE=""
 BODY_FILE=""
@@ -84,7 +87,7 @@ run_required_checks() {
     fast_gate_args+=(--test "$command")
   done
   bash scripts/check-pr-fast.sh "${fast_gate_args[@]}"
-  python3 scripts/repository-rules-review.py \
+  run_python scripts/repository-rules-review.py \
     --base "origin/${BASE_BRANCH}" \
     --head HEAD \
     --output-json /tmp/repository-rules-review.json

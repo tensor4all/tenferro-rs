@@ -211,7 +211,7 @@ def test_docs_ci_runs_docs_script_tests() -> None:
     assert "python3 scripts/check-guide-dependency-snippets.py" in profiles
     assert "python3 scripts/check-operation-categories.py --fail-on-findings" in profiles
     assert (
-        "python3 \"$ROOT_DIR/scripts/check-operation-categories.py\" --fail-on-findings --include-rendered"
+        "run_python \"$ROOT_DIR/scripts/check-operation-categories.py\" --fail-on-findings --include-rendered"
         in build_docs_site
     )
 
