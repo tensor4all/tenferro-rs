@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,16 @@ class CheckError(ValueError):
     pass
 
 
+REPRODUCE_COMMANDS = (
+    ("p10-api-normalization", ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_public_api")),
+    ("p4-traversal-resolution-counts", ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_traversal_resolution")),
+    ("p3-static-rank-preservation", ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_static_rank")),
+    ("p3-host-owner", ("cargo", "test", "-p", "tenferro-tensor", "--test", "storage_compile_contract")),
+    (None, ("cargo", "test", "-p", "tenferro-runtime", "scoped_immediate_provider_returns_borrowed_output")),
+    (None, ("python3", "scripts/ci/run_profile.py", "coverage")),
+)
+
+
 def read(path: Path) -> str:
     if not path.is_file():
         raise CheckError(f"missing closure evidence: {path.relative_to(ROOT)}")
@@ -46,6 +57,54 @@ def record(path: Path) -> dict:
         return json.loads(match.group(1))
     except json.JSONDecodeError as error:
         raise CheckError(f"invalid JSON record in {path}: {error}") from error
+
+
+def run_reproduction(
+    receipt_path: Path,
+    *,
+    receipt_validator=None,
+    runner=None,
+) -> list[dict[str, object]]:
+    if receipt_validator is None:
+        command = [
+            sys.executable,
+            "scripts/check-storage-ownership-contracts.py",
+            "--root",
+            str(ROOT),
+            "--receipt",
+            str(receipt_path),
+            "--summary-json",
+        ]
+        receipt_result = subprocess.run(
+            command, cwd=ROOT, text=True, capture_output=True, check=False
+        )
+        if receipt_result.returncode != 0:
+            raise CheckError(
+                "receipt checker failed: " + receipt_result.stderr.strip()
+            )
+    elif receipt_validator(receipt_path) != 0:
+        raise CheckError("receipt checker failed")
+
+    def default_runner(argv: tuple[str, ...]) -> int:
+        result = subprocess.run(argv, cwd=ROOT, check=False)
+        return result.returncode
+
+    execute = runner or default_runner
+    executions = []
+    for obligation_id, argv in REPRODUCE_COMMANDS:
+        exit_code = execute(argv)
+        executions.append(
+            {
+                "obligation_id": obligation_id,
+                "argv": list(argv),
+                "exit_code": exit_code,
+            }
+        )
+        if exit_code != 0:
+            raise CheckError(
+                f"reproduction command exited with exit code {exit_code}: {' '.join(argv)}"
+            )
+    return executions
 
 
 def validate() -> tuple[str, dict, dict, dict]:
@@ -67,11 +126,11 @@ def validate() -> tuple[str, dict, dict, dict]:
         raise CheckError("performance evidence is not passing")
     if static_rank.get("status") != "pass":
         raise CheckError("static-rank evidence is not passing")
-    if matrix.get("status") not in ("pass", "structured-skip"):
-        raise CheckError("hardware matrix has an invalid status")
+    if matrix.get("complete") is not True or matrix.get("status") != "pass":
+        raise CheckError("hardware matrix is incomplete or not passing")
     for lane in matrix.get("lanes", []):
-        if lane.get("status") == "skip" and not all(lane.get(key) for key in ("command", "device_facts", "evidence", "skip_reason")):
-            raise CheckError(f"hardware skip for {lane.get('lane')} is not structured")
+        if lane.get("status") != "pass" or not isinstance(lane.get("test_count"), int) or lane["test_count"] <= 0:
+            raise CheckError(f"hardware lane is incomplete: {lane.get('lane')}")
     audit_text = read(ROOT / DOC_AUDIT)
     for marker in ("Critical usability gaps: 0", "Important usability gaps: 0", "Source-blind"):
         if marker not in audit_text:
@@ -79,8 +138,14 @@ def validate() -> tuple[str, dict, dict, dict]:
     return candidate, matrix, performance, static_rank
 
 
-def write_report(path: Path, candidate: str, matrix: dict, performance: dict, static_rank: dict) -> None:
-    skipped = [lane["lane"] for lane in matrix.get("lanes", []) if lane.get("status") == "skip"]
+def write_report(
+    path: Path,
+    candidate: str,
+    matrix: dict,
+    performance: dict,
+    static_rank: dict,
+    reproduction: list[dict[str, object]] | None = None,
+) -> None:
     record_value = {
         "schema": "tenferro.storage-redesign-closure.v1",
         "candidate_commit": candidate,
@@ -91,14 +156,19 @@ def write_report(path: Path, candidate: str, matrix: dict, performance: dict, st
             "prepared_and_hot_paths": "verified by storage element hot-path, static-rank, and traversal evidence",
             "api_and_docs": "verified by public API tests, rendered documentation checks, and source-blind audit",
             "cpu": "verified by CPU public API and workspace test evidence",
-            "gpu_and_multi_gpu": "CUDA and WebGPU provider lanes pass; Metal is structured-skip on Linux",
+            "gpu_and_multi_gpu": "CUDA, WebGPU, and Metal provider lanes pass",
             "ad": "CUDA AD integration lane passes",
         },
         "performance": {"result": performance["result"], "report": PERFORMANCE.as_posix()},
-        "hardware_skips": skipped,
+        "hardware_skips": [],
         "evidence_paths": [relative.as_posix() for relative in REQUIRED_FILES],
-        "notes": "No Critical or Important findings. Any unavailable lane has an exact command, environment, device fact, and evidence owner in the matrix.",
+        "notes": "No Critical or Important findings; every required hardware lane has a positive passing test count.",
     }
+    if reproduction is not None:
+        record_value["reproduction"] = {
+            "mode": "reproduce",
+            "executions": reproduction,
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "# Storage redesign closure\n\n"
@@ -111,13 +181,29 @@ def write_report(path: Path, candidate: str, matrix: dict, performance: dict, st
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--reproduce", action="store_true")
+    parser.add_argument("--receipt", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.reproduce and args.receipt is None:
+            raise CheckError("--receipt is required with --reproduce")
         candidate, matrix, performance, static_rank = validate()
         report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
         if any(part == ".." for part in report.parts):
             raise CheckError("report path must remain inside the repository")
-        write_report(ROOT / report, candidate, matrix, performance, static_rank)
+        report_path = ROOT / report
+        existing_reproduction = None
+        if report_path.is_file() and not args.reproduce:
+            existing = record(report)
+            existing_reproduction = existing.get("reproduction")
+            if not isinstance(existing_reproduction, dict):
+                existing_reproduction = None
+            else:
+                existing_reproduction = existing_reproduction.get("executions")
+        reproduction = (
+            run_reproduction(args.receipt.resolve()) if args.reproduce else existing_reproduction
+        )
+        write_report(report_path, candidate, matrix, performance, static_rank, reproduction)
     except (CheckError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"storage-redesign-closure: {error}", file=sys.stderr)
         return 1

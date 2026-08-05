@@ -34,6 +34,52 @@ class FreezeEvidenceTests(unittest.TestCase):
                 self.assertIsNone(module.select_existing_record(saved, refresh=True))
 
 
+class ClosureReproductionTests(unittest.TestCase):
+    def test_reproduction_command_set_is_bounded(self) -> None:
+        module = load_script("check-storage-redesign-closure.py")
+        self.assertEqual(
+            [item[0] for item in module.REPRODUCE_COMMANDS],
+            [
+                "p10-api-normalization",
+                "p4-traversal-resolution-counts",
+                "p3-static-rank-preservation",
+                "p3-host-owner",
+                None,
+                None,
+            ],
+        )
+
+    def test_receipt_checker_failure_stops_before_execution(self) -> None:
+        module = load_script("check-storage-redesign-closure.py")
+        ran = False
+
+        def runner(argv: tuple[str, ...]) -> int:
+            nonlocal ran
+            ran = True
+            return 0
+
+        with self.assertRaisesRegex(module.CheckError, "receipt checker"):
+            module.run_reproduction(
+                Path("receipt.json"),
+                receipt_validator=lambda _: 1,
+                runner=runner,
+            )
+        self.assertFalse(ran)
+
+    def test_nonzero_reproduction_fails(self) -> None:
+        module = load_script("check-storage-redesign-closure.py")
+
+        def runner(argv: tuple[str, ...]) -> int:
+            return 1 if argv[0] == "python3" else 0
+
+        with self.assertRaisesRegex(module.CheckError, "exit code 1"):
+            module.run_reproduction(
+                Path("receipt.json"),
+                receipt_validator=lambda _: 0,
+                runner=runner,
+            )
+
+
 class HardwareMatrixTests(unittest.TestCase):
     candidate = "a" * 40
 
