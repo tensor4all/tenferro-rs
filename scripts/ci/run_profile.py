@@ -109,6 +109,14 @@ def commands_for(profile: str) -> tuple[str, ...]:
         raise ValueError(f"unknown CI profile: {profile}") from error
 
 
+def _command_for_execution(command: str) -> str:
+    """Use this process's interpreter for repository-owned Python commands."""
+
+    if command == "python3" or command.startswith("python3 "):
+        return shlex.quote(sys.executable) + command[len("python3") :]
+    return command
+
+
 def expand_profiles(profiles: Sequence[str]) -> tuple[str, ...]:
     """Expand composites and preserve the first occurrence of each profile."""
 
@@ -151,15 +159,17 @@ def run_profiles(
             if dry_run:
                 continue
             environment = os.environ.copy()
+            environment["PYTHON"] = sys.executable
             if profile == "workspace-blas":
                 rustflags = "-l dylib=openblas -l dylib=lapack"
                 environment["RUSTFLAGS"] = rustflags
                 environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = rustflags
                 environment["CARGO"] = _TRYBUILD_CARGO_WRAPPER
+            execution_command = _command_for_execution(command)
             try:
                 # Commands are repository constants, not caller-provided shell text.
                 subprocess.run(
-                    command, shell=True, check=True, env=environment
+                    execution_command, shell=True, check=True, env=environment
                 )
             except subprocess.CalledProcessError as error:
                 raise RuntimeError(

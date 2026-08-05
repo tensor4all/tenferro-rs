@@ -305,6 +305,8 @@ may be enabled for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
 
 ## Build Commands
 
+Repository scripts require Python 3.11 or newer. Set `$PYTHON` to one executable or path token to override the resolver when needed.
+
 ```bash
 # Build entire workspace
 cargo build

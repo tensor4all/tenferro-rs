@@ -51,3 +51,26 @@ Nested extension/sample workspaces (`ext/tropical`, `ext/sparse`,
 `samples/kdv-pinn`) do not see the root `[profile.ci]`. CI failed with
 `profile ci is not defined` until those manifests defined a matching profile
 (with explicit `debug = 0`, since nested defaults keep test debuginfo).
+
+## Python 3.11 resolver follow-up (#1606)
+
+- **Context:** Accepted issue #1606 addresses macOS hosts whose bare `python3`
+  is older than 3.11.
+- **Chosen design:** One shell resolver performs a semantic `sys.version_info`
+  probe in deterministic order (`$PYTHON`, `python3.13`, `python3.12`,
+  `python3.11`, `python3`), then offers `uv` as an optional fallback. `$PYTHON`
+  remains one executable/path token; the selected `sys.executable` is propagated
+  through `run_profile.py` and inherited by nested shells.
+- **Required coverage:** Added resolver fixtures and the directly affected
+  run-profile, local-gate, and docs source-contract updates.
+- **Rejected:** `eval`/shell text; pyenv/bootstrap, dependency installation, or
+  a version matrix; trusting a version banner; and PATH fallback after invalid
+  `$PYTHON`.
+- **Verification:** RED caught the missing helper plus aggregate/profile/docs
+  contract failures. GREEN passed 9 resolver tests, 31 run-profile tests, and
+  188 CI tests, along with shell syntax, a real docs profile under a fake-old
+  PATH, the fast gate, and full local gates/coverage/docs/rules review.
+- **Residual risks:** The `uv` contract is tested with a fake executable; hosted
+  CI still supplies final evidence. Enforcement is limited to the accepted
+  repository shell entrypoints and their profile children; unrelated hosted
+  workflow invocations remain outside #1606.
