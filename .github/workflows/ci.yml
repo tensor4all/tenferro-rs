@@ -168,6 +168,33 @@ jobs:
           if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
           if [ "${REQUIRED}" != true ]; then echo "dependency check not required: ${REASON}"; fi
 
+  macos-gated-check:
+    name: macOS-gated GPU type-check
+    needs: policy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - name: Type-check macOS-gated GPU tests
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: cargo check -p tenferro-gpu --features webgpu --test integration --target aarch64-apple-darwin
+      - name: Report macOS-gated check disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "macOS-gated GPU check not required: ${REASON}"; fi
+
   coverage:
     name: coverage
     needs: policy

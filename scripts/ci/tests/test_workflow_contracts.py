@@ -26,6 +26,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/run_profile.py docs", text)
         self.assertIn("name: CI configuration checks", text)
 
+    def test_macos_gated_gpu_tests_are_cross_checked(self) -> None:
+        text = read(".github/workflows/ci.yml")
+        start = text.index("  macos-gated-check:")
+        end = text.index("\n  coverage:", start)
+        block = text[start:end]
+        self.assertIn("name: macOS-gated GPU type-check", block)
+        self.assertIn("targets: aarch64-apple-darwin", block)
+        self.assertIn(
+            "cargo check -p tenferro-gpu --features webgpu --test integration "
+            "--target aarch64-apple-darwin",
+            block,
+        )
+        self.assertIn("needs.policy.outputs.run_rust == 'true'", block)
+
     def test_required_names_remain_stable(self) -> None:
         fast = read(".github/workflows/ci.yml")
         heavy = read(".github/workflows/ci-pr-workspace-tests.yml")
