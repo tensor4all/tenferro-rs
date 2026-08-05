@@ -70,6 +70,10 @@ def environment(env: dict[str, str]) -> dict[str, object]:
     }
 
 
+def select_existing_record(record: dict[str, object] | None, *, refresh: bool) -> dict[str, object] | None:
+    return None if refresh else record
+
+
 def frozen_candidate() -> str:
     text = (ROOT / "docs/design/storage-contract-freeze.md").read_text(encoding="utf-8")
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
@@ -87,9 +91,10 @@ def main() -> int:
     parser.add_argument("--baseline-obligation", required=True)
     parser.add_argument("--baseline-report", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
     output = args.report if args.report.is_absolute() else ROOT / args.report
-    if output.is_file():
+    if output.is_file() and not args.refresh:
         text = output.read_text(encoding="utf-8")
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if not match:

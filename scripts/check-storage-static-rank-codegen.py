@@ -26,11 +26,16 @@ def run(*args: str) -> str:
     ).stdout.strip()
 
 
+def select_existing_record(record: dict[str, object] | None, *, refresh: bool) -> dict[str, object] | None:
+    return None if refresh else record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
-    if args.report.is_file():
+    if args.report.is_file() and not args.refresh:
         text = args.report.read_text(encoding="utf-8")
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if not match:
