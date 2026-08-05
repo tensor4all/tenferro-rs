@@ -61,12 +61,19 @@ class CheckError(ValueError):
     pass
 
 
-def read_freeze(path: Path) -> dict:
+def read_record(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if not match:
-        raise CheckError("freeze report has no fenced JSON record")
+        raise CheckError(f"report has no fenced JSON record: {path}")
     record = json.loads(match.group(1))
+    if not isinstance(record, dict):
+        raise CheckError(f"report JSON is not an object: {path}")
+    return record
+
+
+def read_freeze(path: Path) -> dict:
+    record = read_record(path)
     candidate = record.get("candidate_commit")
     if not isinstance(candidate, str) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
         raise CheckError("freeze report has no full candidate commit")
@@ -83,6 +90,15 @@ def cpu_facts() -> str:
             if line.lower().startswith("model name"):
                 model = line.split(":", 1)[-1].strip()
                 break
+    if model == "unknown" and platform.system() == "Darwin":
+        result = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            model = result.stdout.strip()
     return f"{platform.machine()} {model}; {platform.system()} {platform.release()}"
 
 
@@ -138,30 +154,97 @@ def run_lane(name: str, spec: dict, timeout: int) -> dict:
     }
 
 
+def merge_records(candidate: str, records: list[dict]) -> dict:
+    lanes: dict[str, dict] = {}
+    for record in records:
+        if record.get("schema") != "tenferro.storage-hardware-matrix.v1":
+            raise CheckError("partial hardware report has an invalid schema")
+        if record.get("candidate_commit") != candidate:
+            raise CheckError("partial hardware report has a different candidate")
+        for lane in record.get("lanes", []):
+            name = lane.get("lane")
+            if name not in REQUIRED:
+                raise CheckError(f"unknown hardware lane: {name}")
+            if name in lanes:
+                raise CheckError(f"duplicate hardware lane: {name}")
+            if lane.get("status") != "pass":
+                raise CheckError(f"hardware lane is not passing: {name}")
+            count = lane.get("test_count")
+            if not isinstance(count, int) or count <= 0:
+                raise CheckError(f"hardware lane has no executed tests: {name}")
+            if not lane.get("environment") or not lane.get("device_facts"):
+                raise CheckError(f"hardware lane lacks host/device facts: {name}")
+            lanes[name] = lane
+    missing = [name for name in REQUIRED if name not in lanes]
+    if missing:
+        raise CheckError("missing hardware lane(s): " + ", ".join(missing))
+    ordered = [lanes[name] for name in REQUIRED]
+    return {
+        "schema": "tenferro.storage-hardware-matrix.v1",
+        "candidate_commit": candidate,
+        "required_lanes": list(REQUIRED),
+        "required_mode": True,
+        "complete": True,
+        "status": "pass",
+        "environment": {"hosts": sorted({lane["environment"] for lane in ordered})},
+        "lanes": ordered,
+        "evidence_paths": sorted({lane["evidence"] for lane in ordered}),
+    }
+
+
+def write_report(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# Frozen storage hardware matrix\n\n"
+        "Unavailable hardware is a structured skip, never a pass.\n\n"
+        "```json\n" + json.dumps(record, indent=2) + "\n```\n",
+        encoding="utf-8",
+    )
+
+
+def resolve_report(path: Path, *, allow_external: bool) -> Path:
+    if path.is_absolute():
+        if not allow_external:
+            try:
+                return path.relative_to(ROOT)
+            except ValueError as error:
+                raise CheckError("report path must remain inside the repository") from error
+        return path
+    return ROOT / path
+
+
+def report_output_path(path: Path, *, merge: bool) -> Path:
+    return resolve_report(path, allow_external=not merge)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--merge-report", action="append", default=[], type=Path)
     parser.add_argument("--required-mode", action="store_true")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--lanes", default=",".join(REQUIRED))
     args = parser.parse_args(argv)
     try:
         freeze = read_freeze(ROOT / FREEZE)
-        report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
-        if any(part == ".." for part in report.parts):
-            raise CheckError("report path must remain inside the repository")
-        existing = ROOT / report
-        if existing.is_file():
-            text = existing.read_text(encoding="utf-8")
-            match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-            if not match:
-                raise CheckError("existing hardware matrix has no fenced JSON record")
-            saved = json.loads(match.group(1))
-            if saved.get("candidate_commit") != freeze["candidate_commit"]:
+        output = report_output_path(args.report, merge=bool(args.merge_report))
+        candidate = freeze["candidate_commit"]
+        if args.merge_report:
+            record = merge_records(
+                candidate,
+                [read_record(path) for path in args.merge_report],
+            )
+            write_report(output, record)
+            print("storage-hardware-matrix-pass")
+            return 0
+        if output.is_file():
+            saved = read_record(output)
+            if saved.get("candidate_commit") != candidate:
                 raise CheckError("existing hardware matrix does not match frozen candidate")
-            if saved.get("status") not in ("pass", "structured-skip"):
-                raise CheckError("existing hardware matrix is not passing")
-            print(f"storage-hardware-matrix-{saved['status']}")
+            if saved.get("complete") is not True or saved.get("status") != "pass":
+                raise CheckError("existing hardware matrix is incomplete or not passing")
+            merge_records(candidate, [saved])
+            print("storage-hardware-matrix-pass")
             return 0
         lanes = [name for name in args.lanes.split(",") if name]
         unknown = [name for name in lanes if name not in LANES]
@@ -175,25 +258,20 @@ def main(argv: list[str] | None = None) -> int:
             raise CheckError("required hardware lane skipped: " + ", ".join(item["lane"] for item in skipped_required))
         if bad:
             raise CheckError("hardware lane failed: " + ", ".join(item["lane"] for item in bad))
-        status = "pass" if not skipped_required else "structured-skip"
+        complete = not skipped_required and set(lanes) == set(REQUIRED)
+        status = "pass" if complete else ("structured-skip" if skipped_required else "pass")
         record = {
             "schema": "tenferro.storage-hardware-matrix.v1",
-            "candidate_commit": freeze["candidate_commit"],
+            "candidate_commit": candidate,
             "required_lanes": list(REQUIRED),
             "required_mode": required_mode,
+            "complete": complete,
             "status": status,
             "environment": {"host": cpu_facts(), "python": platform.python_version()},
             "lanes": results,
             "evidence_paths": sorted({item["evidence"] for item in results}),
         }
-        output = ROOT / report
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            "# Frozen storage hardware matrix\n\n"
-            "Unavailable hardware is a structured skip, never a pass.\n\n"
-            "```json\n" + json.dumps(record, indent=2) + "\n```\n",
-            encoding="utf-8",
-        )
+        write_report(output, record)
     except (CheckError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"storage-hardware-matrix: {error}", file=sys.stderr)
         return 1

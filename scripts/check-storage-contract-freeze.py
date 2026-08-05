@@ -38,6 +38,25 @@ class CheckError(ValueError):
     pass
 
 
+EVIDENCE_ALLOWLIST = frozenset(
+    {
+        "docs/design/storage-contract-freeze.md",
+        "docs/testing/storage-hardware-matrix.md",
+        "docs/testing/storage-static-rank-codegen.md",
+        "docs/testing/storage-traversal-performance.md",
+        "docs/worklogs/storage-documentation-source-blind-audit.md",
+        "docs/worklogs/storage-redesign-closure.md",
+        "docs/worklogs/2026-08-05-issue-1617-closure-hygiene-remediation.md",
+    }
+)
+
+
+def validate_evidence_paths(paths: set[str]) -> None:
+    invalid = sorted(paths - EVIDENCE_ALLOWLIST)
+    if invalid:
+        raise CheckError(f"non-evidence path after candidate: {invalid[0]}")
+
+
 def run(*args: str) -> str:
     result = subprocess.run(
         args, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -64,8 +83,12 @@ def existing_record(path: Path) -> dict[str, object] | None:
     return record
 
 
-def validate_candidate(report_path: Path) -> tuple[str, str, bool]:
-    previous = existing_record(report_path)
+def select_existing_record(record: dict[str, object] | None, *, refresh: bool) -> dict[str, object] | None:
+    return None if refresh else record
+
+
+def validate_candidate(report_path: Path, *, refresh: bool = False) -> tuple[str, str, bool]:
+    previous = select_existing_record(existing_record(report_path), refresh=refresh)
     if previous is None and tracked_status():
         raise CheckError("candidate must be clean before freeze evidence is written")
     candidate = (
@@ -102,6 +125,15 @@ def validate_candidate(report_path: Path) -> tuple[str, str, bool]:
     )
     if diff_check.returncode:
         raise CheckError("candidate diff contains whitespace errors")
+    if previous is not None:
+        changed = subprocess.run(
+            ("git", "diff", "--name-only", f"{candidate}..HEAD"),
+            cwd=ROOT,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.splitlines()
+        validate_evidence_paths(set(changed))
     return candidate, base, previous is not None
 
 
@@ -134,10 +166,13 @@ def write_report(path: Path, candidate: str, base: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--refresh", action="store_true")
     args = parser.parse_args(argv)
     try:
         report = args.report if not args.report.is_absolute() else args.report.relative_to(ROOT)
-        candidate, base, already_recorded = validate_candidate(ROOT / report)
+        candidate, base, already_recorded = validate_candidate(
+            ROOT / report, refresh=args.refresh
+        )
         if any(part == ".." for part in report.parts):
             raise CheckError("report path must remain inside the repository")
         if not already_recorded:

@@ -47,7 +47,7 @@ fn managed_upload_maps_without_post_creation_transfers_and_keeps_identity() {
         }
     );
 
-    let Tensor::F32(typed) = &managed else {
+    let Tensor::F32(typed) = &mut managed else {
         panic!("expected f32 tensor")
     };
     assert_eq!(typed.allocation_domain(), Some(context.domain_id()));

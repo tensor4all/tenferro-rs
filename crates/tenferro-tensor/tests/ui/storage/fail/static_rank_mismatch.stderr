@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/storage/fail/static_rank_mismatch.rs
+  |
+  |     requires_rank_three(tensor.as_view());
+  |     ------------------- ^^^^^^^^^^^^^^^^ expected `3`, found `2`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected struct `TypedTensorView<'_, f64, Rank<3>>`
+             found struct `TypedTensorView<'_, f64, Rank<2>>`
+note: function defined here
+ --> tests/ui/storage/fail/static_rank_mismatch.rs
+  |
+  | fn requires_rank_three(_: TypedTensorView<'_, f64, Rank<3>>) {}
+  |    ^^^^^^^^^^^^^^^^^^^ ------------------------------------

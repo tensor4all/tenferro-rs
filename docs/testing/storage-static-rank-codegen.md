@@ -3,7 +3,7 @@
 ```json
 {
   "schema": "tenferro.storage-static-rank-codegen.v1",
-  "candidate_commit": "385a04db9a8cf5547784f0d756e9a7065b3d4efc",
+  "candidate_commit": "652b5c45f753f04425d71541b387acedc39cfa04",
   "command": "cargo rustc -p tenferro-tensor --bench element_access --release -- --emit=asm",
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.6",
   "target": "x86_64-unknown-linux-gnu",
@@ -15,6 +15,6 @@
   "observations": [
     "both fixed-rank probes are present and their backward loops contain no prohibited setup calls"
   ],
-  "assembly": "target/release/deps/element_access-b8d5525be22d5bd4.s"
+  "assembly": "target/release/deps/element_access-6868a32ef0f5348a.s"
 }
 ```

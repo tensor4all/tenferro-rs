@@ -26,16 +26,23 @@ def run(*args: str) -> str:
     ).stdout.strip()
 
 
+def select_existing_record(record: dict[str, object] | None, *, refresh: bool) -> dict[str, object] | None:
+    return None if refresh else record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--refresh", action="store_true")
     args = parser.parse_args()
-    if args.report.is_file():
+    saved = None
+    if args.report.is_file() and not args.refresh:
         text = args.report.read_text(encoding="utf-8")
         match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if not match:
             raise ValueError("existing static-rank report has no JSON record")
-        saved = json.loads(match.group(1))
+        saved = select_existing_record(json.loads(match.group(1)), refresh=args.refresh)
+    if saved is not None:
         freeze_text = (ROOT / "docs/design/storage-contract-freeze.md").read_text(encoding="utf-8")
         freeze_match = re.search(r"```json\s*(\{.*?\})\s*```", freeze_text, re.DOTALL)
         if not freeze_match:

@@ -144,11 +144,12 @@ python3 scripts/check-storage-hardware-matrix.py \
 
 The Markdown report contains exactly one fenced JSON record with schema
 `tenferro.storage-hardware-matrix.v1`. Its required top-level fields are
-`schema`, `candidate_commit`, `freeze_report`, `required_lanes`, and `lanes`.
-`candidate_commit` is exactly 40 lowercase hexadecimal characters;
-`freeze_report` is exactly `docs/design/storage-contract-freeze.md`; and
+`schema`, `candidate_commit`, `required_lanes`, `complete`, `status`, and
+`lanes`. `candidate_commit` is exactly 40 lowercase hexadecimal characters;
 `required_lanes` is exactly `cpu`, `cuda2`, `webgpu`, `metal`, and `cuda-ad` in
-that order.
+that order. A host-specific development capture may set `complete: false` and
+contain only a selected lane subset. The final merged report sets
+`complete: true`, `required_mode: true`, and `status: "pass"`.
 
 Each lane object records `id`, `status`, exact command argv, OS/architecture,
 compiler/toolchain, provider/runtime versions, detected devices, feature flags,
@@ -160,16 +161,13 @@ a measured concrete value.
 The checker:
 
 1. parses the freeze report and requires one candidate commit;
-2. requires every lane to name that commit and every required status to be
-   `pass`;
-3. validates exact command arrays and required environment facts;
-4. requires the scenario/counter fields owned by each lane;
-5. verifies P10 report paths and candidate compatibility: no source file named
-   by either P10 hot-path report changed between its measured commit and the
-   P13-A candidate;
-6. rejects product-tree changes between the candidate and evidence HEAD except
-   the P13 evidence allowlist;
-7. verifies the ledger row remains nonterminal until P13-B.
+2. records selected host-specific lanes as incomplete development captures;
+3. merges captures only when every required lane names the same candidate, occurs
+   exactly once, has concrete host/device facts, has a positive test count, and
+   has status `pass`;
+4. validates the final report as complete and passing;
+5. leaves candidate/evidence allowlist validation to the freeze/closure checker;
+6. verifies the ledger row remains nonterminal until P13-B.
 
 The checker trusts ordinary tracked evidence and hosted CI results. It does not
 attempt to defend against a malicious runner or query remote hardware during a

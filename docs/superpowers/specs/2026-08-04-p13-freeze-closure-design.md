@@ -40,15 +40,18 @@ The allowed post-C diff is closed and path-specific:
 
 - `docs/design/storage-contract-freeze.md`;
 - `docs/testing/storage-hardware-matrix.md`;
-- `docs/testing/storage-documentation-audit.md`;
+- `docs/testing/storage-static-rank-codegen.md`;
+- `docs/testing/storage-traversal-performance.md`;
+- `docs/worklogs/storage-documentation-source-blind-audit.md`;
 - `docs/worklogs/storage-redesign-closure.md`;
+- `docs/worklogs/2026-08-05-issue-1617-closure-hygiene-remediation.md`;
 - tagged `state` promotions only in
   `scripts/storage-ownership-contracts.toml`;
 - the active-ID fixture in `scripts/test-storage-ownership-contracts-v2.py`,
   limited to adding exactly the IDs promoted by the same evidence commit.
 
-Product docs, Rust/Python implementation, benchmark/codegen reports, checker
-logic, and all other tests must already be in C and are not on this allowlist.
+Product docs, Rust/Python implementation, checker logic, CI, durable design
+specs, and all other tests must already be in C and are not on this allowlist.
 The active-ID fixture exception may change only its expected set literal; it
 cannot change executable validation logic. An allowed path may contain evidence
 only and cannot redefine a contract or API.
@@ -86,8 +89,10 @@ detached plus eligible synchronous-scoped runtime model.
 ## P13-A prerequisite evidence
 
 Before C is selected, all P0-P10 obligations are active and passing. The
-candidate also contains the complete P12 product docs and P11/P12/P13 checkers,
-even though their evidence rows remain deferred. Required non-hardware checks
+candidate contains the complete P12 product docs and P11/P12/P13 checker
+implementations, even though their evidence rows remain deferred. P10
+benchmark/codegen producer scripts and benchmark sources are in C; their final
+candidate-bound reports are generated after C. Required non-hardware checks
 include:
 
 - formatting, workspace check/test/clippy, extensions, doctests, and docs;
@@ -99,7 +104,8 @@ include:
 - clean tracked worktree and exact base/candidate provenance.
 
 Hardware-specific tests may produce structured local skips at this gate; P11
-required mode owns actual execution.
+required mode owns actual execution. A host-specific report may be incomplete,
+but final closure requires a merged passing report for every required lane.
 
 ## Freeze report
 
@@ -203,11 +209,12 @@ The report contains exactly one fenced JSON record with schema
 `tenferro.storage-redesign-closure.v1` and concrete fields:
 
 - candidate C and freeze/P11/P12 report paths;
-- audit reviewer identities/independence statements;
+- audit source and independence statement;
 - seven lane outcomes and evidence references;
 - all findings and dispositions;
 - rerun/invalidation decisions;
 - final active obligation list;
+- optional reproduction mode, exact argv, and exit statuses;
 - `terminal: true` only when no blocker remains.
 
 The checker:
