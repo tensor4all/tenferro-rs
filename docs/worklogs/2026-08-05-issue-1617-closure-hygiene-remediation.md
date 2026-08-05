@@ -54,5 +54,12 @@ commit; evidence descendants may change only the closed evidence allowlist.
   Darwin 25.5.0.
 - The generated remediation plan was removed from the PR after the repository
   rules review identified it as prohibited standalone AI content.
-- The default recorded-evidence closure report passes; bounded reproduction and
-  final receipt generation remain the next closure steps.
+- The default recorded-evidence closure report passes.
+- Pre-reproduction evidence head: `39a36fead0c91ad187dd5a87822455a96161b7fb`.
+- Pre-reproduction receipt: `/tmp/issue-1617-pre-reproduction-receipt.json`,
+  validated as 31/31 zero-exit executions with `terminal: true`.
+- Bounded reproduction passed all six fixed commands, including coverage
+  (`209/209` files passed); the reproduced closure report records all six
+  zero-exit results.
+- The final receipt path is `/tmp/issue-1617-final-receipt.json`; it will be
+  generated after this final evidence commit so it binds the clean final head.

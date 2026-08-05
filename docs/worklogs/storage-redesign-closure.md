@@ -31,6 +31,79 @@ This is an independent evidence audit of the frozen product candidate.
     "crates/tenferro-tensor/tests/storage_public_api.rs",
     "crates/tenferro-gpu/tests/storage_provider_webgpu.rs"
   ],
-  "notes": "No Critical or Important findings; every required hardware lane has a positive passing test count."
+  "notes": "No Critical or Important findings; every required hardware lane has a positive passing test count.",
+  "reproduction": {
+    "mode": "reproduce",
+    "executions": [
+      {
+        "obligation_id": "p10-api-normalization",
+        "argv": [
+          "cargo",
+          "test",
+          "-p",
+          "tenferro-tensor",
+          "--test",
+          "storage_public_api"
+        ],
+        "exit_code": 0
+      },
+      {
+        "obligation_id": "p4-traversal-resolution-counts",
+        "argv": [
+          "cargo",
+          "test",
+          "-p",
+          "tenferro-tensor",
+          "--test",
+          "storage_traversal_resolution"
+        ],
+        "exit_code": 0
+      },
+      {
+        "obligation_id": "p3-static-rank-preservation",
+        "argv": [
+          "cargo",
+          "test",
+          "-p",
+          "tenferro-tensor",
+          "--test",
+          "storage_static_rank"
+        ],
+        "exit_code": 0
+      },
+      {
+        "obligation_id": "p3-host-owner",
+        "argv": [
+          "cargo",
+          "test",
+          "-p",
+          "tenferro-tensor",
+          "--test",
+          "storage_compile_contract"
+        ],
+        "exit_code": 0
+      },
+      {
+        "obligation_id": null,
+        "argv": [
+          "cargo",
+          "test",
+          "-p",
+          "tenferro-runtime",
+          "scoped_immediate_provider_returns_borrowed_output"
+        ],
+        "exit_code": 0
+      },
+      {
+        "obligation_id": null,
+        "argv": [
+          "python3",
+          "scripts/ci/run_profile.py",
+          "coverage"
+        ],
+        "exit_code": 0
+      }
+    ]
+  }
 }
 ```
