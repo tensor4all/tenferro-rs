@@ -1257,6 +1257,346 @@ def test_missing_doc_example_findings_ignores_unchanged_items() -> None:
     assert findings == []
 
 
+def test_missing_doc_example_findings_flags_added_public_trait_method() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub trait PublicApi {",
+            "    fn old(&self);",
+            "    fn method(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    diff = "\n".join(
+        [
+            "diff --git a/crates/x/src/lib.rs b/crates/x/src/lib.rs",
+            "--- a/crates/x/src/lib.rs",
+            "+++ b/crates/x/src/lib.rs",
+            "@@ -1,3 +1,4 @@",
+            " pub trait PublicApi {",
+            "     fn old(&self);",
+            "+    fn method(&self);",
+            " }",
+        ]
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines=mod.added_lines_by_file(diff),
+    )
+    assert len(findings) == 1
+    assert findings[0].id == "missing-doc-examples"
+    assert findings[0].severity == "warn"
+    assert "PublicApi::method" in findings[0].detail
+
+
+def test_missing_doc_example_findings_accepts_trait_method_examples() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "/// Public API.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```",
+            "/// let _ = 1;",
+            "/// ```",
+            "pub trait PublicApi {",
+            "    /// Calls the API.",
+            "    ///",
+            "    /// # Examples",
+            "    ///",
+            "    /// ```",
+            "    /// let _ = 1;",
+            "    /// ```",
+            "    fn method(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {16}},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_skips_hidden_trait_methods() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "/// Public API.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```",
+            "/// let _ = 1;",
+            "/// ```",
+            "pub trait PublicApi {",
+            "    #[doc(hidden)]",
+            "    fn hidden_method(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {10}},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_skips_private_traits() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "trait PrivateApi {",
+            "    fn method(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {1, 2, 3}},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_recognizes_trait_method_forms() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "/// Public API.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```",
+            "/// let _ = 1;",
+            "/// ```",
+            "pub trait PublicApi {",
+            "    fn required(&self);",
+            "    fn provided(&self) {",
+            "        // } in a comment",
+            '        let _string = "}";',
+            "        /* { in a block comment */",
+            "        let _value = 1;",
+            "    }",
+            "    fn default_method(&self) {",
+            '        let _raw = r#"} {"#;',
+            "    }",
+            "    async fn async_method(&self);",
+            "    unsafe fn unsafe_method(&self);",
+            "    const fn const_method(&self);",
+            '    extern "C" fn extern_method(&self);',
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": set(range(1, len(source.splitlines()) + 1))},
+    )
+    assert len(findings) == 1
+    detail = findings[0].detail
+    for method in (
+        "required",
+        "provided",
+        "default_method",
+        "async_method",
+        "unsafe_method",
+        "const_method",
+        "extern_method",
+    ):
+        assert f"PublicApi::{method}" in detail
+
+
+def test_missing_doc_example_findings_ignores_unchanged_trait_methods() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub trait PublicApi {",
+            "    fn old(&self);",
+            "    // unrelated changed line",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    diff = "\n".join(
+        [
+            "diff --git a/crates/x/src/lib.rs b/crates/x/src/lib.rs",
+            "--- a/crates/x/src/lib.rs",
+            "+++ b/crates/x/src/lib.rs",
+            "@@ -1,3 +1,4 @@",
+            " pub trait PublicApi {",
+            "     fn old(&self);",
+            "+    // unrelated changed line",
+            " }",
+        ]
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines=mod.added_lines_by_file(diff),
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_uses_trait_name_for_selective_reexports() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "/// Public API.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```",
+            "/// let _ = 1;",
+            "/// ```",
+            "pub trait PublicApi {",
+            "    fn method(&self);",
+            "}",
+            "",
+            "/// Private API.",
+            "///",
+            "/// # Examples",
+            "///",
+            "/// ```",
+            "/// let _ = 1;",
+            "/// ```",
+            "pub trait PrivateApi {",
+            "    fn hidden_method(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(
+        mod,
+        {
+            "crates/x/src/concrete.rs": source,
+            "crates/x/src/lib.rs": "mod concrete;\npub use concrete::PublicApi;",
+        },
+    )
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/concrete.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={
+            "crates/x/src/concrete.rs": set(range(1, len(source.splitlines()) + 1))
+        },
+    )
+    assert len(findings) == 1
+    assert "PublicApi::method" in findings[0].detail
+    assert "PrivateApi::hidden_method" not in findings[0].detail
+
+
+def test_missing_doc_example_findings_ignores_nested_trait_helpers() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub trait PublicApi {",
+            "    fn provided(&self) {",
+            "        fn helper() {}",
+            "    }",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {3}},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_ignores_trait_comments_and_literals() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub trait PublicApi {",
+            "    /*",
+            "        fn block_fake(&self);",
+            "    */",
+            "    const NORMAL: &str = \"\\",
+            "fn normal_fake(&self);\\",
+            "\";",
+            "    const RAW: &str = r#\"",
+            "fn raw_fake(&self);",
+            "\"#;",
+            "    // fn line_fake(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {3, 6, 9, 11}},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_ignores_traits_in_outer_comments() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "/*",
+            "pub trait Fake {",
+            "    fn fake(&self);",
+            "}",
+            "*/",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": set(range(1, 6))},
+    )
+    assert findings == []
+
+
+def test_missing_doc_example_findings_tracks_nested_block_comments() -> None:
+    mod = load_module()
+    source = "\n".join(
+        [
+            "pub trait PublicApi {",
+            "    /*",
+            "        /*",
+            "        */",
+            "        }",
+            "        fn fake(&self);",
+            "    */",
+            "    fn real(&self);",
+            "}",
+        ]
+    )
+    _with_fake_text(mod, {"crates/x/src/lib.rs": source})
+    findings = mod.missing_doc_example_findings(
+        ["crates/x/src/lib.rs"],
+        ref="HEAD",
+        worktree=False,
+        added_lines={"crates/x/src/lib.rs": {6, 8}},
+    )
+    assert len(findings) == 1
+    assert "PublicApi::real" in findings[0].detail
+    assert "PublicApi::fake" not in findings[0].detail
+
+
 def test_vacuous_doc_example_findings_flags_path_only_example() -> None:
     mod = load_module()
     vacuous = "\n".join(
@@ -2581,6 +2921,17 @@ def main() -> int:
         test_inline_test_module_findings_skips_untouched_block,
         test_missing_doc_example_findings_flags_only_real_gaps,
         test_missing_doc_example_findings_ignores_unchanged_items,
+        test_missing_doc_example_findings_flags_added_public_trait_method,
+        test_missing_doc_example_findings_accepts_trait_method_examples,
+        test_missing_doc_example_findings_skips_hidden_trait_methods,
+        test_missing_doc_example_findings_skips_private_traits,
+        test_missing_doc_example_findings_recognizes_trait_method_forms,
+        test_missing_doc_example_findings_ignores_unchanged_trait_methods,
+        test_missing_doc_example_findings_uses_trait_name_for_selective_reexports,
+        test_missing_doc_example_findings_ignores_nested_trait_helpers,
+        test_missing_doc_example_findings_ignores_trait_comments_and_literals,
+        test_missing_doc_example_findings_ignores_traits_in_outer_comments,
+        test_missing_doc_example_findings_tracks_nested_block_comments,
         test_vacuous_doc_example_findings_flags_path_only_example,
         test_vacuous_doc_example_findings_ignores_comment_lines,
         test_vacuous_doc_example_findings_accepts_comment_only_example,
