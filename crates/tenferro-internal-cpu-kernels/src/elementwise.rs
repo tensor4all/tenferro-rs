@@ -1486,8 +1486,7 @@ where
             |a, b| MaybeUninit::new(f(a, b)),
         )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        // SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.
-        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
+        // SAFETY: the successful runtime-selected zip/map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
@@ -1498,8 +1497,7 @@ where
             |x| MaybeUninit::new(f(scalar, x)),
         )
         .map_err(|err| crate::Error::backend_source(op, err))?;
-        // SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.
-        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        // SAFETY: the successful runtime-selected scalar-map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
@@ -3579,7 +3577,7 @@ where
             |x, y| MaybeUninit::new(x + y),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        // SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", lhs)?.get(&[]);
@@ -3590,7 +3588,7 @@ where
             |x| MaybeUninit::new(scalar + x),
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
-        // SAFETY: the successful multiplication kernel writes every logical destination element and retains no destination view.
+        // SAFETY: the successful add scalar-map replay writes every logical destination element and retains no destination view.
         Ok(unsafe { out.assume_init()? })
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", rhs)?.get(&[]);

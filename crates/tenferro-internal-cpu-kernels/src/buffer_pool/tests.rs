@@ -441,6 +441,57 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
             "{helper} must retain the pinned same-shape kernel"
         );
     }
+
+    assert!(
+        !elementwise.contains(
+            "// SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.\\n        // SAFETY:"
+        ),
+        "generic zip/map overwrite proof must not be duplicated"
+    );
+    assert!(
+        !elementwise.contains(
+            "// SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.\\n        // SAFETY:"
+        ),
+        "generic scalar-map overwrite proof must not be duplicated"
+    );
+
+    let generic_binary = elementwise
+        .split_once("fn typed_binary_view_with_pool")
+        .and_then(|(_, suffix)| suffix.split_once("fn typed_unary_view_with_pool"))
+        .map(|(body, _)| body)
+        .expect("generic binary helper must remain present");
+    assert!(generic_binary.contains(
+        "// SAFETY: the successful runtime-selected zip/map replay writes every logical destination element and retains no destination view."
+    ));
+    assert!(generic_binary.contains(
+        "// SAFETY: the successful runtime-selected scalar-map replay writes every logical destination element and retains no destination view."
+    ));
+
+    let add = elementwise
+        .split_once("pub fn typed_add_view_with_pool")
+        .and_then(|(_, suffix)| suffix.split_once("pub fn typed_sub_with_pool"))
+        .map(|(body, _)| body)
+        .expect("add view helper must remain present");
+    assert!(add.contains(
+        "// SAFETY: the successful add zip/map replay writes every logical destination element and retains no destination view."
+    ));
+    assert!(add.contains(
+        "// SAFETY: the successful add scalar-map replay writes every logical destination element and retains no destination view."
+    ));
+    assert!(
+        !add.contains("successful multiplication kernel"),
+        "add overwrite proofs must not claim multiplication"
+    );
+
+    let multiplication = elementwise
+        .split_once("pub fn typed_mul_view_with_pool")
+        .and_then(|(_, suffix)| suffix.split_once("fn typed_div_with_pool"))
+        .map(|(body, _)| body)
+        .expect("multiplication helpers must remain present");
+    assert!(
+        multiplication.contains("successful multiplication kernel"),
+        "same-shape multiplication must retain its operation-specific proof"
+    );
 }
 
 #[test]
