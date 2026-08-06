@@ -65,6 +65,9 @@ mod domain_executor;
 #[allow(dead_code)]
 mod dot_runtime;
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
+pub(crate) use tenferro_internal_cpu_kernels::elementwise::{
+    erased_raw_strided_ref, erased_raw_strided_uninit_mut,
+};
 pub(crate) use tenferro_internal_cpu_kernels::PooledUninitOutput;
 mod engine;
 mod exec_session;
@@ -82,7 +85,6 @@ mod runtime_adapter;
 mod structural;
 mod topology;
 
-use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 #[cfg(test)]
 use strided_kernel::StridedArray;
@@ -90,28 +92,6 @@ use strided_kernel::{col_major_strides as kernel_col_major_strides, StridedView}
 
 use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
-
-pub(crate) fn erased_raw_strided_ref<'a>(
-    dtype: strided_kernel::KernelDType,
-    data: &'a [u8],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<strided_kernel::ErasedRawStridedRef<'a>> {
-    let data_ptr = NonNull::new(data.as_ptr().cast_mut()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: callers derive `data` from initialized typed host storage and
-    // keep that storage alive for the returned descriptor lifetime.
-    unsafe {
-        strided_kernel::ErasedRawStridedRef::from_raw_parts(
-            dtype,
-            data_ptr,
-            data.len(),
-            dims,
-            strides,
-            offset,
-        )
-    }
-}
 
 pub(crate) fn erased_raw_strided_mut<'a>(
     dtype: strided_kernel::KernelDType,
@@ -125,28 +105,6 @@ pub(crate) fn erased_raw_strided_mut<'a>(
     // destination and retain that borrow for the returned descriptor lifetime.
     unsafe {
         strided_kernel::ErasedRawStridedMut::from_raw_parts(
-            dtype,
-            data_ptr,
-            data.len(),
-            dims,
-            strides,
-            offset,
-        )
-    }
-}
-
-pub(crate) fn erased_raw_strided_uninit_mut<'a>(
-    dtype: strided_kernel::KernelDType,
-    data: &'a mut [MaybeUninit<u8>],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<strided_kernel::ErasedRawStridedUninitMut<'a>> {
-    let data_ptr = NonNull::new(data.as_mut_ptr().cast::<u8>()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: the guard owns the allocation, and the caller proves that every
-    // reachable destination element is overwritten before typed exposure.
-    unsafe {
-        strided_kernel::ErasedRawStridedUninitMut::from_raw_parts(
             dtype,
             data_ptr,
             data.len(),

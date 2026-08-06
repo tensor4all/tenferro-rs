@@ -262,3 +262,36 @@ failures, so hosted/hardware evidence remains conditional; they do not prove
 constructor availability. Non-Apple hosts exercise and assert the typed
 unavailable branch, while the successful Apple transfer branch requires a
 supported host-visible Metal adapter.
+
+## Issue #1577 follow-up
+
+The remaining structural duplicates were limited to three ownership seams:
+`lstsq` validation in eager/traced linalg, checked compact strides in the CUDA
+and WebGPU providers, and erased initialized/uninitialized view constructors in
+the CPU crate and internal kernels. The private linalg validator now owns the
+shared dtype, rank, and tall-or-square checks while callers provide lazy shape
+extraction and their pre-existing wide-error wrapper. This preserves eager's
+`GraphBuild` validation display and traced's transparent
+`TensorRuntime`/`Execution` display, including dtype/rank/wide precedence. The
+traced path extracts a concrete shape once and performs no dummy symbolic-rank
+allocation or second probe. The provider-neutral GPU helper now lives in
+`native_permutation` and is called by both CUDA and WebGPU. The
+`elementwise` module owns both erased constructors, with the CPU crate using a
+direct narrow re-export; both constructors are explicitly unsafe with contracts
+covering alignment, dtype/storage agreement, bounds, borrows, initialization,
+and typed exposure.
+
+RED coverage added paired eager/traced `lstsq` cases for unsupported integer
+dtypes, rank-one `A` and `b`, wide `2x3` inputs, and symbolic-shape precedence;
+source assertions guard the single concrete-shape extraction and absence of the
+old dummy vector/probe. The prior candidate was intentionally checked against
+these source/base-contract snapshots first: it still contained the
+`try_concrete_shape` probe and dummy rank vector, and it routed the traced wide
+error through the eager `GraphBuild` wrapper, so the checks were RED. The wide
+case now retains per-surface wrapper, phase, and display snapshots. GPU RED
+tests covered empty, normal, unrepresentable-dimension, and
+stride-product-overflow shapes with caller-supplied operation names. GREEN
+passed after the three ownership extractions. Verification covered the focused
+suites, provider helper tests and clippy, formatting, source ownership searches,
+and the final PR gate; residual risk is limited to hardware-gated GPU
+execution.
