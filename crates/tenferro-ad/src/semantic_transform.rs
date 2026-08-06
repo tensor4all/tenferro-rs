@@ -1256,7 +1256,34 @@ fn transpose_broadcast(
         SemanticTransformRole::Vjp,
         "broadcast cotangent",
     )?;
-    let mut reduce_axes: Vec<_> = (0..output_shape.shape.len())
+    let input_rank = input_shape.shape.len();
+    let output_rank = output_shape.shape.len();
+    let metadata_error = |message| SemanticAdTransformError::UnsupportedMetadata {
+        role: SemanticTransformRole::Vjp,
+        message,
+    };
+    if dims.len() != input_rank {
+        return Err(metadata_error(format!(
+            "broadcast dims length {} does not match input rank {input_rank}",
+            dims.len()
+        )));
+    }
+    let mut seen = HashSet::with_capacity(dims.len());
+    for (input_axis, &output_axis) in dims.iter().enumerate() {
+        if output_axis >= output_rank {
+            return Err(metadata_error(format!(
+                "broadcast dims[{input_axis}] = {output_axis} is out of bounds for output rank {output_rank}"
+            )));
+        }
+        if !seen.insert(output_axis) {
+            return Err(metadata_error(format!(
+                "broadcast dims[{input_axis}] = {output_axis} duplicates an earlier output axis"
+            )));
+        }
+    }
+    // INVARIANT: these repeated membership and position scans are bounded by tensor rank;
+    // replace them with axis maps only if unusually high-rank tensors make this measurable.
+    let mut reduce_axes: Vec<_> = (0..output_rank)
         .filter(|axis| !dims.contains(axis))
         .collect();
     reduce_axes.extend(
@@ -1282,7 +1309,7 @@ fn transpose_broadcast(
         )?[0];
     }
 
-    let remaining_output_axes: Vec<_> = (0..output_shape.shape.len())
+    let remaining_output_axes: Vec<_> = (0..output_rank)
         .filter(|axis| !reduce_axes.contains(axis))
         .collect();
     let perm: Vec<_> = dims
@@ -1293,9 +1320,13 @@ fn transpose_broadcast(
             remaining_output_axes
                 .iter()
                 .position(|candidate| *candidate == axis)
-                .expect("broadcast dims survive unless reduced")
+                .ok_or_else(|| {
+                    metadata_error(format!(
+                        "broadcast output axis {axis} did not survive cotangent reduction"
+                    ))
+                })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     if perm.iter().copied().ne(0..perm.len()) {
         value = builder.add_op(CoreSemanticOp::Transpose { perm }, &[value])?[0];
     }
