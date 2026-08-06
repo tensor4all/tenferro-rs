@@ -205,29 +205,6 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
     })
 }
 
-fn compact_strides_isize(op: &'static str, shape: &[usize]) -> crate::Result<Vec<isize>> {
-    let mut strides = Vec::with_capacity(shape.len());
-    let mut stride = 1isize;
-    for &dim in shape {
-        strides.push(stride);
-        let dim = isize::try_from(dim).map_err(|_| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("dimension {dim} cannot be represented as isize"),
-            )
-        })?;
-        stride = stride.checked_mul(dim).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("column-major stride overflow for shape {shape:?}"),
-            )
-        })?;
-    }
-    Ok(strides)
-}
-
 fn launch_native_materialization<E: CubePrimitive>(
     backend: &CudaBackend,
     output: ArrayArg<CubeclCudaRuntime>,
@@ -974,7 +951,8 @@ impl CudaBackend {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
         ensure_resident_on_runtime(self.runtime(), input, "transpose")?;
-        let input_strides = compact_strides_isize("transpose", input.shape())?;
+        let input_strides =
+            crate::native_permutation::compact_col_major_strides("transpose", input.shape())?;
         let plan = NativePermutationPlan::for_transpose(
             "transpose",
             input.shape(),
@@ -1000,7 +978,8 @@ impl CudaBackend {
         validate_permutation("transpose", perm, input.shape().len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
         ensure_resident_on_runtime(self.runtime(), input, "transpose")?;
-        let input_strides = compact_strides_isize("transpose", input.shape())?;
+        let input_strides =
+            crate::native_permutation::compact_col_major_strides("transpose", input.shape())?;
         let plan = NativePermutationPlan::for_transpose(
             "transpose",
             input.shape(),
