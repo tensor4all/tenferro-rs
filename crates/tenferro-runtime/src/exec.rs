@@ -8,8 +8,9 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor, ValidationError,
+    BackendCachedDot, BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
+    ValidationError,
 };
 
 use crate::extension_cache::ExtensionCacheStore;
@@ -840,7 +841,8 @@ pub(crate) fn execute_ffi_instruction_cached<'input, B: TensorBackend + 'static>
 ) -> Result<()> {
     match &inst.op {
         ExecOp::DotGeneral(config) => {
-            let result = backend.dot_general_read_cached(
+            let result = BackendCachedDot::dot_general_read_cached(
+                backend,
                 backend_cache,
                 cache_slot,
                 get_read(slots, &inst.input_slots, 0)?,
@@ -855,7 +857,8 @@ pub(crate) fn execute_ffi_instruction_cached<'input, B: TensorBackend + 'static>
             lhs_conj,
             rhs_conj,
         } => {
-            let result = backend.dot_general_with_conj_read_cached(
+            let result = BackendCachedDot::dot_general_with_conj_read_cached(
+                backend,
                 backend_cache,
                 cache_slot,
                 get_read(slots, &inst.input_slots, 0)?,

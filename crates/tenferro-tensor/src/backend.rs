@@ -4031,7 +4031,7 @@ pub trait BackendSessionHost: BackendRuntimeCache {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R
     where
-        Self: TensorBackend + BackendSessionIdentity + Sized,
+        Self: TensorBackend + Sized,
     {
         default_backend_session(self, f)
     }
@@ -4043,7 +4043,7 @@ pub trait BackendSessionHost: BackendRuntimeCache {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R
     where
-        Self: TensorBackend + BackendSessionIdentity + Sized,
+        Self: TensorBackend + Sized,
     {
         self.with_backend_session(f)
     }
@@ -4098,15 +4098,6 @@ impl<T> TensorBackendOps for T where
 ///     backend.with_backend_session(|exec| exec.add(a, b))
 /// }
 /// ```
-/// Identity contract for a concrete erased backend-session target.
-///
-/// Implementors must use a distinct zero-sized `'static` marker for each
-/// concrete target that a backend leaf may reconstruct from an erased session.
-#[doc(hidden)]
-pub trait BackendSessionIdentity {
-    type Marker: 'static;
-}
-
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// Build-local identity for backend-extension session capability dispatch.
     #[doc(hidden)]
@@ -4126,19 +4117,6 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     unsafe fn session_data_mut(&mut self) -> *mut ();
 }
 
-impl<T> BackendSession for T
-where
-    T: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer + BackendSessionIdentity + Sized,
-{
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<T::Marker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut T as *mut ()
-    }
-}
-
 /// Standard runtime backend over dynamic [`Tensor`] values.
 ///
 /// # Examples
@@ -4150,7 +4128,7 @@ where
 /// ```
 pub trait TensorBackend:
     BackendRuntimeCache
-    + BackendSessionIdentity
+    + BackendSession
     + TensorBackendOps
     + BackendCachedDot
     + TensorDeviceTransfer
@@ -4174,7 +4152,7 @@ impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
 ///     default_backend_session(backend, |_exec| 1usize)
 /// }
 /// ```
-pub fn default_backend_session<B: TensorBackend + BackendSessionIdentity, R: Send>(
+pub fn default_backend_session<B: TensorBackend, R: Send>(
     backend: &mut B,
     f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
 ) -> R {

@@ -189,7 +189,7 @@ where
         return None;
     }
     let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker is supplied by the same blanket
+    // SAFETY: the exact marker is supplied by CpuExecSession's explicit
     // `BackendSession` implementation that produced `session_data_mut`, and
     // the equality above proves that the erased value is `CpuExecSession`.
     // The callback is higher-ranked and returns no session borrow, so the

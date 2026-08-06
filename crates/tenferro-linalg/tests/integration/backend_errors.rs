@@ -5,7 +5,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
     BackendStorageHandle, CompareDir, DType, DotGeneralConfig, Error, ErrorKind, GatherConfig,
     MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
     TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
@@ -231,8 +231,17 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         }
     }
     impl BackendCachedDot for DefaultOnlyLinalgBackend {}
-    impl BackendSessionIdentity for DefaultOnlyLinalgBackend {
-        type Marker = DefaultOnlyLinalgBackend;
+    #[doc(hidden)]
+    struct DefaultOnlyLinalgBackendSessionMarker;
+
+    impl BackendSession for DefaultOnlyLinalgBackend {
+        fn session_type_id(&self) -> std::any::TypeId {
+            std::any::TypeId::of::<DefaultOnlyLinalgBackendSessionMarker>()
+        }
+
+        unsafe fn session_data_mut(&mut self) -> *mut () {
+            self as *mut Self as *mut ()
+        }
     }
     impl BackendSessionHost for DefaultOnlyLinalgBackend {}
     impl TensorBackend for DefaultOnlyLinalgBackend {}

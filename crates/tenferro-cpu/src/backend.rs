@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -35,9 +36,9 @@ use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendSessionIdentity, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural, TensorViewCanonicalization,
+    DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -1021,7 +1022,7 @@ fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) 
 /// assert_eq!(backend.kind(), clone.kind());
 /// ```
 #[doc(hidden)]
-pub struct CpuBackendSessionMarker;
+struct CpuBackendSessionMarker;
 
 #[derive(Clone)]
 pub struct CpuBackend {
@@ -2715,8 +2716,14 @@ impl CpuBackend {
     }
 }
 
-impl BackendSessionIdentity for CpuBackend {
-    type Marker = CpuBackendSessionMarker;
+impl BackendSession for CpuBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<CpuBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendRuntimeCache for CpuBackend {

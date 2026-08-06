@@ -1,3 +1,4 @@
+use std::any::TypeId;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
@@ -12,15 +13,15 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendSessionIdentity, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
-    PadConfig, Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorValue, TensorWrite,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, Result as TensorResult,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorValue, TensorWrite,
 };
 
 #[doc(hidden)]
-pub struct EagerBackendSessionMarker;
+struct EagerBackendSessionMarker;
 
 pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
@@ -170,7 +171,7 @@ macro_rules! dispatch {
 
 #[cfg(test)]
 #[doc(hidden)]
-pub struct RecordingBackendSessionMarker;
+struct RecordingBackendSessionMarker;
 
 #[cfg(test)]
 #[derive(Debug)]
@@ -191,8 +192,14 @@ macro_rules! delegate_recording_backend_methods {
 }
 
 #[cfg(test)]
-impl BackendSessionIdentity for RecordingBackend {
-    type Marker = RecordingBackendSessionMarker;
+impl BackendSession for RecordingBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<RecordingBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 #[cfg(test)]
@@ -342,8 +349,14 @@ macro_rules! delegate_tensor_backend_methods {
     };
 }
 
-impl BackendSessionIdentity for EagerBackend {
-    type Marker = EagerBackendSessionMarker;
+impl BackendSession for EagerBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<EagerBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendRuntimeCache for EagerBackend {

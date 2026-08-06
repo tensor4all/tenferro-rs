@@ -1,10 +1,10 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity, CompareDir,
-    DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TensorView, TensorWrite, TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite,
+    TypedTensor,
 };
 
 use crate::eager::{
@@ -26,6 +26,8 @@ fn typed_eager_einsum_does_not_erase_through_host_copies() {
 
 #[derive(Default)]
 struct WrongDTypeBackend;
+#[doc(hidden)]
+struct WrongDTypeBackendSessionMarker;
 
 macro_rules! panic_backend_methods {
     ($($name:ident($($arg:ident : $argty:ty),*) -> $ret:ty;)+) => {
@@ -140,8 +142,14 @@ impl TensorDot for WrongDTypeBackend {
 
 impl BackendCachedDot for WrongDTypeBackend {}
 
-impl BackendSessionIdentity for WrongDTypeBackend {
-    type Marker = WrongDTypeBackend;
+impl BackendSession for WrongDTypeBackend {
+    fn session_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<WrongDTypeBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendSessionHost for WrongDTypeBackend {}

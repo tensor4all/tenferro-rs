@@ -19,9 +19,9 @@ use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 #[cfg(feature = "cpu-blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
-    ContractionScalar, DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, ContractionScalar,
+    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use tenferro_tensor::{
@@ -35,6 +35,10 @@ use tenferro_tensor::{
 #[test]
 fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
     let mut backend = CpuBackend::new();
+    assert_ne!(
+        backend.session_type_id(),
+        std::any::TypeId::of::<crate::exec_session::CpuExecSessionMarker>()
+    );
     let mut called = false;
     assert!(with_cpu_exec_session(&mut backend, |_| {
         called = true;

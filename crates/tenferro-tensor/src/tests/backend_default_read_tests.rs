@@ -2,15 +2,16 @@ use crate::{
     backend::{
         validate_dot_general_read_into, validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob,
     },
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendSessionIdentity, CompareDir, ContractionScalar, DType, DotGeneralAccumulation,
-    DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRead, TensorReduction, TensorScalar, TensorStructural, TensorView,
-    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
+    ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
 
+#[doc(hidden)]
 struct DefaultReadBackendSessionMarker;
 
 struct DefaultReadBackend {
@@ -520,8 +521,14 @@ impl BackendRuntimeCache for DefaultReadBackend {
 
 impl BackendCachedDot for DefaultReadBackend {}
 
-impl BackendSessionIdentity for DefaultReadBackend {
-    type Marker = DefaultReadBackendSessionMarker;
+impl BackendSession for DefaultReadBackend {
+    fn session_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<DefaultReadBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendSessionHost for DefaultReadBackend {}

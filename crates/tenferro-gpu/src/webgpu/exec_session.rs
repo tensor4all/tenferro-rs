@@ -1,7 +1,8 @@
+use std::any::TypeId;
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, BackendSessionIdentity, ElementwiseFusionPlan,
-    GroupedGemmConfig, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
+    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -12,7 +13,7 @@ use super::{WebGpuBackend, WebGpuRuntime, WebGpuRuntimeIdentity};
 
 /// Marker for the concrete erased WebGPU execution-session target.
 #[doc(hidden)]
-pub struct WebGpuExecSessionMarker;
+pub(super) struct WebGpuExecSessionMarker;
 
 /// Borrowed WebGPU execution capability.
 #[doc(hidden)]
@@ -248,8 +249,14 @@ delegate_cached! {
     ) -> crate::Result<()>;
 }
 
-impl BackendSessionIdentity for WebGpuExecSession<'_> {
-    type Marker = WebGpuExecSessionMarker;
+impl BackendSession for WebGpuExecSession<'_> {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<WebGpuExecSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendSessionHost for WebGpuBackend {

@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSessionHost, BackendSessionIdentity, CompareDir, DotGeneralConfig, Error, GatherConfig,
+    BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, Error, GatherConfig,
     PadConfig, Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorRead, TensorReduction, TensorStructural, TensorView,
@@ -160,6 +160,7 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[24.0; 10]);
 }
 
+#[doc(hidden)]
 struct NoBroadcastMaterializationBackendSessionMarker;
 
 struct NoBroadcastMaterializationBackend {
@@ -168,8 +169,14 @@ struct NoBroadcastMaterializationBackend {
     rhs_strides: &'static [isize],
 }
 
-impl BackendSessionIdentity for NoBroadcastMaterializationBackend {
-    type Marker = NoBroadcastMaterializationBackendSessionMarker;
+impl BackendSession for NoBroadcastMaterializationBackend {
+    fn session_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<NoBroadcastMaterializationBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 fn unexpected(op: &'static str) -> Error {

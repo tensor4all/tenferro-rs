@@ -1,7 +1,8 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
+use std::any::TypeId;
 use std::sync::Arc;
-use tenferro_tensor::backend::{BackendSessionIdentity, ElementwiseFusionPlan, GroupedGemmConfig};
+use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
     CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
     PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,
@@ -24,7 +25,7 @@ use super::{
 
 /// Marker for the concrete erased CPU execution-session target.
 #[doc(hidden)]
-pub struct CpuExecSessionMarker;
+pub(super) struct CpuExecSessionMarker;
 
 /// Borrowed CPU execution session used by scheduler-owned extension regions.
 #[doc(hidden)]
@@ -806,8 +807,14 @@ impl TensorFusion for CpuExecSession<'_> {
     }
 }
 
-impl BackendSessionIdentity for CpuExecSession<'_> {
-    type Marker = CpuExecSessionMarker;
+impl BackendSession for CpuExecSession<'_> {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<CpuExecSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 #[cfg(test)]
