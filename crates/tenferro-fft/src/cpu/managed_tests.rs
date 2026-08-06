@@ -8,10 +8,10 @@ use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
     HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
-    StorageBuffer, Tensor, TensorScalar, TypedTensor,
+    StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor,
 };
 
-use crate::{FftNorm, TensorFftExt};
+use crate::{FftNorm, TensorFftExt, TensorReadFftExt};
 
 #[derive(Debug, Default)]
 struct AccessCounts {
@@ -188,6 +188,86 @@ fn assert_managed_output(output: &Tensor, domain: &FakeDomain, input_id: Option<
     assert_eq!(output_domain, Some(domain.id));
     assert_ne!(output_id, input_id);
     assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+}
+
+#[test]
+fn domain_bound_backend_accepts_host_owned_fft() {
+    let domain = FakeDomain::new();
+    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let mut backend = backend(&domain);
+
+    let output = with_cpu_session(&mut backend, |backend| {
+        host.rfft(None, 0, FftNorm::Backward, backend)
+    })
+    .unwrap();
+    let Tensor::C64(output) = output else {
+        panic!("expected C64 host FFT output")
+    };
+
+    assert_eq!(
+        output.as_slice().unwrap(),
+        &[
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ]
+    );
+    assert!(matches!(output.buffer(), StorageBuffer::Host(_)));
+    assert_eq!(output.allocation_domain(), None);
+    assert_eq!(output.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(domain.counts.reads.load(Ordering::Relaxed), 0);
+    assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn domain_bound_backend_accepts_host_read_fft() {
+    let domain = FakeDomain::new();
+    let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let input = TensorRead::from_tensor(&host);
+    let mut backend = backend(&domain);
+
+    let output = with_cpu_session(&mut backend, |backend| {
+        input.rfft_read(None, 0, FftNorm::Backward, backend)
+    })
+    .unwrap();
+    let Tensor::C64(output) = output else {
+        panic!("expected C64 host FFT output")
+    };
+
+    assert_eq!(
+        output.as_slice().unwrap(),
+        &[
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ]
+    );
+    assert!(matches!(output.buffer(), StorageBuffer::Host(_)));
+    assert_eq!(output.allocation_domain(), None);
+    assert_eq!(output.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(domain.counts.reads.load(Ordering::Relaxed), 0);
+    assert_eq!(domain.counts.writes.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn domain_bound_backend_rejects_foreign_fft_input() {
+    let domain = FakeDomain::new();
+    let foreign = FakeDomain::new();
+    let input = Tensor::F64(foreign.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    let mut backend = backend(&domain);
+
+    let error = with_cpu_session(&mut backend, |backend| {
+        input.rfft(None, 0, FftNorm::Backward, backend)
+    })
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::HostAccess {
+            source: HostAccessError::ForeignDomain { .. },
+            ..
+        }
+    ));
 }
 
 #[test]
