@@ -262,6 +262,8 @@ impl CutensorPermutationPlanCache {
     }
 
     fn touch(&mut self, key: &CutensorPermutationKey) {
+        // INVARIANT: the LRU order is bounded by configured `max_entries`, so
+        // this retain scan has a constant configured ceiling.
         self.order.retain(|existing| existing != key);
         self.order.push_back(key.clone());
     }
@@ -295,6 +297,8 @@ impl CutensorPermutationPlanCache {
     }
 
     fn retained_bytes(&self) -> usize {
+        // INVARIANT: retained entries are bounded by configured `max_entries`,
+        // so this retained-byte fold has a constant configured ceiling.
         let entries_bytes =
             self.entries
                 .iter()

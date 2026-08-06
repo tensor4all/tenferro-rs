@@ -1,5 +1,6 @@
 // Run with: cargo test --features cuda -- --ignored
 use num_complex::{Complex32, Complex64};
+use std::num::NonZeroUsize;
 
 use crate::DotGeneralConfig;
 use crate::Tensor;
@@ -22,6 +23,39 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
 
     assert_eq!(actual.shape(), expected.shape());
     assert_tensor_close(&actual, &expected, tol);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    gpu.set_cutensor_plan_cache_max_entries(NonZeroUsize::new(1).unwrap())
+        .unwrap();
+
+    let lhs_a = tensor_f32(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
+    let rhs_a = tensor_f32(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]);
+    let lhs_b = tensor_f32(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let rhs_b = tensor_f32(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let expected_a = cpu.dot_general(&lhs_a, &rhs_a, &matmul_config()).unwrap();
+    let expected_b = cpu.dot_general(&lhs_b, &rhs_b, &matmul_config()).unwrap();
+
+    let gpu_lhs_a = upload(&gpu, &lhs_a);
+    let gpu_rhs_a = upload(&gpu, &rhs_a);
+    let gpu_lhs_b = upload(&gpu, &lhs_b);
+    let gpu_rhs_b = upload(&gpu, &rhs_b);
+    let actual_a = gpu
+        .dot_general(&gpu_lhs_a, &gpu_rhs_a, &matmul_config())
+        .unwrap();
+    let actual_b = gpu
+        .dot_general(&gpu_lhs_b, &gpu_rhs_b, &matmul_config())
+        .unwrap();
+
+    // Eviction drops the first plan while its launch may still be queued. The
+    // pinned CubeCL CUDA allocator retires async frees on the owning stream.
+    gpu.runtime().synchronize().unwrap();
+    assert_tensor_close(&download(&gpu, &actual_a), &expected_a, 1e-4);
+    assert_tensor_close(&download(&gpu, &actual_b), &expected_b, 1e-4);
 }
 
 fn matmul_config() -> DotGeneralConfig {
