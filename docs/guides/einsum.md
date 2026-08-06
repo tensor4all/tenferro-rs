@@ -292,28 +292,24 @@ let rhs = TracedTensor::from_vec_col_major(
         10.0, 11.0, 12.0,
     ],
 )?;
-let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
+let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1))?;
 
-assert_eq!(out.concrete_shape().unwrap(), vec![2, 4]);
+assert_eq!(out.concrete_shape()?, vec![2, 4]);
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile(&out).unwrap();
+let program = compiler.compile(&out)?;
 let backend = CpuBackend::new();
 let mut builder = Runtime::builder();
-builder
-    .register_engine(runtime_engine_registration(&backend).unwrap())
-    .unwrap();
-builder
-    .install_extension_module(
-        tenferro_einsum::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
-    )
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+    runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 4]);
 assert_eq!(
-    result.as_slice::<f64>().unwrap(),
+    result.as_slice::<f64>()?,
     &[22.0, 28.0, 49.0, 64.0, 76.0, 100.0, 103.0, 136.0],
 );
 ```

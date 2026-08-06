@@ -28,7 +28,7 @@ parallelism policy:
 ```rust
 use tenferro_cpu::CpuBackend;
 
-let backend = CpuBackend::with_threads(4).unwrap();
+let backend = CpuBackend::with_threads(4)?;
 assert_eq!(backend.num_threads(), 4);
 ```
 <!-- end-snippet-source -->
@@ -100,13 +100,13 @@ use tenferro_tensor::backend::TensorViewCanonicalization;
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-).unwrap();
-let transposed = tensor.as_view().transpose_view([1, 0]).unwrap();
-let mut backend = CpuBackend::with_threads(4).unwrap();
-let compact = backend.to_contiguous(&transposed).unwrap();
+)?;
+let transposed = tensor.as_view().transpose_view([1, 0])?;
+let mut backend = CpuBackend::with_threads(4)?;
+let compact = backend.to_contiguous(&transposed)?;
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
 <!-- end-snippet-source -->
 
@@ -172,7 +172,7 @@ parallel, use a smaller inner backend:
 ```rust
 use tenferro_cpu::CpuBackend;
 
-let backend = CpuBackend::with_threads(1).unwrap();
+let backend = CpuBackend::with_threads(1)?;
 ```
 <!-- end-snippet-source -->
 
@@ -204,12 +204,10 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let backend = CpuBackend::with_threads(4).unwrap();
+let backend = CpuBackend::with_threads(4)?;
 let mut builder = Runtime::builder();
-builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
-    .unwrap();
-let runtime = builder.build().unwrap();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+let runtime = builder.build()?;
 ```
 <!-- end-snippet-source -->
 
@@ -230,9 +228,9 @@ use tenferro_runtime::extension::ExtensionCacheLimits;
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
-    NonZeroUsize::new(128).unwrap(),
+    NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
 ).with_max_retained_bytes(
-    NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
+    NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
 ))?;
 ```
 <!-- end-snippet-source -->
@@ -244,7 +242,7 @@ For CPU backends, the CPU buffer pool has its own retention limit:
 use tenferro_cpu::CpuBackend;
 
 let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024)?;
 ```
 <!-- end-snippet-source -->
 
@@ -262,15 +260,16 @@ use tenferro_runtime::{GraphCompiler, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-let runtime = Runtime::builder().build().unwrap();
+let runtime = Runtime::builder().build()?;
 let mut compiler = GraphCompiler::new();
 
-runtime.clear_prepared_cache().unwrap();
-runtime.clear_caches().unwrap();
+runtime.clear_prepared_cache()?;
+runtime.clear_caches()?;
 compiler.clear_caches();
-eager.clear_caches().unwrap();
+eager.clear_caches()?;
 Ok(())
 }
+main()?;
 ```
 <!-- end-snippet-source -->
 

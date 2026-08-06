@@ -43,7 +43,7 @@ let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(backend.runtime(), &x).unwrap();
+let gpu_x = upload_tensor(backend.runtime(), &x)?;
 assert_eq!(gpu_x.shape(), &[2]);
 ```
 <!-- end-snippet-source -->
@@ -62,9 +62,9 @@ let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
-let gpu_x = upload_tensor(backend.runtime(), &x).unwrap();
-let cpu_x = download_tensor(backend.runtime(), &gpu_x).unwrap();
-assert_eq!(cpu_x.as_slice::<f64>().unwrap(), &[3.0]);
+let gpu_x = upload_tensor(backend.runtime(), &x)?;
+let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+assert_eq!(cpu_x.as_slice::<f64>()?, &[3.0]);
 ```
 <!-- end-snippet-source -->
 
