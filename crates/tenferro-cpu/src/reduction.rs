@@ -731,13 +731,19 @@ where
         axes,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    let source = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(input_view.data()),
-        input_view.dims(),
-        input_view.strides(),
-        input_view.offset(),
-    )
+    let source = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(input_view.data()),
+            input_view.dims(),
+            input_view.strides(),
+            input_view.offset(),
+        )
+    }
     .map_err(|err| crate::Error::backend_source(label, err))?;
     // SAFETY: ErasedReducePlan writes every destination element.
     let mut output = unsafe { uninit_full_overwrite_vec(output_len) };
@@ -848,22 +854,34 @@ where
         axes,
     )
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    let source = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(input_view.data()),
-        input_view.dims(),
-        input_view.strides(),
-        input_view.offset(),
-    )
+    let source = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(input_view.data()),
+            input_view.dims(),
+            input_view.strides(),
+            input_view.offset(),
+        )
+    }
     .map_err(|err| crate::Error::backend_source(label, err))?;
     let mut output = PooledUninitOutput::<T>::new(buffers, output_shape.clone())?;
-    let mut dest = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        output.as_uninit_bytes_mut(),
-        &output_shape,
-        &output_strides,
-        0,
-    )
+    let mut dest = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            output.as_uninit_bytes_mut(),
+            &output_shape,
+            &output_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source(label, err))?;
     let source_ptr = strided_kernel::ErasedRawStridedPtr::from_ref(&source);
     plan.execute_uninit(exec_context, &mut dest, &source_ptr)

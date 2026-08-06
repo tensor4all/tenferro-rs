@@ -496,22 +496,34 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("slice", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
-    let input_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("slice", input)?),
-        input_shape,
-        &input_strides,
-        0,
-    )
+    let input_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("slice", input)?),
+            input_shape,
+            &input_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("slice", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        &out_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            &out_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("slice", err))?;
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("slice", err))?;
@@ -638,13 +650,19 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         .iter()
         .zip(input_strides.iter())
         .map(|(input, strides)| {
-            crate::erased_raw_strided_ref(
-                dtype,
-                typed_bytes(typed_host_data("concatenate", input)?),
-                input.shape(),
-                strides,
-                0,
-            )
+            unsafe {
+                // SAFETY: this operation supplies initialized typed bytes with
+                // alignment and dtype matching the descriptor; validated dimensions,
+                // strides, and offset keep every reachable source element in bounds
+                // for the retained borrow.
+                crate::erased_raw_strided_ref(
+                    dtype,
+                    typed_bytes(typed_host_data("concatenate", input)?),
+                    input.shape(),
+                    strides,
+                    0,
+                )
+            }
             .map_err(|err| crate::Error::backend_source("concatenate", err))
         })
         .collect::<crate::Result<_>>()?;
@@ -652,13 +670,19 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         .iter()
         .map(ErasedRawStridedPtr::from_ref)
         .collect();
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        &out_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            &out_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptrs)
         .map_err(|err| crate::Error::backend_source("concatenate", err))?;
@@ -690,22 +714,34 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, input_shape.to_vec())?;
-    let input_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("reverse", input)?),
-        input_shape,
-        &input_strides,
-        0,
-    )
+    let input_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("reverse", input)?),
+            input_shape,
+            &input_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        input_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            input_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
     plan.execute_uninit(exec_context, &mut out_ref, &input_ptr)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
@@ -1049,29 +1085,47 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         })
         .map_err(|err| crate::Error::backend_source("gather", err))?;
 
-    let operand_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("gather", operand)?),
-        operand_shape,
-        &operand_strides,
-        0,
-    )
+    let operand_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("gather", operand)?),
+            operand_shape,
+            &operand_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    let index_ref = crate::erased_raw_strided_ref(
-        index_dtype,
-        typed_bytes(&start_indices.values),
-        &start_indices.shape,
-        &index_strides,
-        0,
-    )
+    let index_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            index_dtype,
+            typed_bytes(&start_indices.values),
+            &start_indices.shape,
+            &index_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("gather", err))?;
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        &out_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            &out_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("gather", err))?;
     let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
     let index_ptr = ErasedRawStridedPtr::from_ref(&index_ref);
@@ -1303,37 +1357,61 @@ where
     // INVARIANT: ErasedScatterPlan first copies the full operand into `out`,
     // then applies every additive update.
     let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
-    let operand_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("scatter", operand)?),
-        operand_shape,
-        &operand_strides,
-        0,
-    )
+    let operand_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("scatter", operand)?),
+            operand_shape,
+            &operand_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let index_ref = crate::erased_raw_strided_ref(
-        index_dtype,
-        typed_bytes(&scatter_indices.values),
-        &scatter_indices.shape,
-        &index_strides,
-        0,
-    )
+    let index_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            index_dtype,
+            typed_bytes(&scatter_indices.values),
+            &scatter_indices.shape,
+            &index_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let update_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("scatter", updates)?),
-        updates_shape,
-        &update_strides,
-        0,
-    )
+    let update_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("scatter", updates)?),
+            updates_shape,
+            &update_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        operand_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            operand_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
     let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
     let index_ptr = ErasedRawStridedPtr::from_ref(&index_ref);
@@ -1427,29 +1505,47 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     // INVARIANT: ErasedDynamicSlicePlan writes every output coordinate exactly once.
     let mut out = PooledUninitOutput::<T>::new(buffers, out_shape.clone())?;
-    let input_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("dynamic_slice", input)?),
-        input_shape,
-        &input_strides,
-        0,
-    )
+    let input_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("dynamic_slice", input)?),
+            input_shape,
+            &input_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    let start_ref = crate::erased_raw_strided_ref(
-        index_dtype,
-        typed_bytes(&starts.values),
-        &starts.shape,
-        &start_strides,
-        0,
-    )
+    let start_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            index_dtype,
+            typed_bytes(&starts.values),
+            &starts.shape,
+            &start_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        &out_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            &out_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
     let start_ptr = ErasedRawStridedPtr::from_ref(&start_ref);
@@ -1543,37 +1639,61 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     // INVARIANT: ErasedDynamicUpdateSlicePlan copies the full operand into
     // `out` before overwriting the update window.
     let mut out = PooledUninitOutput::<T>::new(buffers, operand_shape.to_vec())?;
-    let operand_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
-        operand_shape,
-        &operand_strides,
-        0,
-    )
+    let operand_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
+            operand_shape,
+            &operand_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let update_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("dynamic_update_slice", update)?),
-        update_shape,
-        &update_strides,
-        0,
-    )
+    let update_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("dynamic_update_slice", update)?),
+            update_shape,
+            &update_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let start_ref = crate::erased_raw_strided_ref(
-        index_dtype,
-        typed_bytes(&starts.values),
-        &starts.shape,
-        &start_strides,
-        0,
-    )
+    let start_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            index_dtype,
+            typed_bytes(&starts.values),
+            &starts.shape,
+            &start_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        operand_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            operand_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
     let operand_ptr = ErasedRawStridedPtr::from_ref(&operand_ref);
     let update_ptr = ErasedRawStridedPtr::from_ref(&update_ref);
@@ -1697,22 +1817,34 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let fill = T::pool_zero();
     let mut out = PooledUninitOutput::new(buffers, out_shape.clone())?;
-    let input_ref = crate::erased_raw_strided_ref(
-        dtype,
-        typed_bytes(typed_host_data("pad", input)?),
-        input_shape,
-        &input_strides,
-        0,
-    )
+    let input_ref = unsafe {
+        // SAFETY: this operation supplies initialized typed bytes with
+        // alignment and dtype matching the descriptor; validated dimensions,
+        // strides, and offset keep every reachable source element in bounds
+        // for the retained borrow.
+        crate::erased_raw_strided_ref(
+            dtype,
+            typed_bytes(typed_host_data("pad", input)?),
+            input_shape,
+            &input_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     let input_ptr = ErasedRawStridedPtr::from_ref(&input_ref);
-    let mut out_ref = crate::erased_raw_strided_uninit_mut(
-        dtype,
-        out.as_uninit_bytes_mut(),
-        &out_shape,
-        &out_strides,
-        0,
-    )
+    let mut out_ref = unsafe {
+        // SAFETY: the output guard exclusively owns aligned storage whose
+        // byte layout agrees with dtype; validated dimensions, strides, and
+        // offset keep every destination in bounds, and the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(
+            dtype,
+            out.as_uninit_bytes_mut(),
+            &out_shape,
+            &out_strides,
+            0,
+        )
+    }
     .map_err(|err| crate::Error::backend_source("pad", err))?;
     plan.execute_uninit(
         exec_context,

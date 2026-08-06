@@ -52,6 +52,7 @@ mod extension;
 mod gpu;
 mod tensor_ext;
 mod traced;
+mod validation;
 
 #[cfg(feature = "autodiff")]
 pub use ad::semantic_ad_rules;

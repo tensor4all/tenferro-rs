@@ -11,32 +11,10 @@ use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d,
     ensure_placement_resident_on_runtime, prepared_webgpu_view, unsupported_dtype, WebGpuBackend,
 };
+use crate::native_permutation::compact_col_major_strides;
 
 const TRANSPOSE_OP: &str = "webgpu_transpose";
 const MATERIALIZE_OP: &str = "WebGpuBackend::to_contiguous_read";
-
-fn dense_strides(shape: &[usize], op: &'static str) -> crate::Result<Vec<isize>> {
-    let mut strides = Vec::with_capacity(shape.len());
-    let mut stride = 1isize;
-    for &dim in shape {
-        strides.push(stride);
-        let dim = isize::try_from(dim).map_err(|_| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("dimension {dim} cannot be represented as isize"),
-            )
-        })?;
-        stride = stride.checked_mul(dim).ok_or_else(|| {
-            crate::Error::invalid_argument(
-                op,
-                "shape",
-                format!("column-major stride overflow for shape {shape:?}"),
-            )
-        })?;
-    }
-    Ok(strides)
-}
 
 fn view_allocation_len<T, R>(
     view: &TypedTensorView<'_, T, R>,
@@ -235,7 +213,7 @@ where
 {
     validate_permutation_axes(TRANSPOSE_OP, input.shape().len(), perm)?;
     let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
-    let input_strides = dense_strides(input.shape(), TRANSPOSE_OP)?;
+    let input_strides = compact_col_major_strides(TRANSPOSE_OP, input.shape())?;
     let plan = NativePermutationPlan::for_transpose(
         TRANSPOSE_OP,
         input.shape(),

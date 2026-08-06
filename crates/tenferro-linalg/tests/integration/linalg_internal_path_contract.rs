@@ -471,3 +471,35 @@ fn faer_batched_paths_reuse_pooled_scratch_inputs() {
         "Faer batched paths should not allocate a new Vec for every batch slice"
     );
 }
+
+#[test]
+fn traced_lstsq_validates_once_without_symbolic_shape_probe_allocation() {
+    let source = crate_source("src/traced.rs");
+    let lstsq_source = source_section(
+        &source,
+        "pub fn lstsq",
+        "/// Build a traced full-pivot LU solve op",
+    );
+
+    assert!(
+        lstsq_source.contains("validate_lstsq"),
+        "traced lstsq should use the shared validator"
+    );
+    assert_eq!(
+        lstsq_source.matches("require_concrete_shape").count(),
+        1,
+        "traced lstsq should extract a concrete shape exactly once"
+    );
+    assert!(
+        !lstsq_source.contains("try_concrete_shape") && !lstsq_source.contains("vec![0; a.rank]"),
+        "symbolic lstsq validation must not probe or allocate a dummy shape"
+    );
+
+    let validation = crate_source("src/validation.rs");
+    assert!(
+        validation.contains("shape: impl FnOnce() -> Result<(usize, usize)>")
+            && validation.contains("ensure_float_or_complex(op, dtype)?")
+            && validation.contains("ensure_min_rank(op, a_rank, 2)?"),
+        "shared lstsq validation must keep dtype/rank checks ahead of lazy shape extraction"
+    );
+}

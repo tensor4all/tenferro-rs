@@ -24,7 +24,22 @@ use tenferro_tensor::{
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
 
-fn erased_raw_strided_ref<'a>(
+// This hidden public boundary is required by the separate tenferro-cpu crate;
+// that crate re-exports it only at crate visibility and no user-facing safe
+// wrapper exposes the raw constructor.
+/// Construct an erased read-only strided view over initialized typed storage.
+///
+/// # Safety
+///
+/// The caller must ensure that `data` retains the alignment and byte layout
+/// required by `dtype`, and that `dtype` agrees with the elements in the
+/// backing storage. Every element reachable through `dims`, `strides`, and
+/// `offset` must be within `data`; the metadata must remain alive for `'a`, and
+/// the borrow must not be invalidated or mutated incompatibly while the view
+/// exists. All reachable elements must be initialized and readable for the
+/// lifetime of the returned view.
+#[doc(hidden)]
+pub unsafe fn erased_raw_strided_ref<'a>(
     dtype: KernelDType,
     data: &'a [u8],
     dims: &'a [usize],
@@ -32,14 +47,30 @@ fn erased_raw_strided_ref<'a>(
     offset: isize,
 ) -> strided_kernel::Result<ErasedRawStridedRef<'a>> {
     let data_ptr = NonNull::new(data.as_ptr().cast_mut()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: elementwise fusion receives initialized typed host storage and
-    // retains the backing borrows for the descriptor lifetime.
+    // SAFETY: all documented preconditions are met: `dtype` matches the
+    // aligned, initialized storage; the metadata keeps every reachable element
+    // in bounds; and the storage and metadata remain valid for the returned view.
     unsafe {
         ErasedRawStridedRef::from_raw_parts(dtype, data_ptr, data.len(), dims, strides, offset)
     }
 }
 
-fn erased_raw_strided_uninit_mut<'a>(
+// The same narrow cross-crate boundary is used for the uninitialized output
+// constructor; it is not a user-facing API and has no safe compatibility shim.
+/// Construct an erased writable strided view over exclusively owned storage.
+///
+/// # Safety
+///
+/// The caller must ensure that `data` retains the alignment and byte layout
+/// required by `dtype`, and that `dtype` agrees with the eventual typed output.
+/// Every element reachable through `dims`, `strides`, and `offset` must be
+/// within the allocation, with all metadata and the exclusive borrow valid for
+/// `'a`. No other reference may access the allocation while the view exists.
+/// The caller must keep the storage uninitialized only as `MaybeUninit` until
+/// every reachable element has been fully written, and must not expose it as
+/// typed storage before that full initialization is proven.
+#[doc(hidden)]
+pub unsafe fn erased_raw_strided_uninit_mut<'a>(
     dtype: KernelDType,
     data: &'a mut [MaybeUninit<u8>],
     dims: &'a [usize],
@@ -47,8 +78,10 @@ fn erased_raw_strided_uninit_mut<'a>(
     offset: isize,
 ) -> strided_kernel::Result<ErasedRawStridedUninitMut<'a>> {
     let data_ptr = NonNull::new(data.as_mut_ptr().cast::<u8>()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: the pooled output guard owns this storage and the fused replay
-    // proves that every reachable element is overwritten before exposure.
+    // SAFETY: all documented preconditions are met: `dtype` matches the
+    // aligned storage; the metadata keeps every reachable element in bounds;
+    // and the exclusive borrow remains valid while the storage is kept as
+    // `MaybeUninit` until every reachable element is written before exposure.
     unsafe {
         ErasedRawStridedUninitMut::from_raw_parts(
             dtype,
@@ -1232,7 +1265,10 @@ pub fn elementwise_fusion_with_pool(
     let input_refs = input_layouts
         .iter()
         .map(|input| {
-            erased_raw_strided_ref(dtype, input.data, &input.dims, &input.strides, 0)
+            // SAFETY: fusion inputs are initialized typed storage with matching
+            // dtype and alignment; validated layouts bound every reachable read
+            // for the retained input borrow.
+            unsafe { erased_raw_strided_ref(dtype, input.data, &input.dims, &input.strides, 0) }
                 .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
         })
         .collect::<crate::Result<Vec<_>>>()?;
@@ -1415,9 +1451,13 @@ where
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     let mut out = PooledUninitOutput::<T>::new(buffers, shape.to_vec())?;
     let output_strides = col_major_strides(shape)?;
-    let mut dest =
+    // SAFETY: `out` exclusively owns the output allocation with matching
+    // dtype/alignment and the fused plan overwrites every reachable element
+    // before `assume_init` exposes typed storage.
+    let mut dest = unsafe {
         erased_raw_strided_uninit_mut(dtype, out.as_uninit_bytes_mut(), shape, &output_strides, 0)
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    }
+    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     erased_plan
         .execute_uninit(exec_context, &mut dest, input_ptrs)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
