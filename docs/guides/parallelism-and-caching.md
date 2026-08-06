@@ -166,7 +166,7 @@ parallel, use a smaller inner backend:
 ```rust
 use tenferro_cpu::CpuBackend;
 
-let backend = CpuBackend::with_threads(1);
+let backend = CpuBackend::with_threads(1).unwrap();
 ```
 
 For BLAS/LAPACK providers, apply the same rule to provider thread variables.

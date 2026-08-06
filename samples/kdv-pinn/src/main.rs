@@ -9,7 +9,7 @@
 //! Run the example with:
 //!
 //! ```bash
-//! cargo run -p kdv_pinn --release
+//! cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release
 //! ```
 //!
 //! Optional outputs are controlled by command-line flags:
@@ -19,7 +19,7 @@
 //! - `--loss-png <path>` writes the training-loss curve (log-scale y-axis).
 //!
 //! ```bash
-//! cargo run -p kdv_pinn --release -- --gif kdv_pinn.gif --loss-png loss.png
+//! cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release -- --gif kdv_pinn.gif --loss-png loss.png
 //! ```
 
 mod loss;
