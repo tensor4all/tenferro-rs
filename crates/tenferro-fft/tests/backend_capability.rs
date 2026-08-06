@@ -14,12 +14,11 @@ use tenferro_fft::{
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
-    BackendStorageHandle, CompareDir,
-    DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TypedTensor,
+    BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind,
+    GatherConfig, GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig,
+    StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
+    TensorStructural, TypedTensor,
 };
 
 macro_rules! unreachable_backend_methods {

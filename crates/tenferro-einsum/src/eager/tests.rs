@@ -1,10 +1,9 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, BackendSessionIdentity, CompareDir, DotGeneralConfig, Error, GatherConfig,
-    PadConfig, Result,
-    ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorView,
+    PadConfig, Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorRead, TensorReduction, TensorStructural, TensorView,
 };
 
 use super::{

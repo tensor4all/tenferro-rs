@@ -83,8 +83,7 @@ use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionIdentity, TensorAnalytic, TensorBackend,
-    TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use crate::config::{

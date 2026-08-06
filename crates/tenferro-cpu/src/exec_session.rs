@@ -1,9 +1,7 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
 use std::sync::Arc;
-use tenferro_tensor::backend::{
-    BackendSessionIdentity, ElementwiseFusionPlan, GroupedGemmConfig,
-};
+use tenferro_tensor::backend::{BackendSessionIdentity, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
     CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
     PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,

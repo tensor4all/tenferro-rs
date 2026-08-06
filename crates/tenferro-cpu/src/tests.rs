@@ -20,9 +20,8 @@ use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
-    ContractionScalar,
-    DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    ContractionScalar, DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use tenferro_tensor::{

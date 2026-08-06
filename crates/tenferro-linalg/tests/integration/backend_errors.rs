@@ -6,12 +6,11 @@ use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
-    BackendStorageHandle, CompareDir,
-    DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
-    ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView,
-    ValidationError,
+    BackendStorageHandle, CompareDir, DType, DotGeneralConfig, Error, ErrorKind, GatherConfig,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError,
 };
 
 use super::support;

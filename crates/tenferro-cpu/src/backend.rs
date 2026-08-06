@@ -35,10 +35,9 @@ use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    BackendSessionIdentity, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend,
-    TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural, TensorViewCanonicalization,
+    BackendSessionIdentity, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,

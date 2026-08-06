@@ -1,9 +1,8 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, BackendSessionIdentity, ElementwiseFusionPlan,
-    GroupedGemmConfig, SessionCachedDot,
-    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    GroupedGemmConfig, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,

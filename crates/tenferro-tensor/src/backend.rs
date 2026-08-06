@@ -4128,11 +4128,7 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
 
 impl<T> BackendSession for T
 where
-    T: TensorBackendOps
-        + SessionCachedDot
-        + TensorDeviceTransfer
-        + BackendSessionIdentity
-        + Sized,
+    T: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer + BackendSessionIdentity + Sized,
 {
     fn session_type_id(&self) -> TypeId {
         TypeId::of::<T::Marker>()

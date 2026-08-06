@@ -1,10 +1,10 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity, CompareDir,
-    DType, DotGeneralConfig,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor,
+    DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
+    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TensorView, TensorWrite, TypedTensor,
 };
 
 use crate::eager::{

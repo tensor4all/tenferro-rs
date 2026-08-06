@@ -8,13 +8,12 @@ use std::sync::Arc;
 use crate::{
     AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
     BackendCachedDot, BackendId, BackendRuntimeCache, BackendSessionIdentity, CompareDir, DType,
-    DeviceAccessError,
-    DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig,
-    GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement, PreparedDeviceAccess,
-    ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
-    RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
+    DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GatherConfig, GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement,
+    PreparedDeviceAccess, ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping,
+    RootBoundSpan, RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
     TensorViewCanonicalization, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
