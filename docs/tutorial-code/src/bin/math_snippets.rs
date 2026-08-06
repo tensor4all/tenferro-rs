@@ -1,5 +1,15 @@
 //! Compiled documentation snippets for issue #1609.
 
+// INVARIANT: Independent documentation examples intentionally leave some imports,
+// variables, and helper mains unused when compiled as one family binary.
+#![allow(
+    dead_code,
+    unused_imports,
+    unused_variables,
+    unused_mut,
+    clippy::needless_borrow
+)]
+
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     snippet_linear_algebra_1()?;

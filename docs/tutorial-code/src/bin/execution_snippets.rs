@@ -1,5 +1,9 @@
 //! Compiled documentation snippets for issue #1609.
 
+// INVARIANT: Independent documentation examples intentionally leave some imports,
+// variables, and helper mains unused when compiled as one family binary.
+#![allow(dead_code, unused_imports, unused_variables, unused_mut)]
+
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     snippet_parallelism_and_caching_1()?;

@@ -87,4 +87,7 @@ Family coverage is:
   dependencies; the root workspace excludes preserve those crates' own
   workspace behavior.
 - Tutorial snippet binaries intentionally contain many independent examples,
-  so compiler warnings for unused setup/items are expected and harmless.
+  so narrow crate-level allowances for `dead_code`, `unused_imports`,
+  `unused_variables`, and `unused_mut` (plus `clippy::needless_borrow` in
+  `math_snippets.rs`) keep `-D warnings` from flagging composition noise
+  without rewriting the preserved snippets.
