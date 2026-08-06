@@ -517,9 +517,9 @@ where
     };
 
     // SAFETY: the CPU runtime validated dtype, shapes, axes, and reachable
-    // ranges before provider entry. This adapter additionally accepts only
-    // positive strides and host-backed operands, clamps TBLIS to one thread for
-    // the duration of the call, and keeps all descriptor buffers live.
+    // ranges before provider entry. `checked_output_base_offset` proves that
+    // `out_offset` reaches only the host allocation, and this adapter additionally
+    // accepts only positive strides and keeps all descriptor buffers live.
     unsafe {
         tblis_tensor_mult(
             std::ptr::null(),
@@ -546,7 +546,11 @@ impl TblisRuntimeCall<'_> {
         let lock = tblis_runtime_lock().lock().map_err(|_| {
             Error::runtime_state(OP, "TBLIS runtime thread-control lock was poisoned")
         })?;
+        // SAFETY: TBLIS exposes process-global thread control; this read is
+        // serialized by the existing runtime-call guard held in `_lock`.
         let previous_threads = unsafe { tblis_get_num_threads() };
+        // SAFETY: the same serialized guard protects the process-global ABI
+        // mutation, and `Drop` restores `previous_threads` before releasing it.
         unsafe {
             tblis_set_num_threads(1);
         }
@@ -559,6 +563,8 @@ impl TblisRuntimeCall<'_> {
 
 impl Drop for TblisRuntimeCall<'_> {
     fn drop(&mut self) {
+        // SAFETY: the process-global TBLIS ABI remains serialized by `_lock`
+        // until this Drop completes, and this restores the value saved in enter.
         unsafe {
             tblis_set_num_threads(self.previous_threads);
         }
