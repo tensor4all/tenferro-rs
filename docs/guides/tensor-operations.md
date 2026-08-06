@@ -71,7 +71,7 @@ when ordinary Rust code knows the element type and you do not need AD.
 `R` defaults to dynamic rank; use `Rank<N>` when the rank itself should be
 validated and carried in the Rust type.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_14 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_14 -->
 ```rust
 use tenferro_tensor::{Rank, TypedTensor};
 
@@ -109,7 +109,7 @@ For common typed math without autodiff, `TypedTensorOpsExt` provides selected
 backend-explicit methods that accept dynamic-rank `TypedTensor<T>` values and
 return typed results.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_15 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_15 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
@@ -155,7 +155,7 @@ slice code.
 
 `TypedTensor` exposes explicit host-buffer access for slice-style iteration:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_16 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_16 -->
 ```rust
 use tenferro_tensor::TypedTensor;
 
@@ -210,7 +210,7 @@ explicit `cast` when that lossy projection is intended.
 Use `Tensor` with a backend when you want direct computation without autodiff but the dtype
 should remain dynamic.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_17 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_17 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -233,7 +233,7 @@ Use `EagerTensor` when the same immediate computation should stay in an
 `EagerRuntime`. Create tracked variables when a scalar loss should accumulate
 gradients or when a derivative transform should return another eager tensor.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_18 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_18 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
@@ -253,7 +253,7 @@ Ok(())
 
 Use `TracedTensor` when operations should build a graph first and execute later.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_19 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_19 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
@@ -286,7 +286,7 @@ composable chain for dynamic tensors.
 
 Unwrap each step with `?`, or use the explicit fallible method chain:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_20 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_20 -->
 ```rust
 use tenferro_runtime::{Error, TracedTensor};
 
@@ -310,7 +310,7 @@ sequences and code that needs deferred graph errors to remain visible.
 
 ## Elementwise Math Functions
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_21 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_21 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
@@ -332,7 +332,7 @@ Ok(())
 
 ## Reshape And Transpose
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_22 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_22 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -354,7 +354,7 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
 
 ## Explicit Broadcast
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_23 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_23 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
@@ -372,7 +372,7 @@ Ok(())
 
 ## Reduce Over Axes
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#tensor_operations_24 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_24 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};

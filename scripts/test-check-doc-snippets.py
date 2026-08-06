@@ -33,6 +33,19 @@ def test_successful_region_extraction() -> None:
         assert "let x = 1;" in rewritten
 
 
+def test_region_marker_without_final_newline_preserves_name() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        doc = write_fixture(
+            root,
+            "// snippet-start:run\nlet x = 1;\n// snippet-end:run",
+            "<!-- snippet-source: source.rs#run -->\nold\n<!-- end-snippet-source -->\n",
+        )
+        rewritten, changed = CHECKER.rewrite_doc(root, doc)
+        assert changed
+        assert "let x = 1;" in rewritten
+
+
 def test_unknown_region_fails() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)

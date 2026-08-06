@@ -27,7 +27,7 @@ the column-major flat buffer is:
 [1, 4, 2, 5, 3, 6]
 ```
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_25 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#memory_order_25 -->
 ```rust
 use tenferro_runtime::Tensor;
 
@@ -51,7 +51,7 @@ row-major order. tenferro does not keep a row-major compatibility constructor:
 reorder those buffers explicitly at the boundary, then construct tensors from
 column-major data.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_26 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#memory_order_26 -->
 ```rust
 use tenferro_runtime::Tensor;
 
@@ -85,7 +85,7 @@ linear algebra or contraction kernels.
 
 Owned export returns the column-major host buffer:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_27 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#memory_order_27 -->
 ```rust
 use tenferro_runtime::Tensor;
 

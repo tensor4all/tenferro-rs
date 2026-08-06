@@ -20,7 +20,7 @@ the intersection of that OS CPU set with the process affinity mask. Therefore:
 
 Inspect the process-visible topology before selecting a node:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#cpu_execution_28 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#cpu_execution_28 -->
 ```rust
 use tenferro_cpu::{CpuBackend, CpuPlacement};
 
@@ -53,7 +53,7 @@ CPU set and pins every worker when the engine is constructed. `CpuBackend`
 clones are cheap handles: they share topology, engines, arbitration, and
 engine-owned caches.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#cpu_execution_29 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#cpu_execution_29 -->
 ```rust
 use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuPlacement};
 
@@ -159,7 +159,7 @@ constructed backend or a backend whose provider bundle, placement, or shared
 allocation domain changes receives a distinct token. The token carries no
 execution or storage authority and is not a provider/device identifier.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#cpu_execution_30 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#cpu_execution_30 -->
 ```rust
 let backend = tenferro_cpu::CpuBackend::new();
 let info = backend.execution_info();

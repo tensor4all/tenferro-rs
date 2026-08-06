@@ -45,7 +45,7 @@ The first local build can spend several minutes compiling the default
 Most direct tensor examples start by importing the CPU backend and concrete
 tensor types:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_1 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_1 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TypedTensor};
@@ -96,7 +96,7 @@ operations that must inspect device-side status. See
 
 ## Creating tensors
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_2 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_2 -->
 ```rust
 use tenferro_runtime::{Tensor, TypedTensor};
 use tenferro_tensor::Rank;
@@ -134,7 +134,7 @@ View transforms such as transpose and slice only change layout metadata. When
 an owned compact tensor is required, materialize through the active backend so
 the copy uses that backend's memory pool and thread policy:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_3 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_3 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{TypedTensor};
@@ -160,7 +160,7 @@ canonicalization never performs a hidden CPU/GPU transfer.
 
 ## Arithmetic
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_4 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_4 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -181,7 +181,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 
 ## Linear algebra
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_5 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_5 -->
 ```rust
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::LinalgBackend;
@@ -214,7 +214,7 @@ backend.with_backend_session(|session| {
 
 ## Shape operations
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_6 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_6 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -247,7 +247,7 @@ install `tenferro_einsum::extension_module` on the `Runtime`.
 
 ## Extracting data
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_7 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_7 -->
 ```rust
 use tenferro_runtime::Tensor;
 
@@ -286,7 +286,7 @@ tensors support two AD styles:
 Repeated `backward()` calls add to the existing gradients, and you clear them
 explicitly when you want a fresh pass.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_8 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_8 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
@@ -322,7 +322,7 @@ Ok(())
 Use `backward_with` when the output is not scalar or when reverse mode should
 start from an explicit cotangent seed:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_9 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_9 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
@@ -348,7 +348,7 @@ Ok(())
 
 Functional eager transforms return tensors instead of updating gradient slots:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_10 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_10 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
@@ -384,7 +384,7 @@ Ok(())
 Because functional derivatives are eager tensors, Hessian-vector products can
 be written as `jvp(grad(f))`:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_11 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_11 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
@@ -416,7 +416,7 @@ Ok(())
 Wrap updates, metric computations, and other non-differentiated eager work in
 `no_grad` when they should not be recorded:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_12 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_12 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
@@ -439,7 +439,7 @@ Ok(())
 
 `matmul` participates in the same eager reverse-mode workflow:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#eager_operations_13 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_13 -->
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;

@@ -133,7 +133,7 @@ when gradients are enabled.
 ```rust
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_fft::FftNorm;
+use tenferro_fft::{EagerTensorFftExt, FftNorm};
 
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
@@ -155,8 +155,13 @@ each FFT call:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::apple::AppleContext;
+use tenferro_gpu::{
+    apple::AppleContext,
+    webgpu::with_webgpu_exec_session,
+};
+use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -166,10 +171,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let after_creation = context.transfer_stats();
 
     let mut cpu = context.cpu_backend().clone();
-    let cpu_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut cpu)?;
+    let cpu_spectrum = cpu
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |exec_session| {
+                managed.rfft(None, 0, FftNorm::Backward, exec_session)
+            })
+            .expect("CpuBackend must expose a CPU execution session")
+        })?;
 
     let mut metal = context.metal_backend().clone();
-    let metal_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut metal)?;
+    let metal_spectrum = metal
+        .with_backend_session(|session| {
+            with_webgpu_exec_session(session, |exec_session| {
+                managed.rfft(None, 0, FftNorm::Backward, exec_session)
+            })
+            .expect("WebGpuBackend must expose a WebGPU execution session")
+        })?;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
@@ -193,7 +210,7 @@ post-creation transfer counters, C64 CPU success, and typed C64 Metal failure:
 
 ```bash
 cargo test -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared --test tutorial_binaries
+  --features cpu-faer,apple-shared,doc-snippets --test tutorial_binaries
 ```
 
 Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.

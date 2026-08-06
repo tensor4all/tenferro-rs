@@ -16,7 +16,7 @@ def source_regions(source: pathlib.Path) -> dict[str, str]:
     regions: dict[str, str] = {}
     active: tuple[str, int] | None = None
     for index, line in enumerate(lines):
-        marker = REGION_RE.match(line.rstrip("\\r\\n"))
+        marker = REGION_RE.match(line.rstrip("\r\n"))
         if marker is None:
             continue
         kind, name = marker.groups()

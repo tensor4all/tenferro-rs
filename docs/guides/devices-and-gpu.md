@@ -178,7 +178,7 @@ For a local scratch crate inside the checkout, use matching path dependencies
 and add an empty `[workspace]` table as described in
 [Getting Started](../getting-started/index.md).
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#devices_and_gpu_31 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_31 -->
 ```rust
 use tenferro_gpu::cuda::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::Tensor;
@@ -204,7 +204,7 @@ assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
 On macOS, `AppleContext` owns a host-visible Metal allocation domain and paired
 CPU and WebGPU backend handles. Creation is explicit:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#devices_and_gpu_32 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_32 -->
 ```rust
 use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;

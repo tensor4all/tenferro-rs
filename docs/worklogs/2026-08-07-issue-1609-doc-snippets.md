@@ -20,7 +20,7 @@ malformed source regions. This work is standalone for #1609.
 
 - Kept plain `path` references as whole-file extraction and added line-based
   named-region extraction without a Markdown/Rust parser dependency.
-- Used the four accepted binaries: `core_snippets`, `math_snippets`,
+- Used the four accepted binaries: `core_tensor_snippets`, `math_snippets`,
   `execution_snippets`, and `extension_snippets`.
 - Added only four ignored fragments: the two abbreviated KdV autodiff bodies
   and the two AD continuation fragments in sparse/tropical tutorials. Each has
@@ -43,17 +43,18 @@ explicitly ignored fragments. The 75 newly named regions are distributed as:
 
 | Family binary | Guide/tutorial fences | Regions |
 | --- | ---: | ---: |
-| `core_snippets.rs` | 36 | 36 |
+| `core_tensor_snippets.rs` | 36 | 36 |
 | `math_snippets.rs` | 24 | 24 |
 | `execution_snippets.rs` | 10 | 10 |
 | `extension_snippets.rs` | 5 | 5 |
 
 The 12 remaining compiled references were already complete standalone source
 files and retain whole-file `snippet-source` references: CPU provider choice
-and multiple engines; CUDA quickstart; traced FFT; XLA/PJRT execution; and the
-six existing standalone tutorial binaries (dynamic-shape SVD, eager AD,
-einsum gradients, traced AD, typed tensor, and XLA einsum). They are included
-in the 87-fence compiled total and are not plain unmarked fences.
+and multiple engines; complex AD; CUDA quickstart; traced FFT; XLA/PJRT
+execution; and the six existing standalone tutorial binaries (dynamic-shape
+SVD, eager AD, einsum gradients, traced AD, typed tensor, and XLA einsum).
+They are included in the 87-fence compiled total and are not plain unmarked
+fences.
 
 Family coverage is:
 
@@ -81,8 +82,9 @@ Family coverage is:
 
 ## Residual risks
 
-- CUDA and Apple examples are compile/run gated by hardware/features; ordinary
-  CI validates compilation and skips unavailable hardware execution.
+- CUDA and Apple examples are compile/run gated by hardware, target, and
+  features; ordinary CI validates compilation and skips unavailable hardware
+  execution.
 - The tutorial crate now resolves the standalone extension crates through path
   dependencies; the root workspace excludes preserve those crates' own
   workspace behavior.

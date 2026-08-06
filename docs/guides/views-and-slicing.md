@@ -10,7 +10,7 @@ fresh physical allocation is required.
 `TensorView` family preserves dtype and layout metadata without a transfer.
 The typed forms are `TypedTensorView<T, R>` and `TypedTensorViewMut<T, R>`.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#views_and_slicing_33 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#views_and_slicing_33 -->
 ```rust
 use tenferro_tensor::{Rank, TypedTensor};
 
@@ -24,7 +24,7 @@ assert_eq!(view.get(&[1, 2]), Some(&1.0));
 
 The view can be transformed without copying:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#views_and_slicing_34 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#views_and_slicing_34 -->
 ```rust
 let transposed = view.transpose_view([1, 0])?;
 let reversed = transposed.try_slice(&[
@@ -44,7 +44,7 @@ host slice available for a backend buffer and they do not perform a transfer.
 at a time unless the checked disjoint-view API proves that physical regions do
 not overlap. Mutation is visible through later views of the same owner:
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#views_and_slicing_35 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#views_and_slicing_35 -->
 ```rust
 use tenferro_tensor::{Rank, TypedTensor};
 
@@ -66,7 +66,7 @@ Call `duplicate()` when the next API needs an owned compact tensor. The
 operation reads the view once and allocates a fresh owner; it never silently
 uploads, downloads, or canonicalizes a backend view.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#views_and_slicing_36 -->
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#views_and_slicing_36 -->
 ```rust
 use tenferro_tensor::{Rank, TypedTensor};
 

@@ -751,11 +751,11 @@ assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
         Ok(())
     }
 
-    #[cfg(feature = "apple-shared")]
+    #[cfg(all(feature = "apple-shared", target_os = "macos"))]
     snippet_devices_and_gpu_32()?;
 
     // snippet source: docs/guides/devices-and-gpu.md:225
-    #[cfg(feature = "apple-shared")]
+    #[cfg(all(feature = "apple-shared", target_os = "macos"))]
     fn snippet_devices_and_gpu_32() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:devices_and_gpu_32
 use tenferro_gpu::apple::AppleContext;
