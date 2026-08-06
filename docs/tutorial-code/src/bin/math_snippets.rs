@@ -16,28 +16,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // snippet source: docs/guides/linear-algebra.md:101
     fn snippet_linear_algebra_1() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_1
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_runtime::BackendSessionHost;
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        // snippet-start:linear_algebra_1
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{BackendSessionHost, Tensor};
+use tenferro_runtime::Tensor;
 
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
-
-let x = a.solve(&b, backend).unwrap();
-
-assert_eq!(x.shape(), &[2, 1]);
-assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
-        // snippet-end:linear_algebra_1
-        Ok(())
-    }).expect("CPU execution session is available")
+let mut backend = CpuBackend::new();
+let x = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| a.solve(&b, exec_session))
+        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
 })?;
 
+assert_eq!(x.shape(), &[2, 1]);
+assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
+        // snippet-end:linear_algebra_1
         Ok(())
     }
 
@@ -45,35 +43,37 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
     // snippet source: docs/guides/linear-algebra.md:118
     fn snippet_linear_algebra_2() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_2
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_runtime::BackendSessionHost;
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        // snippet-start:linear_algebra_2
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
-fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
-    lhs.as_slice::<f64>()
-        .unwrap()
+fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    Ok(lhs
         .iter()
-        .zip(rhs.as_slice::<f64>().unwrap())
+        .zip(rhs.iter())
         .map(|(lhs, rhs)| (lhs - rhs).abs())
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max))
 }
-
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0])?;
-
-let factor = a.cholesky(backend).unwrap();
-assert_eq!(a.shape(), &[2, 2]);
-assert_eq!(a.shape(), &[2, 2]);
-        // snippet-end:linear_algebra_2
-        Ok(())
-    }).expect("CPU execution session is available")
+let mut backend = CpuBackend::new();
+let factor = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| a.cholesky(exec_session))
+        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
 })?;
+let factor_t = factor.transpose(&[1, 0], &mut backend)?;
+let reconstructed = factor.matmul(&factor_t, &mut backend)?;
 
+assert_eq!(factor.shape(), &[2, 2]);
+assert_eq!(a.shape(), &[2, 2]);
+assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
+        // snippet-end:linear_algebra_2
         Ok(())
     }
 
@@ -85,10 +85,8 @@ assert_eq!(a.shape(), &[2, 2]);
 use tenferro_ad::AdContext;
 
 let ad = AdContext::builder()
-    .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
-    .unwrap()
-    .build()
-    .unwrap();
+    .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
+    .build()?;
         // snippet-end:linear_algebra_3
         Ok(())
     }
@@ -97,42 +95,45 @@ let ad = AdContext::builder()
 
     // snippet source: docs/guides/linear-algebra.md:169
     fn snippet_linear_algebra_4() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_4
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_runtime::BackendSessionHost;
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        // snippet-start:linear_algebra_4
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
-fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
-    lhs.as_slice::<f64>()
-        .unwrap()
+fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    Ok(lhs
         .iter()
-        .zip(rhs.as_slice::<f64>().unwrap())
+        .zip(rhs.iter())
         .map(|(lhs, rhs)| (lhs - rhs).abs())
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max))
 }
-
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-let (u, s, vt) = a.svd(backend).unwrap();
+let mut backend = CpuBackend::new();
+let (u, s, vt) = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| a.svd(exec_session))
+        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
+})?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
 
-let s_values = s.as_slice::<f64>().unwrap();
+let s_values = s.as_slice::<f64>()?;
 let sigma = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![s_values[0], 0.0, 0.0, s_values[1]],
 )?;
-assert_eq!(a.shape(), &[2, 2]);
-        // snippet-end:linear_algebra_4
-        Ok(())
-    }).expect("CPU execution session is available")
-})?;
+let us = u.matmul(&sigma, &mut backend)?;
+let reconstructed = us.matmul(&vt, &mut backend)?;
 
+assert_eq!(a.shape(), &[2, 2]);
+assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
+        // snippet-end:linear_algebra_4
         Ok(())
     }
 
@@ -151,24 +152,22 @@ let a = TracedTensor::from_vec_col_major(
         0.0, 2.0, 0.0,
         0.0, 0.0, 1.0,
     ],
-)
-.unwrap();
+)?;
 let (u, s, vt) = a
     .svd_with_options(
         SvdOptions::default()
             .gauge(SvdGauge::CanonicalPivot)
             .derivative_eps(1.0e-10),
-    )
-    .unwrap();
+    )?;
 
 let rank = 2;
-let u_rank2 = u.slice_axis(1, 0..rank).unwrap();
-let s_rank2 = s.slice_axis(0, 0..rank).unwrap();
-let vt_rank2 = vt.slice_axis(0, 0..rank).unwrap();
+let u_rank2 = u.slice_axis(1, 0..rank)?;
+let s_rank2 = s.slice_axis(0, 0..rank)?;
+let vt_rank2 = vt.slice_axis(0, 0..rank)?;
 
-assert_eq!(u_rank2.concrete_shape().unwrap(), vec![3, 2]);
-assert_eq!(s_rank2.concrete_shape().unwrap(), vec![2]);
-assert_eq!(vt_rank2.concrete_shape().unwrap(), vec![2, 3]);
+assert_eq!(u_rank2.concrete_shape()?, vec![3, 2]);
+assert_eq!(s_rank2.concrete_shape()?, vec![2]);
+assert_eq!(vt_rank2.concrete_shape()?, vec![2, 3]);
         // snippet-end:linear_algebra_5
         Ok(())
     }
@@ -188,12 +187,11 @@ let a = TracedTensor::from_vec_col_major(
         0.0, 2.0, 0.0,
         0.0, 0.0, 1.0,
     ],
-)
-.unwrap();
-let (_u, s, _vt) = a.svd().unwrap();
-let repeated = s.take_axis(0, &[0, 1, 0]).unwrap();
+)?;
+let (_u, s, _vt) = a.svd()?;
+let repeated = s.take_axis(0, &[0, 1, 0])?;
 
-assert_eq!(repeated.concrete_shape().unwrap(), vec![3]);
+assert_eq!(repeated.concrete_shape()?, vec![3]);
         // snippet-end:linear_algebra_6
         Ok(())
     }
@@ -202,25 +200,21 @@ assert_eq!(repeated.concrete_shape().unwrap(), vec![3]);
 
     // snippet source: docs/guides/linear-algebra.md:265
     fn snippet_linear_algebra_7() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_7
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_runtime::BackendSessionHost;
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        // snippet-start:linear_algebra_7
 use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
-fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
-    lhs.as_slice::<f64>()
-        .unwrap()
+fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    Ok(lhs
         .iter()
-        .zip(rhs.as_slice::<f64>().unwrap())
+        .zip(rhs.iter())
         .map(|(lhs, rhs)| (lhs - rhs).abs())
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max))
 }
-
 let a = Tensor::from_vec_col_major(
     vec![4, 3],
     vec![
@@ -229,28 +223,34 @@ let a = Tensor::from_vec_col_major(
         3.0, 6.0, 10.0, 5.0,
     ],
 )?;
-let (q, r) = a
-    .qr_with_options(
-        QrOptions::default().gauge(QrGauge::PositiveDiagonal),
-        backend,
-    )
-    .unwrap();
-
-assert_eq!(q.shape(), &[4, 3]);
-assert_eq!(r.shape(), &[3, 3]);
+let mut backend = CpuBackend::new();
+let (q, r) = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| {
+        a.qr_with_options(
+            QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+            exec_session,
+        )
+    })
+        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
+})?;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
     vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
 )?;
+let reconstructed = q.matmul(&r, &mut backend)?;
+let qt = q.transpose(&[1, 0], &mut backend)?;
+let qtq = qt.matmul(&q, &mut backend)?;
 
 assert_eq!(q.shape(), &[4, 3]);
+assert_eq!(r.shape(), &[3, 3]);
 assert_eq!(identity.shape(), &[3, 3]);
+assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
+assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
         // snippet-end:linear_algebra_7
-        Ok(())
-    }).expect("CPU execution session is available")
-})?;
-
         Ok(())
     }
 
@@ -258,43 +258,46 @@ assert_eq!(identity.shape(), &[3, 3]);
 
     // snippet source: docs/guides/linear-algebra.md:312
     fn snippet_linear_algebra_8() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:linear_algebra_8
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_runtime::BackendSessionHost;
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        // snippet-start:linear_algebra_8
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
-fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
-    lhs.as_slice::<f64>()
-        .unwrap()
+fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    Ok(lhs
         .iter()
-        .zip(rhs.as_slice::<f64>().unwrap())
+        .zip(rhs.iter())
         .map(|(lhs, rhs)| (lhs - rhs).abs())
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max))
 }
-
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
-let (values, vectors) = a.eigh(backend).unwrap();
+let mut backend = CpuBackend::new();
+let (values, vectors) = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| a.eigh(exec_session))
+        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
+})?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
 
-let value_slice = values.as_slice::<f64>().unwrap();
+let value_slice = values.as_slice::<f64>()?;
 let diagonal = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![value_slice[0], 0.0, 0.0, value_slice[1]],
 )?;
+let vd = vectors.matmul(&diagonal, &mut backend)?;
+let vt = vectors.transpose(&[1, 0], &mut backend)?;
+let reconstructed = vd.matmul(&vt, &mut backend)?;
 
 assert_eq!(a.shape(), &[2, 2]);
+assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
         // snippet-end:linear_algebra_8
-        Ok(())
-    }).expect("CPU execution session is available")
-})?;
-
         Ok(())
     }
 
@@ -307,27 +310,25 @@ use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let factor = a.cholesky()?;
 
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile(&factor).unwrap();
+let program = compiler.compile(&factor)?;
 let backend = CpuBackend::new();
 let mut builder = Runtime::builder();
 builder
-    .register_engine(runtime_engine_registration(&backend).unwrap())
-    .unwrap();
+    .register_engine(runtime_engine_registration(&backend)?)?;
 builder
     .install_extension_module(
-        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
-    )
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id()?)?,
+    )?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 2]);
-assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
+assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
         // snippet-end:linear_algebra_9
         Ok(())
     }
@@ -341,28 +342,26 @@ use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
-let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]).unwrap();
-let x = a.solve(&b).unwrap();
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
+let x = a.solve(&b)?;
 
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile(&x).unwrap();
+let program = compiler.compile(&x)?;
 let backend = CpuBackend::new();
 let mut builder = Runtime::builder();
 builder
-    .register_engine(runtime_engine_registration(&backend).unwrap())
-    .unwrap();
+    .register_engine(runtime_engine_registration(&backend)?)?;
 builder
     .install_extension_module(
-        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
-    )
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id()?)?,
+    )?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 1]);
-assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
         // snippet-end:linear_algebra_10
         Ok(())
     }
@@ -373,18 +372,19 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     fn snippet_linear_algebra_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_11
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_runtime::BackendSessionHost;
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorOpsExt};
 
-fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
-    lhs.as_slice::<f64>()
-        .unwrap()
+fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
+    let lhs = lhs.as_slice::<f64>()?;
+    let rhs = rhs.as_slice::<f64>()?;
+    Ok(lhs
         .iter()
-        .zip(rhs.as_slice::<f64>().unwrap())
+        .zip(rhs.iter())
         .map(|(lhs, rhs)| (lhs - rhs).abs())
-        .fold(0.0, f64::max)
+        .fold(0.0, f64::max))
 }
-
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![4, 4],
@@ -397,37 +397,44 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let outputs = backend
-    .with_backend_session(|session| {
-        with_cpu_exec_session(session, |exec_session| {
-            LinalgBackend::full_piv_lu(exec_session, &a)
-        })
-        .expect("CpuBackend must expose a CPU execution session")
+let outputs = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| {
+        LinalgBackend::full_piv_lu(exec_session, &a)
     })
-    .unwrap();
+    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        op: "full_piv_lu",
+        message: "CPU execution session is unavailable".to_owned(),
+    })?
+})?;
 assert_eq!(outputs.len(), 5);
 let p = &outputs[0];
 let l = &outputs[1];
 let u = &outputs[2];
 let q = &outputs[3];
 let parity = &outputs[4];
-let pt = p.transpose(&[1, 0], &mut backend).unwrap();
-let pt_l = pt.matmul(&l, &mut backend).unwrap();
-let pt_lu = pt_l.matmul(&u, &mut backend).unwrap();
-let reconstructed = pt_lu.matmul(&q, &mut backend).unwrap();
-let x = backend
-    .with_backend_session(|session| {
-        with_cpu_exec_session(session, |exec_session| {
-            LinalgBackend::full_piv_lu_solve(exec_session, &a, &b, false)
-        })
-        .expect("CpuBackend must expose a CPU execution session")
+let pt = p.transpose(&[1, 0], &mut backend)?;
+let pt_l = pt.matmul(l, &mut backend)?;
+let pt_lu = pt_l.matmul(u, &mut backend)?;
+let reconstructed = pt_lu.matmul(q, &mut backend)?;
+let x = backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |exec_session| {
+        LinalgBackend::full_piv_lu_solve(exec_session, &a, &b, false)
     })
-    .unwrap();
+    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        op: "full_piv_lu_solve",
+        message: "CPU execution session is unavailable".to_owned(),
+    })?
+})?;
 
 assert_eq!(p.shape(), &[4, 4]);
 assert_eq!(a.shape(), &[4, 4]);
+assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
 assert_eq!(parity.shape(), &[] as &[usize]);
-let parity_value = parity.as_slice::<f64>().unwrap()[0];
+let parity_value = parity
+    .as_slice::<f64>()?
+    .first()
+    .copied()
+    .ok_or_else(|| tenferro_tensor::Error::Internal("missing LU parity value".to_owned()))?;
 assert!(parity_value == 1.0 || parity_value == -1.0);
 assert_eq!(x.shape(), &[4, 1]);
         // snippet-end:linear_algebra_11

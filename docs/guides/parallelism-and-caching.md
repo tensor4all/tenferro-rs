@@ -225,26 +225,15 @@ configured independently.
 ```rust
 use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
-use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime};
+use tenferro_runtime::extension::ExtensionCacheLimits;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
 ).with_max_retained_bytes(
     NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
-)).unwrap();
-
-let runtime = Runtime::builder().build().unwrap();
-let mut compiler = GraphCompiler::new();
-compiler.clear_caches();
-
-let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
-Ok(())
-}
+))?;
 ```
 <!-- end-snippet-source -->
 
@@ -292,7 +281,7 @@ For CPU backends, clear the buffer pool through the backend:
 use tenferro_cpu::CpuBackend;
 
 let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
+backend.reset_buffer_pool()?;
 ```
 <!-- end-snippet-source -->
 
