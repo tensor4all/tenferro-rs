@@ -955,7 +955,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             with_cpu_exec_session(session, |exec_session| {
                 managed.rfft(None, 0, FftNorm::Backward, exec_session)
             })
-            .expect("CpuBackend must expose a CPU execution session")
+            .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
         })?;
 
     let mut metal = context.metal_backend().clone();
@@ -964,7 +967,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             with_webgpu_exec_session(session, |exec_session| {
                 managed.rfft(None, 0, FftNorm::Backward, exec_session)
             })
-            .expect("WebGpuBackend must expose a WebGPU execution session")
+            .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+                op: "documentation",
+                message: "WebGPU execution session is unavailable".to_owned(),
+            })?
         })?;
     metal.synchronize()?;
 
