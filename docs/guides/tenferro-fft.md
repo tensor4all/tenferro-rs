@@ -124,7 +124,7 @@ backend.with_backend_session(|session| {
         );
         Ok(())
     })
-    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+    .ok_or_else(|| tenferro_tensor::Error::Unsupported {
         op: "documentation",
         message: "CPU execution session is unavailable".to_owned(),
     })?
@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             with_cpu_exec_session(session, |exec_session| {
                 managed.rfft(None, 0, FftNorm::Backward, exec_session)
             })
-            .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -202,7 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             with_webgpu_exec_session(session, |exec_session| {
                 managed.rfft(None, 0, FftNorm::Backward, exec_session)
             })
-            .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "WebGPU execution session is unavailable".to_owned(),
             })?

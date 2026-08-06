@@ -110,7 +110,7 @@ let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
 let mut backend = CpuBackend::new();
 let x = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| a.solve(&b, exec_session))
-        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -143,7 +143,7 @@ let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0])?;
 let mut backend = CpuBackend::new();
 let factor = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| a.cholesky(exec_session))
-        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -203,7 +203,7 @@ let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut backend = CpuBackend::new();
 let (u, s, vt) = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| a.svd(exec_session))
-        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -322,7 +322,7 @@ let (q, r) = backend.with_backend_session(|session| {
             exec_session,
         )
     })
-        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -366,7 +366,7 @@ let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut backend = CpuBackend::new();
 let (values, vectors) = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| a.eigh(exec_session))
-        .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
                 op: "documentation",
                 message: "CPU execution session is unavailable".to_owned(),
             })?
@@ -491,7 +491,7 @@ let outputs = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| {
         LinalgBackend::full_piv_lu(exec_session, &a)
     })
-    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+    .ok_or_else(|| tenferro_tensor::Error::Unsupported {
         op: "full_piv_lu",
         message: "CPU execution session is unavailable".to_owned(),
     })?
@@ -510,7 +510,7 @@ let x = backend.with_backend_session(|session| {
     with_cpu_exec_session(session, |exec_session| {
         LinalgBackend::full_piv_lu_solve(exec_session, &a, &b, false)
     })
-    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+    .ok_or_else(|| tenferro_tensor::Error::Unsupported {
         op: "full_piv_lu_solve",
         message: "CPU execution session is unavailable".to_owned(),
     })?
