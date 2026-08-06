@@ -1,6 +1,7 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
+    BackendSession, BackendSessionHost, BackendSessionIdentity, ElementwiseFusionPlan,
+    GroupedGemmConfig, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
     TensorIndexing, TensorReduction, TensorStructural,
 };
@@ -13,6 +14,10 @@ use tenferro_tensor::{
 use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
 use super::{CudaBackend, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
+
+/// Marker for the concrete erased CUDA execution-session target.
+#[doc(hidden)]
+pub struct CudaExecSessionMarker;
 
 /// Borrowed CUDA execution capability.
 #[doc(hidden)]
@@ -94,11 +99,11 @@ pub fn with_cuda_exec_session<B, R>(
 where
     B: BackendSession + ?Sized,
 {
-    if session.session_type_name() != std::any::type_name::<CudaExecSession<'static>>() {
+    if session.session_type_id() != std::any::TypeId::of::<CudaExecSessionMarker>() {
         return None;
     }
     let data = unsafe { session.session_data_mut() };
-    // SAFETY: the type-name check and the BackendSession erased-pointer
+    // SAFETY: the exact marker check and the BackendSession erased-pointer
     // contract identify the value as CudaExecSession for this scoped visit.
     Some(unsafe { f(&mut *(data.cast::<CudaExecSession<'static>>())) })
 }
@@ -302,6 +307,10 @@ delegate_cached! {
         config: &GroupedGemmConfig<'_>,
         out: TensorWrite<'_>,
     ) -> crate::Result<()>;
+}
+
+impl BackendSessionIdentity for CudaExecSession<'_> {
+    type Marker = CudaExecSessionMarker;
 }
 
 impl BackendSessionHost for CudaBackend {

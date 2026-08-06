@@ -13,13 +13,14 @@ use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, pow, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
-    transpose, tril, triu, CpuBackend, CpuContext, Error,
+    transpose, tril, triu, with_cpu_exec_session, CpuBackend, CpuContext, CpuExecSession, Error,
 };
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 #[cfg(feature = "cpu-blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, ContractionScalar,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
+    ContractionScalar,
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
@@ -31,6 +32,27 @@ use tenferro_tensor::{
     DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
     TypedTensorViewMut,
 };
+
+#[test]
+fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
+    let mut backend = CpuBackend::new();
+    let mut called = false;
+    assert!(with_cpu_exec_session(&mut backend, |_| {
+        called = true;
+    })
+    .is_none());
+    assert!(!called);
+
+    let value = backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |session: &mut CpuExecSession<'_>| {
+                let _: &mut CpuExecSession<'_> = session;
+                17usize
+            })
+        })
+        .expect("CpuBackend must expose its scoped CpuExecSession");
+    assert_eq!(value, 17);
+}
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {

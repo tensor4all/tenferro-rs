@@ -82,7 +82,8 @@ use tenferro_tensor::CacheStats;
 use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
-    BackendCachedDot, BackendRuntimeCache, TensorAnalytic, TensorBackend, TensorBuffer,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionIdentity, TensorAnalytic, TensorBackend,
+    TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
@@ -301,6 +302,9 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 ///
 /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
 /// ```
+#[doc(hidden)]
+pub struct CudaBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct CudaBackend {
     inner: Arc<CudaBackendState>,
@@ -5697,6 +5701,10 @@ impl TensorFusion for CudaBackend {
             _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
         }
     }
+}
+
+impl BackendSessionIdentity for CudaBackend {
+    type Marker = CudaBackendSessionMarker;
 }
 
 impl BackendCachedDot for CudaBackend {}

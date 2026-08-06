@@ -35,7 +35,8 @@ use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend, TensorBuffer,
+    BackendSessionIdentity, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend,
+    TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
@@ -1020,6 +1021,9 @@ fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) 
 /// let clone = backend.clone();
 /// assert_eq!(backend.kind(), clone.kind());
 /// ```
+#[doc(hidden)]
+pub struct CpuBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct CpuBackend {
     runtime_identity: CpuRuntimeIdentity,
@@ -2710,6 +2714,10 @@ impl CpuBackend {
             }
         }
     }
+}
+
+impl BackendSessionIdentity for CpuBackend {
+    type Marker = CpuBackendSessionMarker;
 }
 
 impl BackendRuntimeCache for CpuBackend {

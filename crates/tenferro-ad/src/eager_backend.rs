@@ -12,12 +12,16 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendSessionIdentity, CompareDir, DType,
     DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, Result as TensorResult,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorValue, TensorWrite,
 };
+
+#[doc(hidden)]
+pub struct EagerBackendSessionMarker;
 
 pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
@@ -166,6 +170,10 @@ macro_rules! dispatch {
 }
 
 #[cfg(test)]
+#[doc(hidden)]
+pub struct RecordingBackendSessionMarker;
+
+#[cfg(test)]
 #[derive(Debug)]
 pub struct RecordingBackend {
     materializations: Arc<AtomicUsize>,
@@ -181,6 +189,11 @@ macro_rules! delegate_recording_backend_methods {
             }
         )*
     };
+}
+
+#[cfg(test)]
+impl BackendSessionIdentity for RecordingBackend {
+    type Marker = RecordingBackendSessionMarker;
 }
 
 #[cfg(test)]
@@ -328,6 +341,10 @@ macro_rules! delegate_tensor_backend_methods {
             }
         )*
     };
+}
+
+impl BackendSessionIdentity for EagerBackend {
+    type Marker = EagerBackendSessionMarker;
 }
 
 impl BackendRuntimeCache for EagerBackend {

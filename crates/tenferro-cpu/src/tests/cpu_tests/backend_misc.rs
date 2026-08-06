@@ -1398,6 +1398,7 @@ fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
 
 #[test]
 fn test_default_backend_session_methods_cover_cache_fallbacks() {
+    struct DefaultOnlyBackendSessionMarker;
     struct DefaultOnlyBackend;
 
     macro_rules! panic_backend_methods {
@@ -1510,6 +1511,10 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl BackendCachedDot for DefaultOnlyBackend {}
+
+    impl BackendSessionIdentity for DefaultOnlyBackend {
+        type Marker = DefaultOnlyBackendSessionMarker;
+    }
 
     impl BackendSessionHost for DefaultOnlyBackend {}
 

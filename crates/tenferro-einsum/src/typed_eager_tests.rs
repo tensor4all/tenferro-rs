@@ -1,6 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity, CompareDir,
+    DType, DotGeneralConfig,
     GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor,
@@ -138,6 +139,10 @@ impl TensorDot for WrongDTypeBackend {
 }
 
 impl BackendCachedDot for WrongDTypeBackend {}
+
+impl BackendSessionIdentity for WrongDTypeBackend {
+    type Marker = WrongDTypeBackend;
+}
 
 impl BackendSessionHost for WrongDTypeBackend {}
 

@@ -2,7 +2,8 @@ use crate::{
     backend::{
         validate_dot_general_read_into, validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob,
     },
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendSessionIdentity, CompareDir,
     ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
@@ -10,6 +11,8 @@ use crate::{
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
+
+struct DefaultReadBackendSessionMarker;
 
 struct DefaultReadBackend {
     calls: Vec<&'static str>,
@@ -517,6 +520,10 @@ impl BackendRuntimeCache for DefaultReadBackend {
 }
 
 impl BackendCachedDot for DefaultReadBackend {}
+
+impl BackendSessionIdentity for DefaultReadBackend {
+    type Marker = DefaultReadBackendSessionMarker;
+}
 
 impl BackendSessionHost for DefaultReadBackend {}
 

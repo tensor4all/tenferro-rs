@@ -13,7 +13,8 @@ use tenferro_fft::{
 };
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendSessionIdentity,
+    BackendStorageHandle, CompareDir,
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
     MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
     TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
@@ -132,6 +133,9 @@ macro_rules! impl_minimal_tensor_backend {
             }
         }
         impl BackendCachedDot for $ty {}
+        impl BackendSessionIdentity for $ty {
+            type Marker = $ty;
+        }
         impl BackendSessionHost for $ty {}
         impl TensorBackend for $ty {}
     };

@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::{
     AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
-    BackendCachedDot, BackendId, BackendRuntimeCache, CompareDir, DType, DeviceAccessError,
+    BackendCachedDot, BackendId, BackendRuntimeCache, BackendSessionIdentity, CompareDir, DType,
+    DeviceAccessError,
     DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig,
     GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement, PreparedDeviceAccess,
     ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
@@ -614,6 +615,9 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
+#[doc(hidden)]
+pub struct WebGpuBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
@@ -1050,6 +1054,10 @@ impl TensorDeviceTransfer for WebGpuBackend {
 
 impl BackendRuntimeCache for WebGpuBackend {
     type RuntimeCache = ();
+}
+
+impl BackendSessionIdentity for WebGpuBackend {
+    type Marker = WebGpuBackendSessionMarker;
 }
 
 impl BackendCachedDot for WebGpuBackend {}
