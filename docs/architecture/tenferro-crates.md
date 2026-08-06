@@ -123,7 +123,7 @@ runtime-owned execution bridge. It is not a runtime-to-CPU dependency:
 
 ```text
 tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops
-tenferro-cpu              -> tenferro-tensor
+tenferro-cpu              -> tenferro-tensor, tenferro-core-ops
 tenferro-cpu              -> tenferro-internal-cpu-kernels
 tenferro-cpu              -> tenferro-runtime
 tenferro-gpu              -> tenferro-tensor, tenferro-core-ops,
@@ -140,11 +140,14 @@ tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu
 
 tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor, tenferro-cpu
+                              tenferro-tensor, tenferro-cpu,
+                              tenferro-internal-extension-macros
 tenferro-linalg           -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor, tenferro-cpu
+                              tenferro-tensor, tenferro-cpu,
+                              tenferro-internal-extension-macros
 tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor, tenferro-cpu
+                              tenferro-tensor, tenferro-cpu,
+                              tenferro-internal-extension-macros
 ```
 
 Additional internal dependencies:

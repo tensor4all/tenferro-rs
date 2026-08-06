@@ -230,3 +230,35 @@ is a repair and is fixed here; one is a scope expansion and is now tracked.
 Coverage: `test_rust_inline_test_blocks_ignores_braces_in_literals` and
 `test_rust_inline_test_blocks_handles_literal_edge_cases` (char literals, raw
 strings, escaped quotes, multi-line strings, and the lifetime negative case).
+
+## Issue #1578 follow-up
+
+The remaining drift was documentation-only: the compressed `AGENTS.md` graph
+omitted the production `tenferro-gpu -> tenferro-cpu` and
+`tenferro-fft -> tenferro-cpu` edges, while the detailed architecture inventory
+also omitted `tenferro-cpu -> tenferro-core-ops` and the three normal operation-
+crate edges to `tenferro-internal-extension-macros`. Eight Apple rustdoc
+examples only named function pointers, and the extension-boundary rule omitted
+`webgpu`. The follow-up uses locked `cargo metadata --no-deps` as the
+production-edge inventory, checks the compressed overview and detailed
+inventory, replaces each Apple example with a runnable success/error case, and
+adds a deterministic durable vacuity fixture for the eight pre-edit findings.
+The inventory now covers published workspace crates' normal non-optional edges;
+optional/dev and docs tutorial-code edges remain excluded. The standard
+extension wording now names `cuda`, `rocm`, and `webgpu` without renaming any
+feature or dependency.
+
+The `docs/guides/tenferro-fft.md` checkout remains pinned to `8ffcc57b`: the
+Apple shared path is explicitly unreleased and the checkout pin is removed when
+a later release task publishes it. Verification covered the documentation and
+repository-rule scripts, all 28 WebGPU doctests (including one-at-a-time
+checks while replacing the eight examples), metadata edge proof, guide pin
+justification, docs profile, and the focused PR gate.
+
+Residuals are limited to the documented hardware boundary: no supported Apple
+host was available in this task. Existing Apple integration tests exercise
+success semantics only when `AppleContext::new()` succeeds and skip constructor
+failures, so hosted/hardware evidence remains conditional; they do not prove
+constructor availability. Non-Apple hosts exercise and assert the typed
+unavailable branch, while the successful Apple transfer branch requires a
+supported host-visible Metal adapter.

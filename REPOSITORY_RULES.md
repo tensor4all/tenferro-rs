@@ -383,10 +383,10 @@ diff-scoped review bot.
 - Optional capabilities are feature boundaries, not new operation-family
   crates. Put operation-specific AD support behind an `autodiff` feature in the
   owning operation crate instead of adding `*-ad` companion crates.
-- User-facing operation crates expose backend features as `cuda` and `rocm`.
-  Do not document or require a public `gpu` feature on those crates; use
-  internal `cfg(any(feature = "cuda", feature = "rocm"))` checks or internal
-  helper features when needed.
+- User-facing operation crates expose backend features as `cuda`, `rocm`, and
+  `webgpu`. Do not document or require a public `gpu` feature on those crates;
+  use internal `cfg(any(feature = "cuda", feature = "rocm", feature = "webgpu"))`
+  checks or internal helper features when needed.
 - Extension crates depend on the runtime, tensor, AD, or GPU crate they need;
   dependency flow must not require a facade crate to depend back on them.
 - Extension AD rules should be owned by an explicit `tenferro_ad::AdContext`
