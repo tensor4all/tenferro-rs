@@ -6,11 +6,12 @@ license.workspace = true
 publish = false
 
 [features]
-default = ["cpu-faer", "xla-pjrt"]
+default = ["cpu-faer", "xla-pjrt", "doc-snippets"]
 cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer", "tenferro-linalg/cpu-faer"]
 cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas", "tenferro-linalg/cpu-blas"]
 xla-pjrt = ["tenferro-xla/pjrt"]
 apple-shared = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor"]
+doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/webgpu", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
 
 [dependencies]
 num-complex.workspace = true
@@ -24,6 +25,8 @@ tenferro-ops = { package = "tenferro-internal-ops", path = "../../crates/tenferr
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor", optional = true }
 tenferro-xla = { path = "../../crates/tenferro-xla", default-features = false }
+tenferro-ext-sparse = { package = "tenferro-ext-sparse", path = "../../ext/sparse", optional = true, features = ["autodiff"] }
+tenferro-ext-tropical = { package = "tenferro-ext-tropical", path = "../../ext/tropical", optional = true, features = ["autodiff"] }
 
 [[bin]]
 name = "typed_tensor_non_ad"
@@ -64,6 +67,22 @@ path = "src/bin/dynamic_shape_truncated_svd.rs"
 [[bin]]
 name = "complex_ad_convention"
 path = "src/bin/complex_ad_convention.rs"
+
+[[bin]]
+name = "core_snippets"
+path = "src/bin/core_snippets.rs"
+
+[[bin]]
+name = "math_snippets"
+path = "src/bin/math_snippets.rs"
+
+[[bin]]
+name = "execution_snippets"
+path = "src/bin/execution_snippets.rs"
+
+[[bin]]
+name = "extension_snippets"
+path = "src/bin/extension_snippets.rs"
 
 [[bin]]
 name = "apple_shared_fft"

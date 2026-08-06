@@ -61,6 +61,7 @@ to run the contraction immediately on an explicit backend without autodiff.
 Arrays such as `[&lhs, &rhs]` implement the extension traits directly; their
 receiver type is the fixed-size array of borrowed tensor references.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_12 -->
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
@@ -126,8 +127,8 @@ assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
 );
-# Ok::<(), tenferro_tensor::Error>(())
 ```
+<!-- end-snippet-source -->
 
 ## TensorRead And Prepared Plans
 
@@ -143,6 +144,7 @@ executed repeatedly. Preparing the plan parses and optimizes the contraction
 tree once; each execution validates the input count, dtype, and shape before
 running the stored tree.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_13 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
@@ -165,6 +167,7 @@ let planned = plan.execute_read(inputs, &mut backend)?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
+let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
 let inputs = [
     TensorRead::from_view(TensorView::F64(matrix)),
     TensorRead::from_tensor(&vector),
@@ -175,14 +178,15 @@ plan.execute_read_into(
     TensorWrite::from_tensor(&mut planned_out),
 )?;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
-# Ok::<(), tenferro_tensor::Error>(())
 ```
+<!-- end-snippet-source -->
 
 ## Traced Matrix Multiply
 
 Use the traced route when einsum should be part of a graph compiled by
 `GraphCompiler` and executed by `Runtime::run_compiled`.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_14 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::TraceContextEinsumExt;
@@ -218,6 +222,7 @@ let result = outputs.remove(0);
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 ```
+<!-- end-snippet-source -->
 
 ## EagerTensor
 
@@ -227,6 +232,7 @@ The `"i->ii"` form embeds a vector on a diagonal. This is a tenferro extension
 to the common NumPy/PyTorch einsum surface; NumPy rejects repeated output
 labels in that form.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_15 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
@@ -241,17 +247,18 @@ let diag = [&v].einsum("i->ii").unwrap();
 
 assert_eq!(outer.shape(), &[2, 3]);
 assert_eq!(
-    outer.materialized().unwrap().as_slice::<f64>().unwrap(),
+    outer.to_tensor().unwrap().as_slice::<f64>().unwrap(),
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
 assert_eq!(diag.shape(), &[3, 3]);
 assert_eq!(
-    diag.materialized().unwrap().as_slice::<f64>().unwrap(),
+    diag.to_tensor().unwrap().as_slice::<f64>().unwrap(),
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
 );
 Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 ## Tensordot Sugar
 
@@ -261,6 +268,7 @@ contracts the last `n` axes of the left tensor with the first `n` axes of the
 right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
 negative axes.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_16 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
@@ -269,7 +277,7 @@ use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 let rhs = TracedTensor::from_vec_col_major(
     vec![3, 4],
     vec![
@@ -278,10 +286,10 @@ let rhs = TracedTensor::from_vec_col_major(
         7.0, 8.0, 9.0,
         10.0, 11.0, 12.0,
     ],
-);
+)?;
 let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 
-assert_eq!(out.rank, 2);
+assert_eq!(out.concrete_shape().unwrap(), vec![2, 4]);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out).unwrap();
 let backend = CpuBackend::new();
@@ -304,6 +312,7 @@ assert_eq!(
     &[22.0, 28.0, 49.0, 64.0, 76.0, 100.0, 103.0, 136.0],
 );
 ```
+<!-- end-snippet-source -->
 
 ## Optimization Controls
 
@@ -322,6 +331,7 @@ This path is shape-independent and can be used with symbolic traced inputs.
 it requires concrete shapes and is converted to fixed contraction pairs when a
 concrete traced op is built.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_17 -->
 ```rust
 use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
@@ -350,6 +360,7 @@ let metadata = graph
     .unwrap();
 assert_eq!(metadata.shape().len(), 2);
 ```
+<!-- end-snippet-source -->
 
 ## Cache Management
 

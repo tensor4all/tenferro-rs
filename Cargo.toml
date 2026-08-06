@@ -17,7 +17,7 @@ members = [
     "crates/tenferro-fft",
     "docs/tutorial-code",
 ]
-exclude = ["third_party/t4a-tblis-src"]
+exclude = ["third_party/t4a-tblis-src", "ext/sparse", "ext/tropical"]
 default-members = [
     "crates/tenferro-tensor",
 ]

@@ -75,7 +75,7 @@ def snippet_source(root: pathlib.Path, doc: pathlib.Path, source_rel: str) -> st
 
 
 def fenced(source: str) -> str:
-    return "```rust\\n" + source.rstrip() + "\\n```\\n"
+    return "```rust\n" + source.rstrip() + "\n```\n"
 
 
 def unmarked_rust_fences(root: pathlib.Path) -> list[str]:

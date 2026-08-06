@@ -205,7 +205,8 @@ sampled tensors at every epoch.
 
 The PDE residual is the key traced-AD pattern:
 
-```rust
+This abbreviated autodiff fragment intentionally omits its surrounding network definition.
+```rust,ignore
 let ones_x = ones_like(x)?;
 let ones_t = ones_like(t)?;
 let u_t = u.jvp(t, &ones_t)?;
@@ -237,7 +238,8 @@ apply the PDE weight twice.
 After the scalar `total_loss` tensor is built, the sample requests one gradient
 per parameter placeholder:
 
-```rust
+This abbreviated autodiff fragment intentionally omits its surrounding network definition.
+```rust,ignore
 let param_grads: Vec<TracedTensor> = net
     .parameters()
     .iter()

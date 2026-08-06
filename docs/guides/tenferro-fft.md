@@ -97,26 +97,26 @@ is a borrowed view or other read-oriented value. The `_read` suffix is reserved
 for that `TensorRead` surface; compact `Tensor` inputs use unsuffixed method
 names.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
-let mut backend = CpuBackend::new();
 let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-let full = x.fft(None, -1, FftNorm::Backward, &mut backend)?;
-let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut backend)?;
+let full = x.fft(None, -1, FftNorm::Backward, backend)?;
+let one_sided = x.rfft(None, -1, FftNorm::Backward, backend)?;
 assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 assert_eq!(one_sided.shape(), &[3]);
 
 let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
 let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
 let read = TensorRead::from_view(TensorView::F64(view));
-let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
+let read_full = read.fft_read(None, -1, FftNorm::Backward, backend)?;
 assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-# Ok::<(), tenferro_tensor::Error>(())
 ```
+<!-- end-snippet-source -->
 
 `TypedTensor<T>` wrappers are not part of the current API. FFT operations can
 change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
@@ -129,10 +129,11 @@ methods have the same names and arguments as `TracedTensorFftExt`, register the
 FFT execution runtime on demand, and record the existing extension operation
 when gradients are enabled.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_23 -->
 ```rust
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_fft::{EagerTensorFftExt, FftNorm};
+use tenferro_fft::FftNorm;
 
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
@@ -142,9 +143,9 @@ let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
 let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
 
 assert_eq!(spectrum.shape(), &[3]);
-assert_eq!(restored.materialized()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
-# Ok::<(), tenferro_ad::Error>(())
+assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 ```
+<!-- end-snippet-source -->
 
 ### Apple shared CPU and Metal execution
 
@@ -152,6 +153,7 @@ assert_eq!(restored.materialized()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 implicit. Clone its mutable backend handles and pass the desired backend to
 each FFT call:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
 use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::apple::AppleContext;
@@ -175,6 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. The initial
 CubeK Metal implementation supports C32 CFFT/IFFT, F32 one-sided RFFT, and C32

@@ -27,13 +27,14 @@ the column-major flat buffer is:
 [1, 4, 2, 5, 3, 6]
 ```
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_25 -->
 ```rust
 use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
-);
+)?;
 
 assert_eq!(tensor.shape(), &[2, 3]);
 assert_eq!(
@@ -41,6 +42,7 @@ assert_eq!(
     &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
 );
 ```
+<!-- end-snippet-source -->
 
 ## Importing External Data
 
@@ -49,6 +51,7 @@ row-major order. tenferro does not keep a row-major compatibility constructor:
 reorder those buffers explicitly at the boundary, then construct tensors from
 column-major data.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_26 -->
 ```rust
 use tenferro_runtime::Tensor;
 
@@ -61,8 +64,8 @@ assert_eq!(
     tensor.as_slice::<f64>().unwrap(),
     &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
 );
-# Ok::<(), tenferro_runtime::Error>(())
 ```
+<!-- end-snippet-source -->
 
 The constructor name is intentionally explicit: a flat buffer passed to
 `from_vec_col_major` is interpreted as tenferro's physical storage order.
@@ -82,15 +85,17 @@ linear algebra or contraction kernels.
 
 Owned export returns the column-major host buffer:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_snippets.rs#memory_order_27 -->
 ```rust
 use tenferro_runtime::Tensor;
 
-let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let (shape, data) = tensor.into_vec_col_major::<f64>().unwrap();
 
 assert_eq!(shape, vec![2, 2]);
 assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);
 ```
+<!-- end-snippet-source -->
 
 Convert the exported buffer in your application if a consumer expects
 row-major data.
