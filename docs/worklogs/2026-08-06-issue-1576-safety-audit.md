@@ -8,21 +8,21 @@ add, and multiplication operations; the source-contract test checks those
 phrases and rejects duplicate adjacent proofs. TBLIS thread-control FFI now
 states the process-global ABI/serialized guard/Drop-restoration contract.
 
-The erased session bridge now uses a doc-hidden `BackendSessionIdentity` with
-per-concrete-target `'static` marker `TypeId`s instead of `type_name`; CPU,
-CUDA, WebGPU, eager, and test backends/sessions were updated. CPU tests cover
-foreign-marker rejection without callback invocation and a scoped concrete
-borrow.
+The erased session bridge now uses explicit `BackendSession` implementations
+for each concrete backend/session and private `'static` marker structs whose
+`TypeId`s identify the concrete target; it no longer uses a shared
+`BackendSessionIdentity` or `type_name`. CPU tests cover foreign-marker
+rejection without callback invocation and a scoped concrete borrow.
 
 CUDA cache scans have canonical bounded `// INVARIANT:` markers. The pinned
 CubeCL source was inspected at revision `1c88bb6f1a47ffb11755e05048b7828a743f53e1`:
 `cubecl-cuda/src/compute/storage/gpu.rs` records deallocations and matches
 `malloc_async` with `free_async` on the owning stream, while sync allocations
 use `free_sync`; `cubecl-runtime` flushes storage through the CUDA server.
-The cache SAFETY marker records this handle-owned release contract. A real
-CUDA eviction test runs two asynchronous cuTENSOR matmuls with
-`max_entries = 1`, synchronizes at the test boundary, and validates both
-outputs.
+The cache INVARIANT marker records this handle-owned release contract. A real
+CUDA eviction test retains nonzero workspace, asserts that allocation and an
+actual eviction occur with `max_entries = 1`, synchronizes at the test
+boundary, and validates both outputs.
 
 ## Verification
 
@@ -43,5 +43,5 @@ Passed:
 
 The CUDA eviction test passed on the available CUDA GPU/toolkit environment.
 No new dependency, synchronization, registry, downcast framework, or shim was
-added. Generated build directories and subagent artifacts are cleanup items
-before handoff.
+added. Generated build directories, Cargo.lock files, and subagent artifacts
+were removed before handoff.

@@ -444,13 +444,13 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
 
     assert!(
         !elementwise.contains(
-            "// SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.\\n        // SAFETY:"
+            "// SAFETY: the successful zip/map replay writes every logical destination element and retains no destination view.\n        // SAFETY:"
         ),
         "generic zip/map overwrite proof must not be duplicated"
     );
     assert!(
         !elementwise.contains(
-            "// SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.\\n        // SAFETY:"
+            "// SAFETY: the successful scalar map replay writes every logical destination element and retains no destination view.\n        // SAFETY:"
         ),
         "generic scalar-map overwrite proof must not be duplicated"
     );

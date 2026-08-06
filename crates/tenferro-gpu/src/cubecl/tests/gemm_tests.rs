@@ -6,6 +6,7 @@ use crate::DotGeneralConfig;
 use crate::Tensor;
 use tenferro_tensor::TensorDot;
 
+use super::super::gemm::cutensor_plan_cache_workspace_bytes;
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
     tensor_f64, upload,
@@ -33,10 +34,10 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     gpu.set_cutensor_plan_cache_max_entries(NonZeroUsize::new(1).unwrap())
         .unwrap();
 
-    let lhs_a = tensor_f32(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
-    let rhs_a = tensor_f32(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]);
-    let lhs_b = tensor_f32(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-    let rhs_b = tensor_f32(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let lhs_a = tensor_f32(vec![64, 64], vec![1.0; 64 * 64]);
+    let rhs_a = tensor_f32(vec![64, 64], vec![1.0; 64 * 64]);
+    let lhs_b = tensor_f32(vec![65, 64], vec![1.0; 65 * 64]);
+    let rhs_b = tensor_f32(vec![64, 65], vec![1.0; 64 * 65]);
     let expected_a = cpu.dot_general(&lhs_a, &rhs_a, &matmul_config()).unwrap();
     let expected_b = cpu.dot_general(&lhs_b, &rhs_b, &matmul_config()).unwrap();
 
@@ -47,9 +48,20 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     let actual_a = gpu
         .dot_general(&gpu_lhs_a, &gpu_rhs_a, &matmul_config())
         .unwrap();
+    assert!(
+        cutensor_plan_cache_workspace_bytes(&gpu).unwrap() > 0,
+        "first contraction must retain a nonzero cuTENSOR workspace"
+    );
+
     let actual_b = gpu
         .dot_general(&gpu_lhs_b, &gpu_rhs_b, &matmul_config())
         .unwrap();
+    let cache_stats = gpu.cutensor_plan_cache_stats().unwrap();
+    assert_eq!(cache_stats.entries, 1);
+    assert!(
+        cache_stats.evictions > 0,
+        "second contraction must evict the first plan"
+    );
 
     // Eviction drops the first plan while its launch may still be queued. The
     // pinned CubeCL CUDA allocator retires async frees on the owning stream.
