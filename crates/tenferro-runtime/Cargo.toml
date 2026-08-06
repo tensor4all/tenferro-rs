@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Concrete tensor helpers, traced tensors, graph execution, and extension runtime support for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "runtime", "graph", "numerical"]
+categories = ["science", "mathematics", "data-structures"]
+documentation = "https://docs.rs/tenferro-runtime"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["cpu-faer"]
 
 [lib]
 name = "tenferro_runtime"

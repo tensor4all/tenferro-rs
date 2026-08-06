@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal core primitive operation catalog used by graph, runtime, and backend dispatch."
+rust-version.workspace = true
+keywords = ["tensor", "operations", "graph"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-core-ops"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_core_ops"

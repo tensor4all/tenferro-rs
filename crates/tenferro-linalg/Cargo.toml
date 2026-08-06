@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Linear algebra traced APIs, eager helpers, extension runtime, and optional AD rules for tenferro."
+rust-version.workspace = true
+keywords = ["linear-algebra", "tensor", "mathematics", "numerical"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-linalg"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["autodiff", "cpu-faer", "cuda", "webgpu"]
 
 [features]
 default = ["cpu-faer"]

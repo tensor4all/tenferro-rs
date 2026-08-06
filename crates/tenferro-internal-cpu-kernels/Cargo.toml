@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Internal CPU kernel implementations and buffer pools for tenferro-cpu."
+rust-version.workspace = true
+keywords = ["tensor", "kernels", "cpu", "numerical"]
+categories = ["science", "mathematics", "hardware-support"]
+documentation = "https://docs.rs/tenferro-internal-cpu-kernels"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_internal_cpu_kernels"

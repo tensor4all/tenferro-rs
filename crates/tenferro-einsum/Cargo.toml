@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Subscripts, contraction planning, concrete/traced/eager einsum APIs, extension runtime, and AD rule for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "einsum", "contraction", "numerical"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-einsum"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["autodiff", "cpu-faer", "cuda", "webgpu"]
 
 [features]
 default = ["cpu-faer"]

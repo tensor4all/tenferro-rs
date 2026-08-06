@@ -9,6 +9,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Procedural macros for tenferro extension-op registration."
+rust-version.workspace = true
+keywords = ["tensor", "macros", "code-generation"]
+categories = ["development-tools", "development-tools::procedural-macro-helpers"]
+documentation = "https://docs.rs/tenferro-internal-extension-macros"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
 
 [lib]
 name = "tenferro_extension_macros"

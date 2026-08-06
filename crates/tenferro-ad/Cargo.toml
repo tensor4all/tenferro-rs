@@ -10,6 +10,14 @@ readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Eager runtime, eager tensors, and traced AD extension traits for tenferro."
+rust-version.workspace = true
+keywords = ["tensor", "autodiff", "numerical", "graph"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-ad"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+features = ["cpu-faer", "cuda", "webgpu"]
 
 [lib]
 name = "tenferro_ad"
