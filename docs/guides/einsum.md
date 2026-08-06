@@ -220,7 +220,7 @@ let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
 let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 2]);
-assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 ```
 <!-- end-snippet-source -->
 
@@ -237,26 +237,31 @@ labels in that form.
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::EagerEinsumExt;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
-let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
-let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap()).unwrap();
+let u = ctx.variable_from(Tensor::from_vec_col_major(
+    vec![2],
+    vec![1.0_f64, 2.0],
+)?)?;
+let v = ctx.variable_from(Tensor::from_vec_col_major(
+    vec![3],
+    vec![3.0_f64, 4.0, 5.0],
+)?)?;
 
-let outer = [&u, &v].einsum("i,j->ij").unwrap();
-let diag = [&v].einsum("i->ii").unwrap();
+let outer = [&u, &v].einsum("i,j->ij")?;
+let diag = [&v].einsum("i->ii")?;
 
 assert_eq!(outer.shape(), &[2, 3]);
+let outer_tensor = outer.to_tensor()?;
 assert_eq!(
-    outer.to_tensor().unwrap().as_slice::<f64>().unwrap(),
+    outer_tensor.as_slice::<f64>()?,
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
 assert_eq!(diag.shape(), &[3, 3]);
+let diag_tensor = diag.to_tensor()?;
 assert_eq!(
-    diag.to_tensor().unwrap().as_slice::<f64>().unwrap(),
+    diag_tensor.as_slice::<f64>()?,
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
 );
-Ok(())
-}
 ```
 <!-- end-snippet-source -->
 
