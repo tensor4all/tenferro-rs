@@ -343,22 +343,21 @@ let mut trace = TraceContext::new();
 let a = trace.input(ProgramInputSpec::new(
     DType::F64,
     DimExpr::from_concrete(&[2, 3]),
-)).unwrap();
+))?;
 let b = trace.input(ProgramInputSpec::new(
     DType::F64,
     DimExpr::from_concrete(&[3, 2]),
-)).unwrap();
+))?;
 let c = trace.einsum_with(
     &[a, b],
     "ij,jk->ik",
     EinsumOptimize::False,
-).unwrap();
+)?;
 
-let graph = trace.finish(&[c]).unwrap();
+let graph = trace.finish(&[c])?;
 let metadata = graph
     .program()
-    .value_metadata(graph.program().outputs()[0])
-    .unwrap();
+    .value_metadata(graph.program().outputs()[0])?;
 assert_eq!(metadata.shape().len(), 2);
 ```
 <!-- end-snippet-source -->
