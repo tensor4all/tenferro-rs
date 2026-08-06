@@ -3,7 +3,8 @@
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::{EagerTensorLinalgExt, TracedTensorLinalgExt};
+use tenferro_runtime::{DType, Error, ErrorPhase, TracedTensor, TypedTensor};
 
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
@@ -19,6 +20,69 @@ fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
         EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
     )
     .unwrap()
+}
+
+fn eager_i32(data: Vec<i32>, shape: Vec<usize>) -> EagerTensor {
+    EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(shape, data).unwrap(),
+        EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn traced_i32(data: Vec<i32>, shape: Vec<usize>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape(Tensor::I32(
+        TypedTensor::from_vec_col_major(shape, data).unwrap(),
+    ))
+    .unwrap()
+}
+
+fn assert_lstsq_validation_reason(
+    label: &str,
+    eager_result: tenferro_ad::Result<EagerTensor>,
+    traced_result: tenferro_runtime::Result<TracedTensor>,
+    expected_reason: &str,
+) {
+    let eager_error = eager_result.expect_err(label);
+    let traced_error = traced_result.expect_err(label);
+    assert!(
+        eager_error.to_string().contains(expected_reason),
+        "{label}: eager expected {expected_reason:?}, got {eager_error}"
+    );
+    assert!(
+        traced_error.to_string().contains(expected_reason),
+        "{label}: traced expected {expected_reason:?}, got {traced_error}"
+    );
+}
+
+fn assert_lstsq_wide_error_contract(
+    eager_error: &Error,
+    traced_error: &Error,
+    expected_reason: &str,
+) {
+    assert!(matches!(
+        eager_error,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            ..
+        }
+    ));
+    assert_eq!(eager_error.phase(), Some(ErrorPhase::GraphBuild));
+    assert_eq!(
+        eager_error.to_string(),
+        Error::invalid_argument("lstsq", ErrorPhase::GraphBuild, "shape", expected_reason)
+            .to_string()
+    );
+
+    assert!(matches!(
+        traced_error,
+        Error::TensorRuntime(tenferro_tensor::Error::Validation { .. })
+    ));
+    assert_eq!(traced_error.phase(), Some(ErrorPhase::Execution));
+    assert_eq!(
+        traced_error.to_string(),
+        tenferro_tensor::Error::invalid_argument("lstsq", "shape", expected_reason).to_string()
+    );
 }
 
 fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
@@ -151,6 +215,88 @@ fn eager_composite_records_existing_primitives_for_backward() {
     for (&actual, expected) in actual.iter().zip([4.0, 0.0, 0.0, 2.0]) {
         assert!((actual - expected).abs() < 1.0e-12);
     }
+}
+
+#[test]
+fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
+    let eager_a = eager_i32(vec![1, 0, 0, 1], vec![2, 2]);
+    let eager_b = eager_i32(vec![1, 2], vec![2, 1]);
+    let traced_a = traced_i32(vec![1, 0, 0, 1], vec![2, 2]);
+    let traced_b = traced_i32(vec![1, 2], vec![2, 1]);
+    assert_lstsq_validation_reason(
+        "integer dtype",
+        eager_a.lstsq(&eager_b),
+        traced_a.lstsq(&traced_b),
+        "does not support dtype I32",
+    );
+
+    let eager_a = eager(vec![1.0, 2.0], vec![2]);
+    let eager_b = eager(vec![1.0, 2.0], vec![2, 1]);
+    let traced_a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let traced_b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
+    assert_lstsq_validation_reason(
+        "rank-one A",
+        eager_a.lstsq(&eager_b),
+        traced_a.lstsq(&traced_b),
+        "rank mismatch",
+    );
+
+    let eager_a = eager(vec![1.0, 0.0, 0.0, 1.0], vec![2, 2]);
+    let eager_b = eager(vec![1.0, 2.0], vec![2]);
+    let traced_a =
+        TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let traced_b = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    assert_lstsq_validation_reason(
+        "rank-one B",
+        eager_a.lstsq(&eager_b),
+        traced_a.lstsq(&traced_b),
+        "rank mismatch",
+    );
+
+    let eager_a = eager(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![2, 3]);
+    let eager_b = eager(vec![1.0, 2.0], vec![2, 1]);
+    let traced_a =
+        TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])
+            .unwrap();
+    let traced_b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
+    let eager_error = eager_a.lstsq(&eager_b).unwrap_err();
+    let traced_error = traced_a.lstsq(&traced_b).unwrap_err();
+    const WIDE_REASON: &str = "lstsq requires a tall or square matrix (rows 2 >= cols 3); \
+        underdetermined (wide) systems are not supported";
+    assert!(eager_error.to_string().contains("tall or square"));
+    assert!(traced_error.to_string().contains("tall or square"));
+    assert_lstsq_wide_error_contract(&eager_error, &traced_error, WIDE_REASON);
+}
+
+#[test]
+fn traced_lstsq_symbolic_shape_keeps_dtype_and_rank_precedence() {
+    let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
+
+    let symbolic_i32 = TracedTensor::input_symbolic_shape(DType::I32, 2).unwrap();
+    let error = symbolic_i32.lstsq(&b).unwrap_err();
+    assert!(error.to_string().contains("does not support dtype I32"));
+    assert!(!error.to_string().contains("symbolic shape"));
+
+    let symbolic_rank_one = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let error = symbolic_rank_one.lstsq(&b).unwrap_err();
+    assert!(error.to_string().contains("rank mismatch"));
+    assert!(!error.to_string().contains("symbolic shape"));
+
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rank_one_b = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let error = a.lstsq(&rank_one_b).unwrap_err();
+    assert!(error.to_string().contains("rank mismatch"));
+    assert!(!error.to_string().contains("symbolic shape"));
+
+    let error = a.lstsq(&b).unwrap_err();
+    let expected = Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        "lstsq",
+        "shape",
+        "symbolic shape is not supported by this traced linalg helper",
+    ));
+    assert!(matches!(error, Error::TensorRuntime(_)));
+    assert_eq!(error.phase(), Some(ErrorPhase::Execution));
+    assert_eq!(error.to_string(), expected.to_string());
 }
 
 #[test]

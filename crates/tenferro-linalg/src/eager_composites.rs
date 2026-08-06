@@ -3,6 +3,7 @@ use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Resul
 use tenferro_runtime::ErrorPhase;
 
 use crate::eager_ext::{eig, eigh, lu, qr, solve, svd, triangular_solve};
+use crate::validation::validate_lstsq;
 
 pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     let (_p, _l, u, parity) = lu(a)?;
@@ -25,21 +26,14 @@ pub(crate) fn inv(a: &EagerTensor) -> Result<EagerTensor> {
 }
 
 pub(crate) fn lstsq(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
-    ensure_float_or_complex("lstsq", a.dtype())?;
-    ensure_min_rank("lstsq", a.shape().len(), 2)?;
-    ensure_min_rank("lstsq", b.shape().len(), 2)?;
-    let (m, n) = (a.shape()[0], a.shape()[1]);
-    if m < n {
-        return Err(Error::invalid_argument(
-            "lstsq",
-            ErrorPhase::GraphBuild,
-            "shape",
-            format!(
-                "lstsq requires a tall or square matrix (rows {m} >= cols {n}); \
-                 underdetermined (wide) systems are not supported"
-            ),
-        ));
-    }
+    validate_lstsq(
+        "lstsq",
+        a.dtype(),
+        a.shape().len(),
+        b.shape().len(),
+        || Ok((a.shape()[0], a.shape()[1])),
+        |message| Error::invalid_argument("lstsq", ErrorPhase::GraphBuild, "shape", message),
+    )?;
     // Least squares via thin QR: A = Q R (full column rank), so
     // argmin_x |A x - b| solves R x = Qᴴ b.
     let (q, r) = qr(a)?;

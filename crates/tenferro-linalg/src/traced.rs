@@ -9,6 +9,7 @@ use tenferro_runtime::{
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
+use crate::validation::validate_lstsq;
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
@@ -957,23 +958,21 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// Backend QR and triangular-solve failures and concrete shape mismatches are
 /// reported during compile or execution.
 pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
-    ensure_float_or_complex("lstsq", a.dtype)?;
-    ensure_min_rank("lstsq", a.rank, 2)?;
-    ensure_min_rank("lstsq", b.rank, 2)?;
-    let a_shape = require_concrete_shape("lstsq", a)?;
-    let (m, n) = (a_shape[0], a_shape[1]);
-    if m < n {
-        return Err(Error::TensorRuntime(
-            tenferro_tensor::Error::invalid_argument(
-                "lstsq",
-                "shape",
-                format!(
-                    "lstsq requires a tall or square matrix (rows {m} >= cols {n}); \
-                     underdetermined (wide) systems are not supported"
-                ),
-            ),
-        ));
-    }
+    validate_lstsq(
+        "lstsq",
+        a.dtype,
+        a.rank,
+        b.rank,
+        || {
+            let shape = require_concrete_shape("lstsq", a)?;
+            Ok((shape[0], shape[1]))
+        },
+        |message| {
+            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+                "lstsq", "shape", message,
+            ))
+        },
+    )?;
     let (q, r) = qr(a)?;
     let qh = q.conj()?.transpose(&matrix_transpose_perm(q.rank))?;
     let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
