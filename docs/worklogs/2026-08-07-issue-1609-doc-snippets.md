@@ -34,7 +34,12 @@ malformed source regions. This work is standalone for #1609.
   construction, both troubleshooting tensor constructors, and both KdV launch
   commands. The broader migration also updated stale examples to current
   fallible constructors and backend/session APIs where compilation exposed
-  drift.
+  drift, including the Apple FFT capability wrappers and the eager FFT trait
+  feature.
+- Guide regions may use hidden setup lines in their compiled family function;
+  this preserves the displayed continuation while compiling the complete
+  example, as allowed by the accepted plan. Nested cache and einsum examples
+  execute their assertions rather than leaving an uncalled helper function.
 
 ## Migration ledger
 
@@ -73,10 +78,15 @@ Family coverage is:
 
 ## Verification
 
-- `python3 scripts/test-check-doc-snippets.py`
-- `python3 scripts/check-doc-snippets.py --check` → `doc-snippets-ok`.
 - `python3 scripts/test-check-doc-snippets.py` → `check-doc-snippets-tests-ok`.
+- `python3 scripts/check-doc-snippets.py --check` → `doc-snippets-ok`.
 - `cargo test --manifest-path docs/tutorial-code/Cargo.toml --release tutorial_binaries_run_successfully -- --exact` → passed.
+- `cargo check` and Clippy for `docs/tutorial-code` with `--all-features
+  --all-targets` → passed.
+- The documented Apple feature test command with `doc-snippets` → passed on
+  non-Apple hardware with Apple runtime binaries gated/skipped.
+- `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
+  checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are
   accounted for as 87 compiled references and four ignored fragments.
 
