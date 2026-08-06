@@ -103,9 +103,22 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_gpu::apple::AppleContext;
+/// use tenferro_gpu::apple::{AppleContext, AppleTransferStats};
 ///
-/// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
+/// match AppleContext::new() {
+///     Ok(context) => {
+///         assert_eq!(
+///             context.cpu_backend().allocation_domain(),
+///             Some(context.domain_id())
+///         );
+///         assert_eq!(context.transfer_stats(), AppleTransferStats::default());
+///     }
+///     Err(error) => assert!(matches!(
+///         error,
+///         tenferro_tensor::Error::RuntimeState { .. }
+///             | tenferro_tensor::Error::BackendSource { .. }
+///     )),
+/// }
 /// ```
 #[derive(Clone)]
 pub struct AppleContext {
@@ -130,9 +143,22 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::apple::AppleContext;
+    /// use tenferro_gpu::apple::{AppleContext, AppleTransferStats};
     ///
-    /// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
+    /// match AppleContext::new() {
+    ///     Ok(context) => {
+    ///         assert_eq!(
+    ///             context.cpu_backend().allocation_domain(),
+    ///             Some(context.domain_id())
+    ///         );
+    ///         assert_eq!(context.transfer_stats(), AppleTransferStats::default());
+    ///     }
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
     /// ```
     ///
     /// # Errors
@@ -178,8 +204,18 @@ impl AppleContext {
     ///
     /// ```rust
     /// use tenferro_gpu::apple::AppleContext;
-    /// use tenferro_tensor::AllocationDomainId;
-    /// let _method: fn(&AppleContext) -> AllocationDomainId = AppleContext::domain_id;
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => assert_eq!(
+    ///         context.cpu_backend().allocation_domain(),
+    ///         Some(context.domain_id())
+    ///     ),
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
     /// ```
     pub fn domain_id(&self) -> AllocationDomainId {
         self.state.id
@@ -191,7 +227,18 @@ impl AppleContext {
     ///
     /// ```rust
     /// use tenferro_gpu::apple::AppleContext;
-    /// let _method = AppleContext::cpu_backend;
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => assert_eq!(
+    ///         context.cpu_backend().allocation_domain(),
+    ///         Some(context.domain_id())
+    ///     ),
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
     /// ```
     pub fn cpu_backend(&self) -> &CpuBackend {
         &self.cpu
@@ -203,7 +250,21 @@ impl AppleContext {
     ///
     /// ```rust
     /// use tenferro_gpu::apple::AppleContext;
-    /// let _method = AppleContext::metal_backend;
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => {
+    ///         let backend = context.metal_backend();
+    ///         assert_eq!(
+    ///             backend.runtime_identity(),
+    ///             backend.runtime().runtime_identity()
+    ///         );
+    ///     }
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
     /// ```
     pub fn metal_backend(&self) -> &WebGpuBackend {
         &self.metal
@@ -214,8 +275,19 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::apple::AppleContext;
-    /// let _method = AppleContext::transfer_stats;
+    /// use tenferro_gpu::apple::{AppleContext, AppleTransferStats};
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => assert_eq!(
+    ///         context.transfer_stats(),
+    ///         AppleTransferStats::default()
+    ///     ),
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
     /// ```
     pub fn transfer_stats(&self) -> AppleTransferStats {
         self.state.snapshot()
@@ -226,8 +298,33 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::apple::AppleContext;
-    /// let _method = AppleContext::upload_tensor;
+    /// use tenferro_gpu::apple::{AppleContext, AppleTransferStats};
+    /// use tenferro_tensor::{Tensor, TypedTensor};
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => {
+    ///         let host = Tensor::from_vec_col_major([2], vec![1.0_f32, 2.0])?;
+    ///         let managed: TypedTensor<f32> = match context.upload_tensor(&host)? {
+    ///             Tensor::F32(typed) => typed,
+    ///             _ => unreachable!("expected f32 tensor"),
+    ///         };
+    ///         assert_eq!(managed.allocation_domain(), Some(context.domain_id()));
+    ///         assert_eq!(managed.with_host_read(|data| data.to_vec())?, [1.0, 2.0]);
+    ///         assert_eq!(
+    ///             context.transfer_stats(),
+    ///             AppleTransferStats {
+    ///                 uploaded_bytes: 8,
+    ///                 downloaded_bytes: 0,
+    ///             }
+    ///         );
+    ///     }
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors
@@ -247,8 +344,30 @@ impl AppleContext {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_gpu::apple::AppleContext;
-    /// let _method = AppleContext::download_tensor;
+    /// use tenferro_gpu::apple::{AppleContext, AppleTransferStats};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(context) => {
+    ///         let host = Tensor::from_vec_col_major([2], vec![1.0_f32, 2.0])?;
+    ///         let managed = context.upload_tensor(&host)?;
+    ///         let downloaded = context.download_tensor(&managed)?;
+    ///         assert_eq!(downloaded.as_slice::<f32>()?, &[1.0, 2.0]);
+    ///         assert_eq!(
+    ///             context.transfer_stats(),
+    ///             AppleTransferStats {
+    ///                 uploaded_bytes: 8,
+    ///                 downloaded_bytes: 8,
+    ///             }
+    ///         );
+    ///     }
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors

@@ -1696,6 +1696,112 @@ def test_vacuous_doc_example_findings_accepts_real_usage() -> None:
     assert findings == []
 
 
+APPLE_PRE_EDIT_FIXTURE = """\
+/// Explicit Apple context.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // Constructor type signature.
+/// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
+/// ```
+///
+/// Create a context with [`AppleContext::new`].
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // The constructor is fallible.
+/// let _constructor: fn() -> tenferro_tensor::Result<AppleContext> = AppleContext::new;
+/// ```
+///
+/// Return this context's allocation-domain identity.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+/// use tenferro_tensor::AllocationDomainId;
+///
+/// // Inspect the method signature.
+/// let _method: fn(&AppleContext) -> AllocationDomainId = AppleContext::domain_id;
+/// ```
+///
+/// Return the paired CPU backend.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // The endpoint is available from the context.
+/// let _method = AppleContext::cpu_backend;
+/// ```
+///
+/// Return the paired Metal WebGPU backend.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // The endpoint is available from the context.
+/// let _method = AppleContext::metal_backend;
+/// ```
+///
+/// Return transfer statistics.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // Read the current counters.
+/// let _method = AppleContext::transfer_stats;
+/// ```
+///
+/// Upload a host tensor.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // Explicitly create managed storage.
+/// let _method = AppleContext::upload_tensor;
+/// ```
+///
+/// Download a managed tensor.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_gpu::apple::AppleContext;
+///
+/// // Explicitly copy managed storage back to the host.
+/// let _method = AppleContext::download_tensor;
+/// ```
+"""
+
+
+def test_vacuous_doc_example_fixture_audits_pre_edit_apple_examples() -> None:
+    mod = load_module()
+    fixture_path = "crates/tenferro-gpu/src/webgpu/apple.rs"
+    _with_fake_text(mod, {fixture_path: APPLE_PRE_EDIT_FIXTURE})
+    findings = mod.vacuous_doc_example_findings(
+        [fixture_path],
+        ref="HEAD",
+        worktree=False,
+        added_lines={fixture_path: set(range(1, len(APPLE_PRE_EDIT_FIXTURE.splitlines()) + 1))},
+    )
+    assert len(findings) == 8
+    assert all(item.id == "vacuous-doc-example" for item in findings)
+
+
 def test_ai_report_file_findings_flags_reports_outside_worklogs() -> None:
     mod = load_module()
     _with_fake_text(
@@ -2936,6 +3042,7 @@ def main() -> int:
         test_vacuous_doc_example_findings_ignores_comment_lines,
         test_vacuous_doc_example_findings_accepts_comment_only_example,
         test_vacuous_doc_example_findings_accepts_real_usage,
+        test_vacuous_doc_example_fixture_audits_pre_edit_apple_examples,
         test_ai_report_file_findings_flags_reports_outside_worklogs,
         test_parse_cargo_tenferro_dependencies_skips_optional_and_dev,
         test_parse_cargo_tenferro_dependencies_accepts_compact_optional_syntax,
