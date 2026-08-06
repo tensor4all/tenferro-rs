@@ -100,21 +100,35 @@ names.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
-let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-let full = x.fft(None, -1, FftNorm::Backward, backend)?;
-let one_sided = x.rfft(None, -1, FftNorm::Backward, backend)?;
-assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-assert_eq!(one_sided.shape(), &[3]);
+let mut backend = CpuBackend::new();
+backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
+        let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+        let full = x.fft(None, -1, FftNorm::Backward, backend)?;
+        let one_sided = x.rfft(None, -1, FftNorm::Backward, backend)?;
+        assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+        assert_eq!(one_sided.shape(), &[3]);
 
-let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
-let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
-let read = TensorRead::from_view(TensorView::F64(view));
-let read_full = read.fft_read(None, -1, FftNorm::Backward, backend)?;
-assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+        let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+        let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+        let read = TensorRead::from_view(TensorView::F64(view));
+        let read_full = read.fft_read(None, -1, FftNorm::Backward, backend)?;
+        assert_eq!(
+            read_full.as_slice::<Complex64>()?[0],
+            Complex64::new(10.0, 0.0),
+        );
+        Ok(())
+    })
+    .ok_or_else(|| tenferro_tensor::Error::BackendFailure {
+        op: "documentation",
+        message: "CPU execution session is unavailable".to_owned(),
+    })?
+})?;
 ```
 <!-- end-snippet-source -->
 
