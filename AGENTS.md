@@ -460,4 +460,10 @@ tenferro-ad
 
 tenferro-core-ops is internal metadata used by tensor, runtime, GPU, and ops.
 tenferro-internal-extension-macros is used by operation-family crates.
+
+tenferro-gpu              -> tenferro-cpu
+tenferro-fft              -> tenferro-cpu
 ```
+
+See [the complete crate map](docs/architecture/tenferro-crates.md) for the
+complete direct-edge inventory.

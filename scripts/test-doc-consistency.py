@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import re
 import subprocess
@@ -197,6 +198,62 @@ def test_agents_layer_diagram_lists_cpu_crate() -> None:
     assert "tenferro-cpu" in text
     assert "tenferro-tensor   - Dense runtime tensors, backend traits, CPU backend" not in text
     assert "tenferro-tensor   - Dense runtime tensors, backend traits" in text
+
+
+def test_dependency_overview_matches_metadata_for_published_crates() -> None:
+    metadata = json.loads(
+        subprocess.run(
+            ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    workspace_members = set(metadata["workspace_members"])
+    expected_edges = {}
+    for package in metadata["packages"]:
+        manifest_path = pathlib.Path(package["manifest_path"])
+        if (
+            package["id"] not in workspace_members
+            or manifest_path.parent.parent != ROOT / "crates"
+            or not package["name"].startswith("tenferro-")
+            or package.get("publish") == []
+        ):
+            continue
+        dependencies = {
+            dependency["name"]
+            for dependency in package["dependencies"]
+            if dependency["name"].startswith("tenferro-")
+            and dependency["kind"] is None
+            and not dependency["optional"]
+        }
+        if dependencies:
+            expected_edges[package["name"]] = dependencies
+
+    reviewer = load_repository_rules_review()
+    documented_edges = reviewer.parse_dependency_diagram(
+        read("docs/architecture/tenferro-crates.md")
+    )
+    assert documented_edges is not None
+    assert documented_edges == expected_edges
+
+    production_edges = {
+        (source, target)
+        for source, targets in expected_edges.items()
+        for target in targets
+    }
+    expected_gpu_fft_edges = {
+        ("tenferro-gpu", "tenferro-cpu"),
+        ("tenferro-fft", "tenferro-cpu"),
+    }
+    assert expected_gpu_fft_edges <= production_edges
+
+    overview_start = read("AGENTS.md").index("### Dependency Graph")
+    overview = read("AGENTS.md")[overview_start:]
+    for source, target in expected_gpu_fft_edges:
+        assert re.search(rf"{source}\s*->\s*{target}", overview)
+    assert "docs/architecture/tenferro-crates.md" in overview
 
 
 def test_docs_ci_runs_docs_script_tests() -> None:
@@ -595,6 +652,7 @@ def main() -> int:
     for test in [
         test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
         test_agents_layer_diagram_lists_cpu_crate,
+        test_dependency_overview_matches_metadata_for_published_crates,
         test_docs_ci_runs_docs_script_tests,
         test_design_documentation_requirements_have_named_rendered_homes,
         test_ci_enforces_public_error_docs_and_extension_clippy,
