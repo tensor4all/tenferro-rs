@@ -737,9 +737,12 @@ println!("topology={:?} requested={:?} resolved={:?}", info.topology(),
     // snippet source: docs/guides/devices-and-gpu.md:181
     fn snippet_devices_and_gpu_31() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:devices_and_gpu_31
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::Tensor;
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let Some(device) = devices.first() else { return Ok(()); };
 let backend = CudaBackend::new(device.id())?;

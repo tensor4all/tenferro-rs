@@ -40,6 +40,10 @@ malformed source regions. This work is standalone for #1609.
   this preserves the displayed continuation while compiling the complete
   example, as allowed by the accepted plan. Nested cache and einsum examples
   execute their assertions rather than leaving an uncalled helper function.
+- CUDA guide snippets probe `gpu_available()` before driver discovery so the
+  tutorial binary exits cleanly on non-CUDA hosts. The TBLIS workspace contract
+  test now checks for the required exclusion within the root exclusion list,
+  while allowing the additional standalone extension-workspace exclusions.
 
 ## Migration ledger
 

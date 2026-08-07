@@ -180,9 +180,12 @@ and add an empty `[workspace]` table as described in
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_31 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::Tensor;
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let Some(device) = devices.first() else { return Ok(()); };
 let backend = CudaBackend::new(device.id())?;

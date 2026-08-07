@@ -147,9 +147,12 @@ backend.reset_buffer_pool()?;
     // snippet source: docs/guides/troubleshooting.md:37
     fn snippet_troubleshooting_9() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_9
-use tenferro_gpu::cuda::{cuda_devices, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;
@@ -165,9 +168,12 @@ assert_eq!(gpu_x.shape(), &[2]);
     // snippet source: docs/guides/troubleshooting.md:54
     fn snippet_troubleshooting_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_10
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;

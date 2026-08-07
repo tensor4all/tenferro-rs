@@ -36,9 +36,12 @@ backend operation received CPU data. Upload first:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_9 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;
@@ -55,9 +58,12 @@ it before inspecting values:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_10 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
 
+if !gpu_available() {
+    return Ok(());
+}
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
 let backend = CudaBackend::new(device.id())?;

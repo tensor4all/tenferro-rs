@@ -263,7 +263,8 @@ fn external_tblis_provider_example_owns_unpublished_source_build_path() {
     let ext_lib = source("ext/tenferro-cpu-tblis/src/lib.rs");
 
     assert!(
-        root_manifest.contains(r#"exclude = ["third_party/t4a-tblis-src"]"#),
+        root_manifest.contains("exclude = [")
+            && root_manifest.contains("\"third_party/t4a-tblis-src\""),
         "the unpublished source-build crate must stay outside the root workspace"
     );
     assert!(
