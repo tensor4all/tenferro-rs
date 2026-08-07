@@ -48,6 +48,11 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
   tier/configuration explanations; those points were verified against the
   manifests and corrected in the references. The revision-specific package
   count was removed from the skill text.
+- Independent specification and quality reviews found three validation gaps:
+  missing built-root `llms.txt` checking, custom docs output not being passed to
+  Quarto, and mirror checking not being part of the docs build. They also found
+  a missing-canonical-file exception path. The checker, build script, focused
+  tests, and docs-profile contract now cover all four points.
 
 ## Verification
 
@@ -73,6 +78,14 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
   rendered top page, and `guides/choosing-an-api.html` existed, `cmp
   docs/llms.txt /tmp/tenferro-site-1610-1613-review/llms.txt` passed, and the
   built-site checker verified 14 workspace library crates.
+- `cargo test --manifest-path docs/tutorial-code/Cargo.toml --release
+  --no-default-features --features cpu-faer,doc-snippets
+  tutorial_binaries_run_successfully -- --exact` → passed (all 15 tutorial
+  binaries compiled and the exact runtime test passed).
+- `bash scripts/check-pr-fast.sh --coverage-reviewed --doc-snippets --test
+  'python3 scripts/check-agent-skills.py'` → passed.
+- `python3 scripts/ci/run_profile.py docs` → passed; the repository-rules
+  subtest emitted transient LLM retry warnings but exited successfully.
 - `cargo fmt --all --check` → passed after marking the source-region holder
   functions `rustfmt::skip` so extracted snippets retain their display shape.
 
