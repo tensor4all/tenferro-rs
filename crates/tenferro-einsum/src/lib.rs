@@ -72,6 +72,7 @@ mod extension;
 pub mod lowering;
 mod optimize;
 mod planning;
+pub mod prelude;
 mod subscripts;
 mod syntax;
 mod tensordot;

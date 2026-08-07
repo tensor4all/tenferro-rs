@@ -67,3 +67,7 @@ required-features = ["webgpu"]
 name = "webgpu_metal_fft"
 path = "tests/webgpu_metal_fft.rs"
 required-features = ["webgpu"]
+
+[[test]]
+name = "prelude"
+path = "tests/prelude.rs"

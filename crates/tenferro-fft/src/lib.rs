@@ -154,6 +154,7 @@ mod cache;
 mod cpu;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
+pub mod prelude;
 mod spec;
 #[cfg(feature = "webgpu")]
 mod webgpu;
