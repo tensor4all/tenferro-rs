@@ -113,6 +113,10 @@ Family coverage is:
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are
   accounted for as 87 compiled references and four ignored fragments.
+- After hosted `cpu-faer` doctests exposed three stale `CudaExtensionCache`
+  imports, the examples were updated to the existing
+  `tenferro_gpu::cuda::interop` export; `cargo test --doc -p tenferro-gpu
+  --profile ci --features cuda -- --nocapture` passed all 32 doctests.
 
 ## Residual risks
 
