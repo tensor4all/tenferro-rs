@@ -1,18 +1,5 @@
 //! Executable examples for the bundled `tenferro-compute` downstream skill.
 
-#![allow(dead_code, unused_imports, unused_variables, unused_mut)]
-
-fn assert_close(actual: &[f64], expected: &[f64]) {
-    assert_eq!(actual.len(), expected.len());
-    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-        let error = (actual - expected).abs();
-        assert!(
-            error < 1.0e-12,
-            "value {index}: actual={actual}, expected={expected}, error={error}"
-        );
-    }
-}
-
 #[rustfmt::skip]
 fn concrete_operation_and_column_major() -> Result<(), Box<dyn std::error::Error>> {
     // snippet-start:concrete-operation
