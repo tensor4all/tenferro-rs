@@ -12,7 +12,7 @@ use tenferro_ad::semantic_transform::SemanticAdTransformError;
 use tenferro_ad::AdContext;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
-use tenferro_ops::{ExtensionShapeContext, SymDim};
+use tenferro_ops::{ExtensionShapeContext, ShapeExtent, SymDim};
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
 use tenferro_runtime::GraphCompiler;
 use tenferro_tensor::{
@@ -489,6 +489,110 @@ fn semantic_core_reduce_sum_squares_jvp_and_vjp_apply_twice_the_input() {
     assert!(matches!(
         vjp_suffix[2].op(),
         tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
+}
+
+#[test]
+fn broadcast_vjp_rejects_out_of_bounds_dims() {
+    let source = unary_core_program(
+        [DimExpr::Const(1)],
+        CoreSemanticOp::BroadcastInDim {
+            shape: vec![DimExpr::Const(1)],
+            dims: vec![2],
+        },
+    );
+
+    let error = ad_context()
+        .vjp_program(&source, &[true], &[true])
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SemanticAdTransformError::UnsupportedMetadata {
+            role: tenferro_ad::semantic_transform::SemanticTransformRole::Vjp,
+            message,
+        } if message.contains("dims[0] = 2") && message.contains("output rank 1")
+    ));
+}
+
+#[test]
+fn broadcast_vjp_rejects_invalid_dim_count_and_duplicates() {
+    let cases = [
+        (
+            vec![DimExpr::Const(1)],
+            vec![DimExpr::Const(1), DimExpr::Const(1)],
+            vec![0, 1],
+            ["dims length 2", "input rank 1"],
+        ),
+        (
+            vec![DimExpr::Const(1), DimExpr::Const(1)],
+            vec![DimExpr::Const(1), DimExpr::Const(1)],
+            vec![0, 0],
+            ["dims[1] = 0", "duplicates an earlier output axis"],
+        ),
+    ];
+
+    for (input_shape, output_shape, dims, expected) in cases {
+        let source = unary_core_program(
+            input_shape,
+            CoreSemanticOp::BroadcastInDim {
+                shape: output_shape,
+                dims,
+            },
+        );
+        let error = ad_context()
+            .vjp_program(&source, &[true], &[true])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SemanticAdTransformError::UnsupportedMetadata {
+                role: tenferro_ad::semantic_transform::SemanticTransformRole::Vjp,
+                message,
+            } if expected.iter().all(|fragment| message.contains(fragment))
+        ));
+    }
+}
+
+#[test]
+fn broadcast_vjp_accepts_identity_dims() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::BroadcastInDim {
+            shape: vec![DimExpr::Const(2), DimExpr::Const(3)],
+            dims: vec![0, 1],
+        },
+    );
+
+    let transformed = ad_context().vjp_program(&source, &[true], &[true]).unwrap();
+    let output = transformed.frozen().program.outputs()[0];
+    assert_eq!(
+        transformed
+            .frozen()
+            .program
+            .value_metadata(output)
+            .unwrap()
+            .shape(),
+        [
+            ShapeExtent::Exact(DimExpr::Const(2)),
+            ShapeExtent::Exact(DimExpr::Const(3))
+        ]
+    );
+}
+
+#[test]
+fn broadcast_vjp_accepts_permuted_dims() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::BroadcastInDim {
+            shape: vec![DimExpr::Const(3), DimExpr::Const(2)],
+            dims: vec![1, 0],
+        },
+    );
+
+    let transformed = ad_context().vjp_program(&source, &[true], &[true]).unwrap();
+    assert!(matches!(
+        transformed.frozen().program.operations().last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Transpose { perm })
+            if perm.as_slice() == [1, 0]
     ));
 }
 
