@@ -2,6 +2,16 @@
 
 This page is a translation guide for readers who already know `torch` or `jax.numpy`: find the tenferro equivalent quickly, then read [Core Concepts](./core-concepts.md) for tenferro's own mental model.
 
+## Import styles
+
+A focused module can keep its dependencies explicit with direct imports such as
+`use tenferro_runtime::{Tensor, TensorOpsExt};` and
+`use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. A tutorial or a
+module that uses several operation families can use the equivalent crate-local
+preludes: `use tenferro_runtime::prelude::*;` and
+`use tenferro_linalg::prelude::*;`. These imports only affect name lookup;
+backend and device choices remain explicit.
+
 ## Concept mapping
 
 | Concept | PyTorch | JAX | tenferro |

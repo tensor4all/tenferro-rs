@@ -46,10 +46,9 @@ tenferro-linalg = "0.2"
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{
-    BackendSessionHost, TensorRead, TensorView, TypedTensor, TypedTensorOpsExt,
-};
+use tenferro_linalg::prelude::*;
+use tenferro_runtime::prelude::*;
+use tenferro_runtime::{TensorRead, TensorView};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());

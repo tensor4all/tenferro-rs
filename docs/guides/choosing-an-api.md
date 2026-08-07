@@ -24,6 +24,17 @@ Quick reference:
 | Immediate forward execution in one runtime, optionally `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` + `EagerRuntime` |
 | `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `Runtime::run_compiled` |
 
+## Import Style
+
+Use direct imports when a small module should make its dependencies explicit:
+`use tenferro_runtime::{Tensor, TensorOpsExt};` and
+`use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. For tutorials or
+modules using several operation traits, the equivalent crate-local preludes are
+`use tenferro_runtime::prelude::*;` and `use tenferro_linalg::prelude::*;`.
+There is no facade prelude: keep each operation family imported from its own
+crate. The prelude imports extension traits and common associated types; it
+does not change backend selection or execution semantics.
+
 ## Tensor Types
 
 `TypedTensor<T, R = DynRank>` owns runtime tensor data with a compile-time
