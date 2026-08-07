@@ -78,18 +78,30 @@ def fenced(source: str) -> str:
     return "```rust\n" + source.rstrip() + "\n```\n"
 
 
+def canonical_skill_docs(root: pathlib.Path) -> list[pathlib.Path]:
+    skill_root = root / ".agents" / "skills" / "tenferro-compute"
+    if not skill_root.is_dir():
+        return []
+    return sorted(skill_root.rglob("*.md"))
+
+
 def unmarked_rust_fences(root: pathlib.Path) -> list[str]:
     inventory: list[str] = []
-    for directory in (root / "docs" / "guides", root / "docs" / "tutorials"):
-        for doc in sorted(directory.glob("*.md")):
-            marked = False
-            for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
-                if START_RE.search(line):
-                    marked = True
-                elif END_RE.search(line):
-                    marked = False
-                elif line.strip() == "```rust" and not marked:
-                    inventory.append(f"{doc.relative_to(root)}:{line_number}")
+    docs = [
+        doc
+        for directory in (root / "docs" / "guides", root / "docs" / "tutorials")
+        for doc in sorted(directory.glob("*.md"))
+    ]
+    docs.extend(canonical_skill_docs(root))
+    for doc in docs:
+        marked = False
+        for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            if START_RE.search(line):
+                marked = True
+            elif END_RE.search(line):
+                marked = False
+            elif line.strip() == "```rust" and not marked:
+                inventory.append(f"{doc.relative_to(root)}:{line_number}")
     return inventory
 
 
@@ -144,6 +156,7 @@ def user_facing_docs(root: pathlib.Path) -> list[pathlib.Path]:
         if relative.parts and relative.parts[0] in excluded_parts:
             continue
         docs.append(path)
+    docs.extend(canonical_skill_docs(root))
     return docs
 
 

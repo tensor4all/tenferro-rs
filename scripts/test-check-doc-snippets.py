@@ -111,6 +111,28 @@ def test_no_unmarked_plain_rust_fences_remain() -> None:
     assert inventory == [], "unmarked Rust fences remain: " + ", ".join(inventory)
 
 
+def test_canonical_skill_markdown_is_discovered() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        skill = root / ".agents" / "skills" / "tenferro-compute"
+        skill.mkdir(parents=True)
+        doc = skill / "SKILL.md"
+        doc.write_text("# Skill\n", encoding="utf-8")
+        assert doc in CHECKER.user_facing_docs(root)
+
+
+def test_unmarked_skill_rust_fence_is_reported() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        skill = root / ".agents" / "skills" / "tenferro-compute"
+        skill.mkdir(parents=True)
+        doc = skill / "references" / "pitfalls.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("```rust\nlet answer = 42;\n```\n", encoding="utf-8")
+        inventory = CHECKER.unmarked_rust_fences(root)
+        assert any(item.startswith(f"{doc.relative_to(root)}:") for item in inventory)
+
+
 if __name__ == "__main__":
     for name, value in sorted(globals().items()):
         if name.startswith("test_"):
