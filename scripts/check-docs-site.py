@@ -114,7 +114,7 @@ def llms_source_path(root: pathlib.Path, url: str) -> pathlib.Path | None:
     return None
 
 
-def check_llms_index(root: pathlib.Path) -> list[str]:
+def check_llms_index(root: pathlib.Path, docs_site_root: pathlib.Path | None = None) -> list[str]:
     index = root / "docs" / "llms.txt"
     if not index.is_file():
         return ["docs/llms.txt is missing"]
@@ -145,6 +145,8 @@ def check_llms_index(root: pathlib.Path) -> list[str]:
         errors.append(f"docs/llms.txt must link {LLMS_SKILL_PATH}")
     elif not (root / LLMS_SKILL_PATH).is_file():
         errors.append(f"docs/llms.txt skill target does not exist: {LLMS_SKILL_PATH}")
+    if docs_site_root is not None and docs_site_root.exists() and not (docs_site_root / "llms.txt").is_file():
+        errors.append(f"built docs site is missing root llms.txt: {docs_site_root / 'llms.txt'}")
     return errors
 
 
@@ -295,12 +297,6 @@ def main() -> int:
     )
     if snippet_check.returncode != 0:
         return snippet_check.returncode
-    llms_errors = check_llms_index(root)
-    if llms_errors:
-        print("llms.txt validation failed:", file=sys.stderr)
-        for error in llms_errors:
-            print(f"- {error}", file=sys.stderr)
-        return 1
     guide_dependency_check = subprocess.run(
         [
             sys.executable,
@@ -322,6 +318,13 @@ def main() -> int:
         if args.docs_site_root
         else root / "target" / "docs-site"
     )
+
+    llms_errors = check_llms_index(root, docs_site_root)
+    if llms_errors:
+        print("llms.txt validation failed:", file=sys.stderr)
+        for error in llms_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
 
     crates = load_workspace_libs(root)
     missing_doc = [pkg for _member, pkg, doc_dir in crates if not (doc_root / doc_dir / "index.html").exists()]

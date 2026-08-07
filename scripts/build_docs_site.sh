@@ -104,6 +104,7 @@ PY
 }
 
 echo "[1/9] Checking user-facing snippets"
+run_python "$ROOT_DIR/scripts/check-agent-skills.py" --root-dir "$ROOT_DIR"
 run_python "$ROOT_DIR/scripts/check-doc-snippets.py" --root-dir "$ROOT_DIR" --check
 run_python "$ROOT_DIR/scripts/check-guide-dependency-snippets.py" --root-dir "$ROOT_DIR"
 
@@ -167,7 +168,7 @@ FOOTER
 echo "[6/9] Rendering design docs if configured"
 if [[ -f "$ROOT_DIR/docs/_quarto.yml" ]]; then
   if command -v quarto >/dev/null 2>&1; then
-    quarto render "$ROOT_DIR/docs"
+    quarto render "$ROOT_DIR/docs" --output-dir "$OUT_DIR"
   else
     echo "  Warning: quarto not found; design docs site skipped."
     if [[ "${CI:-}" == "true" ]]; then
@@ -183,7 +184,8 @@ echo "[7/9] Checking rendered operation surface references"
 run_python "$ROOT_DIR/scripts/check-operation-categories.py" --fail-on-findings --include-rendered
 
 echo "[8/9] Verifying docs site links and API inventory"
-run_python "$ROOT_DIR/scripts/check-docs-site.py" --root-dir "$ROOT_DIR" --site-index "$API_DIR/index.html"
+run_python "$ROOT_DIR/scripts/check-docs-site.py" --root-dir "$ROOT_DIR" \
+  --site-index "$API_DIR/index.html" --docs-site-root "$OUT_DIR"
 
 echo "[9/9] Verifying site top page"
 REPO_TITLE="$(basename "$ROOT_DIR")"

@@ -48,6 +48,15 @@ def test_complete_skill_layout_passes() -> None:
         assert CHECKER.check(root) == []
 
 
+def test_missing_canonical_file_reports_without_raising() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        make_skill_root(root)
+        (root / ".agents" / "skills" / "tenferro-compute" / "SKILL.md").unlink()
+        errors = CHECKER.check(root)
+        assert any("missing canonical skill file" in error for error in errors)
+
+
 def test_missing_mirror_file_fails() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)

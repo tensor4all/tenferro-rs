@@ -39,6 +39,7 @@ def make_minimal_docs_root(root: pathlib.Path) -> None:
     write(root / "crates/demo/src/lib.rs", "pub fn demo() {}\n")
     write(root / "target/doc/demo_crate/index.html", "<html></html>\n")
     write(root / "target/docs-site/api/index.html", '<a href="../demo_crate/index.html">demo</a>\n')
+    write(root / "target/docs-site/llms.txt", "# llms\n")
     write(
         root / "scripts/check-doc-snippets.py",
         """
@@ -120,6 +121,16 @@ def test_llms_missing_target_fails() -> None:
         assert "target does not exist" in result.stderr
 
 
+def test_built_llms_missing_fails() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        fake_root = pathlib.Path(tmp)
+        make_minimal_docs_root(fake_root)
+        (fake_root / "target/docs-site/llms.txt").unlink()
+        result = run_checker(fake_root)
+        assert result.returncode != 0
+        assert "built docs site is missing root llms.txt" in result.stderr
+
+
 def test_llms_duplicate_url_fails() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         fake_root = pathlib.Path(tmp)
@@ -138,4 +149,5 @@ def test_llms_duplicate_url_fails() -> None:
 if __name__ == "__main__":
     test_rendered_internal_link_outside_render_set_fails()
     test_llms_missing_target_fails()
+    test_built_llms_missing_fails()
     test_llms_duplicate_url_fails()

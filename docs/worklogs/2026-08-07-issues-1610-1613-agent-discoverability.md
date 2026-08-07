@@ -33,9 +33,11 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
   compiler or documentation parser was added.
 - `docs/llms.txt` is a tracked, curated 14-entry source. The build copies it to
   the site root, while `check-docs-site.py` validates its Quarto resource,
-  descriptions, unique URLs, repository-relative documentation targets, and
-  canonical skill target. No Sourcey, crawler, YAML parser, or `llms-full.txt`
-  was added.
+  descriptions, unique URLs, repository-relative documentation targets,
+  canonical skill target, and the built root copy when a site output exists.
+  The build invokes the skill mirror checker and passes its configurable output
+  directory to Quarto, so custom output validation covers the actual rendered
+  site. No Sourcey, crawler, YAML parser, or `llms-full.txt` was added.
 - The skill teaches current direct crates and extension traits, column-major
   input, backend/runtime reuse, compile-once/run-many, explicit extension
   registration, einsum syntax, scratch-workspace setup, and CPU/BLAS feature
@@ -62,16 +64,19 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
 - `cargo run --manifest-path docs/tutorial-code/Cargo.toml
   --no-default-features --features cpu-faer,doc-snippets --bin
   tenferro_compute_skill` → passed.
-- `python3 scripts/test-check-docs-site.py` → passed, including missing-target
-  and duplicate-URL regressions.
-- `bash scripts/build_docs_site.sh /tmp/tenferro-site-1610-1613` → passed;
-  `cmp docs/llms.txt /tmp/tenferro-site-1610-1613/llms.txt` passed and the
+- `python3 scripts/test-check-docs-site.py` → passed, including missing-target,
+  duplicate-URL, and missing-built-root regressions.
+- `python3 scripts/test-doc-consistency.py` → passed, including the docs-build
+  skill-check contract.
+- `bash scripts/build_docs_site.sh /tmp/tenferro-site-1610-1613-review` →
+  passed with Quarto output in the requested directory; root `llms.txt`, the
+  rendered top page, and `guides/choosing-an-api.html` existed, `cmp
+  docs/llms.txt /tmp/tenferro-site-1610-1613-review/llms.txt` passed, and the
   built-site checker verified 14 workspace library crates.
 - `cargo fmt --all --check` → passed after marking the source-region holder
   functions `rustfmt::skip` so extracted snippets retain their display shape.
 
 ## Remaining validation
 
-Run the full tutorial-binary release test, docs-site build and comparison,
-`python3 scripts/check-docs-site.py`, docs CI profile, repository-rules review,
-and hosted CI before merging the combined PR.
+Run the full tutorial-binary release test, docs CI profile,
+repository-rules review, and hosted CI before merging the combined PR.

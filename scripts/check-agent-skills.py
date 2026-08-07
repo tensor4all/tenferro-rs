@@ -39,6 +39,8 @@ def check(root: pathlib.Path) -> list[str]:
             mirror_file = mirror / relative
             if not mirror_file.is_file():
                 errors.append(f"missing mirror file: {mirror_relative / relative}")
+            elif not canonical_file.is_file():
+                continue
             elif canonical_file.read_bytes() != mirror_file.read_bytes():
                 errors.append(f"mirror file does not match canonical: {mirror_relative / relative}")
         if mirror.is_dir():

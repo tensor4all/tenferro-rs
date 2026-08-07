@@ -264,6 +264,7 @@ def test_docs_ci_runs_docs_script_tests() -> None:
     assert "python3 scripts/ci/run_profile.py docs" in text
     assert "python3 scripts/test-check-docs-site.py" in profiles
     assert "python3 scripts/test-doc-consistency.py" in profiles
+    assert 'run_python "$ROOT_DIR/scripts/check-agent-skills.py" --root-dir "$ROOT_DIR"' in build_docs_site
     assert "python3 scripts/test-repository-rules-review.py" in profiles
     assert "python3 scripts/check-guide-dependency-snippets.py" in profiles
     assert "python3 scripts/check-operation-categories.py --fail-on-findings" in profiles
