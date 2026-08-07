@@ -114,3 +114,7 @@ required-features = ["autodiff", "__bench_unification_semantic_ad_api"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "prelude"
+path = "tests/prelude.rs"

@@ -50,6 +50,7 @@ pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
+pub mod prelude;
 mod tensor_ext;
 mod traced;
 mod validation;

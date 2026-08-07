@@ -48,6 +48,7 @@ pub mod extension_cache;
 mod extension_execution_context;
 pub mod graph;
 mod metadata;
+pub mod prelude;
 pub mod program;
 pub mod runtime;
 #[doc(hidden)]
