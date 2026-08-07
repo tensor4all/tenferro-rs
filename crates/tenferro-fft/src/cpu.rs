@@ -34,13 +34,13 @@ impl FftBackend for CpuExecSession<'_> {
         validate_spec_input(input, spec)?;
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
         let allocation_domain = self.shared_allocation_domain();
-        match allocation_domain.as_deref() {
-            Some(domain) => execute_managed_fft_with_plans(input, spec, domain, &mut plans),
-            None => {
-                validate_host_fft_input(fft_op_name(spec.operation()), input)?;
-                execute_fft_with_plans(input, spec, &mut plans)
+        if input.is_backend_buffer() {
+            if let Some(domain) = allocation_domain.as_deref() {
+                return execute_managed_fft_with_plans(input, spec, domain, &mut plans);
             }
         }
+        validate_host_fft_input(fft_op_name(spec.operation()), input)?;
+        execute_fft_with_plans(input, spec, &mut plans)
     }
 }
 
