@@ -98,6 +98,9 @@ Family coverage is:
   instead of CubeCL's lazy client construction, and synchronizes the created
   stream and first checks for a loadable CUDA driver library, so no-driver
   hosts are skipped without entering cudarc's panic-only loader path.
+- The three stale GPU trybuild diagnostics were refreshed to the current
+  provider-module paths; the full seven-case session contract now passes
+  without `TRYBUILD=overwrite`.
 - `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are

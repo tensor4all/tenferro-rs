@@ -1,11 +1,11 @@
-error[E0432]: unresolved import `tenferro_gpu::cuda_runtime_engine_registration_with_id`
+error[E0432]: unresolved import `tenferro_gpu::cuda::cuda_runtime_engine_registration_with_id`
  --> tests/ui/cuda_removed_runtime_engine_registration_with_id.rs:1:5
   |
-1 | use tenferro_gpu::cuda_runtime_engine_registration_with_id;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `cuda_runtime_engine_registration_with_id` in the root
+1 | use tenferro_gpu::cuda::cuda_runtime_engine_registration_with_id;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `cuda_runtime_engine_registration_with_id` in `cuda`
   |
 help: a similar name exists in the module
   |
-1 - use tenferro_gpu::cuda_runtime_engine_registration_with_id;
-1 + use tenferro_gpu::cuda_runtime_engine_registration;
+1 - use tenferro_gpu::cuda::cuda_runtime_engine_registration_with_id;
+1 + use tenferro_gpu::cuda::cuda_runtime_engine_registration;
   |

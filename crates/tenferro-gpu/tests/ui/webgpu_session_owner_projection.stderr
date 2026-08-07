@@ -1,8 +1,8 @@
-error[E0599]: no method named `backend_mut` found for mutable reference `&'a mut tenferro_gpu::WebGpuExecSession<'a>` in the current scope
+error[E0599]: no method named `backend_mut` found for mutable reference `&'a mut tenferro_gpu::webgpu::WebGpuExecSession<'a>` in the current scope
  --> tests/ui/webgpu_session_owner_projection.rs:4:13
   |
 4 |     session.backend_mut()
-  |             ^^^^^^^^^^^ method not found in `&'a mut tenferro_gpu::WebGpuExecSession<'a>`
+  |             ^^^^^^^^^^^ method not found in `&'a mut tenferro_gpu::webgpu::WebGpuExecSession<'a>`
 
 error[E0308]: mismatched types
  --> tests/ui/webgpu_session_owner_projection.rs:8:5
@@ -13,4 +13,4 @@ error[E0308]: mismatched types
   |     ^^^^^^^^^^^^^ expected `&mut WebGpuBackend`, found `&mut WebGpuExecSession<'_>`
   |
   = note: expected mutable reference `&'a mut WebGpuBackend`
-             found mutable reference `&mut tenferro_gpu::WebGpuExecSession<'a>`
+             found mutable reference `&mut tenferro_gpu::webgpu::WebGpuExecSession<'a>`
