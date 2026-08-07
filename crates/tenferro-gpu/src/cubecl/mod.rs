@@ -82,8 +82,8 @@ use tenferro_tensor::CacheStats;
 use tenferro_tensor::{DotGeneralAccumulation, TensorRead, TensorWrite};
 
 use crate::backend::{
-    BackendCachedDot, BackendRuntimeCache, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use crate::config::{
@@ -301,6 +301,9 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 ///
 /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
 /// ```
+#[doc(hidden)]
+struct CudaBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct CudaBackend {
     inner: Arc<CudaBackendState>,
@@ -5696,6 +5699,16 @@ impl TensorFusion for CudaBackend {
             (Tensor::Bool(_), Tensor::Bool(_)) => Ok(None),
             _ => Err(dtype_mismatch("broadcast_multiply", lhs, rhs)),
         }
+    }
+}
+
+impl BackendSession for CudaBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<CudaBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
     }
 }
 

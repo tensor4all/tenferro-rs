@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use crate::{
     AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
-    BackendCachedDot, BackendId, BackendRuntimeCache, CompareDir, DType, DeviceAccessError,
-    DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig,
-    GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement, PreparedDeviceAccess,
-    ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
-    RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
+    BackendCachedDot, BackendId, BackendRuntimeCache, BackendSession, CompareDir, DType,
+    DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GatherConfig, GpuBackendKind, HostAccessError, MemoryKind, PadConfig, Placement,
+    PreparedDeviceAccess, ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping,
+    RootBoundSpan, RootResourceExtent, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorRank, TensorRead, TensorReduction, TensorScalar, TensorStructural,
     TensorViewCanonicalization, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
@@ -614,6 +614,9 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
+#[doc(hidden)]
+struct WebGpuBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
@@ -1050,6 +1053,16 @@ impl TensorDeviceTransfer for WebGpuBackend {
 
 impl BackendRuntimeCache for WebGpuBackend {
     type RuntimeCache = ();
+}
+
+impl BackendSession for WebGpuBackend {
+    fn session_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<WebGpuBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendCachedDot for WebGpuBackend {}

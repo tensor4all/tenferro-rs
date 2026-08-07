@@ -11,6 +11,9 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 
+#[doc(hidden)]
+struct DefaultReadBackendSessionMarker;
+
 struct DefaultReadBackend {
     calls: Vec<&'static str>,
     dot_result: Option<Tensor>,
@@ -517,6 +520,16 @@ impl BackendRuntimeCache for DefaultReadBackend {
 }
 
 impl BackendCachedDot for DefaultReadBackend {}
+
+impl BackendSession for DefaultReadBackend {
+    fn session_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<DefaultReadBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
+}
 
 impl BackendSessionHost for DefaultReadBackend {}
 

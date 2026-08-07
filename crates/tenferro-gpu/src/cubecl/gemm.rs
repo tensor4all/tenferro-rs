@@ -257,6 +257,11 @@ struct DotGeneralLayout {
 }
 
 struct Workspace {
+    // INVARIANT: in pinned CubeCL rev 1c88bb6, CUDA storage records handle
+    // deallocation and matches async allocations with `cuMemFreeAsync` on the
+    // allocation stream (or sync allocations with `cuMemFree`). Dropping an
+    // evicted handle therefore follows CubeCL's stream-owned release contract;
+    // this cache does not free the device pointer directly.
     _handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,
     size: u64,
@@ -500,6 +505,8 @@ impl CutensorContractionPlanCache {
     }
 
     fn touch(&mut self, key: &CutensorContractionKey) {
+        // INVARIANT: the LRU order is bounded by configured `max_entries`, so
+        // this retain scan has a constant configured ceiling.
         self.order.retain(|existing| existing != key);
         self.order.push_back(key.clone());
     }
@@ -533,6 +540,8 @@ impl CutensorContractionPlanCache {
     }
 
     fn retained_bytes(&self) -> usize {
+        // INVARIANT: retained entries are bounded by configured `max_entries`,
+        // so this retained-byte fold has a constant configured ceiling.
         let entries_bytes =
             self.entries
                 .iter()
@@ -1115,6 +1124,20 @@ pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<
     };
     let plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
     Ok(plan_cache.stats())
+}
+
+#[cfg(test)]
+pub(super) fn cutensor_plan_cache_workspace_bytes(backend: &CudaBackend) -> crate::Result<u64> {
+    let Some(plan_cache) = backend
+        .cuda_extension_cache()
+        .get_cloned::<CutensorPlanCacheState>()?
+    else {
+        return Ok(0);
+    };
+    let plan_cache = lock_cutensor_plan_cache(&plan_cache)?;
+    Ok(plan_cache.entries.values().fold(0, |total, cached| {
+        total.saturating_add(cached.workspace.size)
+    }))
 }
 
 pub(super) fn cutensor_plan_cache_max_entries(

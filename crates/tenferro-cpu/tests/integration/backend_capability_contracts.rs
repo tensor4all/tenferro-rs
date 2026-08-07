@@ -704,11 +704,31 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
     let sources = [
         ("dot_runtime", include_str!("../../src/dot_runtime.rs")),
         ("provider", include_str!("../../src/provider.rs")),
-        ("exec_session", include_str!("../../src/exec_session.rs")),
         ("gemm_analysis", include_str!("../../src/gemm/mod.rs")),
     ];
     for (module, source) in sources {
         assert_direct_dispatch(module, source);
+    }
+
+    // exec_session.rs also owns the concrete BackendSession type identity;
+    // scan only its contraction entry points so that this unrelated TypeId is
+    // not mistaken for a dispatch registry.
+    let exec_session = include_str!("../../src/exec_session.rs");
+    for function in [
+        "with_linalg_pool",
+        "dot_general",
+        "dot_general_read",
+        "dot_general_read_into",
+        "dot_general_read_into_accum",
+        "dot_general_with_conj",
+        "dot_general_cached",
+        "dot_general_with_conj_cached",
+        "dot_general_read_into_accum_cached",
+        "grouped_gemm_cached",
+    ] {
+        let body = rust_function_body(exec_session, function)
+            .unwrap_or_else(|| panic!("exec-session dispatch function `{function}` must exist"));
+        assert_direct_dispatch(&format!("exec_session::{function}"), body);
     }
 
     // backend.rs also owns opt-in profiling state, so scanning the entire file

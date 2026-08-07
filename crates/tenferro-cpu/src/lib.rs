@@ -173,10 +173,10 @@ pub use topology::{
 
 /// Visit a CPU execution session carried by a type-erased backend session.
 ///
-/// This is a backend-leaf capability bridge. The type-name check is performed
-/// before the erased pointer is reconstructed, and the callback cannot return
-/// a borrow of the session, so the borrowed resource lease remains scoped to
-/// the caller's session closure.
+/// This is a backend-leaf capability bridge. The exact session marker is checked
+/// before the erased pointer is reconstructed, and the callback cannot return a
+/// borrow of the session, so the borrowed resource lease remains scoped to the
+/// caller's session closure.
 #[doc(hidden)]
 pub fn with_cpu_exec_session<B, R>(
     session: &mut B,
@@ -185,11 +185,11 @@ pub fn with_cpu_exec_session<B, R>(
 where
     B: tenferro_tensor::BackendSession + ?Sized,
 {
-    if session.session_type_name() != std::any::type_name::<CpuExecSession<'static>>() {
+    if session.session_type_id() != std::any::TypeId::of::<exec_session::CpuExecSessionMarker>() {
         return None;
     }
     let data = unsafe { session.session_data_mut() };
-    // SAFETY: `session_type_name` is supplied by the same blanket
+    // SAFETY: the exact marker is supplied by CpuExecSession's explicit
     // `BackendSession` implementation that produced `session_data_mut`, and
     // the equality above proves that the erased value is `CpuExecSession`.
     // The callback is higher-ranked and returns no session borrow, so the

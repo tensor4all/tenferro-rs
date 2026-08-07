@@ -12,6 +12,7 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
+use std::any::TypeId;
 use std::ptr::NonNull;
 use strided_kernel::{
     erased_map_into, erased_zip_into, ErasedMapOp, ErasedRawStridedMut, ErasedRawStridedPtr,
@@ -4098,9 +4099,9 @@ impl<T> TensorBackendOps for T where
 /// }
 /// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
-    /// Build-local type identity for backend-extension session capability dispatch.
+    /// Build-local identity for backend-extension session capability dispatch.
     #[doc(hidden)]
-    fn session_type_name(&self) -> &'static str;
+    fn session_type_id(&self) -> TypeId;
 
     /// Erased pointer used only by backend leaf crates for a checked session
     /// capability bridge. The pointer is borrowed for the lifetime of `self`.
@@ -4111,22 +4112,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// by `self`, and that pointer must remain valid and uniquely borrowed for
     /// the duration of the `&mut self` borrow. Backend leaf crates may use this
     /// contract to recover a concrete session capability after checking
-    /// [`Self::session_type_name`].
+    /// [`Self::session_type_id`].
     #[doc(hidden)]
     unsafe fn session_data_mut(&mut self) -> *mut ();
-}
-
-impl<T> BackendSession for T
-where
-    T: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer + Sized,
-{
-    fn session_type_name(&self) -> &'static str {
-        std::any::type_name::<T>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut T as *mut ()
-    }
 }
 
 /// Standard runtime backend over dynamic [`Tensor`] values.
@@ -4140,6 +4128,7 @@ where
 /// ```
 pub trait TensorBackend:
     BackendRuntimeCache
+    + BackendSession
     + TensorBackendOps
     + BackendCachedDot
     + TensorDeviceTransfer

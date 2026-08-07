@@ -1,3 +1,4 @@
+use std::any::TypeId;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
@@ -18,6 +19,9 @@ use tenferro_tensor::{
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorValue, TensorWrite,
 };
+
+#[doc(hidden)]
+struct EagerBackendSessionMarker;
 
 pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
@@ -75,6 +79,14 @@ impl EagerBackend {
             materializations,
             inner: CpuBackend::new(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recording_session_owner(&mut self) -> Option<*mut ()> {
+        match self {
+            Self::Recording(backend) => Some((backend as *mut RecordingBackend).cast()),
+            _ => None,
+        }
     }
 
     #[cfg(feature = "cuda")]
@@ -166,6 +178,10 @@ macro_rules! dispatch {
 }
 
 #[cfg(test)]
+#[doc(hidden)]
+struct RecordingBackendSessionMarker;
+
+#[cfg(test)]
 #[derive(Debug)]
 pub struct RecordingBackend {
     materializations: Arc<AtomicUsize>,
@@ -181,6 +197,17 @@ macro_rules! delegate_recording_backend_methods {
             }
         )*
     };
+}
+
+#[cfg(test)]
+impl BackendSession for RecordingBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<RecordingBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 #[cfg(test)]
@@ -328,6 +355,16 @@ macro_rules! delegate_tensor_backend_methods {
             }
         )*
     };
+}
+
+impl BackendSession for EagerBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<EagerBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendRuntimeCache for EagerBackend {

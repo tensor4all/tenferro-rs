@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -1020,6 +1021,9 @@ fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) 
 /// let clone = backend.clone();
 /// assert_eq!(backend.kind(), clone.kind());
 /// ```
+#[doc(hidden)]
+struct CpuBackendSessionMarker;
+
 #[derive(Clone)]
 pub struct CpuBackend {
     runtime_identity: CpuRuntimeIdentity,
@@ -2709,6 +2713,16 @@ impl CpuBackend {
                 self.shared.arbiter.try_acquire_provider_exclusive()
             }
         }
+    }
+}
+
+impl BackendSession for CpuBackend {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<CpuBackendSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
     }
 }
 

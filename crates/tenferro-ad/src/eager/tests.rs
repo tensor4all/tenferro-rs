@@ -23,7 +23,9 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
-use tenferro_tensor::{DType, DotGeneralConfig, TensorElementwise};
+use tenferro_tensor::{
+    BackendSession, BackendSessionHost, DType, DotGeneralConfig, TensorElementwise,
+};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
 
@@ -120,6 +122,32 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
         .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
+fn eager_backend_session_identity_projects_to_owner() {
+    let mut backend = EagerBackend::cpu(CpuBackend::new());
+    let owner = (&mut backend as *mut EagerBackend).cast::<()>();
+    let identity = backend.session_type_id();
+    let projected = unsafe { backend.session_data_mut() };
+    assert_eq!(identity, backend.session_type_id());
+    assert_eq!(projected, owner);
+
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let mut recording = EagerBackend::recording_cpu(materializations);
+    let recording_owner = recording.recording_session_owner().unwrap() as usize;
+    let recording_identity = recording.with_backend_session(|session| {
+        let identity = session.session_type_id();
+        let projected = unsafe { session.session_data_mut() };
+        assert_eq!(projected as usize, recording_owner);
+        identity
+    });
+    assert_ne!(recording_identity, identity);
+    assert_eq!(
+        recording_identity,
+        recording.with_backend_session(|session| { session.session_type_id() })
+    );
+    assert!(backend.recording_session_owner().is_none());
 }
 
 #[test]

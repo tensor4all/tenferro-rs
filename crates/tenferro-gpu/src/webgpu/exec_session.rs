@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
@@ -9,6 +10,10 @@ use tenferro_tensor::config::{
 use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite};
 
 use super::{WebGpuBackend, WebGpuRuntime, WebGpuRuntimeIdentity};
+
+/// Marker for the concrete erased WebGPU execution-session target.
+#[doc(hidden)]
+pub(super) struct WebGpuExecSessionMarker;
 
 /// Borrowed WebGPU execution capability.
 #[doc(hidden)]
@@ -43,11 +48,11 @@ pub fn with_webgpu_exec_session<B, R>(
 where
     B: BackendSession + ?Sized,
 {
-    if session.session_type_name() != std::any::type_name::<WebGpuExecSession<'static>>() {
+    if session.session_type_id() != std::any::TypeId::of::<WebGpuExecSessionMarker>() {
         return None;
     }
     let data = unsafe { session.session_data_mut() };
-    // SAFETY: the type-name check and BackendSession erased-pointer contract
+    // SAFETY: the exact marker check and BackendSession erased-pointer contract
     // identify the value as WebGpuExecSession for this scoped visit.
     Some(unsafe { f(&mut *(data.cast::<WebGpuExecSession<'static>>())) })
 }
@@ -242,6 +247,16 @@ delegate_cached! {
         config: &GroupedGemmConfig<'_>,
         out: TensorWrite<'_>,
     ) -> crate::Result<()>;
+}
+
+impl BackendSession for WebGpuExecSession<'_> {
+    fn session_type_id(&self) -> TypeId {
+        TypeId::of::<WebGpuExecSessionMarker>()
+    }
+
+    unsafe fn session_data_mut(&mut self) -> *mut () {
+        self as *mut Self as *mut ()
+    }
 }
 
 impl BackendSessionHost for WebGpuBackend {

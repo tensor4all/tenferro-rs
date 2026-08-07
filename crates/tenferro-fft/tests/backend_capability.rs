@@ -13,12 +13,12 @@ use tenferro_fft::{
 };
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, BackendStorageHandle, CompareDir,
-    DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind,
+    GatherConfig, GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig,
+    StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
+    TensorStructural, TypedTensor,
 };
 
 macro_rules! unreachable_backend_methods {
@@ -33,7 +33,7 @@ macro_rules! unreachable_backend_methods {
 }
 
 macro_rules! impl_minimal_tensor_backend {
-    ($ty:ty) => {
+    ($ty:ty, $marker:ty) => {
         impl BackendRuntimeCache for $ty {
             type RuntimeCache = ();
         }
@@ -132,6 +132,15 @@ macro_rules! impl_minimal_tensor_backend {
             }
         }
         impl BackendCachedDot for $ty {}
+        impl BackendSession for $ty {
+            fn session_type_id(&self) -> std::any::TypeId {
+                std::any::TypeId::of::<$marker>()
+            }
+
+            unsafe fn session_data_mut(&mut self) -> *mut () {
+                self as *mut Self as *mut ()
+            }
+        }
         impl BackendSessionHost for $ty {}
         impl TensorBackend for $ty {}
     };
@@ -144,7 +153,9 @@ impl TensorOnlyBackend {
     fn record_transfer(&self) {}
 }
 
-impl_minimal_tensor_backend!(TensorOnlyBackend);
+#[doc(hidden)]
+struct TensorOnlyBackendSessionMarker;
+impl_minimal_tensor_backend!(TensorOnlyBackend, TensorOnlyBackendSessionMarker);
 
 #[derive(Debug, Default)]
 struct MockNonCpuSession {
@@ -156,7 +167,9 @@ impl MockNonCpuSession {
     fn record_transfer(&self) {}
 }
 
-impl_minimal_tensor_backend!(MockNonCpuSession);
+#[doc(hidden)]
+struct MockNonCpuSessionMarker;
+impl_minimal_tensor_backend!(MockNonCpuSession, MockNonCpuSessionMarker);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct MockNonCpuPlanKey {
@@ -245,7 +258,9 @@ impl RecordingFftSession {
     }
 }
 
-impl_minimal_tensor_backend!(RecordingFftSession);
+#[doc(hidden)]
+struct RecordingFftSessionMarker;
+impl_minimal_tensor_backend!(RecordingFftSession, RecordingFftSessionMarker);
 
 impl FftBackend for RecordingFftSession {
     fn execute_fft(

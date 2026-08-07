@@ -1398,6 +1398,8 @@ fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
 
 #[test]
 fn test_default_backend_session_methods_cover_cache_fallbacks() {
+    #[doc(hidden)]
+    struct DefaultOnlyBackendSessionMarker;
     struct DefaultOnlyBackend;
 
     macro_rules! panic_backend_methods {
@@ -1510,6 +1512,16 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl BackendCachedDot for DefaultOnlyBackend {}
+
+    impl BackendSession for DefaultOnlyBackend {
+        fn session_type_id(&self) -> std::any::TypeId {
+            std::any::TypeId::of::<DefaultOnlyBackendSessionMarker>()
+        }
+
+        unsafe fn session_data_mut(&mut self) -> *mut () {
+            self as *mut Self as *mut ()
+        }
+    }
 
     impl BackendSessionHost for DefaultOnlyBackend {}
 
