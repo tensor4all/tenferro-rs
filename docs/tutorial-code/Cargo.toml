@@ -76,18 +76,22 @@ path = "src/bin/complex_ad_convention.rs"
 [[bin]]
 name = "core_tensor_snippets"
 path = "src/bin/core_tensor_snippets.rs"
+required-features = ["doc-snippets"]
 
 [[bin]]
 name = "math_snippets"
 path = "src/bin/math_snippets.rs"
+required-features = ["doc-snippets"]
 
 [[bin]]
 name = "execution_snippets"
 path = "src/bin/execution_snippets.rs"
+required-features = ["doc-snippets"]
 
 [[bin]]
 name = "extension_snippets"
 path = "src/bin/extension_snippets.rs"
+required-features = ["doc-snippets"]
 
 [[bin]]
 name = "apple_shared_fft"
@@ -98,3 +102,8 @@ required-features = ["apple-shared"]
 name = "apple_shared_cholesky"
 path = "src/bin/apple_shared_cholesky.rs"
 required-features = ["apple-shared"]
+
+[[test]]
+name = "tutorial_binaries"
+path = "tests/tutorial_binaries.rs"
+required-features = ["doc-snippets"]

@@ -89,6 +89,13 @@ Family coverage is:
   --all-targets` → passed.
 - The documented Apple feature test command with `doc-snippets` → passed on
   non-Apple hardware with Apple runtime binaries gated/skipped.
+- `cargo test --manifest-path docs/tutorial-code/Cargo.toml --no-default-features
+  --features cpu-blas --no-run` and the equivalent `cpu-faer` command → passed;
+  doc-only binaries and their integration test are now gated by `doc-snippets`.
+- `cargo test -p tenferro-gpu --features cuda --lib
+  cubecl::runtime::identity_tests::cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available
+  -- --exact` → passed; `gpu_available()` now probes full runtime initialization
+  instead of CubeCL's lazy client construction, so no-driver hosts are skipped.
 - `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are
@@ -98,7 +105,8 @@ Family coverage is:
 
 - CUDA and Apple examples are compile/run gated by hardware, target, and
   features; ordinary CI validates compilation and skips unavailable hardware
-  execution.
+  execution. CUDA availability probing now includes driver/runtime/context
+  initialization; hosted CUDA coverage remains dependent on runner setup.
 - The tutorial crate now resolves the standalone extension crates through path
   dependencies; the root workspace excludes preserve those crates' own
   workspace behavior.

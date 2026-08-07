@@ -14,7 +14,7 @@ use tenferro_tensor::AllocationDomainId;
 
 use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId};
 
-/// Returns `true` if a CUDA device is available for CubeCL.
+/// Returns `true` if a CUDA device can initialize a CubeCL runtime.
 ///
 /// Use this in test helpers to skip GPU tests on machines without hardware.
 pub fn gpu_available() -> bool {
@@ -24,14 +24,9 @@ pub fn gpu_available() -> bool {
     let Some(device_id) = devices.first().map(|device| device.id()) else {
         return false;
     };
-    let Ok(device_ordinal) = usize::try_from(device_id.ordinal()) else {
-        return false;
-    };
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let device = CudaDevice::new(device_ordinal);
-        let _ = CubeclCudaRuntime::client(&device);
-    }))
-    .is_ok()
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaRuntime::new(device_id)))
+        .map(|runtime| runtime.is_ok())
+        .unwrap_or(false)
 }
 
 /// Opaque identity of one exact CUDA runtime instance.
