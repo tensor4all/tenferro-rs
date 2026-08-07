@@ -133,11 +133,11 @@ pub enum ValidationError {
         argument: &'static str,
         message: String,
     },
-    #[error("view is not slice-contiguous")]
+    #[error("view is not slice-contiguous; materialize with to_contiguous before requesting a borrowed slice")]
     NonContiguousViewAsSlice,
     #[error("view metadata is out of borrowed-slice bounds")]
     ViewOutOfBounds,
-    #[error("mutable tensor layout may overlap physical elements")]
+    #[error("mutable tensor layout may overlap physical elements; materialize a contiguous owner before requesting mutable access")]
     OverlappingMutableLayout,
     #[error("integer overflow while validating tensor metadata")]
     IntegerOverflow,
