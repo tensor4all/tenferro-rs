@@ -954,6 +954,10 @@ diff-scoped review bot.
   boundaries. Converting a typed error to `String` is permitted only for
   display/logging, vendor/FFI arguments, final serialization, or an explicit
   message-only external protocol boundary.
+- When a documented alternative API, explicit conversion, feature, or
+  supported-value set provides one reliable remediation, append it to the
+  diagnosis as `<what failed>; <what to do>`. Do not invent a remedy for an
+  arbitrary failure when no universal next action exists.
 
 ## Documentation Policy
 
