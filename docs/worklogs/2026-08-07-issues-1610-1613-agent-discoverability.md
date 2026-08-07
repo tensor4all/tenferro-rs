@@ -86,6 +86,9 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
   'python3 scripts/check-agent-skills.py'` → passed.
 - `python3 scripts/ci/run_profile.py docs` → passed; the repository-rules
   subtest emitted transient LLM retry warnings but exited successfully.
+- Final `python3 scripts/repository-rules-review.py --base origin/main
+  --head HEAD --output-json /tmp/repository-rules-review-1610-1613-final.json`
+  → pass with no findings.
 - `cargo fmt --all --check` → passed after marking the source-region holder
   functions `rustfmt::skip` so extracted snippets retain their display shape.
 
