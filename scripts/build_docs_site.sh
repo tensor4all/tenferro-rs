@@ -10,6 +10,7 @@ API_INDEX_MD="$ROOT_DIR/docs/api/index.md"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$API_DIR"
+cp "$ROOT_DIR/docs/llms.txt" "$OUT_DIR/llms.txt"
 
 render_overview_html() {
   if [[ -f "$API_INDEX_MD" ]]; then

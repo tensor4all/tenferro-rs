@@ -1,6 +1,8 @@
 project:
   type: website
   output-dir: ../target/docs-site
+  resources:
+    - llms.txt
   render:
     - index.md
     - storage-ownership.md
