@@ -94,6 +94,11 @@ path = "src/bin/extension_snippets.rs"
 required-features = ["doc-snippets"]
 
 [[bin]]
+name = "tenferro_compute_skill"
+path = "src/bin/tenferro_compute_skill.rs"
+required-features = ["doc-snippets"]
+
+[[bin]]
 name = "apple_shared_fft"
 path = "src/bin/apple_shared_fft.rs"
 required-features = ["apple-shared"]

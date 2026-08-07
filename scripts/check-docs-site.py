@@ -16,6 +16,11 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
     tomllib = None
 
 
+LLMS_SITE_PREFIX = "/tenferro-rs/"
+LLMS_LINK_RE = re.compile(r"^\s*-\s+\[([^]]+)\]\(([^)]+)\):\s*(\S.*)$", re.MULTILINE)
+LLMS_SKILL_PATH = ".agents/skills/tenferro-compute/SKILL.md"
+
+
 class LinkCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -90,6 +95,59 @@ def missing_rendered_html_links(site_root: pathlib.Path) -> list[tuple[pathlib.P
             if not target.is_file():
                 missing.append((page, href, target))
     return missing
+
+
+def llms_source_path(root: pathlib.Path, url: str) -> pathlib.Path | None:
+    parsed = urlsplit(url)
+    if parsed.netloc == "tensor4all.org" and parsed.path.startswith(LLMS_SITE_PREFIX):
+        relative = unquote(parsed.path[len(LLMS_SITE_PREFIX) :])
+        if relative.endswith("/"):
+            relative += "index.md"
+        elif relative.endswith(".html"):
+            relative = relative[:-5] + ".md"
+        else:
+            return None
+        return root / "docs" / relative
+    github_prefix = "/tensor4all/tenferro-rs/blob/main/"
+    if parsed.netloc == "github.com" and parsed.path.startswith(github_prefix):
+        return root / unquote(parsed.path[len(github_prefix) :])
+    return None
+
+
+def check_llms_index(root: pathlib.Path, docs_site_root: pathlib.Path | None = None) -> list[str]:
+    index = root / "docs" / "llms.txt"
+    if not index.is_file():
+        return ["docs/llms.txt is missing"]
+
+    quarto = root / "docs" / "_quarto.yml"
+    if not quarto.is_file() or not re.search(r"(?m)^\s*-\s*llms\.txt\s*$", quarto.read_text(encoding="utf-8")):
+        return ["docs/_quarto.yml must list llms.txt under project resources"]
+
+    errors: list[str] = []
+    seen_urls: set[str] = set()
+    matches = list(LLMS_LINK_RE.finditer(index.read_text(encoding="utf-8")))
+    if not matches:
+        return ["docs/llms.txt has no described Markdown links"]
+    for match in matches:
+        label, url, description = match.groups()
+        if url in seen_urls:
+            errors.append(f"docs/llms.txt repeats URL: {url}")
+        seen_urls.add(url)
+        if not description.strip():
+            errors.append(f"docs/llms.txt has an empty description for: {label}")
+        target = llms_source_path(root, url)
+        if target is None:
+            errors.append(f"docs/llms.txt has an unsupported URL: {url}")
+        elif not target.is_file():
+            errors.append(f"docs/llms.txt target does not exist: {url} -> {target.relative_to(root)}")
+
+    if not any(url.endswith(LLMS_SKILL_PATH) for url in seen_urls):
+        errors.append(f"docs/llms.txt must link {LLMS_SKILL_PATH}")
+    elif not (root / LLMS_SKILL_PATH).is_file():
+        errors.append(f"docs/llms.txt skill target does not exist: {LLMS_SKILL_PATH}")
+    if docs_site_root is not None and docs_site_root.exists() and not (docs_site_root / "llms.txt").is_file():
+        errors.append(f"built docs site is missing root llms.txt: {docs_site_root / 'llms.txt'}")
+    return errors
 
 
 def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
@@ -260,6 +318,13 @@ def main() -> int:
         if args.docs_site_root
         else root / "target" / "docs-site"
     )
+
+    llms_errors = check_llms_index(root, docs_site_root)
+    if llms_errors:
+        print("llms.txt validation failed:", file=sys.stderr)
+        for error in llms_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
 
     crates = load_workspace_libs(root)
     missing_doc = [pkg for _member, pkg, doc_dir in crates if not (doc_root / doc_dir / "index.html").exists()]

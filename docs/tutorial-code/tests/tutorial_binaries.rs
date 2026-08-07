@@ -68,6 +68,10 @@ fn tutorial_binaries_run_successfully() {
         "extension_snippets",
         env!("CARGO_BIN_EXE_extension_snippets"),
     );
+    run_tutorial(
+        "tenferro_compute_skill",
+        env!("CARGO_BIN_EXE_tenferro_compute_skill"),
+    );
     #[cfg(feature = "apple-shared")]
     {
         run_tutorial("apple_shared_fft", env!("CARGO_BIN_EXE_apple_shared_fft"));

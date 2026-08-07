@@ -278,6 +278,9 @@ specifications live at <https://tensor4all.org/tenferro-rs/>. Start with
 [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/index.html);
 PyTorch/JAX users can also jump in through the
 [PyTorch and JAX mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html).
+Agents and users writing downstream Rust should load the bundled
+[tenferro-compute skill](https://github.com/tensor4all/tenferro-rs/blob/main/.agents/skills/tenferro-compute/SKILL.md)
+for API-tier, crate, import, and pitfall guidance.
 
 Selected deep dives:
 

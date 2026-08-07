@@ -1,0 +1,29 @@
+# tenferro
+
+> tenferro is a Rust-native tensor computation stack with opt-in autodiff for scientific workloads: typed tensors, PyTorch-style eager execution, JAX-style traced graphs, einsum, linear algebra, and explicit CPU, CUDA, and experimental WebGPU backend control.
+
+## Getting started
+
+- [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/): Walks through tenferro's tensor layer, execution model, and backend/device choices, including a first CPU program.
+- [PyTorch and JAX Mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html): Translates common `torch` and `jax.numpy` operations into tenferro's direct, eager, and traced APIs.
+- [Choosing a Tensor API](https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html): Explains how to select the tensor API by value type, execution timing, and backend/device.
+
+## Guides
+
+- [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): Covers the `tenferro-einsum` extension crate, its concrete/eager/traced traits, planning, syntax, and runtime registration.
+- [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
+- [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.
+- [Parallelism and Caching](https://tensor4all.org/tenferro-rs/guides/parallelism-and-caching.html): Describes CPU thread control, provider oversubscription, executor reuse, and cache management.
+- [Memory Order](https://tensor4all.org/tenferro-rs/guides/memory-order.html): Specifies contiguous column-major storage and leftmost-dimension-fastest layout.
+- [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement and transfer boundaries plus CUDA and WebGPU capability coverage.
+- [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers feature selection, BLAS providers, CUDA setup, workspace traps, and common runtime failures.
+
+## Specification
+
+- [API Conventions](https://tensor4all.org/tenferro-rs/spec/api-conventions.html): Normative public API naming, module shape, feature naming, and documentation-surface conventions.
+- [Tensor Semantics](https://tensor4all.org/tenferro-rs/spec/tensor-semantics.html): Defines dense tensor metadata, storage, placement, typed views, and backend boundaries.
+- [Backend Contract](https://tensor4all.org/tenferro-rs/spec/backend-contract.html): Defines the execution pipeline from traced values and extension registration through compiled backend execution.
+
+## Agent skills
+
+- [tenferro-compute skill](https://github.com/tensor4all/tenferro-rs/blob/main/.agents/skills/tenferro-compute/SKILL.md): Helps downstream coding agents choose API tiers, crates, extension-trait imports, performance idioms, and known pitfalls.

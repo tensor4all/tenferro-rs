@@ -1,0 +1,4 @@
+interface:
+  display_name: "tenferro Compute"
+  short_description: "Write downstream Rust tensor programs with tenferro."
+  default_prompt: "Use the tenferro-compute skill to write Rust code against tenferro."
