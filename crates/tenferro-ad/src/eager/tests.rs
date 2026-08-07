@@ -135,16 +135,19 @@ fn eager_backend_session_identity_projects_to_owner() {
 
     let materializations = Arc::new(AtomicUsize::new(0));
     let mut recording = EagerBackend::recording_cpu(materializations);
+    let recording_owner = recording.recording_session_owner().unwrap() as usize;
     let recording_identity = recording.with_backend_session(|session| {
         let identity = session.session_type_id();
         let projected = unsafe { session.session_data_mut() };
-        assert!(!projected.is_null());
+        assert_eq!(projected as usize, recording_owner);
         identity
     });
+    assert_ne!(recording_identity, identity);
     assert_eq!(
         recording_identity,
         recording.with_backend_session(|session| { session.session_type_id() })
     );
+    assert!(backend.recording_session_owner().is_none());
 }
 
 #[test]

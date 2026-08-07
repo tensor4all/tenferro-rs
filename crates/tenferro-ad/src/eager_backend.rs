@@ -81,6 +81,14 @@ impl EagerBackend {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn recording_session_owner(&mut self) -> Option<*mut ()> {
+        match self {
+            Self::Recording(backend) => Some((backend as *mut RecordingBackend).cast()),
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda(backend: CudaBackend) -> Self {
         Self::Cuda(backend)
