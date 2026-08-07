@@ -101,6 +101,13 @@ class RunProfileTests(unittest.TestCase):
             ),
         )
 
+    def test_coverage_excludes_tutorial_package(self) -> None:
+        self.assertEqual(
+            commands_for("coverage")[0],
+            "cargo llvm-cov --workspace --exclude tenferro-tutorial-code "
+            "--profile ci --json --output-path coverage.json",
+        )
+
     def test_hosted_profiles_use_cargo_ci_profile_not_release(self) -> None:
         for name in (
             "workspace-faer",

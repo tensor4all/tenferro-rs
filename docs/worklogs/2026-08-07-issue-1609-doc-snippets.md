@@ -41,7 +41,9 @@ malformed source regions. This work is standalone for #1609.
   example, as allowed by the accepted plan. Nested cache and einsum examples
   execute their assertions rather than leaving an uncalled helper function.
 - CUDA guide snippets probe `gpu_available()` before driver discovery so the
-  tutorial binary exits cleanly on non-CUDA hosts. The TBLIS workspace contract
+  tutorial binary exits cleanly on non-CUDA hosts. The coverage profile excludes
+  the separately exercised tutorial package so its `doc-snippets` feature does
+  not instrument hardware-only GPU modules; the TBLIS workspace contract
   test now checks for the required exclusion within the root exclusion list,
   while allowing the additional standalone extension-workspace exclusions.
 
@@ -101,6 +103,12 @@ Family coverage is:
 - The three stale GPU trybuild diagnostics were refreshed to the current
   provider-module paths; the full seven-case session contract now passes
   without `TRYBUILD=overwrite`.
+- `cargo llvm-cov --workspace --exclude tenferro-tutorial-code --profile ci
+  --json --output-path /tmp/coverage-exclude.json` plus
+  `python3 scripts/check-coverage.py /tmp/coverage-exclude.json` → all 191
+  reported files passed. The eight post-#1577 validation baselines are recorded
+  explicitly in `coverage-thresholds.json`.
+- `python3 -m unittest scripts.ci.tests.test_run_profile -v` → 32 tests passed.
 - `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are
