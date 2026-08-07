@@ -13,6 +13,7 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
+#[rustfmt::skip]
 fn concrete_operation_and_column_major() -> Result<(), Box<dyn std::error::Error>> {
     // snippet-start:concrete-operation
 use tenferro_cpu::CpuBackend;
@@ -35,6 +36,7 @@ assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
     Ok(())
 }
 
+#[rustfmt::skip]
 fn eager_operation() -> Result<(), Box<dyn std::error::Error>> {
     // snippet-start:eager-operation
 use tenferro_ad::{EagerRuntime, Tensor};
@@ -55,6 +57,7 @@ assert_eq!(
     Ok(())
 }
 
+#[rustfmt::skip]
 fn traced_operation_with_extension_registration() -> Result<(), Box<dyn std::error::Error>> {
     // snippet-start:traced-extension-operation
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
@@ -91,6 +94,7 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
     Ok(())
 }
 
+#[rustfmt::skip]
 fn compile_once_run_many() -> Result<(), Box<dyn std::error::Error>> {
     // snippet-start:compile-once-run-many
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
