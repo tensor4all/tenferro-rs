@@ -271,6 +271,7 @@ Additionally, verify the following before pushing:
 - **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`, and update any affected diagrams under `docs/assets/` or embedded in Markdown. Stale documentation is worse than no documentation.
+- **Agent skill freshness**: When a PR changes public API surface, feature flags, crate boundaries, or documented idioms, review `.agents/skills/tenferro-compute/` and the other shipped skill mirrors, and update them in the same PR when they no longer match.
 - **Work log updates**: For nontrivial refactors, cleanup streams, AI-assisted implementation, or explicit tradeoff decisions, add or update a work log under `docs/worklogs/` and link it from the PR body.
 
 ### Local Rust Build Acceleration
