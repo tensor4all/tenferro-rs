@@ -75,8 +75,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
-        f"cargo llvm-cov --workspace {_CARGO_TEST_PROFILE} --json "
-        "--output-path coverage.json",
+        f"cargo llvm-cov --workspace --exclude tenferro-tutorial-code "
+        f"{_CARGO_TEST_PROFILE} --json --output-path coverage.json",
         "python3 scripts/check-coverage.py coverage.json",
     ),
     "ci-config": (

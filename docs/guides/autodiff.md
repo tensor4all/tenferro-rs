@@ -74,68 +74,66 @@ it to keep the first example short.
 
 ## Reverse-mode gradient with `grad`
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#autodiff_18 -->
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
-let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let loss = (&x * &x).reduce_sum(Some(&[0]));
-let ad = AdContext::builder().build().unwrap();
-let grad = ad.grad(&loss, &x).unwrap();
+let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+let loss = (&x * &x)?.reduce_sum(Some(&[0]))?;
+let ad = AdContext::builder().build()?;
+let grad = ad.grad(&loss, &x)?;
 
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile(&grad).unwrap();
+let program = compiler.compile(&grad)?;
 let mut builder = Runtime::builder();
-builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[3]);
-assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
 ```
+<!-- end-snippet-source -->
 
 ## Gradient through linalg
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#autodiff_19 -->
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_linalg::TracedTensorLinalgExt;
 
 let mut compiler = GraphCompiler::new();
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let factor = a.cholesky().unwrap();
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let factor = a.cholesky()?;
 let ad = AdContext::builder()
-    .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
-    .unwrap()
-    .build()
-    .unwrap();
-let loss = factor.reduce_sum(Some(&[0, 1]));
-let grad_a = ad.grad(&loss, &a).unwrap();
-let program = compiler.compile(&grad_a).unwrap();
+    .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
+    .build()?;
+let loss = factor.reduce_sum(Some(&[0, 1]))?;
+let grad_a = ad.grad(&loss, &a)?;
+let program = compiler.compile(&grad_a)?;
 
 let backend = CpuBackend::new();
 let mut builder = Runtime::builder();
-builder
-    .register_engine(runtime_engine_registration(&backend).unwrap())
-    .unwrap();
-builder
-    .install_extension_module(
-        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
-    )
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+builder.install_extension_module(tenferro_linalg::extension_module::<CpuBackend>(
+    runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 assert_eq!(result.shape(), &[2, 2]);
 ```
+<!-- end-snippet-source -->
 
 ## Vector-Jacobian product with `vjp`
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#autodiff_20 -->
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
@@ -144,39 +142,39 @@ use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
-);
+)?;
 let cotangent = TracedTensor::from_vec_col_major(
     vec![2, 2],
     vec![1.0_f64, -0.5, 0.25, 2.0],
-);
+)?;
 
 let mut compiler = GraphCompiler::new();
-let y = a.matmul(&b).unwrap();
-let ad = AdContext::builder().build().unwrap();
-let ct_a = ad.vjp(&y, &a, &cotangent).unwrap();
-let program = compiler.compile(&ct_a).unwrap();
+let y = a.matmul(&b)?;
+let ad = AdContext::builder().build()?;
+let ct_a = ad.vjp(&y, &a, &cotangent)?;
+let program = compiler.compile(&ct_a)?;
 
 let mut builder = Runtime::builder();
-builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 assert_eq!(result.shape(), &[2, 3]);
 // For y = A * B, the cotangent with respect to A is cotangent * B^T.
 assert_eq!(
-    result.as_slice::<f64>().unwrap(),
+    result.as_slice::<f64>()?,
     &[0.875, 2.75, -1.0625, 0.0, 2.75, 5.0],
 );
 ```
+<!-- end-snippet-source -->
 
 ## Jacobian-vector product with `jvp`
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#autodiff_21 -->
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
@@ -185,36 +183,35 @@ use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
-);
+)?;
 let tangent = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, -0.5, 0.25, 0.0, 2.0, -1.0],
-);
+)?;
 
 let mut compiler = GraphCompiler::new();
-let y = a.matmul(&b).unwrap();
-let ad = AdContext::builder().build().unwrap();
-let dy = ad.jvp(&y, &a, &tangent).unwrap();
-let program = compiler.compile(&dy).unwrap();
+let y = a.matmul(&b)?;
+let ad = AdContext::builder().build()?;
+let dy = ad.jvp(&y, &a, &tangent)?;
+let program = compiler.compile(&dy)?;
 
 let mut builder = Runtime::builder();
-builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
-    .unwrap();
-let runtime = builder.build().unwrap();
-let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
 let result = outputs.remove(0);
 assert_eq!(result.shape(), &[2, 2]);
 // For y = A * B, the directional derivative with respect to A is dA * B.
 assert_eq!(
-    result.as_slice::<f64>().unwrap(),
+    result.as_slice::<f64>()?,
     &[4.25, -2.25, 7.4375, -3.75],
 );
 ```
+<!-- end-snippet-source -->
 
 ## Extension AD Rules
 

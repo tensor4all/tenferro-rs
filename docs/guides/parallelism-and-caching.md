@@ -24,12 +24,14 @@ runtime mechanics below for users who have already selected a provider.
 Use `CpuBackend::with_threads(n)` when one backend should carry a fixed CPU
 parallelism policy:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_1 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 
-let backend = CpuBackend::with_threads(4).unwrap();
+let backend = CpuBackend::with_threads(4)?;
 assert_eq!(backend.num_threads(), 4);
 ```
+<!-- end-snippet-source -->
 
 `CpuBackend::new()` reads `RAYON_NUM_THREADS` and falls back to the
 process-visible CPU count when the variable is unset.
@@ -89,21 +91,24 @@ metadata.
 Use the backend-owned canonicalization operation when a metadata-only view must
 become compact:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_2 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TensorViewCanonicalization, TypedTensor};
+use tenferro_tensor::{TypedTensor};
+use tenferro_tensor::backend::TensorViewCanonicalization;
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-).unwrap();
-let transposed = tensor.as_view().transpose_view([1, 0]).unwrap();
-let mut backend = CpuBackend::with_threads(4).unwrap();
-let compact = backend.to_contiguous(&transposed).unwrap();
+)?;
+let transposed = tensor.as_view().transpose_view([1, 0])?;
+let mut backend = CpuBackend::with_threads(4)?;
+let compact = backend.to_contiguous(&transposed)?;
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
+<!-- end-snippet-source -->
 
 Canonicalization preserves placement; it does not silently upload host data or
 download device data.
@@ -163,11 +168,13 @@ Do not accidentally multiply outer application parallelism by inner kernel
 parallelism. If an outer loop already runs many independent tenferro calls in
 parallel, use a smaller inner backend:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_3 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 
-let backend = CpuBackend::with_threads(1);
+let backend = CpuBackend::with_threads(1)?;
 ```
+<!-- end-snippet-source -->
 
 For BLAS/LAPACK providers, apply the same rule to provider thread variables.
 For benchmarks, pin all relevant thread counts and report them with the result.
@@ -191,18 +198,18 @@ Reuse execution objects when you repeat related work:
 - `Runtime` owns prepared-plan caching and registered runtime cache owners.
   CPU backend buffer pools remain owned by the registered CPU backend.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_4 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let backend = CpuBackend::with_threads(4).unwrap();
+let backend = CpuBackend::with_threads(4)?;
 let mut builder = Runtime::builder();
-builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
-    .unwrap();
-let runtime = builder.build().unwrap();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+let runtime = builder.build()?;
 ```
+<!-- end-snippet-source -->
 
 Short-lived scripts can usually ignore cache tuning. Services, notebooks, and
 benchmark harnesses should treat caches as part of runtime resource management.
@@ -212,43 +219,32 @@ benchmark harnesses should treat caches as part of runtime resource management.
 Runtime, compiler, eager, and CPU backend caches are bounded by default and can be
 configured independently.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_5 -->
 ```rust
 use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
-use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
+use tenferro_runtime::extension::ExtensionCacheLimits;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
-    NonZeroUsize::new(128).unwrap(),
+    NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
 ).with_max_retained_bytes(
-    NonZeroUsize::new(64 * 1024 * 1024).unwrap(),
-)).unwrap();
-
-let runtime = Runtime::builder().build().unwrap();
-runtime.set_prepared_cache_limits(PreparedPlanCacheLimits::new(
-    NonZeroUsize::new(128).unwrap(),
-)).unwrap();
-
-let mut compiler = GraphCompiler::new();
-compiler.clear_caches();
-
-let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
-Ok(())
-}
+    NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
+))?;
 ```
+<!-- end-snippet-source -->
 
 For CPU backends, the CPU buffer pool has its own retention limit:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_6 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 
 let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024)?;
 ```
+<!-- end-snippet-source -->
 
 ## Clearing Cached Memory
 
@@ -256,6 +252,7 @@ Clear caches when a long-running process changes workload phase, when a
 notebook has finished a large experiment, or when memory pressure matters more
 than reusing old plans and buffers.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_7 -->
 ```rust
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
@@ -263,25 +260,29 @@ use tenferro_runtime::{GraphCompiler, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-let runtime = Runtime::builder().build().unwrap();
+let runtime = Runtime::builder().build()?;
 let mut compiler = GraphCompiler::new();
 
-runtime.clear_prepared_cache().unwrap();
-runtime.clear_caches().unwrap();
+runtime.clear_prepared_cache()?;
+runtime.clear_caches()?;
 compiler.clear_caches();
-eager.clear_caches().unwrap();
+eager.clear_caches()?;
 Ok(())
 }
+main()?;
 ```
+<!-- end-snippet-source -->
 
 For CPU backends, clear the buffer pool through the backend:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_8 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 
 let mut backend = CpuBackend::new();
-backend.clear_runtime_caches().unwrap();
+backend.reset_buffer_pool()?;
 ```
+<!-- end-snippet-source -->
 
 `retained_bytes` in cache stats is tenferro's logical retained-data
 estimate. It is not operating-system RSS and does not include allocator arena

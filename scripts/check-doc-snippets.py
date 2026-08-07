@@ -8,10 +8,89 @@ import sys
 
 START_RE = re.compile(r"<!--\s*snippet-source:\s*([^>]+?)\s*-->")
 END_RE = re.compile(r"<!--\s*end-snippet-source\s*-->")
+REGION_RE = re.compile(r"^\s*//\s*snippet-(start|end):([A-Za-z0-9_-]+)\s*$")
 
 
-def fenced(source: pathlib.Path) -> str:
-    return "```rust\n" + source.read_text().rstrip() + "\n```\n"
+def source_regions(source: pathlib.Path) -> dict[str, str]:
+    lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
+    regions: dict[str, str] = {}
+    active: tuple[str, int] | None = None
+    for index, line in enumerate(lines):
+        marker = REGION_RE.match(line.rstrip("\r\n"))
+        if marker is None:
+            continue
+        kind, name = marker.groups()
+        if kind == "start":
+            if active is not None:
+                raise ValueError(f"{source}: nested snippet region {name!r}")
+            if name in regions:
+                raise ValueError(f"{source}: duplicate snippet region {name!r}")
+            active = (name, index)
+        elif active is None:
+            raise ValueError(f"{source}: snippet region end without matching start: {name!r}")
+        else:
+            active_name, start = active
+            if active_name != name:
+                raise ValueError(
+                    f"{source}: reversed or overlapping snippet regions: "
+                    f"expected end for {active_name!r}, got {name!r}"
+                )
+            content = "".join(lines[start + 1 : index])
+            if not content.strip():
+                raise ValueError(f"{source}: empty snippet region {name!r}")
+            regions[name] = content
+            active = None
+    if active is not None:
+        raise ValueError(f"{source}: snippet region missing end: {active[0]!r}")
+    return regions
+
+
+def snippet_source(root: pathlib.Path, doc: pathlib.Path, source_rel: str) -> str:
+    source_name, separator, region_name = source_rel.partition("#")
+    if not source_name:
+        raise ValueError(f"{doc}: snippet source path is empty: {source_rel}")
+    source_path = pathlib.Path(source_name)
+    if source_path.is_absolute():
+        raise ValueError(
+            f"{doc}: snippet source must be relative to repository root: {source_rel}"
+        )
+    source = (root / source_path).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"{doc}: snippet source escapes repository root: {source_rel}"
+        ) from exc
+    if not source.is_file():
+        raise ValueError(f"{doc}: snippet source does not exist: {source_rel}")
+    if not separator:
+        return source.read_text(encoding="utf-8")
+    if not region_name:
+        raise ValueError(f"{doc}: snippet region name is empty: {source_rel}")
+    regions = source_regions(source)
+    try:
+        return regions[region_name]
+    except KeyError as exc:
+        raise ValueError(f"{doc}: unknown snippet region {region_name!r} in {source_rel}") from exc
+
+
+def fenced(source: str) -> str:
+    return "```rust\n" + source.rstrip() + "\n```\n"
+
+
+def unmarked_rust_fences(root: pathlib.Path) -> list[str]:
+    inventory: list[str] = []
+    for directory in (root / "docs" / "guides", root / "docs" / "tutorials"):
+        for doc in sorted(directory.glob("*.md")):
+            marked = False
+            for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+                if START_RE.search(line):
+                    marked = True
+                elif END_RE.search(line):
+                    marked = False
+                elif line.strip() == "```rust" and not marked:
+                    inventory.append(f"{doc.relative_to(root)}:{line_number}")
+    return inventory
 
 
 def rewrite_doc(root: pathlib.Path, doc: pathlib.Path) -> tuple[str, bool]:
@@ -33,24 +112,11 @@ def rewrite_doc(root: pathlib.Path, doc: pathlib.Path) -> tuple[str, bool]:
         if not end:
             raise ValueError(f"{doc}: missing end-snippet-source marker")
         source_rel = start.group(1).strip()
-        source_path = pathlib.Path(source_rel)
-        if source_path.is_absolute():
-            raise ValueError(
-                f"{doc}: snippet source must be relative to repository root: {source_rel}"
-            )
-        source = (root / source_path).resolve()
-        try:
-            source.relative_to(root)
-        except ValueError as exc:
-            raise ValueError(
-                f"{doc}: snippet source escapes repository root: {source_rel}"
-            ) from exc
-        if not source.is_file():
-            raise ValueError(f"{doc}: snippet source does not exist: {source_rel}")
+        source_text = snippet_source(root, doc, source_rel)
         replacement = (
             text[start.start() : start.end()]
             + "\n"
-            + fenced(source)
+            + fenced(source_text)
             + text[end.start() : end.end()]
         )
         current = text[start.start() : end.end()]
@@ -96,6 +162,15 @@ def main() -> int:
                 changed_docs.append(doc)
                 if not args.check:
                     doc.write_text(new_text)
+        unmarked = unmarked_rust_fences(root)
+        if args.check and unmarked:
+            print(
+                f"unmarked plain Rust fences ({len(unmarked)}):",
+                file=sys.stderr,
+            )
+            for fence in unmarked:
+                print(f"- {fence}", file=sys.stderr)
+            return 1
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

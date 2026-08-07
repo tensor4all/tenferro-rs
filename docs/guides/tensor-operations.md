@@ -71,6 +71,7 @@ when ordinary Rust code knows the element type and you do not need AD.
 `R` defaults to dynamic rank; use `Rank<N>` when the rank itself should be
 validated and carried in the Rust type.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_14 -->
 ```rust
 use tenferro_tensor::{Rank, TypedTensor};
 
@@ -95,6 +96,7 @@ let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major(
 .unwrap();
 assert_eq!(static_rank.rank(), 2);
 ```
+<!-- end-snippet-source -->
 
 The flat slice and host-buffer APIs expose the physical column-major host buffer.
 They are useful for host-side inspection, small manual edits, and
@@ -107,6 +109,7 @@ For common typed math without autodiff, `TypedTensorOpsExt` provides selected
 backend-explicit methods that accept dynamic-rank `TypedTensor<T>` values and
 return typed results.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_15 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
@@ -127,6 +130,7 @@ assert_eq!(total.as_slice().unwrap(), &[32.0]);
 assert_eq!(mask.as_slice().unwrap(), &[false, true, true]);
 assert_eq!(selected.as_slice().unwrap(), &[4.0, 7.0, 9.0]);
 ```
+<!-- end-snippet-source -->
 
 The current typed wrapper set covers:
 
@@ -151,6 +155,7 @@ slice code.
 
 `TypedTensor` exposes explicit host-buffer access for slice-style iteration:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_16 -->
 ```rust
 use tenferro_tensor::TypedTensor;
 
@@ -160,6 +165,7 @@ for value in x.host_data_mut().unwrap() {
 }
 assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
 ```
+<!-- end-snippet-source -->
 
 There is no public closure-style `TypedTensor::map` or `mapv` method in the
 current public API. For host-only transformations, use `host_data`,
@@ -204,13 +210,14 @@ explicit `cast` when that lossy projection is intended.
 Use `Tensor` with a backend when you want direct computation without autodiff but the dtype
 should remain dynamic.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_17 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
 let mut backend = CpuBackend::new();
-let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
+let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
 let sum = a.add(&b, &mut backend).unwrap();
 let product = a.mul(&b, &mut backend).unwrap();
@@ -218,6 +225,7 @@ let product = a.mul(&b, &mut backend).unwrap();
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
+<!-- end-snippet-source -->
 
 ## Eager Forward And Autodiff Example
 
@@ -225,24 +233,27 @@ Use `EagerTensor` when the same immediate computation should stay in an
 `EagerRuntime`. Create tracked variables when a scalar loss should accumulate
 gradients or when a derivative transform should return another eager tensor.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_18 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let y = (&x * &x).reduce_sum(Some(&[0])).unwrap();
+let y = (&x * &x)?.reduce_sum(Some(&[0])).unwrap();
 
 y.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 ## Traced Tensor Example
 
 Use `TracedTensor` when operations should build a graph first and execute later.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_19 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
@@ -264,6 +275,7 @@ let outputs = runtime.run_compiled(&program, &[]).unwrap();
 assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
+<!-- end-snippet-source -->
 
 ### Fallible operator chains
 
@@ -274,6 +286,7 @@ composable chain for dynamic tensors.
 
 Unwrap each step with `?`, or use the explicit fallible method chain:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_20 -->
 ```rust
 use tenferro_runtime::{Error, TracedTensor};
 
@@ -289,6 +302,7 @@ fn add_three(
     Ok(sum)
 }
 ```
+<!-- end-snippet-source -->
 
 Tenferro prioritizes robust error handling over concise chained operator
 notation, so explicit fallible methods are the canonical choice for longer
@@ -296,6 +310,7 @@ sequences and code that needs deferred graph errors to remain visible.
 
 ## Elementwise Math Functions
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_21 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
@@ -304,7 +319,8 @@ let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
 let y = x.exp().unwrap();
 
-let data = y.materialized().unwrap().as_slice::<f64>().unwrap();
+let y_tensor = y.to_tensor().unwrap();
+let data = y_tensor.as_slice::<f64>().unwrap();
 
 assert!((data[0] - 1.0).abs() < 1e-12);
 assert!((data[1] - std::f64::consts::E).abs() < 1e-12);
@@ -312,9 +328,11 @@ assert!((data[2] - 7.38905609893065).abs() < 1e-12);
 Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 ## Reshape And Transpose
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_22 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -323,7 +341,7 @@ let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 let reshaped = a.reshape(&[6], &mut backend).unwrap();
 let transposed = a.transpose(&[1, 0], &mut backend).unwrap();
 
@@ -332,9 +350,11 @@ assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
 assert_eq!(transposed.shape(), &[3, 2]);
 assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
+<!-- end-snippet-source -->
 
 ## Explicit Broadcast
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_23 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
 
@@ -344,13 +364,15 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let repeated = v.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 
 assert_eq!(repeated.shape(), &[3, 2]);
-assert_eq!(repeated.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+assert_eq!(repeated.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
 Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 ## Reduce Over Axes
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_24 -->
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
@@ -359,7 +381,7 @@ let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-);
+)?;
 // Logical matrix:
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
@@ -372,3 +394,4 @@ assert_eq!(total.shape(), &[] as &[usize]);
 // Rank-0 tensors hold one scalar element; as_slice() returns a length-1 slice.
 assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
 ```
+<!-- end-snippet-source -->

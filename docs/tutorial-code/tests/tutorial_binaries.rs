@@ -55,6 +55,19 @@ fn tutorial_binaries_run_successfully() {
         "dynamic_shape_truncated_svd",
         env!("CARGO_BIN_EXE_dynamic_shape_truncated_svd"),
     );
+    run_tutorial(
+        "core_tensor_snippets",
+        env!("CARGO_BIN_EXE_core_tensor_snippets"),
+    );
+    run_tutorial("math_snippets", env!("CARGO_BIN_EXE_math_snippets"));
+    run_tutorial(
+        "execution_snippets",
+        env!("CARGO_BIN_EXE_execution_snippets"),
+    );
+    run_tutorial(
+        "extension_snippets",
+        env!("CARGO_BIN_EXE_extension_snippets"),
+    );
     #[cfg(feature = "apple-shared")]
     {
         run_tutorial("apple_shared_fft", env!("CARGO_BIN_EXE_apple_shared_fft"));

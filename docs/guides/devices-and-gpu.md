@@ -178,38 +178,23 @@ For a local scratch crate inside the checkout, use matching path dependencies
 and add an empty `[workspace]` table as described in
 [Getting Started](../getting-started/index.md).
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_31 -->
 ```rust
-use tenferro_gpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, WebGpuBackend,
-};
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
+use tenferro_tensor::Tensor;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if !webgpu_available() {
-        return Ok(());
-    }
-
-    let mut backend = WebGpuBackend::new_default()?;
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])?;
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])?;
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-
-    let gpu_lhs = upload_webgpu_tensor(backend.runtime(), &lhs)?;
-    let gpu_rhs = upload_webgpu_tensor(backend.runtime(), &rhs)?;
-    let gpu_out = backend.dot_general(&gpu_lhs, &gpu_rhs, &config)?;
-    let out = download_webgpu_tensor(backend.runtime(), &gpu_out)?;
-
-    assert_eq!(out.shape(), &[2, 2]);
-    assert_eq!(out.as_slice::<f32>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
-    backend.runtime().synchronize()?;
-    Ok(())
+if !gpu_available() {
+    return Ok(());
 }
+let devices = cuda_devices()?;
+let Some(device) = devices.first() else { return Ok(()); };
+let backend = CudaBackend::new(device.id())?;
+let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+let gpu_x = upload_tensor(backend.runtime(), &x)?;
+let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
 ```
+<!-- end-snippet-source -->
 
 `DotGeneralConfig` uses StableHLO-style dimension-number fields:
 `lhs_contracting_dims`, `rhs_contracting_dims`, `lhs_batch_dims`, and
@@ -222,6 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 On macOS, `AppleContext` owns a host-visible Metal allocation domain and paired
 CPU and WebGPU backend handles. Creation is explicit:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_32 -->
 ```rust
 use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
@@ -236,6 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 The cloned mutable handles make backend selection visible at each operation.
 The same managed tensor keeps its domain and physical allocation identity when

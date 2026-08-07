@@ -97,26 +97,40 @@ is a borrowed view or other read-oriented value. The `_read` suffix is reserved
 for that `TensorRead` surface; compact `Tensor` inputs use unsuffixed method
 names.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 let mut backend = CpuBackend::new();
-let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-let full = x.fft(None, -1, FftNorm::Backward, &mut backend)?;
-let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut backend)?;
-assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-assert_eq!(one_sided.shape(), &[3]);
+backend.with_backend_session(|session| {
+    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
+        let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+        let full = x.fft(None, -1, FftNorm::Backward, backend)?;
+        let one_sided = x.rfft(None, -1, FftNorm::Backward, backend)?;
+        assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+        assert_eq!(one_sided.shape(), &[3]);
 
-let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
-let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
-let read = TensorRead::from_view(TensorView::F64(view));
-let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut backend)?;
-assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-# Ok::<(), tenferro_tensor::Error>(())
+        let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+        let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+        let read = TensorRead::from_view(TensorView::F64(view));
+        let read_full = read.fft_read(None, -1, FftNorm::Backward, backend)?;
+        assert_eq!(
+            read_full.as_slice::<Complex64>()?[0],
+            Complex64::new(10.0, 0.0),
+        );
+        Ok(())
+    })
+    .ok_or_else(|| tenferro_tensor::Error::Unsupported {
+        op: "documentation",
+        message: "CPU execution session is unavailable".to_owned(),
+    })?
+})?;
 ```
+<!-- end-snippet-source -->
 
 `TypedTensor<T>` wrappers are not part of the current API. FFT operations can
 change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
@@ -129,6 +143,7 @@ methods have the same names and arguments as `TracedTensorFftExt`, register the
 FFT execution runtime on demand, and record the existing extension operation
 when gradients are enabled.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_23 -->
 ```rust
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
@@ -142,9 +157,9 @@ let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
 let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
 
 assert_eq!(spectrum.shape(), &[3]);
-assert_eq!(restored.materialized()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
-# Ok::<(), tenferro_ad::Error>(())
+assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 ```
+<!-- end-snippet-source -->
 
 ### Apple shared CPU and Metal execution
 
@@ -152,9 +167,15 @@ assert_eq!(restored.materialized()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 implicit. Clone its mutable backend handles and pass the desired backend to
 each FFT call:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
+use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::apple::AppleContext;
+use tenferro_gpu::{
+    apple::AppleContext,
+    webgpu::with_webgpu_exec_session,
+};
+use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -164,10 +185,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let after_creation = context.transfer_stats();
 
     let mut cpu = context.cpu_backend().clone();
-    let cpu_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut cpu)?;
+    let cpu_spectrum = cpu
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |exec_session| {
+                managed.rfft(None, 0, FftNorm::Backward, exec_session)
+            })
+            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
+                op: "documentation",
+                message: "CPU execution session is unavailable".to_owned(),
+            })?
+        })?;
 
     let mut metal = context.metal_backend().clone();
-    let metal_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut metal)?;
+    let metal_spectrum = metal
+        .with_backend_session(|session| {
+            with_webgpu_exec_session(session, |exec_session| {
+                managed.rfft(None, 0, FftNorm::Backward, exec_session)
+            })
+            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
+                op: "documentation",
+                message: "WebGPU execution session is unavailable".to_owned(),
+            })?
+        })?;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
@@ -175,6 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+<!-- end-snippet-source -->
 
 RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. The initial
 CubeK Metal implementation supports C32 CFFT/IFFT, F32 one-sided RFFT, and C32
@@ -190,7 +230,7 @@ post-creation transfer counters, C64 CPU success, and typed C64 Metal failure:
 
 ```bash
 cargo test -p tenferro-tutorial-code --no-default-features \
-  --features cpu-faer,apple-shared --test tutorial_binaries
+  --features cpu-faer,apple-shared,doc-snippets --test tutorial_binaries
 ```
 
 Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.

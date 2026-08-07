@@ -40,6 +40,7 @@ API is crate-owned, while the low-level graph node is an `ExtensionOp`.
 
 Eager execution can call the tropical einsum implementation directly:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#tropical_extension_5 -->
 ```rust
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_runtime::Tensor;
@@ -48,10 +49,12 @@ let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
 let out = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ```
+<!-- end-snippet-source -->
 
 Traced execution emits an extension op, so the runtime must install the
 tropical extension modules:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#tropical_extension_6 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
@@ -73,6 +76,7 @@ let runtime = builder.build()?;
 let mut outputs = runtime.run_compiled(&program, &[])?;
 let value = outputs.remove(0);
 ```
+<!-- end-snippet-source -->
 
 The op payload holds the tropical kind and parsed einsum subscripts. Runtime
 module installation maps that stable family ID to the concrete execution hook.
@@ -82,7 +86,8 @@ module installation maps that stable family ID to the concrete execution hook.
 Tropical AD is only well-defined on paths with a unique winning contraction
 index. The tutorial registers explicit extension AD rules for that case:
 
-```rust
+This is an intentionally non-standalone AD continuation fragment; its setup is defined by the preceding example.
+```rust,ignore
 use tenferro_ad::AdContext;
 use tenferro_ext_tropical::tropical_semantic_ad_rules;
 

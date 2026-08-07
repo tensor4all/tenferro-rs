@@ -13,6 +13,7 @@ are the differentiable graph inputs.
 
 The public wrapper stores sparse data using ordinary tenferro tensors:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#sparse_extension_1 -->
 ```rust
 use tenferro_ext_sparse::SparseCooTensor;
 use tenferro_tensor::Tensor;
@@ -24,6 +25,7 @@ let coords = Tensor::from_vec_col_major(
 let values = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 1.0, 3.0])?;
 let sparse = SparseCooTensor::from_parts(vec![2, 2], coords, values)?;
 ```
+<!-- end-snippet-source -->
 
 The coordinate tensor has shape `[2, nnz]` in column-major order. Each column is
 `[row, col]`. Values have shape `[nnz]`.
@@ -33,6 +35,7 @@ The coordinate tensor has shape `[2, nnz]` in column-major order. Each column is
 `sparse_matmul_eager` contracts two COO matrices and returns a COO output with
 a deterministic output coordinate order:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#sparse_extension_2 -->
 ```rust
 use tenferro_ext_sparse::{sparse_matmul_eager, SparseCooTensor};
 use tenferro_tensor::Tensor;
@@ -49,6 +52,7 @@ let right = SparseCooTensor::from_parts(
 )?;
 let product = sparse_matmul_eager(&left, &right)?;
 ```
+<!-- end-snippet-source -->
 
 The implementation builds a sparse contraction plan from the two coordinate
 sets. That plan is the extension payload for traced execution; the values stay
@@ -59,6 +63,7 @@ as graph inputs so AD can see them.
 For traced execution, use `SparseCooTracedTensor` and install the sparse
 extension modules before executing the compiled graph:
 
+<!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#sparse_extension_3 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
@@ -68,7 +73,7 @@ use tenferro_tensor::Tensor;
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
 let left = SparseCooTracedTensor::from_parts(
     vec![1, 1],
-    coords.clone(),
+    Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?,
     TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
 )?;
 let right = SparseCooTracedTensor::from_parts(
@@ -90,6 +95,7 @@ let runtime = builder.build()?;
 let mut outputs = runtime.run_compiled(&program, &[])?;
 let values = outputs.remove(0);
 ```
+<!-- end-snippet-source -->
 
 ## AD Rules
 
@@ -97,7 +103,8 @@ With the `autodiff` feature enabled, `sparse_semantic_ad_rules()` registers
 JVP and VJP rules for sparse-sparse matmul. The derivatives are with respect
 to the dense nonzero value tensors, not the fixed coordinates:
 
-```rust
+This is an intentionally non-standalone AD continuation fragment; its setup is defined by the preceding example.
+```rust,ignore
 use tenferro_ad::AdContext;
 use tenferro_ext_sparse::sparse_semantic_ad_rules;
 
