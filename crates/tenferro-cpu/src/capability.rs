@@ -154,6 +154,8 @@ const CPU_CAPABILITIES: &[OperationCapability] = &[
     same_dtype(PrimitiveOpKind::Sign, DType::F64, N),
     same_dtype(PrimitiveOpKind::Sign, DType::I32, N),
     same_dtype(PrimitiveOpKind::Sign, DType::I64, N),
+    same_dtype(PrimitiveOpKind::Sign, DType::C32, N),
+    same_dtype(PrimitiveOpKind::Sign, DType::C64, N),
     same_dtype(PrimitiveOpKind::Maximum, DType::F32, N),
     same_dtype(PrimitiveOpKind::Maximum, DType::F64, N),
     same_dtype(PrimitiveOpKind::Maximum, DType::I32, N),

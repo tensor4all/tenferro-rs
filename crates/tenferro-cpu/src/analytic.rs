@@ -271,6 +271,15 @@ where
     Ok(T::typed_tensor_into_tensor(out))
 }
 
+fn unsupported_analytic_dtype_message(dtype: DType) -> String {
+    let remedy = matches!(dtype, DType::I32 | DType::I64)
+        .then_some("; convert to F64 with TensorOpsExt::convert before this operation");
+    format!(
+        "CPU backend does not support this operation for {dtype:?}; supported dtypes: F32/F64/C32/C64{}",
+        remedy.unwrap_or("")
+    )
+}
+
 fn require_cpu_capability(
     op_kind: PrimitiveOpKind,
     op: &'static str,
@@ -288,7 +297,7 @@ fn require_cpu_capability(
         Err(crate::Error::unsupported_dtype(
             op,
             dtype,
-            format!("CPU backend does not support this operation for {dtype:?}"),
+            unsupported_analytic_dtype_message(dtype),
         ))
     }
 }

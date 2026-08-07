@@ -13,6 +13,29 @@ use tenferro_tensor::{
     DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView,
 };
 
+fn unsupported_dtype_with_supported(
+    op: &'static str,
+    dtype: DType,
+    supported: &'static str,
+) -> crate::Error {
+    crate::Error::unsupported(
+        op,
+        format!("unsupported dtype {dtype:?}; supported dtypes: {supported}"),
+    )
+}
+
+fn unsupported_sum_squares_dtype(op: &'static str, dtype: DType) -> crate::Error {
+    let remedy = matches!(dtype, DType::I32 | DType::I64)
+        .then_some("; convert to F64 with TensorOpsExt::convert before reduction");
+    crate::Error::unsupported(
+        op,
+        format!(
+            "unsupported dtype {dtype:?}; supported dtypes: F32/F64{}",
+            remedy.unwrap_or_default()
+        ),
+    )
+}
+
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
     let mut seen = vec![false; rank];
     for &axis in axes {
@@ -198,9 +221,10 @@ pub(crate) fn reduce_sum(
             axes,
             exec_context,
         )?)),
-        Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) => Err(unsupported_dtype_with_supported(
             "reduce_sum",
-            "unsupported dtype Bool",
+            DType::Bool,
+            "F32/F64/I32/I64/C32/C64",
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes, exec_context)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes, exec_context)?)),
@@ -254,9 +278,10 @@ pub(crate) fn reduce_sum_read(
             "reduce_sum",
             exec_context,
         )?)),
-        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
+        TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype_with_supported(
             "reduce_sum",
-            "unsupported dtype Bool",
+            DType::Bool,
+            "F32/F64/I32/I64/C32/C64",
         )),
         TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
             buffers,
@@ -289,9 +314,9 @@ pub(crate) fn reduce_sum_squares(
     exec_context: &ExecContext,
 ) -> crate::Result<Tensor> {
     if !matches!(input.dtype(), DType::F32 | DType::F64) {
-        return Err(crate::Error::unsupported(
+        return Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
         ));
     }
     validate_axes("reduce_sum_squares", axes, input.shape().len())?;
@@ -314,9 +339,9 @@ pub(crate) fn reduce_sum_squares(
             "reduce_sum_squares",
             exec_context,
         )?)),
-        _ => Err(crate::Error::unsupported(
+        _ => Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
         )),
     }
 }
@@ -328,9 +353,9 @@ pub(crate) fn reduce_sum_squares_read(
     exec_context: &ExecContext,
 ) -> crate::Result<Tensor> {
     if !matches!(input.dtype(), DType::F32 | DType::F64) {
-        return Err(crate::Error::unsupported(
+        return Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
         ));
     }
     validate_axes("reduce_sum_squares", axes, input.shape().len())?;
@@ -360,9 +385,9 @@ pub(crate) fn reduce_sum_squares_read(
             "reduce_sum_squares",
             exec_context,
         )?)),
-        _ => Err(crate::Error::unsupported(
+        _ => Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
         )),
     }
 }
@@ -395,9 +420,10 @@ pub(crate) fn reduce_prod(
             axes,
             exec_context,
         )?)),
-        Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) => Err(unsupported_dtype_with_supported(
             "reduce_prod",
-            "unsupported dtype Bool",
+            DType::Bool,
+            "F32/F64/I32/I64/C32/C64",
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes, exec_context)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes, exec_context)?)),
@@ -451,9 +477,10 @@ pub(crate) fn reduce_prod_read(
             "reduce_prod",
             exec_context,
         )?)),
-        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
+        TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype_with_supported(
             "reduce_prod",
-            "unsupported dtype Bool",
+            DType::Bool,
+            "F32/F64/I32/I64/C32/C64",
         )),
         TensorRead::View(TensorView::C32(t)) => Ok(Tensor::C32(typed_reduce_view_erased(
             buffers,
@@ -490,9 +517,10 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_max(tensor, axes)?)),
         Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_max_integer(tensor, axes)?)),
         Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_max_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(unsupported_dtype_with_supported(
             "reduce_max",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/I32/I64",
         )),
     }
 }
@@ -555,9 +583,10 @@ pub(crate) fn reduce_max_read(
                 "reduce_max",
             )?))
         }
-        view => Err(crate::Error::unsupported(
+        view => Err(unsupported_dtype_with_supported(
             "reduce_max",
-            format!("unsupported dtype {:?}", view.dtype()),
+            view.dtype(),
+            "F32/F64/I32/I64",
         )),
     }
 }
@@ -578,9 +607,10 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_min(tensor, axes)?)),
         Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_min_integer(tensor, axes)?)),
         Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_min_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(unsupported_dtype_with_supported(
             "reduce_min",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/I32/I64",
         )),
     }
 }
@@ -643,9 +673,10 @@ pub(crate) fn reduce_min_read(
                 "reduce_min",
             )?))
         }
-        view => Err(crate::Error::unsupported(
+        view => Err(unsupported_dtype_with_supported(
             "reduce_min",
-            format!("unsupported dtype {:?}", view.dtype()),
+            view.dtype(),
+            "F32/F64/I32/I64",
         )),
     }
 }

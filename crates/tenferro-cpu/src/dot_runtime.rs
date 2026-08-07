@@ -916,7 +916,7 @@ fn allocate_canonical_operand(
         dtype => Err(Error::unsupported_dtype(
             OP,
             dtype,
-            "CPU contraction providers support floating and complex dtypes",
+            crate::cpu_contraction_unsupported_dtype_message(dtype),
         )),
     }
 }

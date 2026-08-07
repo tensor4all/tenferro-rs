@@ -113,19 +113,42 @@ fn ternary_dtype_error(op: &'static str, dtypes: [DType; 3]) -> crate::Error {
     } else if dtypes[0] != dtypes[2] {
         dtype_pair_error(op, dtypes[0], dtypes[2])
     } else {
-        crate::Error::unsupported(
-            op,
-            format!("unsupported dtype {:?} for all three inputs", dtypes[0]),
-        )
+        dtype_pair_error(op, dtypes[0], dtypes[0])
     }
 }
 
 fn dtype_pair_error(op: &'static str, lhs: DType, rhs: DType) -> crate::Error {
     if lhs == rhs {
-        crate::Error::unsupported(op, format!("unsupported dtype {lhs:?}"))
+        let supported = match op {
+            "clamp" => "F32/F64",
+            "maximum" | "minimum" | "rem" => "F32/F64/I32/I64",
+            "add" | "mul" | "sub" => "F32/F64/I32/I64/C32/C64",
+            _ => unreachable!("dtype_pair_error has no supported-dtype contract for {op}"),
+        };
+        crate::Error::unsupported(
+            op,
+            format!("unsupported dtype {lhs:?}; supported dtypes: {supported}"),
+        )
     } else {
         crate::Error::dtype_mismatch(op, lhs, rhs)
     }
+}
+
+fn unary_dtype_error(
+    op: &'static str,
+    dtype: DType,
+    supported: &'static str,
+    recommend_f64: bool,
+) -> crate::Error {
+    let remedy = (recommend_f64 && matches!(dtype, DType::I32 | DType::I64))
+        .then_some("; convert to F64 with TensorOpsExt::convert before this operation");
+    crate::Error::unsupported(
+        op,
+        format!(
+            "unsupported dtype {dtype:?}; supported dtypes: {supported}{}",
+            remedy.unwrap_or("")
+        ),
+    )
 }
 
 fn tensor_pair_error(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> crate::Error {
@@ -1427,7 +1450,10 @@ fn execute_erased_fused_outputs(
             .collect(),
         _ => Err(crate::Error::unsupported(
             ELEMENTWISE_FUSION_OP,
-            format!("unsupported dtype {}", dtype.label()),
+            format!(
+                "unsupported dtype {}; supported dtypes: F32/F64/I32/I64/Bool/C32/C64",
+                dtype.label()
+            ),
         )),
     }
 }
@@ -2689,9 +2715,11 @@ pub fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) => Err(unary_dtype_error(
             "neg",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_neg_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_neg_with_pool(buffers, t)?)),
@@ -2741,9 +2769,11 @@ pub fn neg_read_with_pool(
             &t,
             |x| -x,
         )?)),
-        _ => Err(crate::Error::unsupported(
+        _ => Err(unary_dtype_error(
             "neg",
-            format!("unsupported dtype {dtype:?}"),
+            dtype,
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
     }
 }
@@ -2773,9 +2803,11 @@ pub fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(unary_dtype_error(
             "conj",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/C32/C64",
+            true,
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_conj_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_conj_with_pool(buffers, t)?)),
@@ -2813,10 +2845,7 @@ pub fn conj_read_with_pool(
             &t,
             |x| x.conj_elem(),
         )?)),
-        _ => Err(crate::Error::unsupported(
-            "conj",
-            format!("unsupported dtype {dtype:?}"),
-        )),
+        _ => Err(unary_dtype_error("conj", dtype, "F32/F64/C32/C64", true)),
     }
 }
 
@@ -2848,9 +2877,11 @@ pub fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) => Err(unary_dtype_error(
             "abs",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
         Tensor::C32(t) => Ok(Tensor::F32(typed_complex_abs_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::F64(typed_complex_abs_with_pool(buffers, t)?)),
@@ -2890,9 +2921,11 @@ pub fn abs_read_with_pool(
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
-        _ => Err(crate::Error::unsupported(
+        _ => Err(unary_dtype_error(
             "abs",
-            format!("unsupported dtype {dtype:?}"),
+            dtype,
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
     }
 }
@@ -2923,9 +2956,11 @@ pub fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::unsupported(
+        Tensor::Bool(_) => Err(unary_dtype_error(
             "sign",
-            format!("unsupported dtype {:?}", input.dtype()),
+            input.dtype(),
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_sign_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_sign_with_pool(buffers, t)?)),
@@ -2975,9 +3010,11 @@ pub fn sign_read_with_pool(
             &t,
             |x| x.sign_elem(),
         )?)),
-        _ => Err(crate::Error::unsupported(
+        _ => Err(unary_dtype_error(
             "sign",
-            format!("unsupported dtype {dtype:?}"),
+            dtype,
+            "F32/F64/I32/I64/C32/C64",
+            false,
         )),
     }
 }

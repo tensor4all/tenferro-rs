@@ -80,6 +80,49 @@ fn test_scatter_accepts_i64_indices() {
 }
 
 #[test]
+fn test_scatter_bool_error_lists_supported_data_dtypes() {
+    let operand =
+        Tensor::Bool(TypedTensor::from_vec_col_major(vec![3, 3], vec![false; 9]).unwrap());
+    let scatter_indices =
+        Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]).unwrap();
+    let updates = Tensor::Bool(TypedTensor::from_vec_col_major(vec![3], vec![true; 3]).unwrap());
+
+    let error = scatter(
+        &operand,
+        &scatter_indices,
+        &updates,
+        &diagonal_scatter_config(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::Unsupported {
+            op: "scatter",
+            message,
+        } if message == "Bool data tensors are not supported by additive scatter; supported data dtypes: F32/F64/I32/I64/C32/C64"
+    ));
+}
+
+#[test]
+fn test_bool_index_error_lists_supported_index_dtypes() {
+    let operand =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap());
+    let indices = Tensor::Bool(TypedTensor::from_vec_col_major(vec![1, 1], vec![true]).unwrap());
+
+    let error = gather(&operand, &indices, &simple_gather_config()).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::Validation {
+            op: "index_tensor",
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "configuration",
+                message,
+            },
+        } if message == "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64"
+    ));
+}
+
+#[test]
 fn test_scatter_to_diagonal() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]).unwrap());
     let scatter_indices =

@@ -728,6 +728,45 @@ fn test_reduce_sum_squares_f32_and_f64() {
 }
 
 #[test]
+fn unsupported_reduction_dtype_messages_prescribe_known_recovery() {
+    let i64s = Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let error = reduce_sum_squares(
+        &mut buffers,
+        &i64s,
+        &[0],
+        &strided_kernel::ExecContext::serial(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::Unsupported {
+            op: "reduce_sum_squares",
+            message,
+        } if message == "unsupported dtype I64; supported dtypes: F32/F64; convert to F64 with TensorOpsExt::convert before reduction"
+    ));
+
+    let complex = Tensor::C64(
+        TypedTensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        )
+        .unwrap(),
+    );
+    let mut backend = CpuBackend::new();
+    let error = backend
+        .reduce_max_read(TensorRead::from_tensor(&complex), &[0])
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::Unsupported {
+            op: "reduce_max",
+            message,
+        } if message == "unsupported dtype C64; supported dtypes: F32/F64/I32/I64"
+    ));
+}
+
+#[test]
 fn test_reduce_sum_squares_read_accepts_noncompact_view() {
     let source =
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, -2.0, 3.0, -4.0, 5.0, -6.0])
