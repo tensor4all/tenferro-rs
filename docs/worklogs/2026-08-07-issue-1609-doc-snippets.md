@@ -96,7 +96,8 @@ Family coverage is:
   cubecl::runtime::identity_tests::cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available
   -- --exact` → passed; `gpu_available()` now probes full runtime initialization
   instead of CubeCL's lazy client construction, and synchronizes the created
-  stream, so no-driver hosts are skipped.
+  stream and first checks for a loadable CUDA driver library, so no-driver
+  hosts are skipped without entering cudarc's panic-only loader path.
 - `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are

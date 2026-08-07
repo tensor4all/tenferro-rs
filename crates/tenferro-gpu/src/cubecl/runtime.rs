@@ -18,6 +18,15 @@ use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, Cud
 ///
 /// Use this in test helpers to skip GPU tests on machines without hardware.
 pub fn gpu_available() -> bool {
+    let library_present = std::panic::catch_unwind(|| {
+        // SAFETY: `is_culib_present` only probes candidate library names and
+        // does not call CUDA function pointers or retain a library handle.
+        unsafe { cudarc::driver::sys::is_culib_present() }
+    })
+    .unwrap_or(false);
+    if !library_present {
+        return false;
+    }
     let Ok(devices) = cuda_devices() else {
         return false;
     };
