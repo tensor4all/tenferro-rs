@@ -165,6 +165,55 @@ assert_eq!(gpu_x.shape(), &[2]);
 
     snippet_troubleshooting_10()?;
 
+    snippet_troubleshooting_11()?;
+
+    // snippet source: docs/guides/troubleshooting.md:87
+    fn snippet_troubleshooting_11() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:troubleshooting_11
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::TypedTensor;
+
+let source = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+)?;
+let transposed = source.as_view().transpose_view([1, 0])?;
+let error = transposed.as_slice().unwrap_err();
+assert!(error
+    .to_string()
+    .contains("view is not contiguous column-major"));
+
+let mut backend = CpuBackend::new();
+let compact = backend.to_contiguous(&transposed)?;
+assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+        // snippet-end:troubleshooting_11
+        Ok(())
+    }
+
+    snippet_troubleshooting_12()?;
+
+    // snippet source: docs/guides/troubleshooting.md:114
+    fn snippet_troubleshooting_12() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:troubleshooting_12
+use tenferro_tensor::{TypedTensor, TypedTensorViewMut};
+
+let mut data = [1.0_f64, 2.0];
+let error = TypedTensorViewMut::from_slice(vec![2], vec![0], 0, &mut data).unwrap_err();
+assert!(error
+    .to_string()
+    .contains("mutable tensor layout may overlap physical elements"));
+
+let mut owner = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+{
+    let mut view = owner.as_view_mut();
+    *view.get_mut(&[0]).ok_or("index in contiguous owner")? = 3.0;
+}
+assert_eq!(owner.as_slice()?, &[3.0, 2.0]);
+        // snippet-end:troubleshooting_12
+        Ok(())
+    }
+
     // snippet source: docs/guides/troubleshooting.md:54
     fn snippet_troubleshooting_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_10

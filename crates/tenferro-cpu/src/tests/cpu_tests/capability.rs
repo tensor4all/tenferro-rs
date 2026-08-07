@@ -56,6 +56,11 @@ fn cpu_capability_table_reports_core_elementwise_reduction_and_dot_support() {
     assert_eq!(neg_i32.result, SupportLevel::Native);
     assert_eq!(neg_i32.write_output, SupportLevel::FallbackCopy);
 
+    let sign_c64 = backend
+        .capability(CapabilityQuery::new(PrimitiveOpKind::Sign, DType::C64))
+        .expect("CPU sign/c64 should be described");
+    assert_eq!(sign_c64.result, SupportLevel::Native);
+
     let neg_i32 = backend
         .require_capability(
             CapabilityQuery::new(PrimitiveOpKind::Neg, DType::I32),

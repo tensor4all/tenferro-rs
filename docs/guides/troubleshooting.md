@@ -84,6 +84,58 @@ Typed accessors must match the tensor dtype. If `as_slice::<f64>()` fails,
 check whether the tensor was created from `f32`, complex values, or another
 supported scalar type.
 
+## view is not slice-contiguous
+
+A view cannot be exposed as a borrowed slice unless its layout is contiguous.
+Materialize a compact owner with `to_contiguous` before requesting the slice:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_11 -->
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::TypedTensor;
+
+let source = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+)?;
+let transposed = source.as_view().transpose_view([1, 0])?;
+let error = transposed.as_slice().unwrap_err();
+assert!(error
+    .to_string()
+    .contains("view is not contiguous column-major"));
+
+let mut backend = CpuBackend::new();
+let compact = backend.to_contiguous(&transposed)?;
+assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+```
+<!-- end-snippet-source -->
+
+## mutable tensor layout may overlap physical elements
+
+Mutable views must not alias one physical element from multiple logical
+positions. Materialize or construct a contiguous owner before requesting
+mutable access:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_12 -->
+```rust
+use tenferro_tensor::{TypedTensor, TypedTensorViewMut};
+
+let mut data = [1.0_f64, 2.0];
+let error = TypedTensorViewMut::from_slice(vec![2], vec![0], 0, &mut data).unwrap_err();
+assert!(error
+    .to_string()
+    .contains("mutable tensor layout may overlap physical elements"));
+
+let mut owner = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+{
+    let mut view = owner.as_view_mut();
+    *view.get_mut(&[0]).ok_or("index in contiguous owner")? = 3.0;
+}
+assert_eq!(owner.as_slice()?, &[3.0, 2.0]);
+```
+<!-- end-snippet-source -->
+
 ## Column-Major and Row-Major Confusion
 
 `Tensor::from_vec_col_major` expects tenferro's physical column-major order.

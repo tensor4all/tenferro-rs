@@ -258,7 +258,7 @@ pub(crate) fn scatter_with_pool(
         "scatter",
         operand,
         updates,
-        "Bool data tensors are not supported by additive scatter",
+        "Bool data tensors are not supported by additive scatter; supported data dtypes: F32/F64/I32/I64/C32/C64",
         |op, upd| typed_scatter(
             buffers,
             cache,
@@ -820,12 +820,12 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
         Tensor::Bool(_) => Err(crate::Error::invalid_argument(
             "index_tensor",
             "configuration",
-            "bool index tensors are not supported",
+            "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
         )),
         Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::invalid_argument(
             "index_tensor",
             "configuration",
-            "complex index tensors are not supported",
+            "complex index tensors are not supported; supported index dtypes: I32/I64/F32/F64",
         )),
     }
 }

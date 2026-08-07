@@ -179,6 +179,10 @@ fn reshape_view_as_requires_compact_layout() {
     let non_compact = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0, 6).unwrap();
     let err = non_compact.reshape_view_as::<Rank<1>>([6], 6).unwrap_err();
     assert!(matches!(err, ValidationError::NonContiguousViewAsSlice));
+    assert_eq!(
+        err.to_string(),
+        "view is not slice-contiguous; materialize with to_contiguous before requesting a borrowed slice"
+    );
 }
 
 #[test]
@@ -350,10 +354,12 @@ fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
 #[test]
 fn mutable_layout_rejects_zero_stride_broadcast() {
     let layout = TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![0].into(), 0, 1).unwrap();
-    assert!(matches!(
-        layout.validate_mutable_no_overlap(),
-        Err(ValidationError::OverlappingMutableLayout)
-    ));
+    let err = layout.validate_mutable_no_overlap().unwrap_err();
+    assert!(matches!(err, ValidationError::OverlappingMutableLayout));
+    assert_eq!(
+        err.to_string(),
+        "mutable tensor layout may overlap physical elements; materialize a contiguous owner before requesting mutable access"
+    );
 }
 
 #[test]

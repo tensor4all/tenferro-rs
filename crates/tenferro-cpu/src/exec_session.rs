@@ -65,7 +65,7 @@ fn allocate_dot_output(
         dtype => Err(crate::Error::unsupported_dtype(
             "dot_general",
             dtype,
-            "CPU contraction providers support floating and complex dtypes",
+            crate::cpu_contraction_unsupported_dtype_message(dtype),
         )),
     }
 }

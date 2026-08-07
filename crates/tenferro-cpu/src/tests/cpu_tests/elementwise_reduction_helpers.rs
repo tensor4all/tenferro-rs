@@ -176,25 +176,31 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     );
 
     let bools = TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap();
-    assert!(matches!(
-        backend.reduce_sum_read(
+    let sum_error = backend
+        .reduce_sum_read(
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
-            &[0]
-        ),
-        Err(crate::Error::Unsupported {
+            &[0],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        sum_error,
+        crate::Error::Unsupported {
             op: "reduce_sum",
-            ..
-        })
+            message,
+        } if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
     ));
-    assert!(matches!(
-        backend.reduce_prod_read(
+    let prod_error = backend
+        .reduce_prod_read(
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
-            &[0]
-        ),
-        Err(crate::Error::Unsupported {
+            &[0],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        prod_error,
+        crate::Error::Unsupported {
             op: "reduce_prod",
-            ..
-        })
+            message,
+        } if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
     ));
     assert_eq!(
         backend
@@ -591,14 +597,65 @@ fn equal_bool_add_and_mul_report_unsupported_dtype_not_mismatch() {
         Err(crate::Error::Unsupported {
             op: "add",
             message,
-        }) if message == "unsupported dtype Bool"
+        }) if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
     ));
     assert!(matches!(
         mul(&lhs, &rhs),
         Err(crate::Error::Unsupported {
             op: "mul",
             message,
-        }) if message == "unsupported dtype Bool"
+        }) if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
+    ));
+}
+
+#[test]
+fn unsupported_elementwise_dtype_messages_list_operation_sets() {
+    let bool_tensor = Tensor::Bool(TypedTensor::from_vec_col_major(vec![1], vec![true]).unwrap());
+    let i64_tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+
+    assert!(matches!(
+        rem(&bool_tensor, &bool_tensor),
+        Err(crate::Error::Unsupported { op: "rem", message })
+            if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64"
+    ));
+    assert!(matches!(
+        maximum(&bool_tensor, &bool_tensor),
+        Err(crate::Error::Unsupported {
+            op: "maximum",
+            message,
+        }) if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64"
+    ));
+    assert!(matches!(
+        minimum(&bool_tensor, &bool_tensor),
+        Err(crate::Error::Unsupported {
+            op: "minimum",
+            message,
+        }) if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64"
+    ));
+    assert!(matches!(
+        clamp(&bool_tensor, &bool_tensor, &bool_tensor),
+        Err(crate::Error::Unsupported { op: "clamp", message })
+            if message == "unsupported dtype Bool; supported dtypes: F32/F64"
+    ));
+    assert!(matches!(
+        neg(&bool_tensor),
+        Err(crate::Error::Unsupported { op: "neg", message })
+            if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
+    ));
+    assert!(matches!(
+        abs(&bool_tensor),
+        Err(crate::Error::Unsupported { op: "abs", message })
+            if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
+    ));
+    assert!(matches!(
+        sign(&bool_tensor),
+        Err(crate::Error::Unsupported { op: "sign", message })
+            if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
+    ));
+    assert!(matches!(
+        conj(&i64_tensor),
+        Err(crate::Error::Unsupported { op: "conj", message })
+            if message == "unsupported dtype I64; supported dtypes: F32/F64/C32/C64; convert to F64 with TensorOpsExt::convert before this operation"
     ));
 }
 
