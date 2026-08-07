@@ -9,11 +9,16 @@ dot-general and batched-GEMM machinery into `tenferro-cpu`, remove the external
 dependency, carry forward identified correctness and safety fixes, and unblock
 retirement of the upstream crate.
 
-That description no longer matches the current repository state. PR #1553,
-commit `6255590e`, removed the stale dependency declarations after confirming
-that the active Faer and BLAS contraction paths were already owned by
-`tenferro-cpu`. At the design baseline, `origin/main` is
-`166abc167bb09b12b3a6a80761e817a92ec072f0`; it has no active
+That description no longer matches the current repository state. An earlier
+local implementation/adaptation, commit `eb689172666004ca70618757c62188181635429f`,
+moved the dot-general-specific Faer preparation algorithm into `tenferro-cpu`
+and removed the old `gemm/strided_dot.rs` adapter; its historical record is
+`docs/worklogs/2026-06-23-strided-einsum2-removal.md`. Later, PR #1553, commit
+`6255590e76d21f3ec7ba2a7feaa7e160baecabc1`, removed the stale dependency
+declarations and feature wiring after that local provider path already existed.
+These are distinct steps: #1553 removed stale build-graph references; it did
+not create the earlier local adaptation. At the design baseline, `origin/main`
+is `166abc167bb09b12b3a6a80761e817a92ec072f0`; it has no active
 `strided-einsum2` dependency and no `gemm/strided_dot.rs` adapter.
 
 The local working branch is hundreds of commits behind `origin/main` and
@@ -95,10 +100,16 @@ issue rather than an unreviewed expansion of #1591.
 ### 4. Provenance evidence
 
 Inspect relevant file history and work logs to distinguish original tenferro
-code from any adapted code. If copied or materially adapted implementation is
-found without sufficient attribution, #1591 remains open until provenance is
-resolved. If no code was moved as part of the dependency removal, record that
-fact and retain links to the existing historical work logs.
+code from adapted code. In particular, cite commit
+`eb689172666004ca70618757c62188181635429f` and
+`docs/worklogs/2026-06-23-strided-einsum2-removal.md`: they document the earlier
+local implementation/adaptation that moved Faer preparation into tenferro.
+Distinguish that lineage from PR #1553 / commit
+`6255590e76d21f3ec7ba2a7feaa7e160baecabc1`, which later removed stale dependency
+declarations and feature wiring. Do not claim that no adapted code ever
+existed; record which step owns the adaptation and which step removed the stale
+build-graph edge. If copied or materially adapted implementation lacks
+sufficient attribution, #1591 remains open until provenance is resolved.
 
 ## GitHub Update Flow
 

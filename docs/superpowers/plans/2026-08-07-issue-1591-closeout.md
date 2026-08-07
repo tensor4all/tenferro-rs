@@ -18,6 +18,7 @@
 - Do not modify tenferro-rs #1592.
 - Follow `ai/contribution-workflows/issue-intake.md` and obtain user confirmation before creating any newly proposed follow-up issue.
 - Put build products under `/tmp/tenferro-1591-target` and remove them, generated `Cargo.lock`, and all temporary drafts before completion.
+- Runtime `.pi-subagents/` artifacts are disposable and are not project changes; the final parent cleanup must remove them before asserting a clean worktree.
 - Shared Cargo caches under `~/.cargo` must remain untouched.
 
 ---
@@ -44,6 +45,7 @@
 
 - `/tmp/tenferro-1591-evidence.md` — audit matrix and command results.
 - `/tmp/tenferro-1591-closeout.md` — final #1591 comment body.
+- `/tmp/tenferro-1591-evidence-supplement.md` — post-closeout durable evidence supplement body.
 - `/tmp/tenferro-1591-followup.md` — exact draft for any test-only follow-up.
 - `/tmp/tenferro-1591-target/` — isolated Cargo target directory.
 - `/tmp/tenferro-issue-{1591,1592,198,199,201,202}-before.json` — pre-change GitHub snapshots.
@@ -286,10 +288,15 @@ Then append:
 cat >> /tmp/tenferro-1591-evidence.md <<'EOF'
 ## Provenance
 
-PR #1553 / `6255590e` removed stale manifests, feature wiring, and obsolete
-contract text after the active local Faer/BLAS path already existed. It did not
-copy the retired upstream crate into tenferro. Current implementation ownership
-and rationale remain visible through file history and
+Earlier local implementation/adaptation commit
+`eb689172666004ca70618757c62188181635429f` moved Faer preparation into
+tenferro; its lineage and source context are recorded in
+`docs/worklogs/2026-06-23-strided-einsum2-removal.md`. Later PR #1553 /
+`6255590e76d21f3ec7ba2a7feaa7e160baecabc1` removed stale manifests, feature
+wiring, and obsolete contract text after that local path existed. These are
+distinct steps: #1553 removed stale declarations, while `eb689172` records the
+earlier local adaptation. Do not claim that no adapted code ever existed.
+Current ownership and policy rationale are also visible in
 `docs/worklogs/2026-07-31-issue-1546-faer-policy.md`.
 EOF
 ```
@@ -449,7 +456,13 @@ fi
 cat > /tmp/tenferro-1591-closeout.md <<EOF
 The tenferro side of this migration is complete at \`origin/main\` \`$MAIN_SHA\`.
 
-PR #1553 / commit \`6255590e\` removed the stale \`strided-einsum2\` dependency after confirming that active Faer and BLAS dot-general execution was already owned by \`tenferro-cpu\`. No upstream source transplant was needed for that removal.
+An earlier local implementation/adaptation moved Faer preparation into
+\`tenferro-cpu\` in \`eb689172666004ca70618757c62188181635429f\`, documented by
+\`docs/worklogs/2026-06-23-strided-einsum2-removal.md\`. Later, PR #1553 /
+commit \`6255590e76d21f3ec7ba2a7feaa7e160baecabc1\` removed stale
+\`strided-einsum2\` dependency declarations and feature wiring. #1553 did not
+create that earlier adaptation; the closeout must not claim that no adapted
+code ever existed.
 
 ### Requirement disposition
 
@@ -464,7 +477,7 @@ PR #1553 / commit \`6255590e\` removed the stale \`strided-einsum2\` dependency 
 | Upstream uninitialized-output/HashSet/\`beta == 0\` concerns | Not applicable: current tenferro dot-general providers receive initialized \`TensorWrite\` output |
 | Conjugation cloning concern | Not applicable: local providers carry conjugation flags and layout materialization fuses required transforms |
 | strided-rs #198 transfer | Not required: tenferro does not consume the upstream uninitialized Faer destination API |
-| Provenance | #1553 removed declarations and stale text; file history and the #1546 work log preserve the actual local-ownership history |
+| Provenance | Earlier local Faer preparation adaptation: \`eb689172666004ca70618757c62188181635429f\` and \`docs/worklogs/2026-06-23-strided-einsum2-removal.md\`; later #1553 / \`6255590e76d21f3ec7ba2a7feaa7e160baecabc1\` removed stale declarations and feature wiring |
 
 ### Focused verification
 
@@ -521,6 +534,54 @@ test "$(gh issue view 1591 --repo tensor4all/tenferro-rs --json state --jq .stat
 ```
 
 Expected: the rendered comment is intact and #1591 becomes `CLOSED`. If rendering or links are wrong, edit the comment before closing rather than adding corrective noise.
+
+- [ ] **Step 5: Post a durable evidence supplement after closeout**
+
+Because the original closeout comment used descriptive test categories, post a
+supplementary clarification to the already-closed issue. Link it to the
+existing closeout comment
+`https://github.com/tensor4all/tenferro-rs/issues/1591#issuecomment-5221169202`.
+The supplement is durable evidence and must contain the full audited
+`origin/main` SHA `166abc167bb09b12b3a6a80761e817a92ec072f0`, the full PR #1553
+SHA `6255590e76d21f3ec7ba2a7feaa7e160baecabc1`, the full historical local
+adaptation SHA `eb689172666004ca70618757c62188181635429f`, and
+`docs/worklogs/2026-06-23-strided-einsum2-removal.md`. It must distinguish the
+earlier local Faer preparation adaptation from PR #1553's later stale
+dependency removal and state that all eight commands passed.
+
+Create a small temporary body file, then post and verify its rendered body:
+
+```bash
+cat > /tmp/tenferro-1591-evidence-supplement.md <<'EOF'
+Supplement to the closeout comment:
+https://github.com/tensor4all/tenferro-rs/issues/1591#issuecomment-5221169202
+
+Audited `origin/main`: `166abc167bb09b12b3a6a80761e817a92ec072f0`.
+PR #1553 stale-dependency removal: `6255590e76d21f3ec7ba2a7feaa7e160baecabc1`.
+Earlier local Faer preparation adaptation: `eb689172666004ca70618757c62188181635429f`, recorded in `docs/worklogs/2026-06-23-strided-einsum2-removal.md`. The earlier adaptation and PR #1553's later stale-dependency removal are distinct history; this does not claim that no adapted code existed.
+
+All eight verification commands passed:
+
+`cargo test -p tenferro-cpu --lib cpu_tensor_kernel_parallel_features_are_wired`
+`cargo test -p tenferro-cpu --lib axis_groups_match_existing_rank_validation_through_rank_seventy`
+`cargo test -p tenferro-cpu --lib dot_general_validation_accepts_checked_negative_stride_output`
+`cargo test -p tenferro-cpu --lib checked_batch_offset_reports_batch_conversion_overflow`
+`cargo test -p tenferro-cpu --lib test_dot_general_falls_back_for_unfusable_lhs_batch_layout`
+`cargo test -p tenferro-cpu --lib faer_provider_covers_f32_c32_and_c64_conjugation`
+`cargo test -p tenferro-cpu --lib faer_provider_executes_non_unit_strides_and_strided_batches`
+`cargo test -p tenferro-cpu --no-default-features --features cpu-blas,provider-inject --test integration provider_inject_dot_general_uses_registered_blas`
+EOF
+SUPPLEMENT_URL=$(gh issue comment 1591 --repo tensor4all/tenferro-rs --body-file /tmp/tenferro-1591-evidence-supplement.md)
+printf '%s\n' "$SUPPLEMENT_URL" | tee /tmp/tenferro-1591-evidence-supplement-url
+COMMENT_ID=${SUPPLEMENT_URL##*issuecomment-}
+gh api "repos/tensor4all/tenferro-rs/issues/comments/$COMMENT_ID" --jq .body
+test "$(gh issue view 1591 --repo tensor4all/tenferro-rs --json state --jq .state)" = CLOSED
+```
+
+Expected: the exact eight commands, all required full SHAs, provenance citation,
+and “all eight verification commands passed” render in the supplement; issue
+#1591 remains `CLOSED`. Capture the URL in
+`/tmp/tenferro-1591-evidence-supplement-url` and do not alter issue state.
 
 ---
 
@@ -634,13 +695,14 @@ rm -f /tmp/tenferro-1591-*.md \
       /tmp/tenferro-1591-*-url \
       /tmp/tenferro-1591-*-urls \
       /tmp/tenferro-issue-*-before.json
+rm -rf .pi-subagents
 test ! -e /tmp/tenferro-1591-target
 test -z "$(find /tmp -maxdepth 1 -name 'tenferro-1591-*' -print -quit)"
 git status --short
 git diff --check
 ```
 
-Expected: no temporary audit/build artifacts remain and the repository has no execution-time changes. The already committed design and plan documents are the only branch difference from `origin/main`.
+Expected: no temporary audit/build artifacts or runtime `.pi-subagents/` artifacts remain. The repository has no execution-time changes, and the already committed design and plan documents are the only branch difference from `origin/main`.
 
 - [ ] **Step 6: Report the closeout concisely**
 
@@ -655,4 +717,4 @@ Report:
 - confirmation that `/tmp` build/audit artifacts and generated `Cargo.lock` were removed;
 - residual risks, limited to any declined test-hardening draft or unexecuted platform-specific BLAS lane.
 
-No commit is created for Tasks 1-4 because they intentionally make no repository change.
+The closeout execution makes no production-code change. Commit the documentation fix wave (design and plan, with the evidence report stored at its required path) as one documentation commit after the supplement is verified; do not commit runtime artifacts.
