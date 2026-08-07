@@ -17,8 +17,8 @@ A minimal release dependency block for a CPU concrete program is:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.2"
-tenferro-cpu = "0.2"
+tenferro-runtime = { version = "0.2", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { version = "0.2", default-features = false, features = ["cpu-faer"] }
 ```
 
 For eager AD and linear algebra, add the owning crates and opt into the
@@ -26,10 +26,10 @@ operation family's AD rules:
 
 ```toml
 [dependencies]
-tenferro-ad = "0.2"
-tenferro-runtime = "0.2"
-tenferro-cpu = "0.2"
-tenferro-linalg = { version = "0.2", features = ["autodiff"] }
+tenferro-ad = { version = "0.2", default-features = false, features = ["cpu-faer"] }
+tenferro-runtime = { version = "0.2", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { version = "0.2", default-features = false, features = ["cpu-faer"] }
+tenferro-linalg = { version = "0.2", default-features = false, features = ["autodiff", "cpu-faer"] }
 ```
 
 The exact current publishable package set is discoverable without compiling:
@@ -38,9 +38,10 @@ The exact current publishable package set is discoverable without compiling:
 cargo metadata --no-deps --format-version 1
 ```
 
-At this revision it contains 14 publishable `tenferro-*` packages. The
-`tenferro-tutorial-code` package is a private CI helper, not a downstream
-runtime dependency.
+The `publish` field identifies the packages intended for downstream use; the
+`tenferro-tutorial-code` package is a private CI helper, not a runtime
+dependency. Do not hard-code a package count in tooling or skill text; query
+metadata at the revision you are using.
 
 ## CPU provider features
 
@@ -61,8 +62,18 @@ Do not enable two BLAS provider implementations in one dependency graph.
 
 ## Scratch-crate workspace boundary
 
-When experimenting inside a checkout, put an empty workspace table in the
-scratch crate so Cargo does not enroll it in tenferro's parent workspace:
+When experimenting with a checkout, use a sibling layout so the scratch
+crate is its own workspace:
+
+```text
+work/
+├── tenferro-rs/
+└── scratch/
+    └── Cargo.toml
+```
+
+The scratch `Cargo.toml` then needs an empty workspace table and a path back to
+the checkout:
 
 ```toml
 [workspace]
@@ -71,5 +82,7 @@ scratch crate so Cargo does not enroll it in tenferro's parent workspace:
 tenferro-runtime = { path = "../tenferro-rs/crates/tenferro-runtime" }
 ```
 
-Use crates.io versions for a real downstream project. Do not copy the workspace
-path layout into a published package.
+If the scratch crate is placed inside the checkout instead, keep the empty
+`[workspace]` table so Cargo does not enroll it in the parent workspace. Use
+crates.io versions for a real downstream project; do not copy checkout paths
+into a published package.

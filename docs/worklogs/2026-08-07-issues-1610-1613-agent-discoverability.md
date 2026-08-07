@@ -39,7 +39,13 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
 - The skill teaches current direct crates and extension traits, column-major
   input, backend/runtime reuse, compile-once/run-many, explicit extension
   registration, einsum syntax, scratch-workspace setup, and CPU/BLAS feature
-  choices without adding an API layer.
+  choices without adding an API layer. CPU examples state their provider
+  features explicitly, and scratch-crate layouts are concrete.
+- A source-blind downstream audit checked only the skill artifacts. It found
+  missing explicit CPU feature flags, scratch-layout ambiguity, and two terse
+  tier/configuration explanations; those points were verified against the
+  manifests and corrected in the references. The revision-specific package
+  count was removed from the skill text.
 
 ## Verification
 
@@ -58,6 +64,11 @@ checker, and a curated `docs/llms.txt` index published by the Quarto site.
   tenferro_compute_skill` → passed.
 - `python3 scripts/test-check-docs-site.py` → passed, including missing-target
   and duplicate-URL regressions.
+- `bash scripts/build_docs_site.sh /tmp/tenferro-site-1610-1613` → passed;
+  `cmp docs/llms.txt /tmp/tenferro-site-1610-1613/llms.txt` passed and the
+  built-site checker verified 14 workspace library crates.
+- `cargo fmt --all --check` → passed after marking the source-region holder
+  functions `rustfmt::skip` so extracted snippets retain their display shape.
 
 ## Remaining validation
 

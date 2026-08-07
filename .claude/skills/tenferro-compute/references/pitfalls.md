@@ -32,6 +32,8 @@ is in the [traced API example](api-cheatsheet.md#traced-tensors-and-extensions).
 
 - A scratch crate inside the checkout needs an empty `[workspace]` table.
 - `cpu-faer` and `cpu-blas` are CPU capability features; at least one is needed.
+- Use `CpuBackend::with_threads(n)` for faer/native CPU work; configure BLAS
+  provider threads with the provider's environment variables.
 - Choose exactly one BLAS provider feature (`blas-openblas`, `blas-mkl`, or
   `blas-accelerate`) when using `cpu-blas`.
 - CUDA is explicit: enable `tenferro-gpu`'s `cuda` feature and upload CPU

@@ -105,8 +105,9 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 Import recipes:
 
-- `tenferro_einsum::TraceContextEinsumExt` or
-  `tenferro_einsum::TracedTensorEinsumExt` for einsum.
+- `tenferro_einsum::TraceContextEinsumExt` for `TraceContext::einsum` graph
+  construction; use `tenferro_einsum::TracedTensorEinsumExt` when the receiver
+  is an already traced tensor.
 - `tenferro_linalg::TracedTensorLinalgExt` for traced linear algebra.
 - `tenferro_ad::TracedTensorAdExt` for `grad`, `vjp`, and `jvp` transforms.
 

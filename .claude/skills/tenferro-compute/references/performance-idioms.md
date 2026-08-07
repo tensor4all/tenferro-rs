@@ -10,8 +10,8 @@ runtime across executions when their shape and registration contracts match.
 ## Compile once, run many
 
 A traced graph is a reusable program. Build its input metadata, compile once,
-register the backend and extensions once, and pass new concrete inputs to the
-same runtime:
+register the backend and extensions once, and reuse the compiled program,
+backend, and runtime while passing new concrete inputs:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#compile-once-run-many -->
 ```rust
@@ -51,11 +51,12 @@ other compile-time metadata changes.
 
 ## Threading
 
-Use `CpuBackend::with_threads` or the documented backend configuration rather
-than creating an independent Rayon pool inside an operation. `cpu-faer` follows
-tenferro's CPU context; BLAS/LAPACK provider threads are configured by their
-provider environment variables. Avoid outer parallel loops that oversubscribe
-the provider.
+Use `CpuBackend::with_threads(n)` or the documented backend configuration
+rather than creating an independent Rayon pool inside an operation.
+`cpu-faer` follows tenferro's CPU context; BLAS/LAPACK provider threads are
+configured with variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, or
+`VECLIB_MAXIMUM_THREADS`. Avoid outer parallel loops that oversubscribe the
+provider.
 
 For long-running processes, use the documented runtime/backend cache stats and
 clear operations. Do not defeat cache ownership by constructing a fresh backend
