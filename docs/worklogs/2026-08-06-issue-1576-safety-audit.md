@@ -40,6 +40,11 @@ Passed:
 - `cargo check -p tenferro-gpu --features webgpu --lib`
 - `cargo test -p tenferro-gpu --features cuda --lib cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid -- --ignored`
 - `cargo fmt --all`
+- After rebasing onto `origin/main`, the backend capability contract was
+  narrowed to scan only CPU contraction entry-point bodies in
+  `exec_session.rs`; `cargo test -p tenferro-cpu --test integration
+  backend_capability_contracts::cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging
+  -- --exact` passed.
 
 The CUDA eviction test passed on the available CUDA GPU/toolkit environment.
 No new dependency, synchronization, registry, downcast framework, or shim was
