@@ -24,9 +24,13 @@ pub fn gpu_available() -> bool {
     let Some(device_id) = devices.first().map(|device| device.id()) else {
         return false;
     };
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaRuntime::new(device_id)))
-        .map(|runtime| runtime.is_ok())
-        .unwrap_or(false)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Ok(runtime) = CudaRuntime::new(device_id) else {
+            return false;
+        };
+        runtime.synchronize().is_ok()
+    }))
+    .unwrap_or(false)
 }
 
 /// Opaque identity of one exact CUDA runtime instance.

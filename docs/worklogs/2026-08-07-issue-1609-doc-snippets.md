@@ -95,7 +95,8 @@ Family coverage is:
 - `cargo test -p tenferro-gpu --features cuda --lib
   cubecl::runtime::identity_tests::cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available
   -- --exact` → passed; `gpu_available()` now probes full runtime initialization
-  instead of CubeCL's lazy client construction, so no-driver hosts are skipped.
+  instead of CubeCL's lazy client construction, and synchronizes the created
+  stream, so no-driver hosts are skipped.
 - `python3 scripts/ci/run_profile.py docs` and the coverage-reviewed fast PR
   checks → passed.
 - The inventory reports zero unmarked plain Rust fences; 91 fences are
