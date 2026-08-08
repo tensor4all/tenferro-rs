@@ -859,6 +859,30 @@ fn constant_hash<T: std::hash::Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
+fn contains_method_call(source: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    source.match_indices('.').any(|(offset, _)| {
+        let suffix = source[offset + 1..].trim_start();
+        let Some(suffix) = suffix.strip_prefix(name) else {
+            return false;
+        };
+        let suffix = suffix.trim_start();
+        if suffix.starts_with('(') {
+            return true;
+        }
+        let Some(suffix) = suffix.strip_prefix("::") else {
+            return false;
+        };
+        let suffix = suffix.trim_start();
+        suffix.starts_with('<')
+            && suffix
+                .split_once('(')
+                .is_some_and(|(generic_args, _)| generic_args.trim_end().ends_with('>'))
+    })
+}
+
 #[test]
 fn retained_bytes_include_entry_metadata_and_workspace() {
     let workspace_bytes = 128;
@@ -935,6 +959,66 @@ fn exact_plan_key_match_rejects_collisions_and_runtime_identity_mismatch() {
 }
 
 #[test]
+fn method_call_matcher_matches_exact_host_accessor_calls() {
+    let positive = [
+        ("tensor.host_data()", "host_data"),
+        ("tensor.host_data::<f64>()", "host_data"),
+        ("tensor.host_data_mut()", "host_data_mut"),
+        ("tensor.host_data_mut::<f64>()", "host_data_mut"),
+        ("tensor . host_data :: <f64> ()", "host_data"),
+        ("tensor . host_data_mut :: <f64> ()", "host_data_mut"),
+    ];
+    for (source, method) in positive {
+        assert!(
+            contains_method_call(source, method),
+            "expected {method} call in fixture {source:?}"
+        );
+    }
+
+    let prefix_identifiers = [
+        ("tensor.host_data_mut()", "host_data"),
+        ("tensor.host_data_mut::<f64>()", "host_data"),
+        ("tensor.host_data_type()", "host_data"),
+        ("tensor.host_database()", "host_data"),
+        ("tensor.host_data_type::<f64>()", "host_data"),
+        ("tensor.host_data_mut_type()", "host_data_mut"),
+    ];
+    for (source, method) in prefix_identifiers {
+        assert!(
+            !contains_method_call(source, method),
+            "prefix identifier {source:?} must not match {method}"
+        );
+    }
+
+    let noncalls = [
+        ("tensor.host_data", "host_data"),
+        ("tensor.host_data::<f64>", "host_data"),
+        ("tensor.host_data_mut", "host_data_mut"),
+        ("tensor.host_data_mut::<f64>", "host_data_mut"),
+    ];
+    for (source, method) in noncalls {
+        assert!(
+            !contains_method_call(source, method),
+            "non-call {source:?} must not match {method}"
+        );
+    }
+
+    let permitted_metadata = [
+        ("metadata.host_data_type()", "host_data"),
+        ("metadata.host_database()", "host_data"),
+        ("tensor.host_data_metadata", "host_data"),
+        ("metadata.host_data_mut_type()", "host_data_mut"),
+        ("tensor.host_data_mut_metadata", "host_data_mut"),
+    ];
+    for (source, method) in permitted_metadata {
+        assert!(
+            !contains_method_call(source, method),
+            "permitted metadata identifier {source:?} must not match {method}"
+        );
+    }
+}
+
+#[test]
 fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
     // Keep this list explicit: every CUDA production module must be reviewed
     // when it is added so transfer and host-payload calls cannot bypass this
@@ -947,25 +1031,24 @@ fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
         ("hermitian.rs", include_str!("../hermitian.rs")),
         ("plan.rs", include_str!("../plan.rs")),
     ];
-    let forbidden = [
+    let forbidden_transfers = [
         concat!("upload", "_tensor("),
         concat!("download", "_tensor("),
-        ".host_data",
-        ".host_data_mut",
     ];
-    let typed_host_payload_fixture = "tensor.host_data::<f64>(";
-    assert!(
-        forbidden
-            .iter()
-            .any(|pattern| typed_host_payload_fixture.contains(pattern)),
-        "host payload method stems must detect turbofish calls"
-    );
     for (path, source) in sources {
-        for pattern in forbidden {
+        for pattern in forbidden_transfers {
             assert!(
                 !source.contains(pattern),
                 "CUDA production source {path} must not contain {pattern}"
             );
         }
+        assert!(
+            !contains_method_call(source, "host_data"),
+            "CUDA production source {path} must not call host_data"
+        );
+        assert!(
+            !contains_method_call(source, "host_data_mut"),
+            "CUDA production source {path} must not call host_data_mut"
+        );
     }
 }
