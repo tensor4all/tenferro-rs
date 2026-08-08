@@ -1,10 +1,12 @@
 use super::common::*;
 use super::support;
 use num_complex::{Complex32, Complex64};
+use std::error::Error as StdError;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::FftNorm;
 use tenferro_gpu::cuda::gpu_available;
-use tenferro_runtime::{DType, Tensor};
+
+use tenferro_runtime::{DType, Error, ErrorPhase, PrepareError, Tensor, UnsupportedReason};
 use tenferro_tensor::TensorRead;
 
 #[test]
@@ -62,12 +64,31 @@ fn cuda_traced_missing_extension_module_is_an_explicit_error() {
     let error = runtime
         .run_compiled(&program, &[&gpu_input])
         .expect_err("missing FFT extension registration must fail");
-    let message = error.to_string();
+    let Error::RuntimeStateSource { op, phase, source } = error else {
+        panic!("missing FFT registration returned the wrong structured error");
+    };
+    assert_eq!(op, "Runtime::run_compiled");
+    assert_eq!(phase, ErrorPhase::Execution);
+
+    let mut cause: &(dyn StdError + 'static) = source.as_ref();
+    let prepare_error = loop {
+        if let Some(error) = cause.downcast_ref::<PrepareError>() {
+            break error;
+        }
+        cause = cause
+            .source()
+            .expect("missing FFT registration must retain PrepareError source");
+    };
     assert!(
-        message.contains("extension")
-            || message.contains("module")
-            || message.contains("unsupported"),
-        "missing registration error was not explicit: {message}"
+        matches!(
+            prepare_error,
+            PrepareError::Unsupported {
+                reason: UnsupportedReason::Operation {
+                    operation: tenferro_fft::FFT_EXTENSION_FAMILY_ID,
+                },
+            }
+        ),
+        "missing FFT registration returned the wrong unsupported operation: {prepare_error}"
     );
 }
 
