@@ -10,6 +10,12 @@ The root workspace uses `debug = 0` for local `dev` and `test` builds. The guide
 
 ## Design
 
+### Repository configuration ownership
+
+Maintainer decision: add `.cargo/` as a repository-owned top-level configuration directory for Cargo settings that must propagate across independent Cargo workspace boundaries. Keep it limited to durable repository build policy; developer-specific configuration remains outside the repository. This explicit ownership decision covers the new `.cargo/config.toml` and must be recorded in the PR body.
+
+### Profile propagation
+
 Add a repository-local `.cargo/config.toml` environment default:
 
 ```toml
