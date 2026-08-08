@@ -1,11 +1,12 @@
 use super::common::*;
 use super::support;
 use num_complex::{Complex32, Complex64};
+use std::num::NonZeroUsize;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{EagerTensorFftExt, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
-use tenferro_runtime::Tensor;
+use tenferro_runtime::{ExtensionCacheLimits, Tensor};
 use tenferro_tensor::TensorRead;
 
 #[cfg(feature = "autodiff")]
@@ -48,7 +49,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let expected_spectrum = Operation::Rfft
         .execute_cpu(&mut cpu, &real_host, None, -1, FftNorm::Backward)
         .unwrap();
-    ctx.synchronize().unwrap();
     let spectrum_host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&spectrum_tensor))
@@ -70,7 +70,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let expected_signal = Operation::Irfft
         .execute_cpu(&mut cpu, &expected_spectrum, None, -1, FftNorm::Backward)
         .unwrap();
-    ctx.synchronize().unwrap();
     let signal_host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&signal_tensor))
@@ -100,7 +99,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let expected_fft = Operation::Fft
         .execute_cpu(&mut cpu, &complex_host, None, -1, FftNorm::Backward)
         .unwrap();
-    ctx.synchronize().unwrap();
     let fft_host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&fft_tensor))
@@ -135,6 +133,88 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
 #[cfg(feature = "autodiff")]
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_eager_cache_limit_reduction_evicts_and_preserves_results() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let upload_backend = support::cuda_backend();
+    let host = real_f64(&[8], 0.25);
+    let device = support::upload_cuda(upload_backend.runtime(), &host);
+    let domain = TensorRead::from_tensor(&device)
+        .allocation_domain()
+        .unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
+    let input = EagerTensor::from_tensor_in(device, ctx.clone()).unwrap();
+    let first = input
+        .rfft(None, -1, FftNorm::Backward)
+        .unwrap()
+        .to_tensor()
+        .unwrap();
+    let second = input
+        .rfft(Some(6), -1, FftNorm::Backward)
+        .unwrap()
+        .to_tensor()
+        .unwrap();
+    support::assert_cuda_resident(&first, domain);
+    support::assert_cuda_resident(&second, domain);
+
+    let populated = ctx.cache_stats().unwrap().extensions;
+    assert_eq!(populated.entries, 2);
+    assert!(populated.retained_bytes > 0);
+    assert_eq!(populated.hits, 0);
+    assert_eq!(populated.misses, 2);
+    assert_eq!(populated.evictions, 0);
+    assert_eq!(populated.clears, 0);
+
+    let entry_limit = ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap())
+        .with_max_retained_bytes(NonZeroUsize::new(populated.retained_bytes).unwrap());
+    ctx.set_extension_cache_limits(entry_limit).unwrap();
+    let entry_reduced = ctx.cache_stats().unwrap().extensions;
+    assert_eq!(ctx.extension_cache_limits().unwrap(), entry_limit);
+    assert_eq!(entry_reduced.entries, 1);
+    assert!(entry_reduced.retained_bytes > 0);
+    assert!(entry_reduced.retained_bytes <= populated.retained_bytes);
+    assert_eq!(entry_reduced.hits, 0);
+    assert_eq!(entry_reduced.misses, 2);
+    assert_eq!(entry_reduced.evictions, 1);
+    assert_eq!(entry_reduced.clears, 0);
+
+    let byte_limit = ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap())
+        .with_max_retained_bytes(NonZeroUsize::new(1).unwrap());
+    ctx.set_extension_cache_limits(byte_limit).unwrap();
+    let bytes_reduced = ctx.cache_stats().unwrap().extensions;
+    assert_eq!(ctx.extension_cache_limits().unwrap(), byte_limit);
+    assert_eq!(bytes_reduced.entries, 0);
+    assert_eq!(bytes_reduced.retained_bytes, 0);
+    assert_eq!(bytes_reduced.hits, 0);
+    assert_eq!(bytes_reduced.misses, 2);
+    assert_eq!(bytes_reduced.evictions, 2);
+    assert_eq!(bytes_reduced.clears, 0);
+
+    let expected = Operation::Rfft
+        .execute_cpu(&mut cpu, &host, None, -1, FftNorm::Backward)
+        .unwrap();
+    let first_host = ctx
+        .with_execution_session(|session| session.download_to_host(TensorRead::from_tensor(&first)))
+        .unwrap()
+        .unwrap();
+    assert_host_close(&first_host, &expected, 1.0e-11);
+
+    ctx.clear_extension_caches().unwrap();
+    let cleared = ctx.cache_stats().unwrap().extensions;
+    assert_eq!(cleared.entries, 0);
+    assert_eq!(cleared.retained_bytes, 0);
+    assert_eq!(cleared.hits, 0);
+    assert_eq!(cleared.misses, 2);
+    assert_eq!(cleared.evictions, 2);
+    assert_eq!(cleared.clears, 1);
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
 fn cuda_eager_zero_batch_returns_empty_outputs_without_runtime_cache() {
     if !gpu_available() {
         return;
@@ -153,7 +233,6 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_runtime_cache() {
     support::assert_cuda_resident(&tensor, domain);
     assert_eq!(tensor.shape(), &[0, 8]);
     assert_eq!(tensor.dtype(), tenferro_runtime::DType::C64);
-    ctx.synchronize().unwrap();
     let host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&tensor))
@@ -184,7 +263,6 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_runtime_cache() {
     support::assert_cuda_resident(&real_tensor, domain);
     assert_eq!(real_tensor.shape(), &[2, 0, 5]);
     assert_eq!(real_tensor.dtype(), tenferro_runtime::DType::C32);
-    ctx.synchronize().unwrap();
     let real_host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&real_tensor))

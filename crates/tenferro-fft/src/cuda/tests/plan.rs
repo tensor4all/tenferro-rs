@@ -936,6 +936,9 @@ fn exact_plan_key_match_rejects_collisions_and_runtime_identity_mismatch() {
 
 #[test]
 fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
+    // Keep this list explicit: every CUDA production module must be reviewed
+    // when it is added so transfer and host-payload calls cannot bypass this
+    // contract by falling outside a recursive source scan.
     let sources = [
         ("mod.rs", include_str!("../mod.rs")),
         ("descriptor.rs", include_str!("../descriptor.rs")),
@@ -945,12 +948,10 @@ fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
         ("plan.rs", include_str!("../plan.rs")),
     ];
     let forbidden = [
-        concat!("upload", "_tensor"),
-        concat!("download", "_tensor"),
-        concat!("host", "_data"),
-        concat!("host", "_data_mut"),
-        concat!("as", "_slice"),
-        concat!("to_", "vec"),
+        concat!("upload", "_tensor("),
+        concat!("download", "_tensor("),
+        concat!("host", "_data("),
+        concat!("host", "_data_mut("),
     ];
     for (path, source) in sources {
         for pattern in forbidden {

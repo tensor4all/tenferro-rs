@@ -131,7 +131,7 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
 
     let mut cpu = CpuBackend::new();
     let backend = support::cuda_backend();
-    let host = complex_f64(&[4], 0.5);
+    let host = complex_f64(&[32, 4096], 0.5);
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &host, None, -1, FftNorm::Backward)
         .unwrap();
@@ -141,7 +141,7 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
         .unwrap();
     let (program, _) = compiled_cuda_fft(
         DType::C64,
-        &[4],
+        &[32, 4096],
         Operation::Fft,
         None,
         -1,
@@ -182,9 +182,9 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
 
     let (short_program, _) = compiled_cuda_fft(
         DType::C64,
-        &[4],
+        &[32, 4096],
         Operation::Fft,
-        Some(3),
+        Some(2048),
         -1,
         FftNorm::Backward,
     );
@@ -212,14 +212,13 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
     support::assert_cuda_resident(&first, domain);
     support::assert_cuda_resident(&second, domain);
     support::assert_cuda_resident(&third, domain);
-    backend.runtime().synchronize().unwrap();
     let first = support::download_cuda(backend.runtime(), &first).unwrap();
     let second = support::download_cuda(backend.runtime(), &second).unwrap();
     let third = support::download_cuda(backend.runtime(), &third).unwrap();
     assert_host_close(&first, &expected, 1.0e-11);
     assert_host_close(&second, &expected, 1.0e-11);
     let expected_short = Operation::Fft
-        .execute_cpu(&mut cpu, &host, Some(3), -1, FftNorm::Backward)
+        .execute_cpu(&mut cpu, &host, Some(2048), -1, FftNorm::Backward)
         .unwrap();
     assert_host_close(&third, &expected_short, 1.0e-11);
 }
@@ -279,7 +278,6 @@ fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
         assert_eq!(stats.misses, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.evictions, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.clears, 0, "zero-batch cache stats: {stats:?}");
-        backend.runtime().synchronize().unwrap();
         let output = support::download_cuda(backend.runtime(), &output).unwrap();
         assert_eq!(output.shape(), expected_shape.as_slice());
         assert_eq!(output.dtype(), expected_dtype);

@@ -25,11 +25,12 @@ pub fn upload_cuda(runtime: &tenferro_gpu::cuda::CudaRuntime, tensor: &Tensor) -
     upload_tensor(runtime, tensor).expect("explicit CUDA upload")
 }
 
+/// Download a CUDA tensor; `download_tensor` performs the one required stream
+/// synchronization before reading the payload.
 pub fn download_cuda(
     runtime: &tenferro_gpu::cuda::CudaRuntime,
     tensor: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    runtime.synchronize()?;
     download_tensor(runtime, tensor)
 }
 
