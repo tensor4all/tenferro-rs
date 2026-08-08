@@ -1,9 +1,16 @@
 use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager_with_extension_session;
+use tenferro_ad::extension::{
+    apply_eager_with_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
+};
 use tenferro_ad::EagerTensor;
-use tenferro_runtime::{ErrorPhase, ExtensionModule};
+use tenferro_cpu::CpuBackend;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::webgpu::WebGpuBackend;
+use tenferro_runtime::{EngineId, ErrorPhase, ExtensionModule, RuntimeConfigError};
 use tenferro_tensor::DType;
 
 use crate::{
@@ -174,7 +181,7 @@ fn apply_eager_fft(
     let mut outputs = apply_eager_with_extension_session(
         op,
         &[input],
-        |_target| eager_cpu_extension_module(),
+        eager_extension_module,
         move |_op, input_reads, ctx| {
             execute_fft_extension_reads_session(&execute_op, input_reads, ctx)
         },
@@ -188,17 +195,81 @@ fn apply_eager_fft(
     }
 }
 
-fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
-    static MODULE: OnceLock<Arc<dyn ExtensionModule>> = OnceLock::new();
-    if let Some(module) = MODULE.get() {
-        return Ok(Arc::clone(module));
+struct CachedEagerExtensionModule {
+    engine_id: EngineId,
+    module: Arc<dyn ExtensionModule>,
+}
+
+static CPU_EXTENSION_MODULE: OnceLock<CachedEagerExtensionModule> = OnceLock::new();
+#[cfg(feature = "cuda")]
+static CUDA_EXTENSION_MODULE: OnceLock<CachedEagerExtensionModule> = OnceLock::new();
+#[cfg(feature = "webgpu")]
+static WEBGPU_EXTENSION_MODULE: OnceLock<CachedEagerExtensionModule> = OnceLock::new();
+
+fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>> {
+    let EagerExtensionTarget {
+        engine_id,
+        backend_kind,
+    } = target;
+    match backend_kind {
+        EagerExtensionBackendKind::Cpu => cached_extension_module(
+            &CPU_EXTENSION_MODULE,
+            engine_id,
+            extension_module::<CpuBackend>,
+        ),
+        #[cfg(feature = "cuda")]
+        EagerExtensionBackendKind::Cuda => cached_extension_module(
+            &CUDA_EXTENSION_MODULE,
+            engine_id,
+            extension_module::<CudaBackend>,
+        ),
+        #[cfg(feature = "webgpu")]
+        EagerExtensionBackendKind::WebGpu => cached_extension_module(
+            &WEBGPU_EXTENSION_MODULE,
+            engine_id,
+            extension_module::<WebGpuBackend>,
+        ),
+    }
+}
+
+fn cached_extension_module(
+    slot: &OnceLock<CachedEagerExtensionModule>,
+    engine_id: EngineId,
+    factory: impl FnOnce(EngineId) -> std::result::Result<Arc<dyn ExtensionModule>, RuntimeConfigError>,
+) -> Result<Arc<dyn ExtensionModule>> {
+    if let Some(cached) = slot.get() {
+        return cached.for_engine(&engine_id);
     }
 
-    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
-    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id)
-        .map_err(eager_runtime_config_error)?;
-    let _ = MODULE.set(Arc::clone(&module));
-    Ok(MODULE.get().cloned().unwrap_or(module))
+    let module = factory(engine_id.clone()).map_err(eager_runtime_config_error)?;
+    let requested_engine_id = engine_id.clone();
+    let _ = slot.set(CachedEagerExtensionModule { engine_id, module });
+    slot.get().map_or_else(
+        || {
+            Err(Error::runtime_state(
+                "tenferro_fft::eager_extension_module",
+                ErrorPhase::Execution,
+                "eager FFT module cache was not initialized",
+            ))
+        },
+        |cached| cached.for_engine(&requested_engine_id),
+    )
+}
+
+impl CachedEagerExtensionModule {
+    fn for_engine(&self, engine_id: &EngineId) -> Result<Arc<dyn ExtensionModule>> {
+        if &self.engine_id != engine_id {
+            return Err(Error::runtime_state(
+                "tenferro_fft::eager_extension_module",
+                ErrorPhase::Execution,
+                format!(
+                    "cached FFT extension module targets engine {:?}, requested {:?}",
+                    self.engine_id, engine_id
+                ),
+            ));
+        }
+        Ok(Arc::clone(&self.module))
+    }
 }
 
 fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {

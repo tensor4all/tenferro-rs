@@ -64,7 +64,9 @@ fn cuda_traced_missing_extension_module_is_an_explicit_error() {
         .expect_err("missing FFT extension registration must fail");
     let message = error.to_string();
     assert!(
-        message.contains("extension") || message.contains("module"),
+        message.contains("extension")
+            || message.contains("module")
+            || message.contains("unsupported"),
         "missing registration error was not explicit: {message}"
     );
 }

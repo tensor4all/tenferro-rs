@@ -135,6 +135,8 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::with_cuda_exec_session;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
@@ -1436,6 +1438,12 @@ fn execute_fft_extension_reads_on_session(
     caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if let Some(result) = with_cpu_exec_session(session, |session| {
+        execute_fft_extension_reads_for_capability(op, inputs, session, caches)
+    }) {
+        return result;
+    }
+    #[cfg(feature = "cuda")]
+    if let Some(result) = with_cuda_exec_session(session, |session| {
         execute_fft_extension_reads_for_capability(op, inputs, session, caches)
     }) {
         return result;
