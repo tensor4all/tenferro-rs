@@ -18,3 +18,53 @@ fn compact_host_accumulation_slice_selects_only_compact_host_views() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn contraction_scalar_identity_errors_name_the_public_constructor() {
+    let one_error = ContractionScalar::one(DType::I32).unwrap_err();
+    assert!(matches!(
+        one_error,
+        Error::Validation {
+            op: "ContractionScalar::one",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let zero_error = ContractionScalar::zero(DType::Bool).unwrap_err();
+    assert!(matches!(
+        zero_error,
+        Error::Validation {
+            op: "ContractionScalar::zero",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let overwrite_error = DotGeneralAccumulation::overwrite(DType::I32).unwrap_err();
+    assert!(matches!(
+        overwrite_error,
+        Error::Validation {
+            op: "DotGeneralAccumulation::overwrite",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let add_to_error = DotGeneralAccumulation::add_to(DType::Bool).unwrap_err();
+    assert!(matches!(
+        add_to_error,
+        Error::Validation {
+            op: "DotGeneralAccumulation::add_to",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let scaled_error =
+        DotGeneralAccumulation::scaled(ContractionScalar::F32(1.0), ContractionScalar::F64(1.0))
+            .unwrap_err();
+    assert!(matches!(
+        scaled_error,
+        Error::Validation {
+            op: "DotGeneralAccumulation::scaled",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+}

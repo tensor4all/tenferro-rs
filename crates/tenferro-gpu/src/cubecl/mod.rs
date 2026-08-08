@@ -6002,7 +6002,11 @@ fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<
                 ));
             }
             if limit > dim {
-                return Err(crate::Error::axis_out_of_bounds("slice", axis, rank));
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "configuration",
+                    format!("limit {limit} on axis {axis} exceeds dimension size {dim}"),
+                ));
             }
             if stride == 0 {
                 return Err(crate::Error::invalid_argument(

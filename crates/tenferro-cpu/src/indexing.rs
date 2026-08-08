@@ -466,7 +466,11 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
                 ));
             }
             if limit > dim {
-                return Err(crate::Error::axis_out_of_bounds("slice", axis, rank));
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "configuration",
+                    format!("limit {limit} on axis {axis} exceeds dimension size {dim}"),
+                ));
             }
             if stride == 0 {
                 return Err(crate::Error::invalid_argument(

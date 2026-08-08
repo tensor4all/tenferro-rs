@@ -27,6 +27,49 @@ fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTens
 }
 
 #[test]
+fn cuda_slice_limit_over_dimension_is_invalid_configuration() {
+    let error = super::super::validate_slice(
+        &[2],
+        &SliceConfig {
+            starts: vec![0],
+            limits: vec![3],
+            strides: vec![1],
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::Validation {
+            op: "slice",
+            source: ValidationError::InvalidArgument {
+                argument: "configuration",
+                message,
+            },
+        } if message == "limit 3 on axis 0 exceeds dimension size 2"
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_slice_limit_over_dimension_matches_cpu_invalid_argument() {
+    let config = SliceConfig {
+        starts: vec![0],
+        limits: vec![3],
+        strides: vec![1],
+    };
+    let input = tensor_f64(vec![2], vec![1.0, 2.0]);
+    let expected = cpu_backend().slice(&input, &config).unwrap_err();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let actual = gpu.slice(&gpu_input, &config).unwrap_err();
+
+    assert_eq!(actual.kind(), expected.kind());
+    assert_validation_kind(&actual, "slice", ValidationKind::InvalidArgument);
+    assert_error_parity(expected, actual);
+}
+
+#[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_float_index_validation_matches_cpu() {
     fn check_index(
