@@ -175,10 +175,10 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::backend::GroupedGemmJob;
 #[cfg(feature = "cpu-faer")]
-use tenferro_tensor::{
-    ContractionScalar, TensorView, TensorViewMut, TypedTensorView, TypedTensorViewMut,
-};
+use tenferro_tensor::{ContractionScalar, TensorView, TypedTensorView};
 use tenferro_tensor::{DType, DotGeneralAccumulation, Tensor, TensorRead, TensorWrite};
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+use tenferro_tensor::{TensorViewMut, TypedTensorViewMut};
 
 #[allow(dead_code)]
 fn assert_object_safe(
@@ -759,6 +759,47 @@ fn native_policy_restores_after_error_and_panic_without_contaminating_ambient_wo
             assert_eq!(participants.thread_ids.lock().unwrap().len(), 2);
         });
     });
+}
+
+#[cfg(feature = "cpu-blas")]
+#[test]
+fn blas_rejects_negative_output_leading_stride_before_provider_mutation() {
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let lhs = TensorRead::from_tensor(&lhs);
+    let rhs = TensorRead::from_tensor(&rhs);
+    let mut storage = [41.0_f64; 4];
+    let output_view = TypedTensorViewMut::from_slice([2, 2], [1, -2], 2, &mut storage).unwrap();
+    let mut output = TensorWrite::from_view(TensorViewMut::F64(output_view));
+    let request = CpuGemmRequest::new(
+        &lhs,
+        &rhs,
+        &mut output,
+        2,
+        2,
+        2,
+        1,
+        CpuBatchedMatrixLayout::new(0, 1, 2, 4),
+        CpuBatchedMatrixLayout::new(0, 1, 2, 4),
+        CpuBatchedMatrixLayout::new(2, 1, -2, 4),
+        DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+    );
+    let fixture = execution_context_fixture(1);
+
+    let outcome = fixture
+        .with_context(ParallelMode::Sequential, |context| {
+            crate::gemm::execute_blas_gemm_request(context, request)
+        })
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        CpuProviderOutcome::Unsupported(CpuProviderUnsupported::Layout(
+            crate::provider::CpuOperand::Output,
+        ))
+    );
+    drop(output);
+    assert_eq!(storage, [41.0_f64; 4]);
 }
 
 #[test]

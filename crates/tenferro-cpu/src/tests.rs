@@ -29,7 +29,7 @@ use tenferro_tensor::{
 };
 use tenferro_tensor::{
     DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorViewMut,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 #[test]
