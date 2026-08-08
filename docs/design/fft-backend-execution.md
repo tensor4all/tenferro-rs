@@ -38,11 +38,12 @@ caller-visible operation before or after FFT execution.
 
 ### CUDA/cuFFT execution
 
-The CUDA backend is owned by `tenferro-fft` and uses the dynamically loaded
-cuFFT library. It executes the existing one-dimensional `fft`, `ifft`, `rfft`,
-and `irfft` operations on tensors already resident on the exact borrowed
-`CudaRuntime`. It never uploads, downloads, constructs a CPU backend, or falls
-back to RustFFT. The common CUDA execution path is:
+`tenferro-gpu` owns the CUDA provider, including `CudaBackend` and
+`CudaRuntime`. The CUDA FFT adapter is owned by `tenferro-fft` and uses the
+dynamically loaded cuFFT library. It executes the existing one-dimensional
+`fft`, `ifft`, `rfft`, and `irfft` operations on tensors already resident on the
+exact borrowed `CudaRuntime`. It never uploads, downloads, constructs a CPU
+backend, or falls back to RustFFT. The common CUDA execution path is:
 
 1. Move the requested transform axis to the final logical axis with the
    existing same-device CUDA transpose. If the axis is already final, skip the

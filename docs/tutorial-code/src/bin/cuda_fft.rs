@@ -9,14 +9,46 @@ use tenferro_gpu::cuda::{
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if !gpu_available() {
-        eprintln!("CUDA FFT tutorial skipped: no usable CUDA device is available");
-        return Ok(());
+const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
+
+fn skip_or_fail(
+    require_cuda: bool,
+    reason: impl std::fmt::Display,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reason = reason.to_string();
+    if require_cuda {
+        return Err(std::io::Error::other(format!(
+            "CUDA FFT tutorial requires CUDA assertions, but {reason}"
+        ))
+        .into());
     }
 
-    let Some(device) = cuda_devices()?.into_iter().next() else {
-        return Ok(());
+    eprintln!("{TUTORIAL_SKIP_MARKER} CUDA FFT tutorial skipped: {reason}");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let require_cuda = std::env::var("TENFERRO_REQUIRE_CUDA")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    if !gpu_available() {
+        return skip_or_fail(require_cuda, "no usable CUDA device is available");
+    }
+
+    let devices = match cuda_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            return skip_or_fail(
+                require_cuda,
+                format!("CUDA device enumeration failed: {error}"),
+            );
+        }
+    };
+    let Some(device) = devices.into_iter().next() else {
+        return skip_or_fail(
+            require_cuda,
+            "CUDA reported available but device enumeration returned no devices",
+        );
     };
 
     // Keep one backend/runtime for the upload, FFT, synchronization, and download.

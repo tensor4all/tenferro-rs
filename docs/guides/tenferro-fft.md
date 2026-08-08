@@ -142,14 +142,46 @@ use tenferro_gpu::cuda::{
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if !gpu_available() {
-        eprintln!("CUDA FFT tutorial skipped: no usable CUDA device is available");
-        return Ok(());
+const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
+
+fn skip_or_fail(
+    require_cuda: bool,
+    reason: impl std::fmt::Display,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reason = reason.to_string();
+    if require_cuda {
+        return Err(std::io::Error::other(format!(
+            "CUDA FFT tutorial requires CUDA assertions, but {reason}"
+        ))
+        .into());
     }
 
-    let Some(device) = cuda_devices()?.into_iter().next() else {
-        return Ok(());
+    eprintln!("{TUTORIAL_SKIP_MARKER} CUDA FFT tutorial skipped: {reason}");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let require_cuda = std::env::var("TENFERRO_REQUIRE_CUDA")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    if !gpu_available() {
+        return skip_or_fail(require_cuda, "no usable CUDA device is available");
+    }
+
+    let devices = match cuda_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            return skip_or_fail(
+                require_cuda,
+                format!("CUDA device enumeration failed: {error}"),
+            );
+        }
+    };
+    let Some(device) = devices.into_iter().next() else {
+        return skip_or_fail(
+            require_cuda,
+            "CUDA reported available but device enumeration returned no devices",
+        );
     };
 
     // Keep one backend/runtime for the upload, FFT, synchronization, and download.
@@ -205,6 +237,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 <!-- end-snippet-source -->
+
+In ordinary docs CI, the CUDA feature is compile-checked and the tutorial
+runner may also run this binary without a CUDA device. In that case the binary
+prints a `TENFERRO_TUTORIAL_SKIP:` diagnostic and the runner reports the
+hardware-dependent tutorial as skipped; it does not claim that the CUDA
+assertions ran. The same explicit skip is used if device enumeration is empty,
+even if the availability probe was positive. A compile-only `--no-run` check
+never attempts CUDA execution.
+
+To require the assertions to execute, set `TENFERRO_REQUIRE_CUDA=1`. With this
+strict mode, unavailable CUDA, device-enumeration errors, or an empty device
+list return failure instead of a skip. A successful command therefore proves
+that this tutorial reached and completed its CUDA assertions. For example, on
+an A100 or another configured CUDA host:
+
+```bash
+TENFERRO_REQUIRE_CUDA=1 \
+CUBECL_DEBUG_LOG=0 \
+CUDA_PATH=/usr/local/cuda \
+LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-} \
+cargo run -p tenferro-tutorial-code --no-default-features \
+  --features cpu-faer,cuda,doc-snippets --bin cuda_fft
+```
 
 CUDA supports one-dimensional transforms with these dtype combinations:
 
