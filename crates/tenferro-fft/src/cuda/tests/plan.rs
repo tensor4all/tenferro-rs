@@ -950,9 +950,16 @@ fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
     let forbidden = [
         concat!("upload", "_tensor("),
         concat!("download", "_tensor("),
-        concat!("host", "_data("),
-        concat!("host", "_data_mut("),
+        ".host_data",
+        ".host_data_mut",
     ];
+    let typed_host_payload_fixture = "tensor.host_data::<f64>(";
+    assert!(
+        forbidden
+            .iter()
+            .any(|pattern| typed_host_payload_fixture.contains(pattern)),
+        "host payload method stems must detect turbofish calls"
+    );
     for (path, source) in sources {
         for pattern in forbidden {
             assert!(
