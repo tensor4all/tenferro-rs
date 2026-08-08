@@ -3646,9 +3646,12 @@ pub trait TensorIndexing {
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. In
+    /// particular, a limit greater than the corresponding input dimension is
+    /// reported as [`crate::ValidationError::InvalidArgument`] with the
+    /// `"configuration"` argument. It returns [`crate::Error::BackendFailure`]
+    /// or [`crate::Error::BackendSource`] when backend execution or storage
+    /// access cannot provide the requested result.
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
     /// # Errors
     ///

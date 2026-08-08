@@ -6001,9 +6001,10 @@ fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<
                     format!("start exceeds limit on axis {axis}"),
                 ));
             }
-            // This boundary check intentionally mirrors CPU's validator:
-            // CPU and GPU are independent backend leaves, and sharing it via
-            // tenferro-tensor would require a new public validation API.
+            // INVARIANT: This boundary check intentionally mirrors CPU's
+            // validator. CPU and GPU are independent backend leaves, and
+            // sharing it via tenferro-tensor would require a new public
+            // validation API.
             if limit > dim {
                 return Err(crate::Error::invalid_argument(
                     "slice",
