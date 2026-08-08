@@ -31,6 +31,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [capi.md](./capi.md) | C-API: opaque handles, DLPack, einsum + SVD + AD |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |
+| [nested-cargo-debug-profile.md](./nested-cargo-debug-profile.md) | Repository-owned Cargo environment defaults for debug-free guide and trybuild fixture workspaces |
 | [execution-engine-provider-architecture.md](./execution-engine-provider-architecture.md) | Authoritative runtime-owned execution-engine, provider registration, preparation, and scheduled execution architecture |
 | [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 | [change-aware-ci.md](./change-aware-ci.md) | Conservative pull-request classification, shared command profiles, stable required checks, and trusted RunPod recovery |

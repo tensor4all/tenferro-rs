@@ -302,6 +302,15 @@ def absolutize_repo_paths(block: str, root: pathlib.Path) -> str:
     return re.sub(r'path\s*=\s*"([^"]+)"', replace, block)
 
 
+def cargo_environment(target_dir: pathlib.Path) -> dict[str, str]:
+    """Return the environment for an independent guide Cargo workspace."""
+
+    env = os.environ.copy()
+    env.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
+    env["CARGO_TARGET_DIR"] = str(target_dir)
+    return env
+
+
 def run_case(root: pathlib.Path, target_dir: pathlib.Path, case: GuideCase) -> None:
     block = extract_dependency_block(root, case)
     dependencies = load_dependency_table(block, case)
@@ -330,12 +339,10 @@ def run_case(root: pathlib.Path, target_dir: pathlib.Path, case: GuideCase) -> N
             textwrap.dedent(case.source).lstrip(),
             encoding="utf-8",
         )
-        env = os.environ.copy()
-        env["CARGO_TARGET_DIR"] = str(target_dir)
         result = subprocess.run(
             ["cargo", "run", "--quiet", "--manifest-path", str(tmp_path / "Cargo.toml")],
             cwd=root,
-            env=env,
+            env=cargo_environment(target_dir),
             check=False,
         )
         if result.returncode != 0:
