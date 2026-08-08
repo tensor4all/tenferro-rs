@@ -16,8 +16,8 @@ use super::super::ffi::{
 };
 use super::super::plan::{
     build_plan, plan_key_discriminator_matches, report_cleanup_failures,
-    retained_bytes_for_workspace, retire_handle, CufftCleanup, CufftPlanEntry, CufftWorkspace,
-    CufftWorkspaceOwner,
+    retained_bytes_for_workspace, retire_entry_resources, retire_handle, CufftCleanup,
+    CufftPlanEntry, CufftWorkspace, CufftWorkspaceOwner,
 };
 
 #[derive(Default)]
@@ -252,6 +252,38 @@ impl CufftCleanup for FakeRuntime {
     }
 }
 
+#[derive(Clone)]
+struct TrackedRuntime {
+    witness: Arc<()>,
+}
+
+impl TrackedRuntime {
+    fn new(witness: Arc<()>) -> Self {
+        Self { witness }
+    }
+}
+
+impl CufftCleanup for TrackedRuntime {
+    fn set_current(&self) -> Result<(), CudaFftError> {
+        let _ = &self.witness;
+        record("set_current");
+        if cleanup_failed("set_current") {
+            Err(CudaFftError::test_interop("set_current"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn synchronize(&self) -> Result<(), CudaFftError> {
+        record("synchronize");
+        if cleanup_failed("synchronize") {
+            Err(CudaFftError::test_interop("synchronize"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 struct FakeWorkspace {
     ptr: *mut c_void,
 }
@@ -418,7 +450,9 @@ fn construction_drop_defers_resources_when_cleanup_barrier_fails() {
         let _lock = test_lock();
         reset_state_with_cleanup(128, Some("set_work_area"), Some(cleanup_failure));
         let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
-        let result = build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+        let witness = Arc::new(());
+        let runtime = TrackedRuntime::new(Arc::clone(&witness));
+        let result = build_plan(Arc::clone(&library), runtime, descriptor(), |_bytes| {
             record("allocate_workspace");
             Ok(FakeWorkspace {
                 ptr: 0x1234usize as *mut c_void,
@@ -426,6 +460,8 @@ fn construction_drop_defers_resources_when_cleanup_barrier_fails() {
         });
 
         assert!(result.is_err());
+        assert_eq!(Arc::strong_count(&library), 2);
+        assert_eq!(Arc::strong_count(&witness), 2);
         assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
         assert_eq!(
             calls()
@@ -435,6 +471,111 @@ fn construction_drop_defers_resources_when_cleanup_barrier_fails() {
             0
         );
     }
+}
+
+#[test]
+fn retirement_failure_leaks_complete_lifetime_witness_bundle() {
+    for cleanup_failure in ["set_current", "synchronize"] {
+        let _lock = test_lock();
+        reset_state(128, None);
+        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+        let (handle, workspace) =
+            build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+                record("allocate_workspace");
+                Ok(FakeWorkspace {
+                    ptr: 0x1234usize as *mut c_void,
+                })
+            })
+            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+
+        let witness = Arc::new(());
+        let runtime = TrackedRuntime::new(Arc::clone(&witness));
+        reset_state_with_cleanup(128, None, Some(cleanup_failure));
+        let mut handle = Some(handle);
+        let mut workspace = Some(workspace);
+        let failures = retire_handle(&runtime, &library, &mut handle, &mut workspace);
+
+        assert!(!failures.synchronization.is_empty());
+        assert!(failures.resources_deferred);
+        assert_eq!(Arc::strong_count(&library), 2);
+        assert_eq!(Arc::strong_count(&witness), 3);
+        assert!(handle.is_none());
+        assert!(workspace.is_none());
+        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
+        assert_eq!(
+            calls()
+                .iter()
+                .filter(|&&call| call == "workspace_drop")
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn plan_entry_drop_retirement_leaks_complete_lifetime_witness_bundle() {
+    for cleanup_failure in ["set_current", "synchronize"] {
+        let _lock = test_lock();
+        reset_state(128, None);
+        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+        let (handle, workspace) =
+            build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+                record("allocate_workspace");
+                Ok(FakeWorkspace {
+                    ptr: 0x1234usize as *mut c_void,
+                })
+            })
+            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+
+        let witness = Arc::new(());
+        let runtime = TrackedRuntime::new(Arc::clone(&witness));
+        reset_state_with_cleanup(128, None, Some(cleanup_failure));
+        let failures = retire_entry_resources(&runtime, &library, handle, workspace);
+
+        assert!(!failures.synchronization.is_empty());
+        assert!(failures.resources_deferred);
+        assert_eq!(Arc::strong_count(&library), 2);
+        assert_eq!(Arc::strong_count(&witness), 3);
+        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
+        assert_eq!(
+            calls()
+                .iter()
+                .filter(|&&call| call == "workspace_drop")
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn successful_retirement_releases_resources_and_lifetime_witnesses() {
+    let _lock = test_lock();
+    reset_state(128, None);
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let (handle, workspace) =
+        build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
+            Ok(FakeWorkspace {
+                ptr: 0x1234usize as *mut c_void,
+            })
+        })
+        .unwrap_or_else(|_| unreachable!("fake plan should build"));
+
+    let witness = Arc::new(());
+    let runtime = TrackedRuntime::new(Arc::clone(&witness));
+    let failures = retire_entry_resources(&runtime, &library, handle, workspace);
+
+    assert!(failures.is_empty());
+    assert_eq!(Arc::strong_count(&library), 1);
+    assert_eq!(Arc::strong_count(&witness), 2);
+    assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 1);
+    assert_eq!(
+        calls()
+            .iter()
+            .filter(|&&call| call == "workspace_drop")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -582,6 +723,7 @@ fn retirement_errors_are_reported_without_panicking() {
     let failures = result.unwrap_or_else(|_| unreachable!("retirement must not panic"));
     assert!(failures.synchronization.is_empty());
     assert!(failures.destroy.is_some());
+    assert!(failures.resources_deferred);
     assert!(handle.is_none());
     assert!(workspace.is_none());
     assert_eq!(

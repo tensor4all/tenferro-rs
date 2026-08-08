@@ -90,11 +90,14 @@ impl CufftWorkspaceOwner for CufftWorkspace {
 pub(crate) struct CleanupFailures {
     pub(crate) synchronization: Vec<CudaFftError>,
     pub(crate) destroy: Option<CudaFftError>,
+    /// True when cleanup could not prove retirement safety and the complete
+    /// plan/workspace/lifetime-witness bundle was intentionally leaked.
+    pub(crate) resources_deferred: bool,
 }
 
 impl CleanupFailures {
     pub(crate) fn is_empty(&self) -> bool {
-        self.synchronization.is_empty() && self.destroy.is_none()
+        self.synchronization.is_empty() && self.destroy.is_none() && !self.resources_deferred
     }
 }
 
@@ -102,28 +105,31 @@ impl CleanupFailures {
 ///
 /// The plan and workspace are released only after the retained runtime is made
 /// current and its stream synchronization succeeds. If either step fails, the
-/// opaque plan and workspace are intentionally leaked: destroying either one
-/// could race work whose completion was not proven.
+/// opaque plan, workspace, library witness, and runtime witness are
+/// intentionally leaked: destroying or dropping any of them could race work
+/// whose completion was not proven.
 pub(crate) fn retire_handle<R, W>(
     runtime: &R,
-    library: &CufftLibrary,
+    library: &Arc<CufftLibrary>,
     handle: &mut Option<CufftHandle>,
     workspace: &mut Option<W>,
 ) -> CleanupFailures
 where
-    R: CufftCleanup,
+    R: CufftCleanup + Clone,
     W: CufftWorkspaceOwner,
 {
     let mut failures = CleanupFailures::default();
     if handle.is_some() || workspace.is_some() {
         if let Err(error) = runtime.set_current() {
             failures.synchronization.push(error);
-            defer_resources(handle, workspace);
+            failures.resources_deferred = true;
+            defer_resources(runtime, library, handle, workspace);
             return failures;
         }
         if let Err(error) = runtime.synchronize() {
             failures.synchronization.push(error);
-            defer_resources(handle, workspace);
+            failures.resources_deferred = true;
+            defer_resources(runtime, library, handle, workspace);
             return failures;
         }
     }
@@ -135,9 +141,11 @@ where
         let status = unsafe { (library.api.destroy)(plan) };
         if let Err(error) = map_cufft_status("cufftDestroy", status) {
             failures.destroy = Some(error);
+            failures.resources_deferred = true;
             // A failed destroy leaves the opaque plan's ownership uncertain;
-            // keep its workspace alive with the intentionally leaked plan.
-            defer_resources(handle, workspace);
+            // keep the complete lifetime bundle with the intentionally leaked
+            // plan and workspace.
+            defer_resources(runtime, library, handle, workspace);
             return failures;
         }
         handle.take();
@@ -148,19 +156,59 @@ where
     failures
 }
 
-fn defer_resources<W>(handle: &mut Option<CufftHandle>, workspace: &mut Option<W>) {
-    // The handle has no Rust destructor; discarding it intentionally leaks the
-    // vendor plan rather than destroying it without a proven synchronization.
-    handle.take();
-    if let Some(workspace) = workspace.take() {
-        // The workspace may still be referenced by queued vendor work.
-        std::mem::forget(workspace);
-    }
+/// Owns every witness needed to keep an unretired cuFFT operation valid.
+///
+/// This value is deliberately forgotten only when cleanup cannot prove that
+/// vendor work has completed. There is no safe retry or process-global
+/// quarantine for a plan whose context/stream barrier failed.
+struct DeferredCufftResources<R, W> {
+    _handle: Option<CufftHandle>,
+    _workspace: Option<W>,
+    _library: Arc<CufftLibrary>,
+    _runtime: R,
+}
+
+fn defer_resources<R, W>(
+    runtime: &R,
+    library: &Arc<CufftLibrary>,
+    handle: &mut Option<CufftHandle>,
+    workspace: &mut Option<W>,
+) where
+    R: Clone,
+    W: CufftWorkspaceOwner,
+{
+    // The forgotten bundle retains the vendor plan, workspace allocation,
+    // dynamic-library handle, and CUDA context/runtime clone together until
+    // process exit. Dropping any member independently could invalidate queued
+    // work after a failed cleanup barrier.
+    std::mem::forget(DeferredCufftResources {
+        _handle: handle.take(),
+        _workspace: workspace.take(),
+        _library: Arc::clone(library),
+        _runtime: runtime.clone(),
+    });
+}
+
+/// Retire one owned plan/workspace pair, as used by `CufftPlanEntry::Drop`.
+pub(crate) fn retire_entry_resources<R, W>(
+    runtime: &R,
+    library: &Arc<CufftLibrary>,
+    plan: CufftHandle,
+    workspace: W,
+) -> CleanupFailures
+where
+    R: CufftCleanup + Clone,
+    W: CufftWorkspaceOwner,
+{
+    let mut handle = Some(plan);
+    let mut workspace = Some(workspace);
+    retire_handle(runtime, library, &mut handle, &mut workspace)
 }
 
 #[cold]
 pub(crate) fn report_cleanup_failures(failures: CleanupFailures) {
     let mut stderr = std::io::stderr();
+    let resources_deferred = failures.resources_deferred;
     for error in failures.synchronization {
         let _ = writeln!(
             stderr,
@@ -173,11 +221,17 @@ pub(crate) fn report_cleanup_failures(failures: CleanupFailures) {
             "tenferro-fft: cuFFT plan destroy failed during cleanup: {error}"
         );
     }
+    if resources_deferred {
+        let _ = writeln!(
+            stderr,
+            "tenferro-fft: cuFFT plan and lifetime witnesses were intentionally retained after cleanup failure"
+        );
+    }
 }
 
 struct CufftConstructionGuard<R, W>
 where
-    R: CufftCleanup,
+    R: CufftCleanup + Clone,
     W: CufftWorkspaceOwner,
 {
     library: Arc<CufftLibrary>,
@@ -188,7 +242,7 @@ where
 
 impl<R, W> CufftConstructionGuard<R, W>
 where
-    R: CufftCleanup,
+    R: CufftCleanup + Clone,
     W: CufftWorkspaceOwner,
 {
     fn new(library: Arc<CufftLibrary>, runtime: R) -> Self {
@@ -220,7 +274,7 @@ where
 
 impl<R, W> Drop for CufftConstructionGuard<R, W>
 where
-    R: CufftCleanup,
+    R: CufftCleanup + Clone,
     W: CufftWorkspaceOwner,
 {
     fn drop(&mut self) {
@@ -242,7 +296,7 @@ pub(crate) fn build_plan<R, W, F>(
     mut allocate_workspace: F,
 ) -> Result<(CufftHandle, W), CudaFftError>
 where
-    R: CufftCleanup,
+    R: CufftCleanup + Clone,
     W: CufftWorkspaceOwner,
     F: FnMut(usize) -> Result<W, CudaFftError>,
 {
@@ -551,12 +605,8 @@ impl CufftPlanEntry {
 
 impl Drop for CufftPlanEntry {
     fn drop(&mut self) {
-        let mut handle = Some(self.plan);
-        let mut workspace = Some(std::mem::replace(
-            &mut self.workspace,
-            CufftWorkspace::empty(),
-        ));
-        let failures = retire_handle(&self.runtime, &self.library, &mut handle, &mut workspace);
+        let workspace = std::mem::replace(&mut self.workspace, CufftWorkspace::empty());
+        let failures = retire_entry_resources(&self.runtime, &self.library, self.plan, workspace);
         report_cleanup_failures(failures);
     }
 }
