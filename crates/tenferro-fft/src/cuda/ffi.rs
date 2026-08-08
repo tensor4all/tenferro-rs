@@ -141,6 +141,13 @@ impl CufftLibrary {
         ))
     }
 
+    #[cfg(test)]
+    pub(crate) fn load_from_paths_for_tests(
+        paths: Vec<OsString>,
+    ) -> Result<Arc<Self>, CudaFftError> {
+        Self::load_from_paths(paths)
+    }
+
     fn load_from_paths(paths: Vec<OsString>) -> Result<Arc<Self>, CudaFftError> {
         let mut attempts = Vec::new();
         let mut last_source = None;

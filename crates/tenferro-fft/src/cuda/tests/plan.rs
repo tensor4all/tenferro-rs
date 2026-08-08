@@ -15,7 +15,7 @@ use super::super::ffi::{
     CUFFT_INVALID_PLAN, CUFFT_SUCCESS,
 };
 use super::super::plan::{
-    build_plan, plan_key_discriminator_matches, report_cleanup_failures,
+    bind_plan_to_stream, build_plan, plan_key_discriminator_matches, report_cleanup_failures,
     retained_bytes_for_workspace, retire_entry_resources, retire_handle, CufftCleanup,
     CufftPlanEntry, CufftWorkspace, CufftWorkspaceOwner,
 };
@@ -159,6 +159,7 @@ extern "C" fn fake_exec_c2c(
     _output: *mut c_void,
     _direction: i32,
 ) -> CufftStatus {
+    record("exec_c2c");
     CUFFT_SUCCESS
 }
 
@@ -373,6 +374,25 @@ fn successful_construction_uses_required_cufft_order() {
     );
     drop(workspace);
     assert_eq!(handle, 7);
+}
+
+#[test]
+fn fake_plan_execution_binds_and_queues_without_synchronizing() {
+    let _lock = test_lock();
+    reset_state(0, None);
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+
+    bind_plan_to_stream(&library, 7, 0)
+        .unwrap_or_else(|_| unreachable!("fake plan stream binding should succeed"));
+    // SAFETY: the fake function table records the call and does not
+    // dereference these test-only placeholder pointers.
+    let status =
+        unsafe { (library.api.exec_c2c)(7, std::ptr::null_mut(), std::ptr::null_mut(), 1) };
+    super::super::ffi::map_cufft_status("cufftExecC2C", status)
+        .unwrap_or_else(|_| unreachable!("fake plan execution should enqueue"));
+
+    assert_eq!(calls(), vec!["set_stream", "exec_c2c"]);
+    assert!(!calls().contains(&"synchronize"));
 }
 
 #[test]

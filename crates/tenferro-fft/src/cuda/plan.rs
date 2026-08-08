@@ -372,6 +372,21 @@ fn direction(direction: CufftDirection) -> i32 {
     }
 }
 
+/// Bind a plan to the current stream without waiting for queued work.
+pub(crate) fn bind_plan_to_stream(
+    library: &CufftLibrary,
+    plan: CufftHandle,
+    stream: u64,
+) -> Result<(), CudaFftError> {
+    let stream = usize::try_from(stream)
+        .map_err(|_| CudaFftError::InvalidConfiguration { field: "stream" })?
+        as *mut c_void;
+    // SAFETY: `plan` belongs to `library`, and `stream` is borrowed from the
+    // retained runtime for the duration of this callback.
+    let status = unsafe { (library.api.set_stream)(plan, stream) };
+    map_cufft_status("cufftSetStream", status)
+}
+
 /// One cached cuFFT plan and its manually owned CubeCL work area.
 //
 // INVARIANT: stream identity is intentionally omitted from `CufftPlanKey`;
@@ -458,17 +473,7 @@ impl CufftPlanEntry {
             .map_err(|source| CudaFftError::interop("cufft_execute_context", source))?;
         let mut execution_result = Ok(());
         with_raw_cuda_stream(&self.runtime, OP, |stream| {
-            let stream = match usize::try_from(stream) {
-                Ok(stream) => stream as *mut c_void,
-                Err(_) => {
-                    execution_result = Err(CudaFftError::InvalidConfiguration { field: "stream" });
-                    return;
-                }
-            };
-            // SAFETY: the plan belongs to `self.library`, and the stream is
-            // borrowed only for this scoped callback from the retained runtime.
-            let status = unsafe { (self.library.api.set_stream)(self.plan, stream) };
-            if let Err(error) = map_cufft_status("cufftSetStream", status) {
+            if let Err(error) = bind_plan_to_stream(&self.library, self.plan, stream) {
                 execution_result = Err(error);
                 return;
             }
