@@ -399,6 +399,33 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
 }
 
 #[test]
+fn cpu_slice_limit_over_dimension_is_invalid_configuration() {
+    let mut backend = CpuBackend::new();
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+    let error = backend
+        .slice(
+            &input,
+            &SliceConfig {
+                starts: vec![0],
+                limits: vec![3],
+                strides: vec![1],
+            },
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::Validation {
+            op: "slice",
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "configuration",
+                message,
+            },
+        } if message == "limit 3 on axis 0 exceeds dimension size 2"
+    ));
+}
+
+#[test]
 fn cpu_indexing_validation_covers_error_branches() {
     let mut backend = CpuBackend::new();
     let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
@@ -436,7 +463,7 @@ fn cpu_indexing_validation_covers_error_branches() {
         ),
         "slice",
     );
-    expect_axis_oob(
+    expect_invalid_config(
         backend.slice(
             &input,
             &SliceConfig {

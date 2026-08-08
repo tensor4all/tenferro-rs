@@ -284,10 +284,9 @@ impl ContractionScalar {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// Returns [`crate::Error::Validation`] with a
+    /// [`crate::ValidationError::DTypeMismatch`] source when `dtype` is `I32`,
+    /// `I64`, or `Bool`, which do not support contraction scalar identities.
     pub fn one(dtype: DType) -> crate::Result<Self> {
         match dtype {
             DType::F32 => Ok(Self::F32(1.0)),
@@ -295,7 +294,7 @@ impl ContractionScalar {
             DType::C32 => Ok(Self::C32(Complex32::new(1.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(1.0, 0.0))),
             DType::I32 | DType::I64 | DType::Bool => Err(validation(
-                "dot_general",
+                "ContractionScalar::one",
                 ValidationError::DTypeMismatch {
                     expected: crate::core_dtype(dtype),
                     actual: crate::core_dtype(DType::F32),
@@ -315,10 +314,9 @@ impl ContractionScalar {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// Returns [`crate::Error::Validation`] with a
+    /// [`crate::ValidationError::DTypeMismatch`] source when `dtype` is `I32`,
+    /// `I64`, or `Bool`, which do not support contraction scalar identities.
     pub fn zero(dtype: DType) -> crate::Result<Self> {
         match dtype {
             DType::F32 => Ok(Self::F32(0.0)),
@@ -326,7 +324,7 @@ impl ContractionScalar {
             DType::C32 => Ok(Self::C32(Complex32::new(0.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(0.0, 0.0))),
             DType::I32 | DType::I64 | DType::Bool => Err(validation(
-                "dot_general",
+                "ContractionScalar::zero",
                 ValidationError::DTypeMismatch {
                     expected: crate::core_dtype(dtype),
                     actual: crate::core_dtype(DType::F32),
@@ -454,19 +452,45 @@ impl<'a> GroupedGemmConfig<'a> {
 }
 
 impl DotGeneralAccumulation {
+    fn identity(
+        op: &'static str,
+        dtype: DType,
+        multiplicative: bool,
+    ) -> crate::Result<ContractionScalar> {
+        let result = if multiplicative {
+            ContractionScalar::one(dtype)
+        } else {
+            ContractionScalar::zero(dtype)
+        };
+        result.map_err(|error| match error {
+            Error::Validation { source, .. } => validation(op, source),
+            error => error,
+        })
+    }
+
     /// Return overwrite semantics, `out = lhs dot rhs`, for `dtype`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DType};
+    ///
+    /// let accum = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
+    /// assert_eq!(accum.alpha, ContractionScalar::F64(1.0));
+    /// assert_eq!(accum.beta, ContractionScalar::F64(0.0));
+    /// ```
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// Returns [`crate::Error::Validation`] with a
+    /// [`crate::ValidationError::DTypeMismatch`] source when `dtype` does not
+    /// support contraction scalar identities.
     pub fn overwrite(dtype: DType) -> crate::Result<Self> {
         Ok(Self {
             lhs_conj: false,
             rhs_conj: false,
-            alpha: ContractionScalar::one(dtype)?,
-            beta: ContractionScalar::zero(dtype)?,
+            alpha: Self::identity("DotGeneralAccumulation::overwrite", dtype, true)?,
+            beta: Self::identity("DotGeneralAccumulation::overwrite", dtype, false)?,
         })
     }
 
@@ -484,16 +508,15 @@ impl DotGeneralAccumulation {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// Returns [`crate::Error::Validation`] with a
+    /// [`crate::ValidationError::DTypeMismatch`] source when `dtype` does not
+    /// support contraction scalar identities.
     pub fn add_to(dtype: DType) -> crate::Result<Self> {
         Ok(Self {
             lhs_conj: false,
             rhs_conj: false,
-            alpha: ContractionScalar::one(dtype)?,
-            beta: ContractionScalar::one(dtype)?,
+            alpha: Self::identity("DotGeneralAccumulation::add_to", dtype, true)?,
+            beta: Self::identity("DotGeneralAccumulation::add_to", dtype, true)?,
         })
     }
 
@@ -513,14 +536,13 @@ impl DotGeneralAccumulation {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// Returns [`crate::Error::Validation`] with a
+    /// [`crate::ValidationError::DTypeMismatch`] source when `alpha` and `beta`
+    /// have different dtypes.
     pub fn scaled(alpha: ContractionScalar, beta: ContractionScalar) -> crate::Result<Self> {
         if alpha.dtype() != beta.dtype() {
             return Err(validation(
-                "dot_general",
+                "DotGeneralAccumulation::scaled",
                 ValidationError::DTypeMismatch {
                     expected: crate::core_dtype(alpha.dtype()),
                     actual: crate::core_dtype(beta.dtype()),
@@ -3624,9 +3646,12 @@ pub trait TensorIndexing {
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
-    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
-    /// backend execution or storage access cannot provide the requested result.
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. In
+    /// particular, a limit greater than the corresponding input dimension is
+    /// reported as [`crate::ValidationError::InvalidArgument`] with the
+    /// `"configuration"` argument. It returns [`crate::Error::BackendFailure`]
+    /// or [`crate::Error::BackendSource`] when backend execution or storage
+    /// access cannot provide the requested result.
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
     /// # Errors
     ///

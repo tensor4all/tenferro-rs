@@ -465,8 +465,16 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
                     format!("start exceeds limit on axis {axis}"),
                 ));
             }
+            // INVARIANT: This boundary check intentionally mirrors CUDA's
+            // validator. CPU and GPU are independent backend leaves, and
+            // sharing it via tenferro-tensor would require a new public
+            // validation API.
             if limit > dim {
-                return Err(crate::Error::axis_out_of_bounds("slice", axis, rank));
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "configuration",
+                    format!("limit {limit} on axis {axis} exceeds dimension size {dim}"),
+                ));
             }
             if stride == 0 {
                 return Err(crate::Error::invalid_argument(

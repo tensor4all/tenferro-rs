@@ -652,6 +652,44 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
 }
 
 #[test]
+fn test_dot_general_falls_back_for_mixed_batch_orders() {
+    let lhs_storage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let rhs_storage = [10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0];
+    let lhs_view =
+        TypedTensorView::from_slice([1, 1, 2, 3], [1, 1, 3, 1], 0, &lhs_storage).unwrap();
+    let rhs_view =
+        TypedTensorView::from_slice([1, 1, 2, 3], [1, 1, 1, 2], 0, &rhs_storage).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![2, 3],
+        rhs_batch_dims: vec![2, 3],
+    };
+    let mut backend = CpuBackend::new();
+
+    let output = backend
+        .dot_general_read(
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            TensorRead::from_view(TensorView::F64(rhs_view)),
+            &config,
+        )
+        .unwrap();
+
+    assert_eq!(output.shape(), &[1, 1, 2, 3]);
+    for b1 in 0..3 {
+        for b0 in 0..2 {
+            let lhs = lhs_storage[b0 * 3 + b1];
+            let rhs = rhs_storage[b0 + b1 * 2];
+            assert_eq!(
+                get_f64(&output, &[0, 0, b0, b1]),
+                lhs * rhs,
+                "mixed batch coordinate ({b0}, {b1})"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_transpose() {
     let t = Tensor::F64(
         TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
