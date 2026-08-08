@@ -18,8 +18,9 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{
-    Error, ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-    GraphCompiler, Runtime,
+    Error, ExecutionContextIdentity, ExtensionEngine, ExtensionModule, ExtensionModuleError,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    GraphCompiler, PrepareCapability, PrepareError, Runtime, UnsupportedReason,
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
@@ -433,6 +434,59 @@ fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
 }
 
 #[derive(Debug)]
+struct ReadPathFallbackConfig;
+
+impl ExtensionPlanningConfig for ReadPathFallbackConfig {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.read-path-fallback-probe.v1"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn payload_hash(&self, _state: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+#[derive(Debug)]
+struct ReadPathFallbackEngine {
+    engine_id: tenferro_runtime::EngineId,
+}
+
+impl ExtensionEngine for ReadPathFallbackEngine {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.read-path-fallback-probe.v1"
+    }
+
+    fn engine_id(&self) -> &tenferro_runtime::EngineId {
+        &self.engine_id
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        ExecutionContextIdentity::of::<CpuBackend>()
+    }
+
+    fn prepare(
+        &self,
+        _request: ExtensionPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(PrepareCapability::Unsupported(
+            UnsupportedReason::Operation {
+                operation: "read-path-fallback-test",
+            },
+        ))
+    }
+}
+
+#[derive(Debug)]
 struct ReadPathFallbackModule {
     module_id: ExtensionModuleId,
 }
@@ -452,9 +506,13 @@ impl ExtensionModule for ReadPathFallbackModule {
 
     fn configure(
         &self,
-        _registrar: &mut ExtensionModuleRegistrar<'_>,
+        registrar: &mut ExtensionModuleRegistrar<'_>,
     ) -> std::result::Result<(), ExtensionModuleError> {
-        Ok(())
+        let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+        registrar.register_engine(Arc::new(ReadPathFallbackEngine {
+            engine_id: engine_id.clone(),
+        }))?;
+        registrar.register_planning_config(engine_id, Arc::new(ReadPathFallbackConfig))
     }
 }
 

@@ -10,8 +10,10 @@ use crate::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::{
-    EngineId, Error, ErrorPhase, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    ExtensionModuleRegistrar, Runtime,
+    EngineId, Error, ErrorPhase, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, PrepareCapability, PrepareError, Runtime, RuntimeConfigError,
+    UnsupportedReason,
 };
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 use tenferro_tensor::TensorRead;
@@ -71,15 +73,86 @@ impl ExtensionOp for BridgeProbe {
 }
 
 #[derive(Debug)]
+struct BridgeConfig {
+    family_id: &'static str,
+}
+
+impl ExtensionPlanningConfig for BridgeConfig {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn payload_hash(&self, state: &mut dyn Hasher) {
+        state.write(self.family_id.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.family_id == other.family_id)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+#[derive(Debug)]
+struct BridgeEngine {
+    family_id: &'static str,
+    engine_id: EngineId,
+}
+
+impl ExtensionEngine for BridgeEngine {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        ExecutionContextIdentity::of::<CpuBackend>()
+    }
+
+    fn prepare(
+        &self,
+        _request: ExtensionPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(PrepareCapability::Unsupported(
+            UnsupportedReason::Operation {
+                operation: "eager-extension-bridge-test",
+            },
+        ))
+    }
+}
+
+#[derive(Debug)]
 struct BridgeModule {
     module_id: ExtensionModuleId,
+    engine_id: Option<EngineId>,
 }
 
 impl BridgeModule {
-    fn new() -> Arc<dyn ExtensionModule> {
+    fn without_engine() -> Arc<dyn ExtensionModule> {
         Arc::new(Self {
             module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
                 .unwrap(),
+            engine_id: None,
+        })
+    }
+
+    fn for_engine(engine_id: EngineId) -> Arc<dyn ExtensionModule> {
+        Arc::new(Self {
+            module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
+                .unwrap(),
+            engine_id: Some(engine_id),
         })
     }
 }
@@ -91,9 +164,21 @@ impl ExtensionModule for BridgeModule {
 
     fn configure(
         &self,
-        _registrar: &mut ExtensionModuleRegistrar<'_>,
+        registrar: &mut ExtensionModuleRegistrar<'_>,
     ) -> Result<(), ExtensionModuleError> {
-        Ok(())
+        let Some(engine_id) = &self.engine_id else {
+            return Ok(());
+        };
+        registrar.register_engine(Arc::new(BridgeEngine {
+            family_id: BridgeProbe::one().family_id(),
+            engine_id: engine_id.clone(),
+        }))?;
+        registrar.register_planning_config(
+            engine_id.clone(),
+            Arc::new(BridgeConfig {
+                family_id: BridgeProbe::one().family_id(),
+            }),
+        )
     }
 }
 
@@ -126,7 +211,7 @@ fn eager_extension_factory_receives_exact_cpu_target() {
 
     execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
         *seen_by_factory.lock().unwrap() = Some(target.clone());
-        Ok(BridgeModule::new())
+        Ok(BridgeModule::for_engine(target.engine_id))
     })
     .unwrap();
 
@@ -153,7 +238,7 @@ fn eager_extension_input_context_mismatch_is_reported_before_factory() {
         &[&lhs, &rhs],
         move |_target| {
             *called_by_factory.lock().unwrap() = true;
-            Ok(BridgeModule::new())
+            Ok(BridgeModule::without_engine())
         },
         |_op, _inputs, _ctx| unreachable!("input validation must run first"),
     )
@@ -173,26 +258,149 @@ fn eager_extension_missing_selected_engine_retains_typed_runtime_source() {
 
     let error = super::validate_eager_extension_target(&runtime, &target).unwrap_err();
     assert!(matches!(error, Error::RuntimeStateSource { .. }));
-    let source = std::error::Error::source(&error);
-    assert!(source
-        .as_deref()
-        .is_some_and(|source| source.to_string().contains("is not registered")));
+    let source = std::error::Error::source(&error).unwrap();
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("missing engine source should retain RuntimeConfigError");
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingEngine { engine_id }
+            if engine_id == &target.engine_id
+    ));
+}
+
+#[test]
+fn eager_extension_target_rejects_extension_engine_without_direct_engine() {
+    let target = EagerExtensionTarget {
+        engine_id: EngineId::new("tenferro-tests.placement-engine").unwrap(),
+        backend_kind: EagerExtensionBackendKind::Cpu,
+    };
+    let mut builder = Runtime::builder();
+    builder
+        .install_extension_module(BridgeModule::for_engine(target.engine_id.clone()))
+        .unwrap();
+    let runtime = builder.build().unwrap();
+
+    let error = super::validate_eager_extension_target(&runtime, &target).unwrap_err();
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("expected structured missing direct engine error");
+    };
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("missing direct engine source");
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingEngine { engine_id } if engine_id == &target.engine_id
+    ));
+}
+
+#[test]
+fn eager_extension_module_without_target_engine_is_rejected_before_backend_session() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
+        Ok(BridgeModule::without_engine())
+    })
+    .unwrap_err();
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("expected structured missing extension engine error");
+    };
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("missing extension engine source");
+    let expected_engine = tenferro_cpu::runtime_engine_id().unwrap();
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
+            if *family_id == BridgeProbe::one().family_id()
+                && engine_id == &expected_engine
+    ));
+}
+
+#[test]
+fn eager_extension_module_for_different_engine_is_rejected_before_backend_session() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let expected_engine = tenferro_cpu::runtime_engine_id().unwrap();
+    let different_engine = EngineId::new("tenferro-tests.other-eager-engine").unwrap();
+
+    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
+        Ok(BridgeModule::for_engine(different_engine))
+    })
+    .unwrap_err();
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("expected structured mismatched extension engine error");
+    };
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("mismatched extension engine source");
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
+            if *family_id == BridgeProbe::one().family_id()
+                && engine_id == &expected_engine
+    ));
+}
+
+#[test]
+fn eager_extension_missing_module_is_rejected_for_constructible_runtime() {
+    let mut backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    let runtime = builder.build().unwrap();
+    let target = EagerExtensionTarget {
+        engine_id: tenferro_cpu::runtime_engine_id().unwrap(),
+        backend_kind: EagerExtensionBackendKind::Cpu,
+    };
+
+    let error =
+        super::validate_eager_extension_module(&runtime, BridgeProbe::one().family_id(), &target)
+            .unwrap_err();
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("expected structured missing extension engine error");
+    };
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("missing module source");
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
+            if *family_id == BridgeProbe::one().family_id()
+                && engine_id == &target.engine_id
+    ));
+    let _ = &mut backend;
 }
 
 #[test]
 fn eager_extension_factory_errors_are_returned_without_entering_backend_session() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let input = input(&ctx);
+    let missing_engine = EngineId::new("tenferro-tests.factory-missing-engine").unwrap();
     let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
-        Err(Error::runtime_state(
+        Err(Error::runtime_state_source(
             "test-extension-factory",
             ErrorPhase::Execution,
-            "missing extension module",
+            RuntimeConfigError::MissingEngine {
+                engine_id: missing_engine.clone(),
+            },
         ))
     })
     .unwrap_err();
 
-    assert!(error.to_string().contains("missing extension module"));
+    let Error::RuntimeStateSource { op, phase, source } = error else {
+        panic!("factory error should retain its exact runtime error kind");
+    };
+    assert_eq!(op, "test-extension-factory");
+    assert_eq!(phase, ErrorPhase::Execution);
+    let source = source
+        .downcast_ref::<RuntimeConfigError>()
+        .expect("factory source should retain RuntimeConfigError");
+    assert!(matches!(
+        source,
+        RuntimeConfigError::MissingEngine { engine_id } if engine_id == &missing_engine
+    ));
 }
 
 #[cfg(feature = "cuda")]
@@ -217,7 +425,7 @@ fn eager_extension_factory_receives_exact_cuda_target() {
 
     execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
         *seen_by_factory.lock().unwrap() = Some(target.clone());
-        Ok(BridgeModule::new())
+        Ok(BridgeModule::for_engine(target.engine_id))
     })
     .unwrap();
 
@@ -260,7 +468,7 @@ fn eager_extension_factory_receives_exact_webgpu_target() {
 
     execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
         *seen_by_factory.lock().unwrap() = Some(target.clone());
-        Ok(BridgeModule::new())
+        Ok(BridgeModule::for_engine(target.engine_id))
     })
     .unwrap();
 

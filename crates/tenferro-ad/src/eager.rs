@@ -1396,6 +1396,10 @@ impl EagerRuntime {
             })
     }
 
+    pub(crate) fn runtime(&self) -> &Runtime {
+        &self.runtime
+    }
+
     pub(crate) fn eager_extension_target(&self) -> Result<EagerExtensionTarget> {
         let (engine_id, backend_kind) = {
             let backend = self.lock_backend()?;

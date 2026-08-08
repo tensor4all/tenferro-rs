@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager_with_extension_session;
 use tenferro_ad::EagerTensor;
-use tenferro_runtime::{EngineId, ErrorPhase, ExtensionModule};
+use tenferro_runtime::{ErrorPhase, ExtensionModule};
 
 use crate::eager_composites;
 use crate::extension::{
@@ -725,37 +724,22 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
     apply_eager_with_extension_session(
         op,
         inputs,
-        |target| eager_cpu_extension_module(target.engine_id),
+        |_target| eager_cpu_extension_module(),
         move |_op, input_reads, ctx| execute_linalg_extension_reads(&execute_op, input_reads, ctx),
     )
 }
 
-fn eager_cpu_extension_module(engine_id: EngineId) -> Result<Arc<dyn ExtensionModule>> {
-    static MODULES: OnceLock<Mutex<HashMap<EngineId, Arc<dyn ExtensionModule>>>> = OnceLock::new();
-    let modules = MODULES.get_or_init(|| Mutex::new(HashMap::new()));
-    {
-        let modules = modules.lock().map_err(|_| {
-            Error::runtime_state(
-                "tenferro_linalg::eager_extension_module",
-                tenferro_runtime::ErrorPhase::Execution,
-                "extension module cache lock poisoned",
-            )
-        })?;
-        if let Some(module) = modules.get(&engine_id) {
-            return Ok(Arc::clone(module));
-        }
+fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
+    static MODULE: OnceLock<Arc<dyn ExtensionModule>> = OnceLock::new();
+    if let Some(module) = MODULE.get() {
+        return Ok(Arc::clone(module));
     }
 
-    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id.clone())
+    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
+    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id)
         .map_err(eager_runtime_config_error)?;
-    let mut modules = modules.lock().map_err(|_| {
-        Error::runtime_state(
-            "tenferro_linalg::eager_extension_module",
-            tenferro_runtime::ErrorPhase::Execution,
-            "extension module cache lock poisoned",
-        )
-    })?;
-    Ok(Arc::clone(modules.entry(engine_id).or_insert(module)))
+    let _ = MODULE.set(Arc::clone(&module));
+    Ok(MODULE.get().cloned().unwrap_or(module))
 }
 
 fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {

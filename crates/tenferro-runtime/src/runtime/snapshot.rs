@@ -478,6 +478,29 @@ impl RuntimeConfigSnapshot {
         self.extensions.has_family(family_id)
     }
 
+    /// Return whether this snapshot contains an extension engine for one exact
+    /// family/engine pair.
+    ///
+    /// This narrow, doc-hidden query is the cross-crate eager-extension
+    /// contract used by `tenferro-ad` to validate an owner-selected module
+    /// without exposing module internals or widening [`ExtensionModule`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{EngineId, Runtime};
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let snapshot = runtime.snapshot()?;
+    /// let engine = EngineId::new("example.engine")?;
+    /// assert!(!snapshot.has_extension_engine("example.family.v1", &engine));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn has_extension_engine(&self, family_id: &'static str, engine_id: &EngineId) -> bool {
+        self.extensions.has_engine(family_id, engine_id)
+    }
+
     /// Return an immutable view of a registered engine slot.
     pub fn engine(&self, id: &EngineId) -> Option<EngineSnapshotView<'_>> {
         self.engine_indices

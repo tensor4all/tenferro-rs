@@ -417,6 +417,25 @@ fn install_absent_adds_module_and_sorts_slots() -> Result<(), Box<dyn StdError>>
 }
 
 #[test]
+fn snapshot_exact_extension_engine_query_distinguishes_family_and_engine(
+) -> Result<(), Box<dyn StdError>> {
+    let tuple = fixed(
+        "snapshot-query",
+        "tenferro.family.snapshot-query",
+        "snapshot-query",
+    );
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.snapshot-query",
+        ModuleAction::Register(tuple.clone()),
+    ))?;
+    let snapshot = runtime.snapshot()?;
+    assert!(snapshot.has_extension_engine(tuple.family, &tuple.engine));
+    assert!(!snapshot.has_extension_engine("tenferro.family.other", &tuple.engine,));
+    assert!(!snapshot.has_extension_engine(tuple.family, &engine_id("tenferro.engine.other"),));
+    Ok(())
+}
+
+#[test]
 fn install_same_module_arc_is_noop_and_preserves_epoch_and_identities(
 ) -> Result<(), Box<dyn StdError>> {
     let tuple = fixed("same", "tenferro.family.same", "same");
