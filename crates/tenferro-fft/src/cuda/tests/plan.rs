@@ -15,9 +15,9 @@ use super::super::ffi::{
     CUFFT_INVALID_PLAN, CUFFT_SUCCESS,
 };
 use super::super::plan::{
-    bind_plan_to_stream, build_plan, plan_key_discriminator_matches, report_cleanup_failures,
-    retained_bytes_for_workspace, retire_entry_resources, retire_handle, CufftCleanup,
-    CufftPlanEntry, CufftWorkspace, CufftWorkspaceOwner,
+    build_plan, enqueue_plan_execution, plan_key_discriminator_matches, report_cleanup_failures,
+    retained_bytes_for_workspace, retire_entry_resources, retire_handle, with_cufft_plan_for_batch,
+    CufftCleanup, CufftExecutionScopes, CufftPlanEntry, CufftWorkspace, CufftWorkspaceOwner,
 };
 
 #[derive(Default)]
@@ -285,6 +285,27 @@ impl CufftCleanup for TrackedRuntime {
     }
 }
 
+struct FakeExecutionScopes;
+
+impl CufftExecutionScopes for FakeExecutionScopes {
+    fn with_stream(&self, callback: impl FnOnce(u64)) -> Result<(), CudaFftError> {
+        callback(0);
+        Ok(())
+    }
+
+    fn with_input_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
+        record("input_pointer_scope");
+        callback(std::ptr::null_mut());
+        Ok(())
+    }
+
+    fn with_output_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
+        record("output_pointer_scope");
+        callback(std::ptr::null_mut());
+        Ok(())
+    }
+}
+
 struct FakeWorkspace {
     ptr: *mut c_void,
 }
@@ -377,22 +398,67 @@ fn successful_construction_uses_required_cufft_order() {
 }
 
 #[test]
-fn fake_plan_execution_binds_and_queues_without_synchronizing() {
+fn fake_plan_execution_uses_shared_enqueue_helper_without_synchronizing() {
     let _lock = test_lock();
     reset_state(0, None);
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let scopes = FakeExecutionScopes;
 
-    bind_plan_to_stream(&library, 7, 0)
-        .unwrap_or_else(|_| unreachable!("fake plan stream binding should succeed"));
-    // SAFETY: the fake function table records the call and does not
-    // dereference these test-only placeholder pointers.
-    let status =
-        unsafe { (library.api.exec_c2c)(7, std::ptr::null_mut(), std::ptr::null_mut(), 1) };
-    super::super::ffi::map_cufft_status("cufftExecC2C", status)
-        .unwrap_or_else(|_| unreachable!("fake plan execution should enqueue"));
+    enqueue_plan_execution(
+        &scopes,
+        &library,
+        7,
+        |api, plan, input, output| {
+            // SAFETY: the fake function table records the call and does not
+            // dereference these test-only placeholder pointers.
+            unsafe { (api.exec_c2c)(plan, input, output, 1) }
+        },
+        "cufftExecC2C",
+    )
+    .unwrap_or_else(|_| unreachable!("fake plan execution should enqueue"));
 
-    assert_eq!(calls(), vec!["set_stream", "exec_c2c"]);
+    assert_eq!(
+        calls(),
+        vec![
+            "set_stream",
+            "input_pointer_scope",
+            "output_pointer_scope",
+            "exec_c2c"
+        ]
+    );
     assert!(!calls().contains(&"synchronize"));
+}
+
+#[test]
+fn zero_batch_plan_gate_skips_loader_and_plan_creation() {
+    let mut load_calls = 0;
+    let mut plan_calls = 0;
+    let plan = with_cufft_plan_for_batch(0, || {
+        load_calls += 1;
+        plan_calls += 1;
+        Ok::<_, CudaFftError>(())
+    })
+    .unwrap_or_else(|_| unreachable!("zero-batch gate should not fail"));
+
+    assert!(plan.is_none());
+    assert_eq!(load_calls, 0);
+    assert_eq!(plan_calls, 0);
+}
+
+#[test]
+fn nonzero_batch_plan_gate_loads_and_creates_once() {
+    let mut load_calls = 0;
+    let mut plan_calls = 0;
+    let plan = with_cufft_plan_for_batch(1, || {
+        load_calls += 1;
+        plan_calls += 1;
+        Ok::<_, CudaFftError>(7)
+    })
+    .unwrap_or_else(|_| unreachable!("nonzero-batch gate should invoke the closure"));
+
+    assert_eq!(plan, Some(7));
+    assert_eq!(load_calls, 1);
+    assert_eq!(plan_calls, 1);
 }
 
 #[test]
@@ -802,17 +868,22 @@ fn workspace_and_execution_keep_ffi_pointers_scoped() {
     assert!(!workspace_section.contains("unsafe impl Send for CufftWorkspace"));
     assert!(!workspace_section.contains("unsafe impl Sync for CufftWorkspace"));
 
-    let execute_section = source
-        .split_once("pub(crate) fn execute(")
-        .and_then(|(_, rest)| rest.split_once("    fn execute_pair"))
+    let enqueue_section = source
+        .split_once("pub(crate) fn enqueue_plan_execution")
+        .and_then(|(_, rest)| rest.split_once("/// One cached cuFFT plan"))
         .map(|(section, _)| section)
-        .unwrap_or_else(|| unreachable!("execute source section should exist"));
-    let stream_callback = execute_section
-        .split_once("with_raw_cuda_stream")
-        .and_then(|(_, rest)| rest.split_once("        })\n        .map_err"))
+        .unwrap_or_else(|| unreachable!("enqueue helper source section should exist"));
+    assert!(enqueue_section.contains("bind_plan_to_stream"));
+    assert!(enqueue_section.contains("with_input_ptr"));
+    assert!(enqueue_section.contains("with_output_ptr"));
+    assert!(!enqueue_section.contains("synchronize"));
+
+    let execute_pair_section = source
+        .split_once("fn execute_pair")
+        .and_then(|(_, rest)| rest.split_once("    pub(crate) fn retained_bytes"))
         .map(|(section, _)| section)
-        .unwrap_or_else(|| unreachable!("stream callback source section should exist"));
-    assert!(stream_callback.contains("self.execute_pair("));
+        .unwrap_or_else(|| unreachable!("execute pair source section should exist"));
+    assert!(execute_pair_section.contains("enqueue_plan_execution"));
 }
 
 #[test]
