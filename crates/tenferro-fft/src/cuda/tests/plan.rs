@@ -4,6 +4,9 @@ use std::mem::size_of;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use syn::ext::IdentExt;
+use syn::visit::{self, Visit};
+use syn::{Expr, ExprCall, ExprMethodCall};
 use tenferro_gpu::cuda::CudaRuntime;
 
 use super::super::descriptor::{
@@ -859,28 +862,46 @@ fn constant_hash<T: std::hash::Hash>(value: &T) -> u64 {
     hasher.finish()
 }
 
-fn contains_method_call(source: &str, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
+#[derive(Debug, Default, PartialEq, Eq)]
+struct HostAccessorCalls {
+    methods: Vec<&'static str>,
+    ufcs: Vec<&'static str>,
+}
+
+fn host_accessor_name(ident: &syn::Ident) -> Option<&'static str> {
+    match ident.unraw().to_string().as_str() {
+        "host_data" => Some("host_data"),
+        "host_data_mut" => Some("host_data_mut"),
+        _ => None,
     }
-    source.match_indices('.').any(|(offset, _)| {
-        let suffix = source[offset + 1..].trim_start();
-        let Some(suffix) = suffix.strip_prefix(name) else {
-            return false;
-        };
-        let suffix = suffix.trim_start();
-        if suffix.starts_with('(') {
-            return true;
+}
+
+impl<'ast> Visit<'ast> for HostAccessorCalls {
+    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+        if let Some(name) = host_accessor_name(&node.method) {
+            self.methods.push(name);
         }
-        let Some(suffix) = suffix.strip_prefix("::") else {
-            return false;
-        };
-        let suffix = suffix.trim_start();
-        suffix.starts_with('<')
-            && suffix
-                .split_once('(')
-                .is_some_and(|(generic_args, _)| generic_args.trim_end().ends_with('>'))
-    })
+        visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+        if let Expr::Path(path) = node.func.as_ref() {
+            if let Some(segment) = path.path.segments.last() {
+                if let Some(name) = host_accessor_name(&segment.ident) {
+                    self.ufcs.push(name);
+                }
+            }
+        }
+        visit::visit_expr_call(self, node);
+    }
+}
+
+fn host_accessor_calls(path: &str, source: &str) -> HostAccessorCalls {
+    let file = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("failed to parse CUDA source {path}: {error}"));
+    let mut calls = HostAccessorCalls::default();
+    calls.visit_file(&file);
+    calls
 }
 
 #[test]
@@ -959,63 +980,28 @@ fn exact_plan_key_match_rejects_collisions_and_runtime_identity_mismatch() {
 }
 
 #[test]
-fn method_call_matcher_matches_exact_host_accessor_calls() {
-    let positive = [
-        ("tensor.host_data()", "host_data"),
-        ("tensor.host_data::<f64>()", "host_data"),
-        ("tensor.host_data_mut()", "host_data_mut"),
-        ("tensor.host_data_mut::<f64>()", "host_data_mut"),
-        ("tensor . host_data :: <f64> ()", "host_data"),
-        ("tensor . host_data_mut :: <f64> ()", "host_data_mut"),
-    ];
-    for (source, method) in positive {
-        assert!(
-            contains_method_call(source, method),
-            "expected {method} call in fixture {source:?}"
-        );
-    }
+fn ast_visitor_matches_accessor_calls_without_textual_false_positives() {
+    let fixture = r#"
+        fn fixture(tensor: &TypedTensor<f64>, metadata: &Metadata) {
+            // tensor.host_data(); TypedTensor::<f64>::host_data_mut(&tensor)
+            let _ = tensor /* whitespace */ . r#host_data :: <f64> ();
+            let _ = tensor.host_data_mut();
+            let _ = TypedTensor::<f64>::host_data(&tensor);
+            let _ = TypedTensor::<f64>::r#host_data_mut(&tensor);
+            let _ = metadata.host_data_type();
+            let _ = metadata.host_data_mut_type();
+            let _ = "tensor.host_data::<f64>(); TypedTensor::<f64>::host_data(&tensor)";
+            /* tensor.host_data_mut(); TypedTensor::<f64>::host_data(&tensor) */
+        }
+    "#;
 
-    let prefix_identifiers = [
-        ("tensor.host_data_mut()", "host_data"),
-        ("tensor.host_data_mut::<f64>()", "host_data"),
-        ("tensor.host_data_type()", "host_data"),
-        ("tensor.host_database()", "host_data"),
-        ("tensor.host_data_type::<f64>()", "host_data"),
-        ("tensor.host_data_mut_type()", "host_data_mut"),
-    ];
-    for (source, method) in prefix_identifiers {
-        assert!(
-            !contains_method_call(source, method),
-            "prefix identifier {source:?} must not match {method}"
-        );
-    }
-
-    let noncalls = [
-        ("tensor.host_data", "host_data"),
-        ("tensor.host_data::<f64>", "host_data"),
-        ("tensor.host_data_mut", "host_data_mut"),
-        ("tensor.host_data_mut::<f64>", "host_data_mut"),
-    ];
-    for (source, method) in noncalls {
-        assert!(
-            !contains_method_call(source, method),
-            "non-call {source:?} must not match {method}"
-        );
-    }
-
-    let permitted_metadata = [
-        ("metadata.host_data_type()", "host_data"),
-        ("metadata.host_database()", "host_data"),
-        ("tensor.host_data_metadata", "host_data"),
-        ("metadata.host_data_mut_type()", "host_data_mut"),
-        ("tensor.host_data_mut_metadata", "host_data_mut"),
-    ];
-    for (source, method) in permitted_metadata {
-        assert!(
-            !contains_method_call(source, method),
-            "permitted metadata identifier {source:?} must not match {method}"
-        );
-    }
+    assert_eq!(
+        host_accessor_calls("fixture", fixture),
+        HostAccessorCalls {
+            methods: vec!["host_data", "host_data_mut"],
+            ufcs: vec!["host_data", "host_data_mut"],
+        }
+    );
 }
 
 #[test]
@@ -1042,13 +1028,10 @@ fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
                 "CUDA production source {path} must not contain {pattern}"
             );
         }
-        assert!(
-            !contains_method_call(source, "host_data"),
-            "CUDA production source {path} must not call host_data"
-        );
-        assert!(
-            !contains_method_call(source, "host_data_mut"),
-            "CUDA production source {path} must not call host_data_mut"
+        assert_eq!(
+            host_accessor_calls(path, source),
+            HostAccessorCalls::default(),
+            "CUDA production source {path} must not call host_data or host_data_mut"
         );
     }
 }

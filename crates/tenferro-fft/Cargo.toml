@@ -60,6 +60,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+syn = { workspace = true, features = ["full", "visit"] }
 
 [[bench]]
 name = "fft_plan_cache"
