@@ -5,7 +5,7 @@ use std::sync::Arc;
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
-use tenferro_runtime::{Error, ErrorPhase, ExtensionModule, Result};
+use tenferro_runtime::{Error, ErrorPhase, ExtensionModule, Result, Runtime, RuntimeConfigError};
 use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
@@ -14,6 +14,33 @@ pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
     ExtensionExecutionContext, ExtensionFamilyId, ExtensionOp,
 };
+
+/// Closed backend kind selected by the eager runtime owner for an extension.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EagerExtensionBackendKind {
+    /// The eager runtime owns a CPU backend.
+    Cpu,
+    /// The eager runtime owns a CUDA backend.
+    #[cfg(feature = "cuda")]
+    Cuda,
+    /// The eager runtime owns a WebGPU backend.
+    #[cfg(feature = "webgpu")]
+    WebGpu,
+}
+
+/// Exact engine target selected by the eager runtime owner.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EagerExtensionTarget {
+    /// Exact runtime engine selected for this eager context.
+    pub engine_id: tenferro_runtime::EngineId,
+    /// Closed backend kind selected for this eager context.
+    pub backend_kind: EagerExtensionBackendKind,
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Adopt an untracked eager tensor value produced by this runtime's backend.
 ///
@@ -88,19 +115,27 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// Apply an extension op to eager tensors through a direct prepared-operation
 /// callback receiving a non-owning backend session.
 ///
-/// This keeps eager extension execution on the extension crate's semantic
-/// implementation without using the retired legacy extension executor.
+/// The eager runtime owner resolves the exact engine and closed backend kind
+/// before invoking `module_factory`. Extension crates use that target to build
+/// their module; this bridge does not infer placement from tensor values or
+/// construct an engine identifier on their behalf. The module is installed and
+/// the callback is entered under the same borrowed backend session.
 ///
 /// # Errors
 ///
 /// Returns `Error::Validation` with `InvalidArgument` when `inputs` is empty
 /// or its length differs from the extension's declared input count. Returns
-/// `Error::ContextMismatch` when tensors belong to different eager runtimes;
-/// backend, extension, and runtime-state failures retain their typed sources.
+/// `Error::ContextMismatch` when tensors belong to different eager runtimes,
+/// and `Error::RuntimeState` when the selected engine is unavailable or the
+/// module factory fails; backend and extension failures retain their typed
+/// sources.
+#[doc(hidden)]
 pub fn apply_eager_with_extension_session(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&EagerTensor],
-    module: Arc<dyn ExtensionModule>,
+    module_factory: impl FnOnce(
+        EagerExtensionTarget,
+    ) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>>,
     execute: impl FnOnce(
             &dyn ExtensionOp,
             &[TensorRead<'_>],
@@ -109,12 +144,37 @@ pub fn apply_eager_with_extension_session(
         + Send,
 ) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
+    let target = ctx.eager_extension_target()?;
+    let module = module_factory(target)?;
     ctx.install_extension_module(module)?;
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
     let outputs = ctx.with_extension_execution_context(|extension_ctx| {
         execute(op.as_ref(), &input_reads, extension_ctx)
     })??;
     finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
+}
+
+pub(crate) fn validate_eager_extension_target(
+    runtime: &Runtime,
+    target: &EagerExtensionTarget,
+) -> Result<()> {
+    let snapshot = runtime.snapshot().map_err(|source| {
+        Error::runtime_state_source(
+            "extension::apply_eager_with_extension_session",
+            ErrorPhase::Execution,
+            source,
+        )
+    })?;
+    if snapshot.engine(&target.engine_id).is_none() {
+        return Err(Error::runtime_state_source(
+            "extension::apply_eager_with_extension_session",
+            ErrorPhase::Execution,
+            RuntimeConfigError::MissingEngine {
+                engine_id: target.engine_id.clone(),
+            },
+        ));
+    }
+    Ok(())
 }
 
 fn validate_eager_extension_inputs(

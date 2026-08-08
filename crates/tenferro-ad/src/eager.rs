@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
+use crate::extension::{
+    validate_eager_extension_target, EagerExtensionBackendKind, EagerExtensionTarget,
+};
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
 #[cfg(test)]
 use computegraph::graph::Graph;
@@ -40,6 +43,8 @@ use tenferro_tensor::{
 };
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 
+#[cfg(feature = "cuda")]
+use crate::eager_backend::cuda_runtime_engine_id;
 use crate::eager_backend::{
     cpu_runtime_engine_id, cpu_runtime_hardware_class, eager_runtime_for_backend, EagerBackend,
 };
@@ -1389,6 +1394,48 @@ impl EagerRuntime {
             .map_err(|source| {
                 runtime_state_source("EagerRuntime::install_extension_module", source)
             })
+    }
+
+    pub(crate) fn eager_extension_target(&self) -> Result<EagerExtensionTarget> {
+        let (engine_id, backend_kind) = {
+            let backend = self.lock_backend()?;
+            match &*backend {
+                EagerBackend::Cpu(_) => (
+                    cpu_runtime_engine_id().map_err(|source| {
+                        runtime_config_error("EagerRuntime::eager_extension_target", source)
+                    })?,
+                    EagerExtensionBackendKind::Cpu,
+                ),
+                #[cfg(test)]
+                EagerBackend::Recording(_) => {
+                    return Err(Error::unsupported(
+                        "EagerRuntime::eager_extension_target",
+                        ErrorPhase::Execution,
+                        "the recording backend has no registered eager extension engine",
+                    ));
+                }
+                #[cfg(feature = "cuda")]
+                EagerBackend::Cuda(_) => (
+                    cuda_runtime_engine_id().map_err(|source| {
+                        runtime_config_error("EagerRuntime::eager_extension_target", source)
+                    })?,
+                    EagerExtensionBackendKind::Cuda,
+                ),
+                #[cfg(feature = "webgpu")]
+                EagerBackend::WebGpu(_) => (
+                    tenferro_gpu::webgpu::webgpu_runtime_engine_id().map_err(|source| {
+                        runtime_config_error("EagerRuntime::eager_extension_target", source)
+                    })?,
+                    EagerExtensionBackendKind::WebGpu,
+                ),
+            }
+        };
+        let target = EagerExtensionTarget {
+            engine_id,
+            backend_kind,
+        };
+        validate_eager_extension_target(&self.runtime, &target)?;
+        Ok(target)
     }
 
     /// Clear generic extension runtime cache entries.
