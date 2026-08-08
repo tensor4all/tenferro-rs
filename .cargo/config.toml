@@ -1,0 +1,4 @@
+# Keep independently generated Cargo fixtures aligned with the root dev profile.
+# A caller-provided debugger level remains authoritative.
+[env]
+CARGO_PROFILE_DEV_DEBUG = { value = "0", force = false }
