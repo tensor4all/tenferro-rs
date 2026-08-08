@@ -51,10 +51,18 @@ fn cuda_zero_batch_returns_empty_resident_outputs_without_cache_entries() {
             .expect("zero-batch CUDA FFT execution");
         support::assert_cuda_resident(&actual, domain);
         assert_eq!(actual.shape(), expected_shape);
+        assert_eq!(actual.dtype(), expected.dtype());
         let actual =
             support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
         assert_host_close(&actual, &expected, tolerance);
-        assert_eq!(executor.cache_stats().entries, 0);
-        assert_eq!(executor.cache_stats().retained_bytes, 0);
+        assert_eq!(actual.shape(), expected_shape);
+        assert_eq!(element_count(actual.shape()), 0);
+        let stats = executor.cache_stats();
+        assert_eq!(stats.entries, 0);
+        assert_eq!(stats.retained_bytes, 0);
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.clears, 0);
     }
 }

@@ -55,7 +55,7 @@ where
         half
     };
     let mut starts = vec![0; rank];
-    let mut limits = one_sided.shape().to_vec();
+    let mut limits = Vec::from(one_sided.shape());
     let strides = vec![1; rank];
     limits[last] = mirror_end;
     starts[last] = 1;

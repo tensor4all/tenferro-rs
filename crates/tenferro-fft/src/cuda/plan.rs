@@ -96,6 +96,7 @@ pub(crate) struct CleanupFailures {
 }
 
 impl CleanupFailures {
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.synchronization.is_empty() && self.destroy.is_none() && !self.resources_deferred
     }

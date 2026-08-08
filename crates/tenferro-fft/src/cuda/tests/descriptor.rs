@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use super::super::descriptor::{
     CufftDirection, CufftPlanDescriptor, CufftPlanStructuralKey, CufftTransformKind,
 };
-use super::super::error::{into_backend_source_error, into_tensor_error, CudaFftError};
+use super::super::error::{into_tensor_error, CudaFftError};
 
 fn assert_descriptor(
     kind: CufftTransformKind,
@@ -40,13 +40,31 @@ fn descriptor_maps_all_cufft_transform_kinds_to_rank_one_layouts() {
 fn descriptor_uses_ceil_half_spectrum_extent_for_odd_lengths() {
     let r2c =
         CufftPlanDescriptor::new(CufftTransformKind::R2c64, CufftDirection::Forward, 7, 3).unwrap();
+    assert_eq!(r2c.kind, CufftTransformKind::R2c64);
+    assert_eq!(r2c.direction, CufftDirection::Forward);
+    assert_eq!(r2c.rank, 1);
+    assert_eq!(r2c.n, [7]);
     assert_eq!(r2c.inembed, [7]);
     assert_eq!(r2c.onembed, [4]);
+    assert_eq!(r2c.istride, 3);
+    assert_eq!(r2c.idist, 1);
+    assert_eq!(r2c.ostride, 3);
+    assert_eq!(r2c.odist, 1);
+    assert_eq!(r2c.batch, 3);
 
     let c2r =
         CufftPlanDescriptor::new(CufftTransformKind::C2r64, CufftDirection::Inverse, 7, 3).unwrap();
+    assert_eq!(c2r.kind, CufftTransformKind::C2r64);
+    assert_eq!(c2r.direction, CufftDirection::Inverse);
+    assert_eq!(c2r.rank, 1);
+    assert_eq!(c2r.n, [7]);
     assert_eq!(c2r.inembed, [4]);
     assert_eq!(c2r.onembed, [7]);
+    assert_eq!(c2r.istride, 3);
+    assert_eq!(c2r.idist, 1);
+    assert_eq!(c2r.ostride, 3);
+    assert_eq!(c2r.odist, 1);
+    assert_eq!(c2r.batch, 3);
 }
 
 fn assert_invalid(result: Result<CufftPlanDescriptor, CudaFftError>, field: &'static str) {
@@ -66,7 +84,7 @@ fn descriptor_rejects_zero_and_overflowing_configurations() {
         CufftPlanDescriptor::new(CufftTransformKind::C2c32, CufftDirection::Forward, 1, 0),
         "batch",
     );
-    let product_overflow_n = usize::try_from(i64::MAX).unwrap_or_else(|_| usize::MAX / 2 + 1);
+    let product_overflow_n = usize::try_from(i64::MAX).unwrap_or(usize::MAX / 2 + 1);
     assert_invalid(
         CufftPlanDescriptor::new(
             CufftTransformKind::C2c32,
@@ -109,28 +127,28 @@ fn constant_hash<T: Hash>(value: &T) -> u64 {
 
 #[test]
 fn distinct_structural_keys_require_exact_comparison_even_when_hashes_collide() {
-    let first = CufftPlanStructuralKey::new(
-        0,
-        CufftTransformKind::C2c32,
-        CufftDirection::Forward,
-        8,
-        3,
-        3,
-        1,
-        3,
-        1,
-    );
-    let second = CufftPlanStructuralKey::new(
-        0,
-        CufftTransformKind::C2c32,
-        CufftDirection::Forward,
-        7,
-        3,
-        3,
-        1,
-        3,
-        1,
-    );
+    let first = CufftPlanStructuralKey {
+        device_ordinal: 0,
+        kind: CufftTransformKind::C2c32,
+        direction: CufftDirection::Forward,
+        n: 8,
+        batch: 3,
+        istride: 3,
+        idist: 1,
+        ostride: 3,
+        odist: 1,
+    };
+    let second = CufftPlanStructuralKey {
+        device_ordinal: 0,
+        kind: CufftTransformKind::C2c32,
+        direction: CufftDirection::Forward,
+        n: 7,
+        batch: 3,
+        istride: 3,
+        idist: 1,
+        ostride: 3,
+        odist: 1,
+    };
 
     assert_eq!(constant_hash(&first), constant_hash(&second));
     assert_ne!(first, second);
@@ -170,11 +188,4 @@ fn internal_invariant_translation_uses_tensor_internal_error() {
         tenferro_tensor::Error::Internal(message)
             if message == "descriptor unexpectedly missing"
     ));
-}
-
-#[test]
-fn backend_source_translation_keeps_the_typed_source() {
-    let error = into_backend_source_error("fft", std::io::Error::other("cuFFT loader failed"));
-    let source = std::error::Error::source(&error).expect("typed backend source is retained");
-    assert!(source.downcast_ref::<std::io::Error>().is_some());
 }

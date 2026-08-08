@@ -19,14 +19,23 @@ pub(crate) type CufftHandle = i32;
 pub(crate) type CufftStatus = i32;
 
 pub(crate) const CUFFT_SUCCESS: CufftStatus = 0;
+#[cfg(test)]
 pub(crate) const CUFFT_INVALID_PLAN: CufftStatus = 1;
+#[cfg(test)]
 pub(crate) const CUFFT_ALLOC_FAILED: CufftStatus = 2;
+#[cfg(test)]
 pub(crate) const CUFFT_INVALID_TYPE: CufftStatus = 3;
+#[cfg(test)]
 pub(crate) const CUFFT_INVALID_VALUE: CufftStatus = 4;
+#[cfg(test)]
 pub(crate) const CUFFT_INTERNAL_ERROR: CufftStatus = 5;
+#[cfg(test)]
 pub(crate) const CUFFT_EXEC_FAILED: CufftStatus = 6;
+#[cfg(test)]
 pub(crate) const CUFFT_SETUP_FAILED: CufftStatus = 7;
+#[cfg(test)]
 pub(crate) const CUFFT_INVALID_SIZE: CufftStatus = 8;
+#[cfg(test)]
 pub(crate) const CUFFT_UNALIGNED_DATA: CufftStatus = 9;
 
 pub(crate) const CUFFT_FORWARD: i32 = -1;

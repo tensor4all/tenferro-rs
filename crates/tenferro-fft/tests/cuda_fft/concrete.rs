@@ -118,7 +118,7 @@ fn cuda_real_fft_completes_even_and_odd_hermitian_spectrum() {
 
     let mut cpu = CpuBackend::new();
     let mut cuda = support::cuda_backend();
-    for n in [8usize, 7] {
+    for n in [8usize, 7, 2, 1] {
         let input = real_f64(&[n], 0.25);
         let actual = run_case(
             &mut cpu,

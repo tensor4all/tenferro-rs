@@ -258,6 +258,10 @@ pub(crate) fn assert_host_close(actual: &Tensor, expected: &Tensor, tolerance: f
     }
 }
 
+// INVARIANT: this test helper keeps every FFT planning parameter explicit at
+// call sites so each acceptance case documents its operation, axis, length,
+// normalization, and tolerance.
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn run_case(
     cpu: &mut CpuBackend,
     cuda: &mut CudaBackend,
@@ -268,6 +272,10 @@ pub(crate) fn run_case(
     norm: FftNorm,
     tolerance: f64,
 ) -> Tensor {
+    assert!(
+        !input.is_backend_buffer(),
+        "CPU oracle input must be a separately constructed host tensor"
+    );
     let expected = operation
         .execute_cpu(cpu, input, n, axis, norm)
         .expect("CPU FFT oracle");
@@ -275,15 +283,21 @@ pub(crate) fn run_case(
     let gpu_domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .expect("uploaded input allocation domain");
+    let runtime_identity = cuda.runtime_identity();
     let actual = operation
         .execute_cuda(cuda, &gpu_input, n, axis, norm)
         .expect("CUDA FFT execution");
     support::assert_cuda_resident(&actual, gpu_domain);
+    assert_eq!(cuda.runtime_identity(), runtime_identity);
     let actual = support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
     assert_host_close(&actual, &expected, tolerance);
     actual
 }
 
+// INVARIANT: this test helper keeps every FFT planning parameter explicit at
+// call sites so each cache/lifecycle case documents its operation, axis,
+// length, normalization, and tolerance.
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn run_executor_case(
     executor: &mut FftExecutor,
     cpu: &mut CpuBackend,
@@ -295,6 +309,10 @@ pub(crate) fn run_executor_case(
     norm: FftNorm,
     tolerance: f64,
 ) -> Tensor {
+    assert!(
+        !input.is_backend_buffer(),
+        "CPU oracle input must be a separately constructed host tensor"
+    );
     let expected = operation
         .execute_cpu(cpu, input, n, axis, norm)
         .expect("CPU FFT oracle");
@@ -302,10 +320,12 @@ pub(crate) fn run_executor_case(
     let gpu_domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .expect("uploaded input allocation domain");
+    let runtime_identity = cuda.runtime_identity();
     let actual = operation
         .execute_executor(executor, cuda, &gpu_input, n, axis, norm)
         .expect("CUDA FFT execution through FftExecutor");
     support::assert_cuda_resident(&actual, gpu_domain);
+    assert_eq!(cuda.runtime_identity(), runtime_identity);
     let actual = support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
     assert_host_close(&actual, &expected, tolerance);
     actual

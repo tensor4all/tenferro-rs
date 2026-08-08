@@ -417,9 +417,10 @@ fn canonicalize_input(
             .ok_or_else(|| {
                 tenferro_tensor::Error::invalid_argument(OP, "rank", "FFT requires rank >= 1")
             })?;
-        let current_shape = owner
-            .as_ref()
-            .map_or_else(|| input.shape().to_vec(), |tensor| tensor.shape().to_vec());
+        let current_shape = owner.as_ref().map_or_else(
+            || Vec::from(input.shape()),
+            |tensor| Vec::from(tensor.shape()),
+        );
         let current_len = current_shape.get(last).copied().ok_or_else(|| {
             tenferro_tensor::Error::Internal("FFT canonical input shape is inconsistent".into())
         })?;

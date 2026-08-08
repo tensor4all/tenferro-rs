@@ -1,5 +1,3 @@
-use std::error::Error as StdError;
-
 /// Errors raised while preparing or executing a CUDA FFT request.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CudaFftError {
@@ -52,14 +50,6 @@ pub(crate) fn into_tensor_error(op: &'static str, source: CudaFftError) -> tenfe
         }
         source => tenferro_tensor::Error::backend_source(op, source),
     }
-}
-
-/// Translate loader, vendor-status, and lifecycle failures to typed backend sources.
-pub(crate) fn into_backend_source_error<E>(op: &'static str, source: E) -> tenferro_tensor::Error
-where
-    E: StdError + Send + Sync + 'static,
-{
-    tenferro_tensor::Error::backend_source(op, source)
 }
 
 impl CudaFftError {

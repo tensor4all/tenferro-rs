@@ -108,32 +108,6 @@ pub(crate) struct CufftPlanStructuralKey {
     pub(crate) odist: i64,
 }
 
-impl CufftPlanStructuralKey {
-    pub(crate) const fn new(
-        device_ordinal: usize,
-        kind: CufftTransformKind,
-        direction: CufftDirection,
-        n: usize,
-        batch: usize,
-        istride: i64,
-        idist: i64,
-        ostride: i64,
-        odist: i64,
-    ) -> Self {
-        Self {
-            device_ordinal,
-            kind,
-            direction,
-            n,
-            batch,
-            istride,
-            idist,
-            ostride,
-            odist,
-        }
-    }
-}
-
 /// Exact runtime identity and structural arguments used to cache one cuFFT plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CufftPlanKey<I = CudaRuntimeIdentity> {
@@ -151,17 +125,17 @@ pub(crate) struct CufftPlanKey<I = CudaRuntimeIdentity> {
 
 impl<I> CufftPlanKey<I> {
     pub(crate) fn structural_key(&self) -> CufftPlanStructuralKey {
-        CufftPlanStructuralKey::new(
-            self.device_ordinal,
-            self.kind,
-            self.direction,
-            self.n,
-            self.batch,
-            self.istride,
-            self.idist,
-            self.ostride,
-            self.odist,
-        )
+        CufftPlanStructuralKey {
+            device_ordinal: self.device_ordinal,
+            kind: self.kind,
+            direction: self.direction,
+            n: self.n,
+            batch: self.batch,
+            istride: self.istride,
+            idist: self.idist,
+            ostride: self.ostride,
+            odist: self.odist,
+        }
     }
 }
 

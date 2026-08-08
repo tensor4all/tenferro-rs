@@ -393,8 +393,26 @@ fn successful_construction_uses_required_cufft_order() {
             "set_work_area"
         ]
     );
-    drop(workspace);
-    assert_eq!(handle, 7);
+    let mut handle = Some(handle);
+    let mut workspace = Some(workspace);
+    let failures = retire_handle(&FakeRuntime, &library, &mut handle, &mut workspace);
+    assert!(failures.is_empty());
+    assert_eq!(
+        calls(),
+        vec![
+            "create",
+            "set_auto_allocation",
+            "make_plan_many_64",
+            "allocate_workspace",
+            "set_work_area",
+            "set_current",
+            "synchronize",
+            "destroy",
+            "workspace_drop",
+        ]
+    );
+    assert!(handle.is_none());
+    assert!(workspace.is_none());
 }
 
 #[test]
@@ -430,13 +448,13 @@ fn fake_plan_execution_uses_shared_enqueue_helper_without_synchronizing() {
 }
 
 #[test]
-fn zero_batch_plan_gate_skips_loader_and_plan_creation() {
+fn zero_batch_plan_gate_skips_invalid_loader_and_plan_creation() {
     let mut load_calls = 0;
     let mut plan_calls = 0;
     let plan = with_cufft_plan_for_batch(0, || {
         load_calls += 1;
         plan_calls += 1;
-        Ok::<_, CudaFftError>(())
+        Err::<(), _>(CudaFftError::NoLibraryCandidates)
     })
     .unwrap_or_else(|_| unreachable!("zero-batch gate should not fail"));
 
@@ -914,4 +932,32 @@ fn exact_plan_key_match_rejects_collisions_and_runtime_identity_mismatch() {
     assert!(!plan_key_discriminator_matches(&first, &different_shape));
     assert_ne!(first, different_runtime);
     assert!(!plan_key_discriminator_matches(&first, &different_runtime));
+}
+
+#[test]
+fn cuda_sources_do_not_cross_the_explicit_transfer_boundary() {
+    let sources = [
+        ("mod.rs", include_str!("../mod.rs")),
+        ("descriptor.rs", include_str!("../descriptor.rs")),
+        ("error.rs", include_str!("../error.rs")),
+        ("ffi.rs", include_str!("../ffi.rs")),
+        ("hermitian.rs", include_str!("../hermitian.rs")),
+        ("plan.rs", include_str!("../plan.rs")),
+    ];
+    let forbidden = [
+        concat!("upload", "_tensor"),
+        concat!("download", "_tensor"),
+        concat!("host", "_data"),
+        concat!("host", "_data_mut"),
+        concat!("as", "_slice"),
+        concat!("to_", "vec"),
+    ];
+    for (path, source) in sources {
+        for pattern in forbidden {
+            assert!(
+                !source.contains(pattern),
+                "CUDA production source {path} must not contain {pattern}"
+            );
+        }
+    }
 }

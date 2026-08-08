@@ -16,4 +16,5 @@ mod validation;
 #[path = "cuda_fft/zero_batch.rs"]
 mod zero_batch;
 
+#[path = "cuda_fft/support.rs"]
 mod support;

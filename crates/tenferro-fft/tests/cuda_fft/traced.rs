@@ -148,35 +148,80 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
         FftNorm::Backward,
     );
     let runtime = cuda_runtime_with_fft(&backend, true);
+    let initial = runtime.cache_stats().unwrap().extensions;
+    assert_eq!(initial.entries, 0);
+    assert_eq!(initial.retained_bytes, 0);
+    assert_eq!(initial.hits, 0);
+    assert_eq!(initial.misses, 0);
+    assert_eq!(initial.evictions, 0);
+    assert_eq!(initial.clears, 0);
 
     let first = runtime
         .run_compiled(&program, &[&gpu_input])
         .unwrap()
         .remove(0);
+    let first_stats = runtime.cache_stats().unwrap().extensions;
+    assert_eq!(first_stats.entries, 1);
+    assert!(first_stats.retained_bytes > 0);
+    assert_eq!(first_stats.hits, 0);
+    assert_eq!(first_stats.misses, 1);
+    assert_eq!(first_stats.evictions, 0);
+    assert_eq!(first_stats.clears, 0);
+
     let second = runtime
         .run_compiled(&program, &[&gpu_input])
         .unwrap()
         .remove(0);
-    let stats = runtime.cache_stats().unwrap().extensions;
-    assert_eq!(stats.entries, 1, "runtime FFT cache stats: {stats:?}");
-    assert_eq!(stats.hits, 1, "runtime FFT cache stats: {stats:?}");
-    assert_eq!(stats.misses, 1, "runtime FFT cache stats: {stats:?}");
-    assert!(
-        stats.retained_bytes > 0,
-        "runtime FFT cache has no retained bytes: {stats:?}"
+    let second_stats = runtime.cache_stats().unwrap().extensions;
+    assert_eq!(second_stats.entries, 1);
+    assert!(second_stats.retained_bytes > 0);
+    assert_eq!(second_stats.hits, 1);
+    assert_eq!(second_stats.misses, 1);
+    assert_eq!(second_stats.evictions, 0);
+    assert_eq!(second_stats.clears, 0);
+
+    let (short_program, _) = compiled_cuda_fft(
+        DType::C64,
+        &[4],
+        Operation::Fft,
+        Some(3),
+        -1,
+        FftNorm::Backward,
     );
+    let third = runtime
+        .run_compiled(&short_program, &[&gpu_input])
+        .unwrap()
+        .remove(0);
+    let third_stats = runtime.cache_stats().unwrap().extensions;
+    assert_eq!(third_stats.entries, 2);
+    assert!(third_stats.retained_bytes > 0);
+    assert_eq!(third_stats.hits, 1);
+    assert_eq!(third_stats.misses, 2);
+    assert_eq!(third_stats.evictions, 0);
+    assert_eq!(third_stats.clears, 0);
+
     runtime.clear_caches().unwrap();
     let cleared = runtime.cache_stats().unwrap().extensions;
     assert_eq!(cleared.entries, 0);
     assert_eq!(cleared.retained_bytes, 0);
+    assert_eq!(cleared.hits, 1);
+    assert_eq!(cleared.misses, 2);
+    assert_eq!(cleared.evictions, 0);
+    assert_eq!(cleared.clears, 1);
 
     support::assert_cuda_resident(&first, domain);
     support::assert_cuda_resident(&second, domain);
+    support::assert_cuda_resident(&third, domain);
     backend.runtime().synchronize().unwrap();
     let first = support::download_cuda(backend.runtime(), &first).unwrap();
     let second = support::download_cuda(backend.runtime(), &second).unwrap();
+    let third = support::download_cuda(backend.runtime(), &third).unwrap();
     assert_host_close(&first, &expected, 1.0e-11);
     assert_host_close(&second, &expected, 1.0e-11);
+    let expected_short = Operation::Fft
+        .execute_cpu(&mut cpu, &host, Some(3), -1, FftNorm::Backward)
+        .unwrap();
+    assert_host_close(&third, &expected_short, 1.0e-11);
 }
 
 #[test]
@@ -221,12 +266,24 @@ fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
             .remove(0);
         support::assert_cuda_resident(&output, domain);
         assert_eq!(output.shape(), expected_shape.as_slice());
+        let expected_dtype = if dtype == DType::C64 {
+            DType::C64
+        } else {
+            DType::C32
+        };
+        assert_eq!(output.dtype(), expected_dtype);
         let stats = runtime.cache_stats().unwrap().extensions;
         assert_eq!(stats.entries, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.retained_bytes, 0, "zero-batch cache stats: {stats:?}");
+        assert_eq!(stats.hits, 0, "zero-batch cache stats: {stats:?}");
+        assert_eq!(stats.misses, 0, "zero-batch cache stats: {stats:?}");
+        assert_eq!(stats.evictions, 0, "zero-batch cache stats: {stats:?}");
+        assert_eq!(stats.clears, 0, "zero-batch cache stats: {stats:?}");
         backend.runtime().synchronize().unwrap();
         let output = support::download_cuda(backend.runtime(), &output).unwrap();
         assert_eq!(output.shape(), expected_shape.as_slice());
+        assert_eq!(output.dtype(), expected_dtype);
+        assert_eq!(element_count(output.shape()), 0);
         assert_eq!(
             output.as_slice::<Complex64>().map_or(0, <[Complex64]>::len),
             0
