@@ -678,9 +678,17 @@ impl Drop for CufftPlanEntry {
     }
 }
 
-pub(crate) fn extension_plan_key(key: &CufftPlanKey) -> ExtensionCacheKey {
+/// Add the exact runtime owner to the cache discriminator while retaining the
+/// full equality-bearing key in every entry. The runtime address is only a
+/// discriminator: pointer reuse or collision cannot cause unsafe reuse because
+/// `CufftPlanEntry::matches_key` compares the retained runtime identity.
+pub(crate) fn extension_plan_key_for_runtime(
+    key: &CufftPlanKey,
+    runtime: &CudaRuntime,
+) -> ExtensionCacheKey {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
+    hasher.write_usize(runtime as *const CudaRuntime as usize);
     ExtensionCacheKey::new(
         FFT_EXTENSION_FAMILY_ID,
         CUFFT_CACHE_NAMESPACE,
