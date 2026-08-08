@@ -94,7 +94,47 @@ fn checked_cufft_i64(value: usize, field: &'static str) -> Result<i64, CudaFftEr
     i64::try_from(value).map_err(|_| CudaFftError::InvalidConfiguration { field })
 }
 
-/// Exact identity and structural arguments used to cache one cuFFT plan.
+/// Hashable structural arguments used to discriminate one cuFFT plan.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct CufftPlanStructuralKey {
+    pub(crate) device_ordinal: usize,
+    pub(crate) kind: CufftTransformKind,
+    pub(crate) direction: CufftDirection,
+    pub(crate) n: usize,
+    pub(crate) batch: usize,
+    pub(crate) istride: i64,
+    pub(crate) idist: i64,
+    pub(crate) ostride: i64,
+    pub(crate) odist: i64,
+}
+
+impl CufftPlanStructuralKey {
+    pub(crate) const fn new(
+        device_ordinal: usize,
+        kind: CufftTransformKind,
+        direction: CufftDirection,
+        n: usize,
+        batch: usize,
+        istride: i64,
+        idist: i64,
+        ostride: i64,
+        odist: i64,
+    ) -> Self {
+        Self {
+            device_ordinal,
+            kind,
+            direction,
+            n,
+            batch,
+            istride,
+            idist,
+            ostride,
+            odist,
+        }
+    }
+}
+
+/// Exact runtime identity and structural arguments used to cache one cuFFT plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CufftPlanKey {
     pub(crate) runtime_identity: CudaRuntimeIdentity,
@@ -109,20 +149,28 @@ pub(crate) struct CufftPlanKey {
     pub(crate) odist: i64,
 }
 
+impl CufftPlanKey {
+    pub(crate) fn structural_key(&self) -> CufftPlanStructuralKey {
+        CufftPlanStructuralKey::new(
+            self.device_ordinal,
+            self.kind,
+            self.direction,
+            self.n,
+            self.batch,
+            self.istride,
+            self.idist,
+            self.ostride,
+            self.odist,
+        )
+    }
+}
+
 impl Hash for CufftPlanKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // `CudaRuntimeIdentity` intentionally exposes equality but not a hash.
         // The cache discriminator therefore hashes every structural field and
         // relies on exact key equality to reject collisions, including keys
         // from distinct runtime instances on one device ordinal.
-        self.device_ordinal.hash(state);
-        self.kind.hash(state);
-        self.direction.hash(state);
-        self.n.hash(state);
-        self.batch.hash(state);
-        self.istride.hash(state);
-        self.idist.hash(state);
-        self.ostride.hash(state);
-        self.odist.hash(state);
+        self.structural_key().hash(state);
     }
 }

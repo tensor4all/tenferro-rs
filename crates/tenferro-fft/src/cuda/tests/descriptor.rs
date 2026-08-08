@@ -1,7 +1,9 @@
 use std::hash::{Hash, Hasher};
 
-use super::super::descriptor::{CufftDirection, CufftPlanDescriptor, CufftTransformKind};
-use super::super::error::{into_tensor_error, CudaFftError};
+use super::super::descriptor::{
+    CufftDirection, CufftPlanDescriptor, CufftPlanStructuralKey, CufftTransformKind,
+};
+use super::super::error::{into_backend_source_error, into_tensor_error, CudaFftError};
 
 fn assert_descriptor(
     kind: CufftTransformKind,
@@ -64,12 +66,12 @@ fn descriptor_rejects_zero_and_overflowing_configurations() {
         CufftPlanDescriptor::new(CufftTransformKind::C2c32, CufftDirection::Forward, 1, 0),
         "batch",
     );
-    let max_signed = usize::try_from(i64::MAX).expect("i64::MAX fits in usize");
+    let product_overflow_n = usize::try_from(i64::MAX).unwrap_or_else(|_| usize::MAX / 2 + 1);
     assert_invalid(
         CufftPlanDescriptor::new(
             CufftTransformKind::C2c32,
             CufftDirection::Forward,
-            max_signed,
+            product_overflow_n,
             2,
         ),
         "element_count",
@@ -106,22 +108,57 @@ fn constant_hash<T: Hash>(value: &T) -> u64 {
 }
 
 #[test]
-fn distinct_descriptors_require_exact_comparison_even_when_hashes_collide() {
-    let first =
-        CufftPlanDescriptor::new(CufftTransformKind::C2c32, CufftDirection::Forward, 8, 3).unwrap();
-    let second =
-        CufftPlanDescriptor::new(CufftTransformKind::C2c32, CufftDirection::Forward, 7, 3).unwrap();
+fn distinct_structural_keys_require_exact_comparison_even_when_hashes_collide() {
+    let first = CufftPlanStructuralKey::new(
+        0,
+        CufftTransformKind::C2c32,
+        CufftDirection::Forward,
+        8,
+        3,
+        3,
+        1,
+        3,
+        1,
+    );
+    let second = CufftPlanStructuralKey::new(
+        0,
+        CufftTransformKind::C2c32,
+        CufftDirection::Forward,
+        7,
+        3,
+        3,
+        1,
+        3,
+        1,
+    );
 
     assert_eq!(constant_hash(&first), constant_hash(&second));
     assert_ne!(first, second);
 }
 
 #[test]
-fn cuda_error_translation_keeps_the_typed_source() {
+fn invalid_descriptor_configuration_is_structured_tensor_validation() {
     let error = into_tensor_error("fft", CudaFftError::InvalidConfiguration { field: "batch" });
-    let source = std::error::Error::source(&error).expect("typed CUDA source is retained");
+
+    assert_eq!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::Validation(tenferro_tensor::ValidationKind::InvalidArgument)
+    );
     assert!(matches!(
-        source.downcast_ref::<CudaFftError>(),
-        Some(CudaFftError::InvalidConfiguration { field: "batch" })
+        error,
+        tenferro_tensor::Error::Validation {
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "batch",
+                ..
+            },
+            ..
+        }
     ));
+}
+
+#[test]
+fn backend_source_translation_keeps_the_typed_source() {
+    let error = into_backend_source_error("fft", std::io::Error::other("cuFFT loader failed"));
+    let source = std::error::Error::source(&error).expect("typed backend source is retained");
+    assert!(source.downcast_ref::<std::io::Error>().is_some());
 }
