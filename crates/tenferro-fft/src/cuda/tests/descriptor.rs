@@ -157,6 +157,22 @@ fn invalid_descriptor_configuration_is_structured_tensor_validation() {
 }
 
 #[test]
+fn internal_invariant_translation_uses_tensor_internal_error() {
+    let error = into_tensor_error(
+        "fft",
+        CudaFftError::InternalInvariant {
+            message: "descriptor unexpectedly missing",
+        },
+    );
+
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::Internal(message)
+            if message == "descriptor unexpectedly missing"
+    ));
+}
+
+#[test]
 fn backend_source_translation_keeps_the_typed_source() {
     let error = into_backend_source_error("fft", std::io::Error::other("cuFFT loader failed"));
     let source = std::error::Error::source(&error).expect("typed backend source is retained");

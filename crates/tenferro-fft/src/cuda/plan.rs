@@ -9,6 +9,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -19,9 +20,7 @@ use tenferro_gpu::cuda::CudaRuntime;
 use tenferro_runtime::ExtensionCacheKey;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 
-use super::descriptor::{
-    CufftDirection, CufftPlanDescriptor, CufftPlanKey, CufftPlanStructuralKey, CufftTransformKind,
-};
+use super::descriptor::{CufftDirection, CufftPlanDescriptor, CufftPlanKey, CufftTransformKind};
 use super::error::CudaFftError;
 use super::ffi::{
     map_cufft_status, CufftApi, CufftHandle, CufftLibrary, CufftStatus, CUFFT_C2C, CUFFT_C2R,
@@ -61,17 +60,13 @@ pub(crate) trait CufftWorkspaceOwner: Sized {
 /// CubeCL-owned workspace retained by one cuFFT plan entry.
 pub(crate) struct CufftWorkspace {
     _owner: DeviceByteBuffer,
-    ptr: *mut c_void,
     bytes: usize,
 }
 
 impl CufftWorkspace {
     fn from_device(owner: DeviceByteBuffer, bytes: usize) -> Self {
-        let mut ptr = std::ptr::null_mut();
-        owner.with_ptr(|device_ptr| ptr = device_ptr);
         Self {
             _owner: owner,
-            ptr,
             bytes,
         }
     }
@@ -87,19 +82,9 @@ impl CufftWorkspaceOwner for CufftWorkspace {
     }
 
     fn with_ptr(&self, f: impl FnOnce(*mut c_void)) {
-        // The pointer is only passed during this callback; `_owner` keeps the
-        // CubeCL allocation alive for the whole plan-entry lifetime.
-        f(self.ptr);
+        self._owner.with_ptr(f);
     }
 }
-
-// SAFETY: `owner` retains the CubeCL allocation and the pointer is never
-// exposed except through the scoped `with_ptr` callback. Plan execution and
-// retirement are serialized by the mutable FFT execution/cache boundary.
-unsafe impl Send for CufftWorkspace {}
-// SAFETY: immutable references only permit another scoped pointer borrow; the
-// owning execution session serializes the actual cuFFT calls.
-unsafe impl Sync for CufftWorkspace {}
 
 #[derive(Default)]
 pub(crate) struct CleanupFailures {
@@ -115,10 +100,10 @@ impl CleanupFailures {
 
 /// Retire one handle and its workspace without panicking from `Drop` paths.
 ///
-/// The workspace is dropped only after the stream barrier and destroy call have
-/// both been attempted. Any errors are returned so callers that can report
-/// them do not silently discard cleanup failures; `Drop` callers log them via
-/// [`report_cleanup_failures`].
+/// The plan and workspace are released only after the retained runtime is made
+/// current and its stream synchronization succeeds. If either step fails, the
+/// opaque plan and workspace are intentionally leaked: destroying either one
+/// could race work whose completion was not proven.
 pub(crate) fn retire_handle<R, W>(
     runtime: &R,
     library: &CufftLibrary,
@@ -133,36 +118,60 @@ where
     if handle.is_some() || workspace.is_some() {
         if let Err(error) = runtime.set_current() {
             failures.synchronization.push(error);
+            defer_resources(handle, workspace);
+            return failures;
         }
         if let Err(error) = runtime.synchronize() {
             failures.synchronization.push(error);
+            defer_resources(handle, workspace);
+            return failures;
         }
     }
 
-    if let Some(handle) = handle.take() {
-        // SAFETY: `handle` was returned by the same retained cuFFT library's
+    if let Some(plan) = *handle {
+        // SAFETY: `plan` was returned by the same retained cuFFT library's
         // successful `cufftCreate` call and has not been destroyed before this
         // one-shot retirement path.
-        let status = unsafe { (library.api.destroy)(handle) };
+        let status = unsafe { (library.api.destroy)(plan) };
         if let Err(error) = map_cufft_status("cufftDestroy", status) {
             failures.destroy = Some(error);
+            // A failed destroy leaves the opaque plan's ownership uncertain;
+            // keep its workspace alive with the intentionally leaked plan.
+            defer_resources(handle, workspace);
+            return failures;
         }
+        handle.take();
     }
 
-    // Keep this explicit: cuFFT may still refer to the caller-owned work area
-    // until destroy returns, so releasing it earlier would race queued work.
     let workspace = workspace.take();
     drop(workspace);
     failures
 }
 
+fn defer_resources<W>(handle: &mut Option<CufftHandle>, workspace: &mut Option<W>) {
+    // The handle has no Rust destructor; discarding it intentionally leaks the
+    // vendor plan rather than destroying it without a proven synchronization.
+    handle.take();
+    if let Some(workspace) = workspace.take() {
+        // The workspace may still be referenced by queued vendor work.
+        std::mem::forget(workspace);
+    }
+}
+
 #[cold]
 pub(crate) fn report_cleanup_failures(failures: CleanupFailures) {
+    let mut stderr = std::io::stderr();
     for error in failures.synchronization {
-        eprintln!("tenferro-fft: cuFFT cleanup synchronization failed: {error}");
+        let _ = writeln!(
+            stderr,
+            "tenferro-fft: cuFFT cleanup synchronization failed: {error}"
+        );
     }
     if let Some(error) = failures.destroy {
-        eprintln!("tenferro-fft: cuFFT plan destroy failed during cleanup: {error}");
+        let _ = writeln!(
+            stderr,
+            "tenferro-fft: cuFFT plan destroy failed during cleanup: {error}"
+        );
     }
 }
 
@@ -332,6 +341,16 @@ unsafe impl Send for CufftPlanEntry {}
 // workspace/plan are only accessed through the owning mutable session boundary.
 unsafe impl Sync for CufftPlanEntry {}
 
+pub(crate) fn retained_bytes_for_workspace(workspace_bytes: usize) -> usize {
+    size_of::<Arc<CufftLibrary>>()
+        .saturating_add(size_of::<CudaRuntime>())
+        .saturating_add(size_of::<usize>())
+        .saturating_add(size_of::<CufftPlanKey>())
+        .saturating_add(size_of::<CufftHandle>())
+        .saturating_add(size_of::<CufftWorkspace>())
+        .saturating_add(workspace_bytes)
+}
+
 impl CufftPlanEntry {
     /// Create a cached cuFFT plan entry on the exact retained runtime.
     pub(crate) fn create(
@@ -363,10 +382,7 @@ impl CufftPlanEntry {
                     .map_err(|source| CudaFftError::interop("cufft_workspace_allocate", source))
             },
         )?;
-        let retained_bytes = size_of::<CufftPlanKey>()
-            .saturating_add(size_of::<CufftHandle>())
-            .saturating_add(size_of::<CufftWorkspace>())
-            .saturating_add(workspace.bytes());
+        let retained_bytes = retained_bytes_for_workspace(workspace.bytes());
         Ok(Self {
             library,
             plan,
@@ -386,107 +402,110 @@ impl CufftPlanEntry {
         self.runtime
             .set_current_cuda_context(OP)
             .map_err(|source| CudaFftError::interop("cufft_execute_context", source))?;
-        let mut stream_result = Ok(());
+        let mut execution_result = Ok(());
         with_raw_cuda_stream(&self.runtime, OP, |stream| {
             let stream = match usize::try_from(stream) {
                 Ok(stream) => stream as *mut c_void,
                 Err(_) => {
-                    stream_result = Err(CudaFftError::InvalidConfiguration { field: "stream" });
+                    execution_result = Err(CudaFftError::InvalidConfiguration { field: "stream" });
                     return;
                 }
             };
             // SAFETY: the plan belongs to `self.library`, and the stream is
             // borrowed only for this scoped callback from the retained runtime.
             let status = unsafe { (self.library.api.set_stream)(self.plan, stream) };
-            stream_result = map_cufft_status("cufftSetStream", status);
+            if let Err(error) = map_cufft_status("cufftSetStream", status) {
+                execution_result = Err(error);
+                return;
+            }
+
+            execution_result = match self.key.kind {
+                CufftTransformKind::C2c32 => match (input, output) {
+                    (Tensor::C32(input), Tensor::C32(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe {
+                                (api.exec_c2c)(plan, input, output, direction(self.key.direction))
+                            }
+                        },
+                        "cufftExecC2C",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+                CufftTransformKind::C2c64 => match (input, output) {
+                    (Tensor::C64(input), Tensor::C64(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe {
+                                (api.exec_z2z)(plan, input, output, direction(self.key.direction))
+                            }
+                        },
+                        "cufftExecZ2Z",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+                CufftTransformKind::R2c32 => match (input, output) {
+                    (Tensor::F32(input), Tensor::C32(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe { (api.exec_r2c)(plan, input, output) }
+                        },
+                        "cufftExecR2C",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+                CufftTransformKind::R2c64 => match (input, output) {
+                    (Tensor::F64(input), Tensor::C64(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe { (api.exec_d2z)(plan, input, output) }
+                        },
+                        "cufftExecD2Z",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+                CufftTransformKind::C2r32 => match (input, output) {
+                    (Tensor::C32(input), Tensor::F32(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe { (api.exec_c2r)(plan, input, output) }
+                        },
+                        "cufftExecC2R",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+                CufftTransformKind::C2r64 => match (input, output) {
+                    (Tensor::C64(input), Tensor::F64(output)) => self.execute_pair(
+                        input,
+                        output,
+                        |api, plan, input, output| {
+                            // SAFETY: the tensor-pointer callbacks validate exact
+                            // runtime residency and keep both buffers borrowed.
+                            unsafe { (api.exec_z2d)(plan, input, output) }
+                        },
+                        "cufftExecZ2D",
+                    ),
+                    _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
+                },
+            };
         })
         .map_err(|source| CudaFftError::interop("cufft_execute_stream", source))?;
-        stream_result?;
-
-        match self.key.kind {
-            CufftTransformKind::C2c32 => match (input, output) {
-                (Tensor::C32(input), Tensor::C32(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe {
-                            (api.exec_c2c)(plan, input, output, direction(self.key.direction))
-                        }
-                    },
-                    "cufftExecC2C",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-            CufftTransformKind::C2c64 => match (input, output) {
-                (Tensor::C64(input), Tensor::C64(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe {
-                            (api.exec_z2z)(plan, input, output, direction(self.key.direction))
-                        }
-                    },
-                    "cufftExecZ2Z",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-            CufftTransformKind::R2c32 => match (input, output) {
-                (Tensor::F32(input), Tensor::C32(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe { (api.exec_r2c)(plan, input, output) }
-                    },
-                    "cufftExecR2C",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-            CufftTransformKind::R2c64 => match (input, output) {
-                (Tensor::F64(input), Tensor::C64(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe { (api.exec_d2z)(plan, input, output) }
-                    },
-                    "cufftExecD2Z",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-            CufftTransformKind::C2r32 => match (input, output) {
-                (Tensor::C32(input), Tensor::F32(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe { (api.exec_c2r)(plan, input, output) }
-                    },
-                    "cufftExecC2R",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-            CufftTransformKind::C2r64 => match (input, output) {
-                (Tensor::C64(input), Tensor::F64(output)) => self.execute_pair(
-                    input,
-                    output,
-                    |api, plan, input, output| {
-                        // SAFETY: the tensor-pointer callbacks validate exact
-                        // runtime residency and keep both buffers borrowed.
-                        unsafe { (api.exec_z2d)(plan, input, output) }
-                    },
-                    "cufftExecZ2D",
-                ),
-                _ => Err(CudaFftError::InvalidConfiguration { field: "dtype" }),
-            },
-        }
+        execution_result
     }
 
     fn execute_pair<T, U>(
@@ -526,7 +545,7 @@ impl CufftPlanEntry {
     }
 
     pub(crate) fn matches_key(&self, key: &CufftPlanKey) -> bool {
-        self.key == *key
+        plan_key_discriminator_matches(&self.key, key)
     }
 }
 
@@ -552,9 +571,9 @@ pub(crate) fn extension_plan_key(key: &CufftPlanKey) -> ExtensionCacheKey {
     )
 }
 
-pub(crate) fn plan_key_discriminator_matches(
-    stored: &CufftPlanStructuralKey,
-    requested: &CufftPlanStructuralKey,
+pub(crate) fn plan_key_discriminator_matches<I: PartialEq>(
+    stored: &CufftPlanKey<I>,
+    requested: &CufftPlanKey<I>,
 ) -> bool {
     stored == requested
 }

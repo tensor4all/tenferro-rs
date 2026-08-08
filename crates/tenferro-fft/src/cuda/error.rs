@@ -47,6 +47,9 @@ pub(crate) fn into_tensor_error(op: &'static str, source: CudaFftError) -> tenfe
             field,
             "cuFFT descriptor configuration is invalid",
         ),
+        CudaFftError::InternalInvariant { message } => {
+            tenferro_tensor::Error::Internal(message.into())
+        }
         source => tenferro_tensor::Error::backend_source(op, source),
     }
 }

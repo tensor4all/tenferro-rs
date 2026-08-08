@@ -136,8 +136,8 @@ impl CufftPlanStructuralKey {
 
 /// Exact runtime identity and structural arguments used to cache one cuFFT plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CufftPlanKey {
-    pub(crate) runtime_identity: CudaRuntimeIdentity,
+pub(crate) struct CufftPlanKey<I = CudaRuntimeIdentity> {
+    pub(crate) runtime_identity: I,
     pub(crate) device_ordinal: usize,
     pub(crate) kind: CufftTransformKind,
     pub(crate) direction: CufftDirection,
@@ -149,7 +149,7 @@ pub(crate) struct CufftPlanKey {
     pub(crate) odist: i64,
 }
 
-impl CufftPlanKey {
+impl<I> CufftPlanKey<I> {
     pub(crate) fn structural_key(&self) -> CufftPlanStructuralKey {
         CufftPlanStructuralKey::new(
             self.device_ordinal,
@@ -165,12 +165,12 @@ impl CufftPlanKey {
     }
 }
 
-impl Hash for CufftPlanKey {
+impl<I> Hash for CufftPlanKey<I> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // `CudaRuntimeIdentity` intentionally exposes equality but not a hash.
-        // The cache discriminator therefore hashes every structural field and
-        // relies on exact key equality to reject collisions, including keys
-        // from distinct runtime instances on one device ordinal.
+        // The runtime identity intentionally need only expose equality, not a
+        // hash. The cache discriminator therefore hashes every structural
+        // field and relies on exact key equality to reject collisions,
+        // including keys from distinct runtime instances on one device ordinal.
         self.structural_key().hash(state);
     }
 }

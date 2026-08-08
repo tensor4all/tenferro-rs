@@ -1,22 +1,30 @@
 use std::ffi::c_void;
 use std::hash::Hasher;
+use std::mem::size_of;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use super::super::descriptor::{CufftDirection, CufftPlanDescriptor, CufftTransformKind};
+use tenferro_gpu::cuda::CudaRuntime;
+
+use super::super::descriptor::{
+    CufftDirection, CufftPlanDescriptor, CufftPlanKey, CufftTransformKind,
+};
 use super::super::error::CudaFftError;
 use super::super::ffi::{
-    CufftApi, CufftHandle, CufftStatus, CUFFT_ALLOC_FAILED, CUFFT_EXEC_FAILED, CUFFT_INVALID_PLAN,
-    CUFFT_SUCCESS,
+    CufftApi, CufftHandle, CufftLibrary, CufftStatus, CUFFT_ALLOC_FAILED, CUFFT_EXEC_FAILED,
+    CUFFT_INVALID_PLAN, CUFFT_SUCCESS,
 };
 use super::super::plan::{
-    build_plan, plan_key_discriminator_matches, retire_handle, CufftCleanup, CufftWorkspaceOwner,
+    build_plan, plan_key_discriminator_matches, report_cleanup_failures,
+    retained_bytes_for_workspace, retire_handle, CufftCleanup, CufftPlanEntry, CufftWorkspace,
+    CufftWorkspaceOwner,
 };
 
 #[derive(Default)]
 struct FakeState {
     calls: Vec<&'static str>,
     failure: Option<&'static str>,
+    cleanup_failure: Option<&'static str>,
     workspace_bytes: usize,
     allocations: usize,
     work_area_ptr: Option<usize>,
@@ -36,12 +44,21 @@ fn test_lock() -> MutexGuard<'static, ()> {
 }
 
 fn reset_state(workspace_bytes: usize, failure: Option<&'static str>) {
+    reset_state_with_cleanup(workspace_bytes, failure, None);
+}
+
+fn reset_state_with_cleanup(
+    workspace_bytes: usize,
+    failure: Option<&'static str>,
+    cleanup_failure: Option<&'static str>,
+) {
     let mut state = state()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *state = FakeState {
         workspace_bytes,
         failure,
+        cleanup_failure,
         ..FakeState::default()
     };
 }
@@ -59,6 +76,14 @@ fn failed(stage: &'static str) -> bool {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .failure
+        .is_some_and(|failure| failure == stage || failure == "both")
+}
+
+fn cleanup_failed(stage: &'static str) -> bool {
+    state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .cleanup_failure
         .is_some_and(|failure| failure == stage || failure == "both")
 }
 
@@ -210,7 +235,7 @@ struct FakeRuntime;
 impl CufftCleanup for FakeRuntime {
     fn set_current(&self) -> Result<(), CudaFftError> {
         record("set_current");
-        if failed("set_current") {
+        if cleanup_failed("set_current") {
             Err(CudaFftError::test_interop("set_current"))
         } else {
             Ok(())
@@ -219,7 +244,7 @@ impl CufftCleanup for FakeRuntime {
 
     fn synchronize(&self) -> Result<(), CudaFftError> {
         record("synchronize");
-        if failed("synchronize") {
+        if cleanup_failed("synchronize") {
             Err(CudaFftError::test_interop("synchronize"))
         } else {
             Ok(())
@@ -293,6 +318,7 @@ fn successful_construction_uses_required_cufft_order() {
 
     let (handle, workspace) =
         build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
             state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -309,6 +335,7 @@ fn successful_construction_uses_required_cufft_order() {
             "create",
             "set_auto_allocation",
             "make_plan_many_64",
+            "allocate_workspace",
             "set_work_area"
         ]
     );
@@ -323,6 +350,7 @@ fn handle_cleanup_runs_after_stream_synchronization_and_workspace_release() {
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
     let (handle, workspace) =
         build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
             Ok(FakeWorkspace {
                 ptr: 0x1234usize as *mut c_void,
             })
@@ -340,6 +368,7 @@ fn handle_cleanup_runs_after_stream_synchronization_and_workspace_release() {
             "create",
             "set_auto_allocation",
             "make_plan_many_64",
+            "allocate_workspace",
             "set_work_area",
             "set_current",
             "synchronize",
@@ -349,6 +378,63 @@ fn handle_cleanup_runs_after_stream_synchronization_and_workspace_release() {
     );
     assert!(handle.is_none());
     assert!(workspace.is_none());
+}
+
+#[test]
+fn retirement_retains_resources_when_context_or_stream_synchronization_fails() {
+    for cleanup_failure in ["set_current", "synchronize"] {
+        let _lock = test_lock();
+        reset_state(128, None);
+        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+        let (handle, workspace) =
+            build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+                record("allocate_workspace");
+                Ok(FakeWorkspace {
+                    ptr: 0x1234usize as *mut c_void,
+                })
+            })
+            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+
+        reset_state_with_cleanup(128, None, Some(cleanup_failure));
+        let mut handle = Some(handle);
+        let mut workspace = Some(workspace);
+        let failures = retire_handle(&FakeRuntime, &library, &mut handle, &mut workspace);
+
+        assert!(!failures.synchronization.is_empty());
+        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
+        assert_eq!(
+            calls()
+                .iter()
+                .filter(|&&call| call == "workspace_drop")
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn construction_drop_defers_resources_when_cleanup_barrier_fails() {
+    for cleanup_failure in ["set_current", "synchronize"] {
+        let _lock = test_lock();
+        reset_state_with_cleanup(128, Some("set_work_area"), Some(cleanup_failure));
+        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+        let result = build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
+            Ok(FakeWorkspace {
+                ptr: 0x1234usize as *mut c_void,
+            })
+        });
+
+        assert!(result.is_err());
+        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
+        assert_eq!(
+            calls()
+                .iter()
+                .filter(|&&call| call == "workspace_drop")
+                .count(),
+            0
+        );
+    }
 }
 
 #[test]
@@ -363,6 +449,7 @@ fn construction_rolls_back_every_completed_stage_without_double_destroy() {
         reset_state(128, Some(failure));
         let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
         let result = build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
             state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -454,6 +541,7 @@ fn work_area_failure_releases_workspace_after_destroy() {
     reset_state(128, Some("set_work_area"));
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
     let result = build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+        record("allocate_workspace");
         Ok(FakeWorkspace {
             ptr: 0x1234usize as *mut c_void,
         })
@@ -477,6 +565,7 @@ fn retirement_errors_are_reported_without_panicking() {
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
     let (handle, workspace) =
         build_plan(Arc::clone(&library), FakeRuntime, descriptor(), |_bytes| {
+            record("allocate_workspace");
             Ok(FakeWorkspace {
                 ptr: 0x1234usize as *mut c_void,
             })
@@ -484,17 +573,27 @@ fn retirement_errors_are_reported_without_panicking() {
         .unwrap_or_else(|_| unreachable!("fake plan should build"));
     let mut handle = Some(handle);
     let mut workspace = Some(workspace);
-    reset_state(128, Some("both"));
+    reset_state(128, Some("destroy"));
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         retire_handle(&FakeRuntime, &library, &mut handle, &mut workspace)
     }));
     assert!(result.is_ok());
     let failures = result.unwrap_or_else(|_| unreachable!("retirement must not panic"));
-    assert!(!failures.synchronization.is_empty());
+    assert!(failures.synchronization.is_empty());
     assert!(failures.destroy.is_some());
     assert!(handle.is_none());
     assert!(workspace.is_none());
+    assert_eq!(
+        calls()
+            .iter()
+            .filter(|&&call| call == "workspace_drop")
+            .count(),
+        0
+    );
+
+    let report_result = catch_unwind(AssertUnwindSafe(|| report_cleanup_failures(failures)));
+    assert!(report_result.is_ok(), "cleanup reporting must not panic");
 }
 
 #[derive(Default)]
@@ -515,29 +614,71 @@ fn constant_hash<T: std::hash::Hash>(value: &T) -> u64 {
 }
 
 #[test]
-fn exact_plan_discriminator_match_rejects_colliding_structural_keys() {
-    let first = super::super::descriptor::CufftPlanStructuralKey::new(
-        0,
-        CufftTransformKind::C2c32,
-        CufftDirection::Forward,
-        8,
-        3,
-        3,
-        1,
-        3,
-        1,
-    );
-    let second = super::super::descriptor::CufftPlanStructuralKey::new(
-        0,
-        CufftTransformKind::C2c32,
-        CufftDirection::Forward,
-        7,
-        3,
-        3,
-        1,
-        3,
-        1,
-    );
-    assert_eq!(constant_hash(&first), constant_hash(&second));
-    assert!(!plan_key_discriminator_matches(&first, &second));
+fn retained_bytes_include_entry_metadata_and_workspace() {
+    let workspace_bytes = 128;
+    let expected = size_of::<Arc<CufftLibrary>>()
+        + size_of::<CudaRuntime>()
+        + size_of::<usize>()
+        + size_of::<CufftPlanKey>()
+        + size_of::<CufftHandle>()
+        + size_of::<CufftWorkspace>()
+        + workspace_bytes;
+
+    assert_eq!(retained_bytes_for_workspace(workspace_bytes), expected);
+    assert!(size_of::<CufftPlanEntry>() >= size_of::<CufftWorkspace>());
+}
+
+#[test]
+fn workspace_and_execution_keep_ffi_pointers_scoped() {
+    let source = include_str!("../plan.rs");
+    let workspace_section = source
+        .split_once("pub(crate) struct CufftWorkspace")
+        .and_then(|(_, rest)| rest.split_once("#[derive(Default)]"))
+        .map(|(section, _)| section)
+        .unwrap_or_else(|| unreachable!("workspace source section should exist"));
+    assert!(!workspace_section.contains("ptr: *mut c_void"));
+    assert!(!workspace_section.contains("unsafe impl Send for CufftWorkspace"));
+    assert!(!workspace_section.contains("unsafe impl Sync for CufftWorkspace"));
+
+    let execute_section = source
+        .split_once("pub(crate) fn execute(")
+        .and_then(|(_, rest)| rest.split_once("    fn execute_pair"))
+        .map(|(section, _)| section)
+        .unwrap_or_else(|| unreachable!("execute source section should exist"));
+    let stream_callback = execute_section
+        .split_once("with_raw_cuda_stream")
+        .and_then(|(_, rest)| rest.split_once("        })\n        .map_err"))
+        .map(|(section, _)| section)
+        .unwrap_or_else(|| unreachable!("stream callback source section should exist"));
+    assert!(stream_callback.contains("self.execute_pair("));
+}
+
+#[test]
+fn exact_plan_key_match_rejects_collisions_and_runtime_identity_mismatch() {
+    let first = CufftPlanKey::<usize> {
+        runtime_identity: 1,
+        device_ordinal: 0,
+        kind: CufftTransformKind::C2c32,
+        direction: CufftDirection::Forward,
+        n: 8,
+        batch: 3,
+        istride: 3,
+        idist: 1,
+        ostride: 3,
+        odist: 1,
+    };
+    let different_shape = CufftPlanKey {
+        n: 7,
+        ..first.clone()
+    };
+    let different_runtime = CufftPlanKey {
+        runtime_identity: 2,
+        ..first.clone()
+    };
+
+    assert_eq!(constant_hash(&first), constant_hash(&different_shape));
+    assert_ne!(first, different_shape);
+    assert!(!plan_key_discriminator_matches(&first, &different_shape));
+    assert_ne!(first, different_runtime);
+    assert!(!plan_key_discriminator_matches(&first, &different_runtime));
 }
