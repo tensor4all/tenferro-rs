@@ -11,8 +11,7 @@ use num_traits::{One, Zero};
 use super::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, dtype_mismatch, ensure_resident_on_runtime,
     ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_nullary_into,
-    prepared_tensor_access, prepared_view_access, prepared_view_mut_access, typed_tensor_array_arg,
-    CubeclPreparedAccess,
+    prepared_tensor_access, prepared_view_access, prepared_view_mut_access, CubeclPreparedAccess,
 };
 use super::error::{unsupported_dtype, unsupported_operation, workspace_size_overflow};
 use super::ffi::cutensor::{
@@ -20,7 +19,6 @@ use super::ffi::cutensor::{
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::interop::cuda_device_ptr_from_addr;
-use super::memory::upload_tensor;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
@@ -42,9 +40,7 @@ trait CutensorScalar: CubeElement + TensorScalar + CubePrimitive + Clone + One +
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor;
 
-    /// Wrap/unwrap between the typed tensor and the dtype-erased [`Tensor`],
-    /// used to materialize scalar device constants.
-    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor;
+    /// Unwrap the matching dtype variant from dtype-erased tensors.
     fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>>;
 
     /// Unwrap the matching dtype variant from dtype-erased borrowed views.
@@ -102,10 +98,6 @@ impl CutensorScalar for f32 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
     }
-    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
-        Tensor::F32(tensor)
-    }
-
     fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
         match tensor {
             Tensor::F32(tensor) => Some(tensor),
@@ -139,10 +131,6 @@ impl CutensorScalar for f64 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
     }
-    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
-        Tensor::F64(tensor)
-    }
-
     fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
         match tensor {
             Tensor::F64(tensor) => Some(tensor),
@@ -176,10 +164,6 @@ impl CutensorScalar for Complex32 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
     }
-    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
-        Tensor::C32(tensor)
-    }
-
     fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
         match tensor {
             Tensor::C32(tensor) => Some(tensor),
@@ -214,10 +198,6 @@ impl CutensorScalar for Complex64 {
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
     }
-    fn wrap_tensor(tensor: TypedTensor<Self>) -> Tensor {
-        Tensor::C64(tensor)
-    }
-
     fn unwrap_tensor(tensor: &Tensor) -> Option<&TypedTensor<Self>> {
         match tensor {
             Tensor::C64(tensor) => Some(tensor),
@@ -987,22 +967,7 @@ where
             },
         );
     }
-    let factor_host = T::wrap_tensor(TypedTensor::from_vec_col_major(vec![1], vec![beta])?);
-    let factor_device = upload_tensor(rt, &factor_host)?;
-    let factor_typed = T::unwrap_tensor(&factor_device)
-        .ok_or_else(|| Error::Internal("scale factor upload changed dtype".to_string()))?;
-    ensure_resident_on_runtime(rt, out, OP)?;
-    ensure_resident_on_runtime(rt, factor_typed, OP)?;
-    let out_arg = typed_tensor_array_arg(out, OP)?;
-    let factor_arg = typed_tensor_array_arg(factor_typed, OP)?;
-    T::launch_scale_in_place(
-        rt.client(),
-        cube_count_for_len(out.n_elements())?,
-        cube_dim_1d(),
-        out_arg,
-        factor_arg,
-    );
-    Ok(())
+    super::interop::scale_typed_tensor_for_op(rt, out, beta, OP, T::launch_scale_in_place)
 }
 
 fn dot_general_typed<T>(
