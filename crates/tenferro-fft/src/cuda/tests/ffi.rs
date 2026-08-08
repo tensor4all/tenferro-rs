@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 
-use super::super::error::CudaFftError;
+use super::super::error::{into_tensor_error, CudaFftError};
 use super::super::ffi::{
     cufft_library_candidates, map_cufft_status, CufftLibrary, CUFFT_ALLOC_FAILED,
     CUFFT_EXEC_FAILED, CUFFT_INTERNAL_ERROR, CUFFT_INVALID_PLAN, CUFFT_INVALID_SIZE,
@@ -10,7 +10,7 @@ use super::super::ffi::{
 };
 
 #[test]
-fn library_candidates_try_override_then_cuda12_cuda11_and_bare_sonames() {
+fn library_candidates_try_override_then_cuda11_cuda10_and_bare_sonames() {
     let candidates = cufft_library_candidates(Some(OsStr::new(
         "/opt/cuda-a/libcufft.so:/opt/cuda-b/libcufft.so",
     )));
@@ -20,8 +20,8 @@ fn library_candidates_try_override_then_cuda12_cuda11_and_bare_sonames() {
         vec![
             OsString::from("/opt/cuda-a/libcufft.so"),
             OsString::from("/opt/cuda-b/libcufft.so"),
-            OsString::from("libcufft.so.12"),
             OsString::from("libcufft.so.11"),
+            OsString::from("libcufft.so.10"),
             OsString::from("libcufft.so"),
         ]
     );
@@ -30,8 +30,8 @@ fn library_candidates_try_override_then_cuda12_cuda11_and_bare_sonames() {
 #[test]
 fn library_candidates_use_defaults_when_override_is_absent_or_empty() {
     let expected = vec![
-        OsString::from("libcufft.so.12"),
         OsString::from("libcufft.so.11"),
+        OsString::from("libcufft.so.10"),
         OsString::from("libcufft.so"),
     ];
     assert_eq!(cufft_library_candidates(None), expected);
@@ -78,5 +78,69 @@ fn representative_cufft_failures_preserve_function_and_status() {
                 status: actual,
             } if actual == status
         ));
+    }
+}
+
+#[test]
+fn loader_failures_are_io_errors_with_a_typed_source_chain() {
+    // SAFETY: the test opens only a deliberately missing path and never uses
+    // a returned library handle.
+    let missing_source = unsafe { libloading::Library::new("/definitely/missing/libcufft.so") }
+        .expect_err("missing library path should produce a loader source");
+    let library_error = CudaFftError::LibraryLoad {
+        paths: "missing".to_owned(),
+        attempts: "missing".to_owned(),
+        source: missing_source,
+    };
+    let tensor_error = into_tensor_error("cuda_fft", library_error);
+    assert!(matches!(
+        &tensor_error,
+        tenferro_tensor::Error::IoSource { op: "cuda_fft", .. }
+    ));
+    assert_eq!(tensor_error.kind(), tenferro_tensor::ErrorKind::Io);
+    let source = tensor_error
+        .source()
+        .expect("I/O error must retain CudaFftError source");
+    assert!(source.downcast_ref::<CudaFftError>().is_some());
+}
+
+#[test]
+fn symbol_load_failures_are_io_errors_with_a_typed_source_chain() {
+    // SAFETY: the test opens only a deliberately missing path and never uses
+    // a returned library handle.
+    let missing_source = unsafe { libloading::Library::new("/definitely/missing/libcufft.so") }
+        .expect_err("missing library path should produce a loader source");
+    let symbol_error = CudaFftError::SymbolLoad {
+        name: "cufftCreate".to_owned(),
+        source: missing_source,
+    };
+    let tensor_error = into_tensor_error("cuda_fft", symbol_error);
+    assert!(matches!(
+        &tensor_error,
+        tenferro_tensor::Error::IoSource { op: "cuda_fft", .. }
+    ));
+    assert_eq!(tensor_error.kind(), tenferro_tensor::ErrorKind::Io);
+    assert!(tensor_error.source().is_some());
+}
+
+#[test]
+fn vendor_status_and_interop_failures_are_backend_errors_with_typed_sources() {
+    for source in [
+        CudaFftError::CufftStatus {
+            function: "cufftExecC2C",
+            status: 1,
+        },
+        CudaFftError::test_interop("cufft_execute"),
+    ] {
+        let tensor_error = into_tensor_error("cuda_fft", source);
+        assert!(matches!(
+            &tensor_error,
+            tenferro_tensor::Error::BackendSource { op: "cuda_fft", .. }
+        ));
+        assert_eq!(
+            tensor_error.kind(),
+            tenferro_tensor::ErrorKind::BackendFailure
+        );
+        assert!(tensor_error.source().is_some());
     }
 }

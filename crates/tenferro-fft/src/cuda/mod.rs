@@ -12,10 +12,7 @@ use tenferro_gpu::cuda::interop::{
     alloc_output, alloc_zero_output, scale_tensor_write, with_typed_device_ptr,
 };
 use tenferro_gpu::cuda::{CudaExecSession, CudaRuntime};
-use tenferro_tensor::{
-    DType, SliceConfig, Tensor, TensorElementwise, TensorIndexing, TensorReduction,
-    TensorStructural, TensorWrite,
-};
+use tenferro_tensor::{DType, SliceConfig, Tensor, TensorIndexing, TensorStructural, TensorWrite};
 
 use crate::backend::FftExecutionCache;
 use crate::{
@@ -440,22 +437,11 @@ fn canonicalize_input(
                 let current = owner.as_ref().map_or(input, |tensor| tensor);
                 let mut tail_shape = current_shape.clone();
                 tail_shape[last] = canonical.n - current_len;
-                let zero_tail = if current_len == 0 {
-                    // Empty inputs have no element from which to derive the
-                    // semantic zero scalar; allocate and fill the tail on the
-                    // same CUDA runtime instead of reducing an empty tensor.
-                    allocate_cuda_zero_output(session, current.dtype(), &tail_shape)?
-                } else {
-                    let zero = session.sub(current, current)?;
-                    let axes: Vec<usize> = (0..current_shape.len()).collect();
-                    let zero_scalar = session.reduce_sum(&zero, &axes)?;
-                    session.broadcast_in_dim(&zero_scalar, &tail_shape, &[])?
-                };
-                if current_len == 0 {
-                    zero_tail
-                } else {
-                    session.concatenate(&[current, &zero_tail], last)?
-                }
+                // Padding is semantic zero, not an arithmetic reduction. The
+                // input may contain NaN or infinity, and `current - current`
+                // would turn those values into NaN instead of producing zero.
+                let zero_tail = allocate_cuda_zero_output(session, current.dtype(), &tail_shape)?;
+                session.concatenate(&[current, &zero_tail], last)?
             };
             owner = Some(transformed);
         }

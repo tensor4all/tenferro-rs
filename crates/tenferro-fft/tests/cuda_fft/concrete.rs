@@ -3,7 +3,7 @@ use super::support;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftExecutor, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
-use tenferro_tensor::TensorRead;
+use tenferro_tensor::{Tensor, TensorRead};
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
@@ -119,19 +119,106 @@ fn cuda_real_fft_completes_even_and_odd_hermitian_spectrum() {
     let mut cpu = CpuBackend::new();
     let mut cuda = support::cuda_backend();
     for n in [8usize, 7, 2, 1] {
-        let input = real_f64(&[n], 0.25);
-        let actual = run_case(
+        for (input, tolerance) in [
+            (real_f32(&[n], 0.25), 1.0e-5),
+            (real_f64(&[n], 0.25), 1.0e-11),
+        ] {
+            let actual = run_case(
+                &mut cpu,
+                &mut cuda,
+                &input,
+                Operation::Fft,
+                None,
+                -1,
+                FftNorm::Backward,
+                tolerance,
+            );
+            assert_eq!(actual.shape(), &[n]);
+            assert_full_hermitian(&actual);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_irfft_explicit_even_and_odd_lengths_c32_c64() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let mut cuda = support::cuda_backend();
+    for (input, n, tolerance) in [
+        (real_f32(&[8], 0.25), Some(8), 1.0e-5),
+        (real_f32(&[7], 0.25), Some(7), 1.0e-5),
+        (real_f64(&[8], 0.25), Some(8), 1.0e-11),
+        (real_f64(&[7], 0.25), Some(7), 1.0e-11),
+    ] {
+        let spectrum = run_case(
             &mut cpu,
             &mut cuda,
             &input,
-            Operation::Fft,
-            None,
+            Operation::Rfft,
+            n,
             -1,
             FftNorm::Backward,
-            1.0e-11,
+            tolerance,
         );
-        assert_eq!(actual.shape(), &[n]);
-        assert_full_hermitian(&actual);
+        run_case(
+            &mut cpu,
+            &mut cuda,
+            &spectrum,
+            Operation::Irfft,
+            n,
+            -1,
+            FftNorm::Backward,
+            tolerance,
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_zero_padding_preserves_nonfinite_cpu_oracle_real_and_complex() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let mut cuda = support::cuda_backend();
+    let cases = [
+        (
+            Tensor::from_vec_col_major(vec![1], vec![f32::NAN]).unwrap(),
+            1.0e-5,
+        ),
+        (
+            Tensor::from_vec_col_major(vec![1], vec![f64::INFINITY]).unwrap(),
+            1.0e-11,
+        ),
+        (
+            Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(f32::NAN, 0.0)])
+                .unwrap(),
+            1.0e-5,
+        ),
+        (
+            Tensor::from_vec_col_major(
+                vec![1],
+                vec![num_complex::Complex64::new(f64::INFINITY, 0.0)],
+            )
+            .unwrap(),
+            1.0e-11,
+        ),
+    ];
+    for (input, tolerance) in cases {
+        let expected = Operation::Fft
+            .execute_cpu(&mut cpu, &input, Some(2), -1, FftNorm::Backward)
+            .unwrap();
+        let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+        let actual = Operation::Fft
+            .execute_cuda(&mut cuda, &gpu_input, Some(2), -1, FftNorm::Backward)
+            .unwrap();
+        let actual = support::download_cuda(cuda.runtime(), &actual).unwrap();
+        assert_host_close_allow_nonfinite(&actual, &expected, tolerance);
     }
 }
 

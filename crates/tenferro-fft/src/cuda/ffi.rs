@@ -13,7 +13,7 @@ use libloading::Library;
 
 use super::error::CudaFftError;
 
-const DEFAULT_CUFFT_PATHS: &[&str] = &["libcufft.so.12", "libcufft.so.11", "libcufft.so"];
+const DEFAULT_CUFFT_PATHS: &[&str] = &["libcufft.so.11", "libcufft.so.10", "libcufft.so"];
 
 pub(crate) type CufftHandle = i32;
 pub(crate) type CufftStatus = i32;

@@ -57,6 +57,65 @@ impl DeviceByteBuffer {
     }
 }
 
+/// Retain one prepared CubeCL allocation and its exact CUDA runtime while a
+/// vendor library may use the allocation through a scoped raw pointer.
+///
+/// This hidden bridge is intentionally owner-scoped: the pointer is available
+/// only during [`Self::with_device_ptr`], while the prepared handle and runtime
+/// remain owned by the lease until it is dropped. Callers that cannot prove the
+/// vendor stream completed must intentionally retain the lease.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CudaExternalUseLease {
+    // Keep the prepared allocation handle before the runtime so it is released
+    // while the retained CUDA context is still alive.
+    handle: cubecl_runtime::server::Handle,
+    runtime: CudaRuntime,
+}
+
+impl CudaExternalUseLease {
+    /// Prepare and retain a CubeCL-backed tensor for one external CUDA use.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed runtime-state error when `tensor` is host-backed or is
+    /// owned by a different CUDA runtime, or a typed preparation error when
+    /// its provider handle cannot be prepared.
+    pub fn new<T, R>(
+        runtime: &CudaRuntime,
+        tensor: &TypedTensor<T, R>,
+        op: &'static str,
+    ) -> crate::Result<Self>
+    where
+        T: TensorScalar + 'static,
+        R: TensorRank,
+    {
+        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
+        let handle = dispatch::prepared_tensor_access(tensor, op)?.into_handle();
+        Ok(Self {
+            handle,
+            runtime: runtime.clone(),
+        })
+    }
+
+    /// Borrow the retained CUDA device pointer for the duration of `callback`.
+    ///
+    /// The allocation handle and exact runtime are retained by `self` for the
+    /// whole lease, so the pointer cannot outlive the owner-scoped external
+    /// use. The caller must synchronize the vendor stream before dropping this
+    /// lease when the vendor operation is asynchronous.
+    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        let resource = self
+            .runtime
+            .client()
+            .get_resource(self.handle.clone())
+            .map_err(|err| crate::Error::backend_source("cuda_external_use_lease", err))?;
+        let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, "cuda_external_use_lease")?;
+        callback(ptr);
+        Ok(())
+    }
+}
+
 pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::Result<*mut c_void> {
     let addr = usize::try_from(addr).map_err(|_| {
         crate::Error::invalid_argument(

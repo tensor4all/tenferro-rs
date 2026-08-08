@@ -14,7 +14,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use tenferro_gpu::cuda::interop::{
-    alloc_device_bytes, with_raw_cuda_stream, with_typed_device_ptr, DeviceByteBuffer,
+    alloc_device_bytes, with_raw_cuda_stream, CudaExternalUseLease, DeviceByteBuffer,
 };
 use tenferro_gpu::cuda::CudaRuntime;
 use tenferro_runtime::ExtensionCacheKey;
@@ -373,7 +373,7 @@ fn direction(direction: CufftDirection) -> i32 {
     }
 }
 
-/// Bind a plan to the current stream without waiting for queued work.
+/// Bind a plan to the current stream for the next vendor execution.
 pub(crate) fn bind_plan_to_stream(
     library: &CufftLibrary,
     plan: CufftHandle,
@@ -390,39 +390,44 @@ pub(crate) fn bind_plan_to_stream(
 
 pub(crate) trait CufftExecutionScopes {
     fn with_stream(&self, callback: impl FnOnce(u64)) -> Result<(), CudaFftError>;
-    fn with_input_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError>;
-    fn with_output_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError>;
+    fn synchronize(&self) -> Result<(), CudaFftError>;
 }
 
-struct TypedExecutionScopes<'a, T, U> {
+pub(crate) trait CufftExternalUseLease {
+    fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError>;
+}
+
+impl CufftExternalUseLease for CudaExternalUseLease {
+    fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
+        self.with_device_ptr(callback)
+            .map_err(|source| CudaFftError::interop("cufft_execute_pointer", source))
+    }
+}
+
+struct TypedExecutionScopes<'a> {
     runtime: &'a CudaRuntime,
-    input: &'a TypedTensor<T>,
-    output: &'a TypedTensor<U>,
 }
 
-impl<T, U> CufftExecutionScopes for TypedExecutionScopes<'_, T, U>
-where
-    T: TensorScalar + 'static,
-    U: TensorScalar + 'static,
-{
+impl CufftExecutionScopes for TypedExecutionScopes<'_> {
     fn with_stream(&self, callback: impl FnOnce(u64)) -> Result<(), CudaFftError> {
         with_raw_cuda_stream(self.runtime, OP, callback)
             .map_err(|source| CudaFftError::interop("cufft_execute_stream", source))
     }
 
-    fn with_input_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
-        with_typed_device_ptr(self.runtime, self.input, OP, callback)
-            .map_err(|source| CudaFftError::interop("cufft_execute_input_pointer", source))
-    }
-
-    fn with_output_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
-        with_typed_device_ptr(self.runtime, self.output, OP, callback)
-            .map_err(|source| CudaFftError::interop("cufft_execute_output_pointer", source))
+    fn synchronize(&self) -> Result<(), CudaFftError> {
+        self.runtime
+            .synchronize()
+            .map_err(|source| CudaFftError::interop("cufft_execute_synchronize", source))
     }
 }
 
-pub(crate) fn enqueue_plan_execution<S, C>(
+/// Bind, enqueue, and synchronize one cuFFT execution on scoped stream and
+/// pointer callbacks. The leases outlive those callbacks until synchronization
+/// succeeds; a failed barrier intentionally leaks both leases.
+pub(crate) fn enqueue_plan_execution<S, I, O, C>(
     scopes: &S,
+    input_lease: I,
+    output_lease: O,
     library: &CufftLibrary,
     plan: CufftHandle,
     mut call: C,
@@ -430,31 +435,52 @@ pub(crate) fn enqueue_plan_execution<S, C>(
 ) -> Result<(), CudaFftError>
 where
     S: CufftExecutionScopes,
+    I: CufftExternalUseLease,
+    O: CufftExternalUseLease,
     C: FnMut(&CufftApi, CufftHandle, *mut c_void, *mut c_void) -> CufftStatus,
 {
-    let mut execution_result = Ok(());
+    let mut execution_error = None;
+    let mut synchronization_error = None;
     scopes.with_stream(|stream| {
         if let Err(error) = bind_plan_to_stream(library, plan, stream) {
-            execution_result = Err(error);
-            return;
-        }
-
-        let mut pointer_error = None;
-        let input_result = scopes.with_input_ptr(|input_ptr| {
-            if let Err(error) = scopes.with_output_ptr(|output_ptr| {
-                let status = call(&library.api, plan, input_ptr, output_ptr);
-                execution_result = map_cufft_status(function, status);
+            execution_error = Some(error);
+        } else {
+            let mut pointer_error = None;
+            if let Err(error) = input_lease.with_ptr(|input_ptr| {
+                if let Err(error) = output_lease.with_ptr(|output_ptr| {
+                    let status = call(&library.api, plan, input_ptr, output_ptr);
+                    if let Err(error) = map_cufft_status(function, status) {
+                        execution_error = Some(error);
+                    }
+                }) {
+                    pointer_error = Some(error);
+                }
             }) {
-                pointer_error = Some(error);
+                execution_error = Some(error);
+            } else if let Some(error) = pointer_error {
+                execution_error = Some(error);
             }
-        });
-        if let Err(error) = input_result {
-            execution_result = Err(error);
-        } else if let Some(error) = pointer_error {
-            execution_result = Err(error);
+        }
+        if let Err(error) = scopes.synchronize() {
+            synchronization_error = Some(error);
         }
     })?;
-    execution_result
+
+    if synchronization_error.is_some() {
+        // The vendor may still be using both allocations after a failed
+        // synchronization. Forgetting the leases intentionally retains the
+        // prepared handles and exact runtimes until process exit.
+        std::mem::forget(input_lease);
+        std::mem::forget(output_lease);
+    }
+
+    match (execution_error, synchronization_error) {
+        (Some(primary), Some(suppressed)) => {
+            Err(CudaFftError::with_suppressed(primary, suppressed))
+        }
+        (Some(error), None) | (None, Some(error)) => Err(error),
+        (None, None) => Ok(()),
+    }
 }
 
 /// One cached cuFFT plan and its manually owned CubeCL work area.
@@ -492,8 +518,8 @@ pub(crate) fn retained_bytes_for_workspace(workspace_bytes: usize) -> usize {
 
 /// Run cuFFT library loading and plan creation only for a non-empty batch.
 ///
-/// Task 5 must put its complete `CufftLibrary::load`/plan-cache closure here so
-/// a zero-batch execution can return without loading cuFFT or creating a plan.
+/// The caller supplies the complete library/cache/plan closure so a zero-batch
+/// execution can return without loading cuFFT or creating a plan.
 pub(crate) fn with_cufft_plan_for_batch<T>(
     batch: usize,
     load_and_create: impl FnOnce() -> Result<T, CudaFftError>,
@@ -548,6 +574,8 @@ impl CufftPlanEntry {
     }
 
     /// Execute this entry on the retained runtime's currently selected stream.
+    /// The cuFFT stream is synchronized before this method returns; subsequent
+    /// CUDA postprocessing may still remain queued on that stream.
     pub(crate) fn execute(
         &mut self,
         input: &Tensor,
@@ -654,12 +682,22 @@ impl CufftPlanEntry {
         T: TensorScalar + 'static,
         U: TensorScalar + 'static,
     {
+        let input_lease = CudaExternalUseLease::new(&self.runtime, input, OP)
+            .map_err(|source| CudaFftError::interop("cufft_execute_input_lease", source))?;
+        let output_lease = CudaExternalUseLease::new(&self.runtime, output, OP)
+            .map_err(|source| CudaFftError::interop("cufft_execute_output_lease", source))?;
         let scopes = TypedExecutionScopes {
             runtime: &self.runtime,
-            input,
-            output,
         };
-        enqueue_plan_execution(&scopes, &self.library, self.plan, call, function)
+        enqueue_plan_execution(
+            &scopes,
+            input_lease,
+            output_lease,
+            &self.library,
+            self.plan,
+            call,
+            function,
+        )
     }
 
     pub(crate) fn retained_bytes(&self) -> usize {

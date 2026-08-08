@@ -258,6 +258,78 @@ pub(crate) fn assert_host_close(actual: &Tensor, expected: &Tensor, tolerance: f
     }
 }
 
+fn assert_scalar_close_allow_nonfinite(actual: f64, expected: f64, tolerance: f64, index: usize) {
+    if expected.is_nan() {
+        assert!(
+            actual.is_nan(),
+            "expected NaN at index {index}, got {actual:?}"
+        );
+    } else if expected.is_infinite() {
+        assert_eq!(actual, expected, "infinite value differs at index {index}");
+    } else {
+        assert!(
+            actual.is_finite(),
+            "actual value at index {index} is nonfinite: {actual:?}"
+        );
+        let absolute = (actual - expected).abs();
+        let relative = if expected == 0.0 {
+            absolute
+        } else {
+            absolute / expected.abs()
+        };
+        assert!(
+            absolute <= tolerance || relative <= tolerance,
+            "value at index {index} differs: actual {actual:e}, expected {expected:e}"
+        );
+    }
+}
+
+pub(crate) fn assert_host_close_allow_nonfinite(
+    actual: &Tensor,
+    expected: &Tensor,
+    tolerance: f64,
+) {
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(actual.dtype(), expected.dtype());
+    match (actual.dtype(), expected.dtype()) {
+        (DType::C32, DType::C32) => {
+            for (index, (actual, expected)) in actual
+                .as_slice::<Complex32>()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice::<Complex32>().unwrap())
+                .enumerate()
+            {
+                assert_scalar_close_allow_nonfinite(
+                    f64::from(actual.re),
+                    f64::from(expected.re),
+                    tolerance,
+                    index,
+                );
+                assert_scalar_close_allow_nonfinite(
+                    f64::from(actual.im),
+                    f64::from(expected.im),
+                    tolerance,
+                    index,
+                );
+            }
+        }
+        (DType::C64, DType::C64) => {
+            for (index, (actual, expected)) in actual
+                .as_slice::<Complex64>()
+                .unwrap()
+                .iter()
+                .zip(expected.as_slice::<Complex64>().unwrap())
+                .enumerate()
+            {
+                assert_scalar_close_allow_nonfinite(actual.re, expected.re, tolerance, index);
+                assert_scalar_close_allow_nonfinite(actual.im, expected.im, tolerance, index);
+            }
+        }
+        _ => panic!("nonfinite FFT oracle expects a complex output"),
+    }
+}
+
 // INVARIANT: this test helper keeps every FFT planning parameter explicit at
 // call sites so each acceptance case documents its operation, axis, length,
 // normalization, and tolerance.
@@ -329,15 +401,6 @@ pub(crate) fn run_executor_case(
     let actual = support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
     assert_host_close(&actual, &expected, tolerance);
     actual
-}
-
-pub(crate) fn assert_error(result: tenferro_tensor::Result<Tensor>, expected_text: &str) {
-    let error = result.expect_err("unsupported CUDA FFT input must return an error");
-    assert!(!error.to_string().is_empty());
-    assert!(
-        error.to_string().contains(expected_text),
-        "error `{error}` did not contain `{expected_text}`"
-    );
 }
 
 pub(crate) fn cuda_runtime_with_fft(backend: &CudaBackend, install_module: bool) -> Runtime {

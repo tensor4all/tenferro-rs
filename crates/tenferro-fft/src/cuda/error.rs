@@ -32,6 +32,14 @@ pub(crate) enum CudaFftError {
         #[source]
         source: tenferro_tensor::BoxError,
     },
+    /// A primary execution failure with a typed stream-synchronization failure
+    /// retained as suppressed diagnostics.
+    #[error("primary cuFFT error: {primary}; suppressed error: {suppressed}")]
+    WithSuppressed {
+        #[source]
+        primary: Box<Self>,
+        suppressed: Box<Self>,
+    },
     /// An internal construction invariant was violated.
     #[error("internal cuFFT plan invariant failed: {message}")]
     InternalInvariant { message: &'static str },
@@ -48,6 +56,9 @@ pub(crate) fn into_tensor_error(op: &'static str, source: CudaFftError) -> tenfe
         CudaFftError::InternalInvariant { message } => {
             tenferro_tensor::Error::Internal(message.into())
         }
+        CudaFftError::LibraryLoad { .. } | CudaFftError::SymbolLoad { .. } => {
+            tenferro_tensor::Error::io_source(op, source)
+        }
         source => tenferro_tensor::Error::backend_source(op, source),
     }
 }
@@ -62,6 +73,13 @@ impl CudaFftError {
 
     pub(crate) fn internal(message: &'static str) -> Self {
         Self::InternalInvariant { message }
+    }
+
+    pub(crate) fn with_suppressed(primary: Self, suppressed: Self) -> Self {
+        Self::WithSuppressed {
+            primary: Box::new(primary),
+            suppressed: Box::new(suppressed),
+        }
     }
 
     #[cfg(test)]

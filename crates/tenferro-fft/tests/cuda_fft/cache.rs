@@ -422,3 +422,49 @@ fn cuda_caller_owned_cache_clear_and_eviction_are_safe_after_launch() {
         .unwrap();
     assert_host_close(&second_host, &expected_second, 1.0e-11);
 }
+
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let mut cuda = support::cuda_backend();
+    let input = complex_f32(&[4, 64], 0.5);
+    let expected = Operation::Fft
+        .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
+        .unwrap();
+    let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+    let mut executor = FftExecutor::default();
+    let first = Operation::Fft
+        .execute_executor(
+            &mut executor,
+            &mut cuda,
+            &gpu_input,
+            None,
+            -1,
+            FftNorm::Backward,
+        )
+        .unwrap();
+    drop(first);
+    executor.clear_cache();
+
+    // The next upload is intentionally allowed to reuse the released output
+    // allocation. The preceding cuFFT call has synchronized at its FFI
+    // boundary, so no vendor work can access that allocation after `drop`.
+    let replacement_input = support::upload_cuda(cuda.runtime(), &input);
+    let replacement = Operation::Fft
+        .execute_executor(
+            &mut executor,
+            &mut cuda,
+            &replacement_input,
+            None,
+            -1,
+            FftNorm::Backward,
+        )
+        .unwrap();
+    let replacement_host = support::download_cuda(cuda.runtime(), &replacement).unwrap();
+    assert_host_close(&replacement_host, &expected, 1.0e-5);
+}
