@@ -201,8 +201,10 @@ variables:
 The cuFFT loader tries non-empty override entries first, then
 `libcufft.so.11`, `libcufft.so.10`, and bare `libcufft.so`, covering CUDA
 12/cuFFT 11 and CUDA 11/cuFFT 10. The vendor cuFFT call synchronizes its
-bound stream before the FFI callback returns; later CubeCL postprocessing stays
-stream-managed and explicit download synchronizes the final output. A
+bound stream inside the innermost output-pointer callback, after enqueue and
+before that callback returns. Successful pointer use therefore completes before
+the input-pointer and raw-stream callbacks return; later CubeCL postprocessing
+stays stream-managed and explicit download synchronizes the final output. A
 synchronization failure retains the prepared allocation leases and exact CUDA
 runtime rather than reclaiming memory while vendor work might remain.
 

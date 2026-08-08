@@ -82,9 +82,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    // The cuFFT vendor call synchronizes at its FFI boundary. The explicit
-    // download below synchronizes the stream-managed postprocessing and is the
-    // visible device-to-host boundary for the final output.
+    // The cuFFT vendor call synchronizes inside its innermost output-pointer
+    // callback before pointer and stream callbacks return. The explicit download
+    // below synchronizes stream-managed postprocessing and is the visible
+    // device-to-host boundary for the final output.
     let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
     assert_eq!(host_spectrum.dtype(), DType::C32);
     assert_eq!(host_spectrum.shape(), &[3]);

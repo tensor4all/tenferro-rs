@@ -216,9 +216,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    // The cuFFT vendor call synchronizes at its FFI boundary. The explicit
-    // download below synchronizes the stream-managed postprocessing and is the
-    // visible device-to-host boundary for the final output.
+    // The cuFFT vendor call synchronizes inside its innermost output-pointer
+    // callback before pointer and stream callbacks return. The explicit download
+    // below synchronizes stream-managed postprocessing and is the visible
+    // device-to-host boundary for the final output.
     let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
     assert_eq!(host_spectrum.dtype(), DType::C32);
     assert_eq!(host_spectrum.shape(), &[3]);
@@ -280,13 +281,14 @@ caller-visible operations. `n` truncates or zero-pads C2C/R2C input on device,
 with padding allocated and filled as semantic device zeros; C2R uses `n` only
 for the real output length and consumes its validated half-spectrum unchanged.
 Normalization is applied on device using the same `FftNorm` rules described
-above. The cuFFT vendor call synchronizes its bound stream before returning
-from the FFI boundary so its scoped stream and pointer leases cannot outlive
-vendor work. Subsequent CUDA normalization, Hermitian completion, and axis
-restoration remain stream-managed; an explicit download synchronizes the final
-output. Cache eviction or clear also synchronizes while plans and workspaces
-are retired. cuFFT/provider failures are returned as typed errors rather than
-producing a host result.
+above. The cuFFT vendor call synchronizes its bound stream inside the
+innermost output-pointer callback, after enqueue and before pointer use ends,
+so its input-pointer and raw-stream callbacks cannot return while vendor work
+is still using the buffers. Subsequent CUDA normalization, Hermitian completion,
+and axis restoration remain stream-managed; an explicit download synchronizes
+the final output. Cache eviction or clear also synchronizes while plans and
+workspaces are retired. cuFFT/provider failures are returned as typed errors
+rather than producing a host result.
 
 ### Concrete Tensor And TensorRead
 

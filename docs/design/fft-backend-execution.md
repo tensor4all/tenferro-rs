@@ -103,11 +103,13 @@ library-handle metadata; opaque cuFFT internal allocations and library-owned
 state are excluded.
 
 The cuFFT adapter binds each plan to the current CubeCL stream and
-synchronizes that stream at the cuFFT FFI boundary before the scoped stream
-callback returns. Input/output leases retain the prepared CubeCL handles and
-the exact CUDA runtime through that barrier; if synchronization fails, both
-leases are intentionally retained so vendor work cannot race allocation
-reclamation. The current `CudaRuntime` exposes one serialized CubeCL current
+synchronizes that stream inside the innermost output-pointer callback, after
+vendor enqueue and before that callback returns. Successful pointer use
+therefore completes before the input-pointer and scoped stream callbacks
+return. Input/output leases retain the prepared CubeCL handles and the exact
+CUDA runtime through that barrier; if synchronization fails, both leases are
+intentionally retained so vendor work cannot race allocation reclamation. The
+current `CudaRuntime` exposes one serialized CubeCL current
 stream, and the mutable CUDA FFT session serializes plan rebinding and
 execution on that stream. The stream is therefore omitted from the cache key,
 but `cufftSetStream` is called immediately before each execution. Subsequent

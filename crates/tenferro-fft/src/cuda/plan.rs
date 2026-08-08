@@ -422,8 +422,10 @@ impl CufftExecutionScopes for TypedExecutionScopes<'_> {
 }
 
 /// Bind, enqueue, and synchronize one cuFFT execution on scoped stream and
-/// pointer callbacks. The leases outlive those callbacks until synchronization
-/// succeeds; a failed barrier intentionally leaks both leases.
+/// pointer callbacks. Synchronization runs inside the innermost output-pointer
+/// callback, after vendor enqueue and before any pointer or stream callback can
+/// return. The leases outlive those callbacks until synchronization succeeds;
+/// a failed barrier intentionally leaks both leases.
 pub(crate) fn enqueue_plan_execution<S, I, O, C>(
     scopes: &S,
     input_lease: I,
@@ -452,6 +454,9 @@ where
                     if let Err(error) = map_cufft_status(function, status) {
                         execution_error = Some(error);
                     }
+                    if let Err(error) = scopes.synchronize() {
+                        synchronization_error = Some(error);
+                    }
                 }) {
                     pointer_error = Some(error);
                 }
@@ -460,9 +465,6 @@ where
             } else if let Some(error) = pointer_error {
                 execution_error = Some(error);
             }
-        }
-        if let Err(error) = scopes.synchronize() {
-            synchronization_error = Some(error);
         }
     })?;
 

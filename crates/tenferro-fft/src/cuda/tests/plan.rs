@@ -298,6 +298,7 @@ struct FakeExecutionScopes {
 impl CufftExecutionScopes for FakeExecutionScopes {
     fn with_stream(&self, callback: impl FnOnce(u64)) -> Result<(), CudaFftError> {
         callback(0);
+        record("stream_exit");
         Ok(())
     }
 
@@ -312,20 +313,22 @@ impl CufftExecutionScopes for FakeExecutionScopes {
 }
 
 struct FakeLease {
-    scope: &'static str,
+    enter: &'static str,
+    exit: &'static str,
     drops: Arc<AtomicUsize>,
 }
 
 impl FakeLease {
-    fn new(scope: &'static str, drops: Arc<AtomicUsize>) -> Self {
-        Self { scope, drops }
+    fn new(enter: &'static str, exit: &'static str, drops: Arc<AtomicUsize>) -> Self {
+        Self { enter, exit, drops }
     }
 }
 
 impl CufftExternalUseLease for FakeLease {
     fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
-        record(self.scope);
+        record(self.enter);
         callback(std::ptr::null_mut());
+        record(self.exit);
         Ok(())
     }
 }
@@ -446,7 +449,7 @@ fn successful_construction_uses_required_cufft_order() {
 }
 
 #[test]
-fn fake_plan_execution_synchronizes_after_scoped_enqueue() {
+fn fake_plan_execution_synchronizes_before_scoped_callbacks_exit() {
     let _lock = test_lock();
     reset_state(0, None);
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
@@ -456,8 +459,8 @@ fn fake_plan_execution_synchronizes_after_scoped_enqueue() {
 
     enqueue_plan_execution(
         &scopes,
-        FakeLease::new("input_pointer_scope", Arc::clone(&input_drops)),
-        FakeLease::new("output_pointer_scope", Arc::clone(&output_drops)),
+        FakeLease::new("input_enter", "input_exit", Arc::clone(&input_drops)),
+        FakeLease::new("output_enter", "output_exit", Arc::clone(&output_drops)),
         &library,
         7,
         |api, plan, input, output| {
@@ -473,10 +476,13 @@ fn fake_plan_execution_synchronizes_after_scoped_enqueue() {
         calls(),
         vec![
             "set_stream",
-            "input_pointer_scope",
-            "output_pointer_scope",
+            "input_enter",
+            "output_enter",
             "exec_c2c",
             "synchronize",
+            "output_exit",
+            "input_exit",
+            "stream_exit",
         ]
     );
     assert_eq!(input_drops.load(Ordering::Relaxed), 1);
@@ -484,7 +490,7 @@ fn fake_plan_execution_synchronizes_after_scoped_enqueue() {
 }
 
 #[test]
-fn fake_plan_execution_retains_leases_when_synchronization_fails() {
+fn fake_plan_execution_forgets_leases_after_sync_failure_and_exits_scopes() {
     let _lock = test_lock();
     reset_state(0, None);
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
@@ -496,8 +502,8 @@ fn fake_plan_execution_retains_leases_when_synchronization_fails() {
 
     let error = enqueue_plan_execution(
         &scopes,
-        FakeLease::new("input_pointer_scope", Arc::clone(&input_drops)),
-        FakeLease::new("output_pointer_scope", Arc::clone(&output_drops)),
+        FakeLease::new("input_enter", "input_exit", Arc::clone(&input_drops)),
+        FakeLease::new("output_enter", "output_exit", Arc::clone(&output_drops)),
         &library,
         7,
         |api, plan, input, output| {
@@ -512,7 +518,26 @@ fn fake_plan_execution_retains_leases_when_synchronization_fails() {
     assert!(matches!(error, CudaFftError::Interop { .. }));
     assert_eq!(input_drops.load(Ordering::Relaxed), 0);
     assert_eq!(output_drops.load(Ordering::Relaxed), 0);
-    assert_eq!(calls().last(), Some(&"synchronize"));
+    assert_eq!(
+        calls(),
+        vec![
+            "set_stream",
+            "input_enter",
+            "output_enter",
+            "exec_c2c",
+            "synchronize",
+            "output_exit",
+            "input_exit",
+            "stream_exit",
+        ]
+    );
+    assert_eq!(
+        calls()
+            .iter()
+            .filter(|&&call| call == "synchronize")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -528,8 +553,8 @@ fn fake_plan_execution_preserves_primary_and_suppressed_typed_errors() {
 
     let error = enqueue_plan_execution(
         &scopes,
-        FakeLease::new("input_pointer_scope", Arc::clone(&input_drops)),
-        FakeLease::new("output_pointer_scope", Arc::clone(&output_drops)),
+        FakeLease::new("input_enter", "input_exit", Arc::clone(&input_drops)),
+        FakeLease::new("output_enter", "output_exit", Arc::clone(&output_drops)),
         &library,
         7,
         |_api, _plan, _input, _output| CUFFT_EXEC_FAILED,
@@ -554,6 +579,25 @@ fn fake_plan_execution_preserves_primary_and_suppressed_typed_errors() {
     assert!(matches!(*suppressed, CudaFftError::Interop { .. }));
     assert_eq!(input_drops.load(Ordering::Relaxed), 0);
     assert_eq!(output_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        calls(),
+        vec![
+            "set_stream",
+            "input_enter",
+            "output_enter",
+            "synchronize",
+            "output_exit",
+            "input_exit",
+            "stream_exit",
+        ]
+    );
+    assert_eq!(
+        calls()
+            .iter()
+            .filter(|&&call| call == "synchronize")
+            .count(),
+        1
+    );
 }
 
 #[test]
