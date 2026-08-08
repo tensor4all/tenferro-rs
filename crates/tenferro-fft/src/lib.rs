@@ -7,7 +7,12 @@
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! On macOS, `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
+//! With the `cuda` feature, `tenferro_gpu::cuda::CudaBackend` executes the
+//! supported one-dimensional F32/F64/C32/C64 operations through dynamically
+//! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
+//! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
+//! explicit download remain stream-managed. On macOS,
+//! `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
 //! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
 //! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses

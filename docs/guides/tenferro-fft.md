@@ -89,11 +89,12 @@ library paths:
 export CUDA_PATH=/usr/local/cuda
 export LD_LIBRARY_PATH="$CUDA_PATH/lib64:${LD_LIBRARY_PATH:-}"
 export CUBECL_DEBUG_LOG=0
-export TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.12:/opt/cuda/lib64/libcufft.so.11
+export TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.11:/opt/cuda/lib64/libcufft.so.10
 ```
 
 The loader tries non-empty `TENFERRO_CUFFT_PATH` entries in order, then falls
-back to `libcufft.so.12`, `libcufft.so.11`, and `libcufft.so`. A path that
+back to `libcufft.so.11`, `libcufft.so.10`, and `libcufft.so`. This covers
+CUDA 12/cuFFT 11 and CUDA 11/cuFFT 10 installations. A path that
 cannot be opened is skipped so a later override or default can work; if no
 candidate can be loaded, or a loaded library cannot provide the required
 cuFFT symbols, the operation returns a typed provider/load error. This lookup
@@ -215,7 +216,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    backend.runtime().synchronize()?;
+    // The cuFFT vendor call synchronizes at its FFI boundary. The explicit
+    // download below synchronizes the stream-managed postprocessing and is the
+    // visible device-to-host boundary for the final output.
     let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
     assert_eq!(host_spectrum.dtype(), DType::C32);
     assert_eq!(host_spectrum.shape(), &[3]);
@@ -274,12 +277,16 @@ The input must already be resident on the exact `CudaRuntime` borrowed by the
 execution session. CUDA FFT does not implicitly transfer a host or foreign-
 runtime tensor and never falls back to CPU RustFFT; upload and download are
 caller-visible operations. `n` truncates or zero-pads C2C/R2C input on device,
-whereas C2R uses `n` only for the real output length and consumes its validated
-half-spectrum unchanged. Normalization is applied on device using the same
-`FftNorm` rules described above. The runtime currently serializes work on one
-current CUDA stream, and cache eviction or clear may synchronize while plans
-and workspaces are retired. cuFFT/provider failures are returned as typed
-errors rather than producing a host result.
+with padding allocated and filled as semantic device zeros; C2R uses `n` only
+for the real output length and consumes its validated half-spectrum unchanged.
+Normalization is applied on device using the same `FftNorm` rules described
+above. The cuFFT vendor call synchronizes its bound stream before returning
+from the FFI boundary so its scoped stream and pointer leases cannot outlive
+vendor work. Subsequent CUDA normalization, Hermitian completion, and axis
+restoration remain stream-managed; an explicit download synchronizes the final
+output. Cache eviction or clear also synchronizes while plans and workspaces
+are retired. cuFFT/provider failures are returned as typed errors rather than
+producing a host result.
 
 ### Concrete Tensor And TensorRead
 

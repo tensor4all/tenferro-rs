@@ -198,6 +198,14 @@ variables:
 | `TENFERRO_CUBLAS_PATH` | cuBLAS |
 | `TENFERRO_CUFFT_PATH` | cuFFT (loaded by `tenferro-fft`) |
 
+The cuFFT loader tries non-empty override entries first, then
+`libcufft.so.11`, `libcufft.so.10`, and bare `libcufft.so`, covering CUDA
+12/cuFFT 11 and CUDA 11/cuFFT 10. The vendor cuFFT call synchronizes its
+bound stream before the FFI callback returns; later CubeCL postprocessing stays
+stream-managed and explicit download synchronizes the final output. A
+synchronization failure retains the prepared allocation leases and exact CUDA
+runtime rather than reclaiming memory while vendor work might remain.
+
 Local GPU test runs should also set:
 
 | Variable | Purpose |
@@ -305,9 +313,11 @@ Operation crates that need to launch their own CubeCL kernels, such as
 instead. `tenferro-fft` uses the same boundary for cuFFT workspace allocation,
 current-stream access, typed device-pointer access, and the on-device scaling
 helper. The provider owns each allocation and exposes raw streams and pointers
-only through scoped callbacks; neither can escape a callback or be retained by
-an operation crate. cuFFT loading, opaque plans, and plan-cache entries remain
-owned by `tenferro-fft`.
+only through scoped callbacks. `CudaExternalUseLease` additionally retains a
+prepared CubeCL buffer handle and exact `CudaRuntime` while cuFFT may use the
+buffer; a successful stream barrier drops the lease, while a failed barrier
+intentionally retains it. cuFFT loading, opaque plans, and plan-cache entries
+remain owned by `tenferro-fft`.
 
 That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:

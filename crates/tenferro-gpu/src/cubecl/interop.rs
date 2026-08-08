@@ -60,7 +60,9 @@ impl DeviceByteBuffer {
 /// Retain one prepared CubeCL allocation and its exact CUDA runtime while a
 /// vendor library may use the allocation through a scoped raw pointer.
 ///
-/// This hidden bridge is intentionally owner-scoped: the pointer is available
+/// This hidden sibling-crate extension contract is consumed by
+/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. The
+/// bridge is intentionally owner-scoped: the pointer is available
 /// only during [`Self::with_device_ptr`], while the prepared handle and runtime
 /// remain owned by the lease until it is dropped. Callers that cannot prove the
 /// vendor stream completed must intentionally retain the lease.
