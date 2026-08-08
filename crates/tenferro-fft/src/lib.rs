@@ -152,6 +152,8 @@ use tenferro_tensor::{
 mod backend;
 mod cache;
 mod cpu;
+#[cfg(feature = "cuda")]
+mod cuda;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
 pub mod prelude;

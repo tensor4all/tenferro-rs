@@ -29,7 +29,13 @@ autodiff = [
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
-cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
+cuda = [
+    "dep:libloading",
+    "dep:tenferro-gpu",
+    "tenferro-gpu/cuda",
+    "tenferro-ad?/cuda",
+    "tenferro-internal-ops/cuda",
+]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 webgpu = [
     "dep:tenferro-gpu",
@@ -44,6 +50,7 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features =
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false, optional = true }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
+libloading = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
