@@ -1,5 +1,7 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{Error, ErrorKind, Tensor, TensorRead, TensorWrite};
+use tenferro_tensor::{
+    Error, ErrorKind, Tensor, TensorRead, TensorViewMut, TensorWrite, ValidationKind,
+};
 
 use crate::cubecl::interop::scale_tensor_write;
 use crate::cubecl::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaRuntime};
@@ -221,6 +223,183 @@ cuda_test!(scale_rejects_unsupported_dtype, {
         scale_tensor_write(&runtime, TensorWrite::from_tensor(&mut output), 0.25).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert!(error.to_string().contains("scale_tensor_write"));
+});
+
+cuda_test!(scale_validates_placement_before_unsupported_dtype, {
+    let runtime = runtime();
+    let mut host_output = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let error =
+        scale_tensor_write(&runtime, TensorWrite::from_tensor(&mut host_output), 0.25).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::RuntimeState {
+            op: "scale_tensor_write",
+            ..
+        }
+    ));
+
+    let foreign_runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut foreign_output = upload(
+        &foreign_runtime,
+        Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap(),
+    );
+    let error = scale_tensor_write(
+        &runtime,
+        TensorWrite::from_tensor(&mut foreign_output),
+        0.25,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::RuntimeState {
+            op: "scale_tensor_write",
+            ..
+        }
+    ));
+});
+
+cuda_test!(scale_tensor_write_view_full_buffer_is_safe, {
+    let runtime = runtime();
+    let input = vec![1.0_f64, -2.0, 3.5, -4.5];
+    let mut output = upload(
+        &runtime,
+        Tensor::from_vec_col_major(vec![input.len()], input.clone()).unwrap(),
+    );
+
+    {
+        let Tensor::F64(output) = &mut output else {
+            unreachable!()
+        };
+        let view = output
+            .backend_region_view_mut(vec![input.len()], vec![1], 0)
+            .unwrap();
+        scale_tensor_write(
+            &runtime,
+            TensorWrite::from_view(TensorViewMut::F64(view)),
+            0.25,
+        )
+        .unwrap();
+    }
+
+    let actual = download_tensor(&runtime, &output).unwrap();
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        &[0.25, -0.5, 0.875, -1.125]
+    );
+});
+
+cuda_test!(scale_tensor_write_view_compact_prefix_preserves_outside, {
+    let runtime = runtime();
+    let input = vec![1.0_f64, -2.0, 3.5, -4.5, 8.0, 9.0];
+    let mut output = upload(
+        &runtime,
+        Tensor::from_vec_col_major(vec![input.len()], input.clone()).unwrap(),
+    );
+
+    {
+        let Tensor::F64(output) = &mut output else {
+            unreachable!()
+        };
+        let view = output.backend_region_view_mut(vec![3], vec![1], 0).unwrap();
+        scale_tensor_write(
+            &runtime,
+            TensorWrite::from_view(TensorViewMut::F64(view)),
+            0.25,
+        )
+        .unwrap();
+    }
+
+    let actual = download_tensor(&runtime, &output).unwrap();
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        &[0.25, -0.5, 0.875, -4.5, 8.0, 9.0]
+    );
+});
+
+cuda_test!(
+    scale_tensor_write_view_rejects_nonzero_offset_without_writes,
+    {
+        let runtime = runtime();
+        let input = vec![1.0_f64, -2.0, 3.5, -4.5, 8.0, 9.0];
+        let mut output = upload(
+            &runtime,
+            Tensor::from_vec_col_major(vec![input.len()], input.clone()).unwrap(),
+        );
+
+        let error = {
+            let Tensor::F64(output) = &mut output else {
+                unreachable!()
+            };
+            let view = output.backend_region_view_mut(vec![3], vec![1], 1).unwrap();
+            scale_tensor_write(
+                &runtime,
+                TensorWrite::from_view(TensorViewMut::F64(view)),
+                0.25,
+            )
+            .unwrap_err()
+        };
+        assert_eq!(
+            error.kind(),
+            ErrorKind::Validation(ValidationKind::InvalidArgument)
+        );
+
+        let actual = download_tensor(&runtime, &output).unwrap();
+        assert_eq!(actual.as_slice::<f64>().unwrap(), input.as_slice());
+    }
+);
+
+cuda_test!(scale_tensor_write_view_rejects_strided_without_writes, {
+    let runtime = runtime();
+    let input = vec![1.0_f64, -2.0, 3.5, -4.5, 8.0, 9.0];
+    let mut output = upload(
+        &runtime,
+        Tensor::from_vec_col_major(vec![input.len()], input.clone()).unwrap(),
+    );
+
+    let error = {
+        let Tensor::F64(output) = &mut output else {
+            unreachable!()
+        };
+        let view = output.backend_region_view_mut(vec![3], vec![2], 0).unwrap();
+        scale_tensor_write(
+            &runtime,
+            TensorWrite::from_view(TensorViewMut::F64(view)),
+            0.25,
+        )
+        .unwrap_err()
+    };
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+
+    let actual = download_tensor(&runtime, &output).unwrap();
+    assert_eq!(actual.as_slice::<f64>().unwrap(), input.as_slice());
+});
+
+cuda_test!(scale_tensor_write_view_empty_is_a_noop, {
+    let runtime = runtime();
+    let input = vec![1.0_f64, -2.0, 3.5, -4.5];
+    let mut output = upload(
+        &runtime,
+        Tensor::from_vec_col_major(vec![input.len()], input.clone()).unwrap(),
+    );
+
+    {
+        let Tensor::F64(output) = &mut output else {
+            unreachable!()
+        };
+        let view = output.backend_region_view_mut(vec![0], vec![1], 0).unwrap();
+        scale_tensor_write(
+            &runtime,
+            TensorWrite::from_view(TensorViewMut::F64(view)),
+            0.25,
+        )
+        .unwrap();
+    }
+
+    let actual = download_tensor(&runtime, &output).unwrap();
+    assert_eq!(actual.as_slice::<f64>().unwrap(), input.as_slice());
 });
 
 fn upload(runtime: &CudaRuntime, tensor: Tensor) -> Tensor {

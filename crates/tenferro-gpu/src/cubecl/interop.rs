@@ -14,7 +14,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 
 use crate::{TensorRank, TensorScalar, TypedTensor};
-use tenferro_tensor::{DType, TensorViewMut, TensorWrite, TypedTensorViewMut};
+use tenferro_tensor::{DType, TensorRead, TensorViewMut, TensorWrite, TypedTensorViewMut};
 
 use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
@@ -346,11 +346,27 @@ const SCALE_OP: &str = "scale_tensor_write";
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cuda::{CudaRuntime, interop::scale_tensor_write};
-/// use tenferro_tensor::TensorWrite;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use tenferro_gpu::cuda::{
+///     cuda_devices, download_tensor, gpu_available, upload_tensor, CudaRuntime,
+/// };
+/// use tenferro_gpu::cuda::interop::scale_tensor_write;
+/// use tenferro_tensor::{Tensor, TensorWrite};
 ///
-/// let _scale: fn(&CudaRuntime, TensorWrite<'_>, f64) -> tenferro_tensor::Result<()> =
-///     scale_tensor_write;
+/// if !gpu_available() {
+///     return Ok(());
+/// }
+/// let Some(device) = cuda_devices()?.into_iter().next() else {
+///     return Ok(());
+/// };
+/// let runtime = CudaRuntime::new(device.id())?;
+/// let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0])?;
+/// let mut output = upload_tensor(&runtime, &host)?;
+/// scale_tensor_write(&runtime, TensorWrite::from_tensor(&mut output), 0.25)?;
+/// let scaled = download_tensor(&runtime, &output)?;
+/// assert_eq!(scaled.as_slice::<f32>()?, &[0.25, 0.5]);
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Errors
@@ -364,6 +380,7 @@ pub fn scale_tensor_write(
     output: TensorWrite<'_>,
     factor: f64,
 ) -> crate::Result<()> {
+    ensure_tensor_write_resident(rt, &output, SCALE_OP)?;
     let dtype = output.dtype();
     if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
         return Err(unsupported_dtype(SCALE_OP, dtype));
@@ -401,6 +418,48 @@ pub fn scale_tensor_write(
                 scale_typed_view(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
             }
             _ => Err(unsupported_dtype(SCALE_OP, dtype)),
+        },
+    }
+}
+
+fn ensure_tensor_write_resident(
+    rt: &CudaRuntime,
+    output: &TensorWrite<'_>,
+    op: &'static str,
+) -> crate::Result<()> {
+    let read = output.as_read();
+    match &read {
+        TensorRead::Tensor(output) => match *output {
+            crate::Tensor::F32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::F64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::I32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::I64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::Bool(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::C32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::C64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+        },
+        TensorRead::View(output) => match output {
+            crate::TensorView::F32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::F64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::I32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::I64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::Bool(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::C32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::C64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
         },
     }
 }
@@ -541,6 +600,9 @@ fn launch_scale_f32(
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
     unsafe {
         crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
             f32,
@@ -558,6 +620,9 @@ fn launch_scale_f64(
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
     unsafe {
         crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
             f64,
@@ -575,6 +640,9 @@ fn launch_scale_c32(
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
     unsafe {
         crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
             Complex32,
@@ -592,6 +660,9 @@ fn launch_scale_c64(
 ) {
     // SAFETY: the typed scaling bridge validates residency, buffer length, and
     // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
     unsafe {
         crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
             Complex64,
