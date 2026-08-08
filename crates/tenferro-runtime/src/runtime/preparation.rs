@@ -659,7 +659,9 @@ fn resolve_input_locations(
                         engine
                             .storage_classes()
                             .iter()
-                            .filter(move |storage| engine.accepts_input_signature(entry, storage))
+                            .filter(move |storage| {
+                                engine.accepts_input_signature_for_storage(entry, storage)
+                            })
                             .map(move |storage| {
                                 ExecutionLocation::from_witness(
                                     Arc::clone(witness),

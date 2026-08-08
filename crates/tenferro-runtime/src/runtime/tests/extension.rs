@@ -500,6 +500,102 @@ fn install_unequal_same_id_is_conflicting_module_and_publishes_nothing(
 }
 
 #[test]
+fn targeted_replace_rejects_module_without_target_registration_even_when_another_module_matches(
+) -> Result<(), Box<dyn StdError>> {
+    let target = fixed("target-owner", "tenferro.family.targeted", "targeted");
+    let unrelated = fixed("unrelated-owner", "tenferro.family.unrelated", "unrelated");
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.existing-target",
+        ModuleAction::Register(target.clone()),
+    ))?;
+    let before = runtime.snapshot()?;
+
+    let error = runtime
+        .reconfigure(|edit| {
+            edit.replace_extension_module_for_engine(
+                module(
+                    "tenferro.module.replacement",
+                    ModuleAction::Register(unrelated),
+                ),
+                target.family,
+                &target.engine,
+            )?;
+            Ok(())
+        })
+        .expect_err("the unrelated module must not be masked by another module");
+
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::MissingExtensionEngine {
+                module_id: installed_module_id,
+                family_id,
+                engine_id,
+            },
+        } if installed_module_id == module_id("tenferro.module.replacement")
+            && family_id == target.family
+            && engine_id == target.engine
+    ));
+    assert!(Arc::ptr_eq(&before, &runtime.snapshot()?));
+    assert!(runtime
+        .snapshot()?
+        .has_extension_engine(target.family, &target.engine));
+    assert_eq!(runtime.snapshot()?.extension_module_count(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn targeted_replace_rolls_back_a_mismatched_module_and_preserves_the_previous_one(
+) -> Result<(), Box<dyn StdError>> {
+    let target = fixed(
+        "targeted-before",
+        "tenferro.family.targeted-replace",
+        "targeted-replace",
+    );
+    let mismatched = fixed(
+        "targeted-after",
+        "tenferro.family.targeted-other",
+        "targeted-other",
+    );
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.targeted-replace",
+        ModuleAction::Register(target.clone()),
+    ))?;
+    let before = runtime.snapshot()?;
+
+    let error = runtime
+        .reconfigure(|edit| {
+            edit.replace_extension_module_for_engine(
+                module(
+                    "tenferro.module.targeted-replace",
+                    ModuleAction::Register(mismatched),
+                ),
+                target.family,
+                &target.engine,
+            )?;
+            Ok(())
+        })
+        .expect_err("a mismatched replacement must be rejected");
+
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::MissingExtensionEngine {
+                module_id: installed_module_id,
+                ..
+            },
+        } if installed_module_id == module_id("tenferro.module.targeted-replace")
+    ));
+    let after = runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert!(after.has_extension_engine(target.family, &target.engine));
+    assert_eq!(after.extension_module_count(), 1);
+
+    Ok(())
+}
+
+#[test]
 fn replace_absent_installs_validated_transaction_and_advances_epoch(
 ) -> Result<(), Box<dyn StdError>> {
     let tuple = fixed(

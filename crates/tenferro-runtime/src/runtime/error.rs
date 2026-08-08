@@ -259,9 +259,11 @@ pub enum RuntimeConfigError {
     },
     /// An extension module does not register a requested family for an engine.
     #[error(
-        "extension family {family_id:?} has no engine registration for runtime engine {engine_id:?}"
+        "extension module {module_id:?} family {family_id:?} has no engine registration for runtime engine {engine_id:?}"
     )]
     MissingExtensionEngine {
+        /// Extension module whose engine registration is missing.
+        module_id: ExtensionModuleId,
         /// Extension family whose engine registration is missing.
         family_id: &'static str,
         /// Runtime engine selected by the owner.

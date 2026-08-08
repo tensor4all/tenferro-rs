@@ -5,7 +5,10 @@ use std::sync::Arc;
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
-use tenferro_runtime::{Error, ErrorPhase, ExtensionModule, Result, Runtime, RuntimeConfigError};
+use tenferro_runtime::{
+    Error, ErrorPhase, ExtensionModule, InputSignature, PrepareError, Result, Runtime,
+    RuntimeConfigError,
+};
 use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
@@ -248,9 +251,11 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// or its length differs from the extension's declared input count. Returns
 /// `Error::ContextMismatch` when tensors belong to different eager runtimes.
 /// The module factory's [`tenferro_runtime::Error`] is propagated unchanged.
-/// A selected-engine or module-family mismatch is returned as
-/// `Error::RuntimeStateSource` retaining [`RuntimeConfigError`] as its source;
-/// backend and extension failures retain their typed sources.
+/// An input rejected by the selected engine's ingress is returned as
+/// `Error::RuntimeStateSource` retaining [`tenferro_runtime::PrepareError::NoInputIngress`]
+/// with the input index and placement. A selected-engine or module-family
+/// mismatch retains [`RuntimeConfigError`] through the runtime reconfiguration
+/// source chain; backend and extension failures retain their typed sources.
 #[doc(hidden)]
 pub fn apply_eager_with_extension_session(
     op: Arc<dyn ExtensionOp>,
@@ -267,10 +272,10 @@ pub fn apply_eager_with_extension_session(
 ) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     let target = ctx.eager_extension_target()?;
-    let module = module_factory(target.clone())?;
-    ctx.install_extension_module(module)?;
-    validate_eager_extension_module(ctx.runtime(), op.family_id(), &target)?;
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+    validate_eager_extension_input_signature(&ctx, &target, &input_reads)?;
+    let module = module_factory(target.clone())?;
+    ctx.replace_extension_module_for_engine(module, op.family_id(), &target.engine_id)?;
     let outputs = ctx.with_extension_execution_context(|extension_ctx| {
         execute(op.as_ref(), &input_reads, extension_ctx)
     })??;
@@ -300,36 +305,45 @@ pub(crate) fn validate_eager_extension_target(
     Ok(())
 }
 
-pub(crate) fn validate_eager_extension_module(
-    runtime: &Runtime,
-    family_id: &'static str,
+fn validate_eager_extension_input_signature(
+    ctx: &EagerRuntime,
     target: &EagerExtensionTarget,
+    input_reads: &[TensorRead<'_>],
 ) -> Result<()> {
-    let snapshot = runtime.snapshot().map_err(|source| {
+    let signature = InputSignature::from_reads(input_reads).map_err(|source| {
         Error::runtime_state_source(
             "extension::apply_eager_with_extension_session",
             ErrorPhase::Execution,
             source,
         )
     })?;
-    if snapshot.engine(&target.engine_id).is_none() {
-        return Err(Error::runtime_state_source(
+    let snapshot = ctx.runtime().snapshot().map_err(|source| {
+        Error::runtime_state_source(
+            "extension::apply_eager_with_extension_session",
+            ErrorPhase::Execution,
+            source,
+        )
+    })?;
+    let engine = snapshot.engine(&target.engine_id).ok_or_else(|| {
+        Error::runtime_state_source(
             "extension::apply_eager_with_extension_session",
             ErrorPhase::Execution,
             RuntimeConfigError::MissingEngine {
                 engine_id: target.engine_id.clone(),
             },
-        ));
-    }
-    if !snapshot.has_extension_engine(family_id, &target.engine_id) {
-        return Err(Error::runtime_state_source(
-            "extension::apply_eager_with_extension_session",
-            ErrorPhase::Execution,
-            RuntimeConfigError::MissingExtensionEngine {
-                family_id,
-                engine_id: target.engine_id.clone(),
-            },
-        ));
+        )
+    })?;
+    for (input_index, entry) in signature.entries().iter().enumerate() {
+        if !engine.accepts_input_signature(entry) {
+            return Err(Error::runtime_state_source(
+                "extension::apply_eager_with_extension_session",
+                ErrorPhase::Execution,
+                PrepareError::NoInputIngress {
+                    input_index,
+                    placement: entry.placement().clone(),
+                },
+            ));
+        }
     }
     Ok(())
 }

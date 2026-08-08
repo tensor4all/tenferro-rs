@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::hash::Hasher;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
 use super::{
     apply_eager_with_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
@@ -13,11 +13,13 @@ use tenferro_runtime::{
     EngineId, Error, ErrorPhase, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
     ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
     ExtensionPrepareRequest, PrepareCapability, PrepareError, Runtime, RuntimeConfigError,
-    UnsupportedReason,
+    RuntimeReconfigureError, UnsupportedReason,
 };
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, Tensor, TensorStructural};
+#[cfg(feature = "cuda")]
+use tenferro_tensor::{MemoryKind, TensorValue};
 
 #[derive(Clone, Debug)]
 struct BridgeProbe {
@@ -225,6 +227,59 @@ fn eager_extension_factory_receives_exact_cpu_target() {
 }
 
 #[test]
+fn eager_extension_cpu_input_signature_is_accepted_before_factory() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_by_factory = Arc::clone(&calls);
+
+    execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
+        calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap();
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let target = EagerExtensionTarget {
+        engine_id: tenferro_cpu::runtime_engine_id().unwrap(),
+        backend_kind: EagerExtensionBackendKind::Cpu,
+    };
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = (0..2)
+        .map(|_| {
+            let ctx = Arc::clone(&ctx);
+            let barrier = Arc::clone(&barrier);
+            let engine_id = target.engine_id.clone();
+            let target_engine_id = target.engine_id.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                ctx.replace_extension_module_for_engine(
+                    BridgeModule::for_engine(engine_id),
+                    BridgeProbe::one().family_id(),
+                    &target_engine_id,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+
+    for handle in handles {
+        handle
+            .join()
+            .expect("targeted eager installation thread panicked")
+            .unwrap();
+    }
+    let snapshot = ctx.runtime().snapshot().unwrap();
+    assert_eq!(snapshot.extension_module_count(), 1);
+    assert!(snapshot.has_extension_engine(BridgeProbe::one().family_id(), &target.engine_id));
+}
+
+#[test]
 fn eager_extension_input_context_mismatch_is_reported_before_factory() {
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
@@ -305,14 +360,22 @@ fn eager_extension_module_without_target_engine_is_rejected_before_backend_sessi
     let Error::RuntimeStateSource { source, .. } = error else {
         panic!("expected structured missing extension engine error");
     };
-    let source = source
-        .downcast_ref::<RuntimeConfigError>()
-        .expect("missing extension engine source");
+    let reconfiguration = source
+        .downcast_ref::<RuntimeReconfigureError>()
+        .expect("targeted install source should retain RuntimeReconfigureError");
+    let RuntimeReconfigureError::Edit { source, .. } = reconfiguration else {
+        panic!("targeted module validation should fail as an edit error");
+    };
     let expected_engine = tenferro_cpu::runtime_engine_id().unwrap();
     assert!(matches!(
         source,
-        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
-            if *family_id == BridgeProbe::one().family_id()
+        RuntimeConfigError::MissingExtensionEngine {
+            module_id,
+            family_id,
+            engine_id,
+        }
+            if module_id.as_str() == "tenferro-tests.eager-extension-bridge.module"
+                && *family_id == BridgeProbe::one().family_id()
                 && engine_id == &expected_engine
     ));
 }
@@ -331,46 +394,23 @@ fn eager_extension_module_for_different_engine_is_rejected_before_backend_sessio
     let Error::RuntimeStateSource { source, .. } = error else {
         panic!("expected structured mismatched extension engine error");
     };
-    let source = source
-        .downcast_ref::<RuntimeConfigError>()
-        .expect("mismatched extension engine source");
+    let reconfiguration = source
+        .downcast_ref::<RuntimeReconfigureError>()
+        .expect("targeted install source should retain RuntimeReconfigureError");
+    let RuntimeReconfigureError::Edit { source, .. } = reconfiguration else {
+        panic!("targeted module validation should fail as an edit error");
+    };
     assert!(matches!(
         source,
-        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
-            if *family_id == BridgeProbe::one().family_id()
+        RuntimeConfigError::MissingExtensionEngine {
+            module_id,
+            family_id,
+            engine_id,
+        }
+            if module_id.as_str() == "tenferro-tests.eager-extension-bridge.module"
+                && *family_id == BridgeProbe::one().family_id()
                 && engine_id == &expected_engine
     ));
-}
-
-#[test]
-fn eager_extension_missing_module_is_rejected_for_constructible_runtime() {
-    let mut backend = CpuBackend::new();
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
-        .unwrap();
-    let runtime = builder.build().unwrap();
-    let target = EagerExtensionTarget {
-        engine_id: tenferro_cpu::runtime_engine_id().unwrap(),
-        backend_kind: EagerExtensionBackendKind::Cpu,
-    };
-
-    let error =
-        super::validate_eager_extension_module(&runtime, BridgeProbe::one().family_id(), &target)
-            .unwrap_err();
-    let Error::RuntimeStateSource { source, .. } = error else {
-        panic!("expected structured missing extension engine error");
-    };
-    let source = source
-        .downcast_ref::<RuntimeConfigError>()
-        .expect("missing module source");
-    assert!(matches!(
-        source,
-        RuntimeConfigError::MissingExtensionEngine { family_id, engine_id }
-            if *family_id == BridgeProbe::one().family_id()
-                && engine_id == &target.engine_id
-    ));
-    let _ = &mut backend;
 }
 
 #[test]
@@ -443,6 +483,92 @@ fn eager_extension_factory_receives_exact_cuda_target() {
             .map(|target| target.engine_id.as_str()),
         Some("tenferro-ad.cuda.default.v1")
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires CUDA device initialization"]
+fn eager_extension_cuda_host_input_is_rejected_before_factory() {
+    use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+
+    let device = cuda_devices().unwrap().into_iter().next().unwrap();
+    let backend = CudaBackend::new(device.id()).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let input =
+        super::adopt_untracked_eager_value(Arc::clone(&ctx), TensorValue::from_tensor(host))
+            .unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_by_factory = Arc::clone(&calls);
+
+    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
+        calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap_err();
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("CUDA host input should fail with a typed runtime source");
+    };
+    let ingress = source
+        .downcast_ref::<PrepareError>()
+        .expect("input ingress source should retain PrepareError");
+    assert!(matches!(
+        ingress,
+        PrepareError::NoInputIngress {
+            input_index: 0,
+            placement,
+        } if placement.memory_kind == MemoryKind::UnpinnedHost
+    ));
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires CUDA device initialization"]
+fn eager_extension_foreign_cuda_input_is_rejected_before_factory() {
+    use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+
+    let device = cuda_devices().unwrap().into_iter().next().unwrap();
+    let target_ctx =
+        EagerRuntime::with_cuda_backend(CudaBackend::new(device.id()).unwrap()).unwrap();
+    let foreign_ctx =
+        EagerRuntime::with_cuda_backend(CudaBackend::new(device.id()).unwrap()).unwrap();
+    let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let foreign_device = foreign_ctx
+        .with_execution_session(|session| {
+            session.upload_host_tensor(TensorRead::from_tensor(&host))
+        })
+        .unwrap()
+        .unwrap();
+    let input = super::adopt_untracked_eager_value(
+        Arc::clone(&target_ctx),
+        TensorValue::from_tensor(foreign_device),
+    )
+    .unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_by_factory = Arc::clone(&calls);
+
+    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
+        calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap_err();
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let Error::RuntimeStateSource { source, .. } = error else {
+        panic!("foreign CUDA input should fail with a typed runtime source");
+    };
+    let ingress = source
+        .downcast_ref::<PrepareError>()
+        .expect("input ingress source should retain PrepareError");
+    assert!(matches!(
+        ingress,
+        PrepareError::NoInputIngress {
+            input_index: 0,
+            placement,
+        } if placement.memory_kind == MemoryKind::Device
+    ));
 }
 
 #[cfg(feature = "webgpu")]

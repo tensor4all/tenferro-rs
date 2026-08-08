@@ -1396,6 +1396,23 @@ impl EagerRuntime {
             })
     }
 
+    pub(crate) fn replace_extension_module_for_engine(
+        &self,
+        module: Arc<dyn ExtensionModule>,
+        family_id: &'static str,
+        engine_id: &EngineId,
+    ) -> Result<RuntimeEpoch> {
+        let _install_guard = self.lock_extension_install()?;
+        self.runtime
+            .reconfigure(|edit| {
+                edit.replace_extension_module_for_engine(module, family_id, engine_id)?;
+                Ok(())
+            })
+            .map_err(|source| {
+                runtime_state_source("EagerRuntime::replace_extension_module_for_engine", source)
+            })
+    }
+
     pub(crate) fn runtime(&self) -> &Runtime {
         &self.runtime
     }
