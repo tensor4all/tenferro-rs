@@ -9,7 +9,7 @@ use std::ffi::c_void;
 use std::fmt;
 
 use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
+use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use num_complex::{Complex32, Complex64};
 
@@ -148,6 +148,45 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     dispatch::alloc_output(rt, shape)
+}
+
+/// Allocate and fill a dense CUDA tensor with semantic zeros on `rt`.
+///
+/// This is an owner-scoped bridge for operation-family padding and empty-input
+/// preparation. It reuses the backend's existing fill-zero kernel and never
+/// uploads a host tensor or exposes a device pointer to the caller.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::CudaRuntime;
+/// use tenferro_gpu::cuda::interop::alloc_zero_output;
+/// use tenferro_tensor::TypedTensor;
+///
+/// let _alloc: fn(&CudaRuntime, &[usize]) -> tenferro_tensor::Result<TypedTensor<f32>> =
+///     alloc_zero_output::<f32>;
+/// ```
+#[doc(hidden)]
+pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+{
+    let output = alloc_output::<T>(rt, shape)?;
+    dispatch::launch_nullary_into(
+        rt,
+        &output,
+        "alloc_zero_output",
+        dispatch::cube_count_for_len(output.n_elements())?,
+        dispatch::cube_dim_1d(),
+        |client, count, dim, out| unsafe {
+            // SAFETY: `launch_nullary_into` validates output residency and
+            // the launch domain; the fill kernel bounds every write by len.
+            crate::kernels::structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                client, count, dim, out,
+            );
+        },
+    )?;
+    Ok(output)
 }
 
 /// Validate that a tensor is backed by a CubeCL buffer.

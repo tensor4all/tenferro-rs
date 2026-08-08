@@ -50,14 +50,36 @@ pub fn gpu_available() -> bool {
 /// identifier and grants no execution authority.
 #[derive(Clone, Debug)]
 pub struct CudaRuntimeIdentity {
-    marker: Arc<()>,
+    marker: Arc<u8>,
 }
 
 impl CudaRuntimeIdentity {
     fn fresh() -> Self {
         Self {
-            marker: Arc::new(()),
+            marker: Arc::new(0),
         }
+    }
+
+    /// Return a stable, non-authoritative token for owner-scoped caches.
+    ///
+    /// The token is derived from the retained identity allocation, so cloning
+    /// or moving this witness preserves it while independently constructed
+    /// identities remain distinct while their witnesses are retained. It does
+    /// not expose a CUDA handle, context, stream, or execution authority.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaRuntimeIdentity;
+    ///
+    /// let _token: fn(&CudaRuntimeIdentity) -> usize =
+    ///     CudaRuntimeIdentity::cache_discriminator;
+    /// ```
+    #[doc(hidden)]
+    pub fn cache_discriminator(&self) -> usize {
+        // INVARIANT: `marker` is retained by every clone of this identity, so
+        // its Arc allocation address is move/clone-invariant while witnessed.
+        Arc::as_ptr(&self.marker) as usize
     }
 }
 
@@ -360,11 +382,15 @@ mod identity_tests {
     #[test]
     fn cuda_runtime_identity_is_clone_stable_and_instance_scoped() {
         let first = CudaRuntimeIdentity::fresh();
+        let first_token = first.cache_discriminator();
         let clone = first.clone();
+        let moved = clone;
         let independent = CudaRuntimeIdentity::fresh();
 
-        assert_eq!(first, clone);
+        assert_eq!(first, moved);
+        assert_eq!(first_token, moved.cache_discriminator());
         assert_ne!(first, independent);
+        assert_ne!(first_token, independent.cache_discriminator());
     }
 
     #[test]
@@ -383,8 +409,19 @@ mod identity_tests {
         let clone = first.clone();
         let independent = CudaBackend::new(device).expect("second CUDA backend should initialize");
 
-        assert_eq!(first.runtime_identity(), clone.runtime_identity());
-        assert_ne!(first.runtime_identity(), independent.runtime_identity());
+        let first_identity = first.runtime_identity();
+        let clone_identity = clone.runtime_identity();
+        let independent_identity = independent.runtime_identity();
+        assert_eq!(first_identity, clone_identity);
+        assert_eq!(
+            first_identity.cache_discriminator(),
+            clone_identity.cache_discriminator()
+        );
+        assert_ne!(first_identity, independent_identity);
+        assert_ne!(
+            first_identity.cache_discriminator(),
+            independent_identity.cache_discriminator()
+        );
 
         let runtime_clone = first.runtime().clone();
         let _: CudaRuntime = runtime_clone;

@@ -180,6 +180,75 @@ fn cuda_caller_owned_cache_keys_include_runtime_identity() {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_caller_owned_cache_reuses_after_runtime_move() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let host = complex_f64(&[4], 0.5);
+    let mut backend = support::cuda_backend();
+    let first_token = backend.runtime_identity().cache_discriminator();
+    let mut executor = FftExecutor::default();
+
+    run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut backend,
+        &host,
+        Operation::Fft,
+        None,
+        -1,
+        FftNorm::Backward,
+        1.0e-11,
+    );
+    assert_eq!(executor.cache_stats().entries, 1);
+    assert_eq!(executor.cache_stats().hits, 0);
+
+    let backend = Box::new(backend);
+    let mut backend = *backend;
+    assert_eq!(
+        backend.runtime_identity().cache_discriminator(),
+        first_token
+    );
+    run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut backend,
+        &host,
+        Operation::Fft,
+        None,
+        -1,
+        FftNorm::Backward,
+        1.0e-11,
+    );
+    let moved_stats = executor.cache_stats();
+    assert_eq!(moved_stats.entries, 1);
+    assert_eq!(moved_stats.hits, 1);
+    assert_eq!(moved_stats.misses, 1);
+
+    let mut independent = support::cuda_backend();
+    let independent_token = independent.runtime_identity().cache_discriminator();
+    assert_ne!(first_token, independent_token);
+    run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut independent,
+        &host,
+        Operation::Fft,
+        None,
+        -1,
+        FftNorm::Backward,
+        1.0e-11,
+    );
+    let separated_stats = executor.cache_stats();
+    assert_eq!(separated_stats.entries, 2);
+    assert_eq!(separated_stats.hits, 1);
+    assert_eq!(separated_stats.misses, 2);
+}
+
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
 fn cuda_caller_owned_cache_limits_evict_by_entries_and_bytes() {
     if !gpu_available() {
         return;

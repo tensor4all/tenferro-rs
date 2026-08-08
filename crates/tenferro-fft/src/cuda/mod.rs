@@ -8,7 +8,9 @@ pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
 
-use tenferro_gpu::cuda::interop::{alloc_output, scale_tensor_write, with_typed_device_ptr};
+use tenferro_gpu::cuda::interop::{
+    alloc_output, alloc_zero_output, scale_tensor_write, with_typed_device_ptr,
+};
 use tenferro_gpu::cuda::{CudaExecSession, CudaRuntime};
 use tenferro_tensor::{
     DType, SliceConfig, Tensor, TensorElementwise, TensorIndexing, TensorReduction,
@@ -98,7 +100,7 @@ impl FftBackend for CudaExecSession<'_> {
                 ostride: descriptor.ostride,
                 odist: descriptor.odist,
             };
-            let cache_key = extension_plan_key_for_runtime(&key, self.runtime());
+            let cache_key = extension_plan_key_for_runtime(&key);
             let mut cached = false;
             {
                 let store = cache.store_mut();
@@ -435,18 +437,25 @@ fn canonicalize_input(
                     },
                 )?
             } else {
-                // CubeCL's generic complex pad path is not accepted by all
-                // CUDA toolkits. Build the same-placement zero tail from a
-                // reduced `x - x` scalar, then broadcast and concatenate it;
-                // no host transfer or custom kernel is introduced.
                 let current = owner.as_ref().map_or(input, |tensor| tensor);
-                let zero = session.sub(current, current)?;
-                let axes: Vec<usize> = (0..current_shape.len()).collect();
-                let zero_scalar = session.reduce_sum(&zero, &axes)?;
                 let mut tail_shape = current_shape.clone();
                 tail_shape[last] = canonical.n - current_len;
-                let zero_tail = session.broadcast_in_dim(&zero_scalar, &tail_shape, &[])?;
-                session.concatenate(&[current, &zero_tail], last)?
+                let zero_tail = if current_len == 0 {
+                    // Empty inputs have no element from which to derive the
+                    // semantic zero scalar; allocate and fill the tail on the
+                    // same CUDA runtime instead of reducing an empty tensor.
+                    allocate_cuda_zero_output(session, current.dtype(), &tail_shape)?
+                } else {
+                    let zero = session.sub(current, current)?;
+                    let axes: Vec<usize> = (0..current_shape.len()).collect();
+                    let zero_scalar = session.reduce_sum(&zero, &axes)?;
+                    session.broadcast_in_dim(&zero_scalar, &tail_shape, &[])?
+                };
+                if current_len == 0 {
+                    zero_tail
+                } else {
+                    session.concatenate(&[current, &zero_tail], last)?
+                }
             };
             owner = Some(transformed);
         }
@@ -499,6 +508,33 @@ fn allocate_cuda_output(
         DType::F64 => alloc_output::<f64>(runtime, shape).map(Tensor::F64),
         DType::C32 => alloc_output::<num_complex::Complex32>(runtime, shape).map(Tensor::C32),
         DType::C64 => alloc_output::<num_complex::Complex64>(runtime, shape).map(Tensor::C64),
+        _ => Err(crate::tensor_unsupported_dtype(
+            OP,
+            dtype,
+            "F32, F64, C32, or C64",
+        )),
+    }
+}
+
+fn allocate_cuda_zero_output(
+    session: &mut CudaExecSession<'_>,
+    dtype: DType,
+    shape: &[usize],
+) -> tenferro_tensor::Result<Tensor> {
+    match dtype {
+        DType::F32 => alloc_zero_output::<f32>(session.runtime(), shape).map(Tensor::F32),
+        DType::F64 => alloc_zero_output::<f64>(session.runtime(), shape).map(Tensor::F64),
+        // CubeCL's generic complex fill-zero kernel is not accepted by all
+        // CUDA toolkits. Fill a same-device real tensor with the shared kernel
+        // and use the existing device conversion path for complex padding.
+        DType::C32 => {
+            let real = alloc_zero_output::<f32>(session.runtime(), shape).map(Tensor::F32)?;
+            session.cast(&real, DType::C32)
+        }
+        DType::C64 => {
+            let real = alloc_zero_output::<f64>(session.runtime(), shape).map(Tensor::F64)?;
+            session.cast(&real, DType::C64)
+        }
         _ => Err(crate::tensor_unsupported_dtype(
             OP,
             dtype,

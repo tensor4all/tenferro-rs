@@ -1,7 +1,7 @@
 use super::common::*;
 use super::support;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::FftNorm;
+use tenferro_fft::{FftExecutor, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
 use tenferro_tensor::TensorRead;
 
@@ -180,6 +180,61 @@ fn cuda_multiple_interleaved_column_major_batches() {
         FftNorm::Backward,
         1.0e-11,
     );
+}
+
+#[test]
+#[ignore = "requires CUDA cuFFT hardware and library"]
+fn cuda_zero_transform_axis_with_nonzero_batch_is_padded_on_device() {
+    if !gpu_available() {
+        return;
+    }
+
+    let mut cpu = CpuBackend::new();
+    let mut cuda = support::cuda_backend();
+    let mut executor = FftExecutor::default();
+    let complex = complex_f32(&[2, 0], 0.5);
+    let actual = run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut cuda,
+        &complex,
+        Operation::Fft,
+        Some(4),
+        -1,
+        FftNorm::Backward,
+        1.0e-5,
+    );
+    assert_eq!(actual.shape(), &[2, 4]);
+    assert_eq!(executor.cache_stats().entries, 1);
+    assert!(executor.cache_stats().retained_bytes > 0);
+
+    let real = real_f64(&[2, 0], 0.5);
+    let actual = run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut cuda,
+        &real,
+        Operation::Fft,
+        Some(4),
+        -1,
+        FftNorm::Backward,
+        1.0e-11,
+    );
+    assert_eq!(actual.shape(), &[2, 4]);
+
+    let middle_axis = complex_f32(&[2, 0, 3], -0.25);
+    let actual = run_executor_case(
+        &mut executor,
+        &mut cpu,
+        &mut cuda,
+        &middle_axis,
+        Operation::Fft,
+        Some(4),
+        1,
+        FftNorm::Backward,
+        1.0e-5,
+    );
+    assert_eq!(actual.shape(), &[2, 4, 3]);
 }
 
 #[test]
