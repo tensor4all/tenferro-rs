@@ -80,4 +80,6 @@ fn tutorial_binaries_run_successfully() {
             env!("CARGO_BIN_EXE_apple_shared_cholesky"),
         );
     }
+    #[cfg(feature = "cuda")]
+    run_tutorial("cuda_fft", env!("CARGO_BIN_EXE_cuda_fft"));
 }

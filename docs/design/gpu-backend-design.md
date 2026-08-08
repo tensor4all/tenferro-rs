@@ -11,8 +11,11 @@ public `gpu` feature.
 
 The active CUDA implementation lives in `crates/tenferro-gpu/src/cubecl/`,
 gated by the `cuda` feature. It targets NVIDIA CUDA devices through CubeCL and
-CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS. The
-WebGPU implementation lives in a separate provider module, gated by the
+CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS.
+cuFFT is deliberately owned and loaded by the `tenferro-fft` operation crate,
+not by `tenferro-gpu`; the provider supplies only the scoped CUDA interop that
+FFT execution needs. The WebGPU implementation lives in a separate provider
+module, gated by the
 `webgpu` feature, and targets CubeCL-WGPU without depending on CUDA runtime or
 CUDA library bindings.
 
@@ -182,21 +185,25 @@ barrier through `EagerRuntime::synchronize()`, with CPU eager runtimes treating
 the call as a no-op.
 
 cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
-CUDA FFI layer. The CUDA backend first uses default soname/path candidates and
-allows explicit override with these variables:
+CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`
+loads it and owns its opaque plans, workspaces, and `cufft-plans` cache entries;
+`tenferro-gpu` must not load or cache cuFFT handles. The CUDA provider first
+uses default soname/path candidates and allows explicit override with these
+variables:
 
 | Variable | Library |
 | --- | --- |
 | `TENFERRO_CUTENSOR_PATH` | cuTENSOR |
 | `TENFERRO_CUSOLVER_PATH` | cuSOLVER |
 | `TENFERRO_CUBLAS_PATH` | cuBLAS |
+| `TENFERRO_CUFFT_PATH` | cuFFT (loaded by `tenferro-fft`) |
 
 Local GPU test runs should also set:
 
 | Variable | Purpose |
 | --- | --- |
 | `CUDA_PATH` | CUDA toolkit root used by CubeCL/NVRTC |
-| `LD_LIBRARY_PATH` | CUDA, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
+| `LD_LIBRARY_PATH` | CUDA/cuFFT, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
 | `CUBECL_DEBUG_LOG=0` | Suppress generated-kernel log spam |
 
 CUDA paths whose accepted implementation is an NVIDIA vendor library report a
@@ -213,7 +220,10 @@ does not provide an integer or bool permutation compute descriptor.
 `CudaBackend` owns CUDA extension backend-state caches. Extension crates may
 store type-indexed CUDA handles or plans through
 `CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
-and resource owner.
+and resource owner. The `cufft-plans` cache is an intentional exception to
+that generic provider cache: `tenferro-fft` stores cuFFT plans and workspaces in
+its existing caller- or runtime-owned `FftExecutionCache`, not in a hidden
+`CudaBackend` cache.
 
 The CUDA extension cache has bounded defaults for type entries and logical
 retained bytes. Applications can configure it with
@@ -292,7 +302,14 @@ Sibling operation crates must not import it directly.
 
 Operation crates that need to launch their own CubeCL kernels, such as
 `tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda::interop` module
-instead. That module intentionally exposes only the bridges that cannot live in
+instead. `tenferro-fft` uses the same boundary for cuFFT workspace allocation,
+current-stream access, typed device-pointer access, and the on-device scaling
+helper. The provider owns each allocation and exposes raw streams and pointers
+only through scoped callbacks; neither can escape a callback or be retained by
+an operation crate. cuFFT loading, opaque plans, and plan-cache entries remain
+owned by `tenferro-fft`.
+
+That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:
 
 - one-dimensional launch configuration helpers,

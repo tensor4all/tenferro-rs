@@ -36,6 +36,79 @@ configured Metal client. Callers select either backend explicitly; neither
 implementation dispatches to the other. Cross-device movement remains a
 caller-visible operation before or after FFT execution.
 
+### CUDA/cuFFT execution
+
+The CUDA backend is owned by `tenferro-fft` and uses the dynamically loaded
+cuFFT library. It executes the existing one-dimensional `fft`, `ifft`, `rfft`,
+and `irfft` operations on tensors already resident on the exact borrowed
+`CudaRuntime`. It never uploads, downloads, constructs a CPU backend, or falls
+back to RustFFT. The common CUDA execution path is:
+
+1. Move the requested transform axis to the final logical axis with the
+   existing same-device CUDA transpose. If the axis is already final, skip the
+   transpose. The inverse permutation restores the original logical order
+   after execution.
+2. For C2C and R2C, truncate or zero-pad the final axis on device to the
+   validated requested length `n`. C2R does not prepare its input this way:
+   `n` is the real output length, and the already validated half-spectrum is
+   consumed unchanged.
+3. Execute one out-of-place rank-one `cufftMakePlanMany64` plan when the batch
+   is nonzero. For canonical shape `[..., n]`, `batch` is the checked product of
+   all leading extents. The exact column-major descriptor is:
+
+   | Transform | `inembed` | `onembed` | `istride` / `ostride` | `idist` / `odist` |
+   | --- | ---: | ---: | ---: | ---: |
+   | C2C | `n` | `n` | `batch` | `1` |
+   | R2C | `n` | `n / 2 + 1` | `batch` | `1` |
+   | C2R | `n / 2 + 1` | `n` | `batch` | `1` |
+
+   The rank-one `n` array and both rank-one embed arrays are always non-null;
+   cuFFT ignores advanced stride and distance arguments when the corresponding
+   embed pointer is null. This layout represents interleaved column-major
+   lanes directly and avoids in-place real-transform padding and overwrite
+   constraints.
+4. Apply normalization on device because cuFFT is unnormalized. For
+   `FftNorm::Backward`, forward uses `1` and inverse uses `1 / n`; for
+   `Forward`, forward uses `1 / n` and inverse uses `1`; `Ortho` uses
+   `1 / sqrt(n)` in both directions. A real-input full `fft` first receives
+   the one-sided R2C result, then completes the Hermitian spectrum on device:
+   for even `n`, append the reversed conjugate of bins `1..h - 1`; for odd
+   `n`, append bins `1..h`, where `h = n / 2 + 1`. DC (and the Nyquist bin for
+   even `n`) is not duplicated.
+
+If a non-transform axis is zero, the checked batch is zero. The backend
+allocates the correctly shaped, correctly typed resident CUDA output and
+returns before cuFFT loading, descriptor construction, cache lookup, or plan
+creation. This preserves empty CPU semantics without requiring a vendor
+library.
+
+CUDA plans and workspaces use the existing `FftExecutionCache` rather than a
+backend-global cache. Repeated concrete calls use the caller-owned
+`FftExecutor` cache; eager and traced calls use the owning runtime's extension
+cache. The CUDA namespace is `cufft-plans`. Its exact structural key contains
+the CUDA runtime identity, device ordinal, transform dtype/kind, operation
+direction, `n`, batch, `istride`, `idist`, `ostride`, and `odist`; embed extents
+are derived from the kind and `n`. Each entry retains that exact key and checks
+full equality before reuse, so a cache-discriminator hash collision cannot
+reuse a plan for a different request. Logical retained bytes include the
+workspace allocation and directly owned key, plan, runtime, workspace, and
+library-handle metadata; opaque cuFFT internal allocations and library-owned
+state are excluded.
+
+cuFFT launches are asynchronous. The current `CudaRuntime` exposes one
+serialized CubeCL current stream, and the mutable CUDA FFT session serializes
+plan rebinding and execution on that stream. The stream is therefore omitted
+from the cache key, but `cufftSetStream` is called immediately before each
+execution. If selectable concurrent streams are added, stream identity must
+become part of the key and workspace ownership before plan reuse is allowed.
+When an entry is evicted or a cache is cleared, retirement first makes the
+retained CUDA context current and synchronizes its current stream, then calls
+`cufftDestroy` and drops the CubeCL workspace. Cleanup failures are reported
+without panicking. If context selection, synchronization, or destruction
+fails, the complete plan/workspace/library/runtime witness bundle is
+intentionally leaked rather than dropped while queued work may still be
+active.
+
 ## Apple shared execution
 
 `AppleContext` owns one host-visible Metal runtime, one allocation domain, and
@@ -60,9 +133,11 @@ and device-local WebGPU buffers return typed errors. They never trigger CPU
 fallback or an implicit transfer.
 
 `EagerTensorFftExt` registers the same FFT runtime against `EagerBackend`.
-That adapter delegates only to the selected CPU capability today. Other eager
-backend variants return `Unsupported`; the eager surface does not download,
-upload, or select a CPU backend on their behalf.
+The adapter uses the runtime owner's selected CPU, CUDA, or WebGPU capability;
+it does not inspect placement to choose a backend and does not download,
+upload, or select a CPU backend on behalf of a GPU operation. Traced CUDA use
+likewise requires explicit engine registration and
+`extension_module::<CudaBackend>(engine_id)` installation.
 
 ## Cache ownership
 
