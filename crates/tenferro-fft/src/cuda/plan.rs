@@ -480,6 +480,7 @@ where
         // The vendor may still be using both allocations after a failed
         // synchronization. Forgetting the leases intentionally retains the
         // prepared handles and exact runtimes until process exit.
+        // INVARIANT: failed synchronization cannot prove vendor completion, so both leases/witnesses are retained until process exit.
         std::mem::forget(input_lease);
         std::mem::forget(output_lease);
     }
