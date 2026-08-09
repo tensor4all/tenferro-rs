@@ -44,13 +44,13 @@ webgpu = [
 ]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.4.0", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", version = "0.4.0", default-features = false, optional = true }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.4.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.4.0", default-features = false }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.4.0", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.4.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.4.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.3.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.3.0", default-features = false, optional = true }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.3.0", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.3.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.3.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.3.0", default-features = false }
 libloading = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true

@@ -145,7 +145,7 @@ Agents must stop after validation and must never execute a publication.
    python3 scripts/release-publish.py X.Y.Z
    ```
 
-   **New-package gate:** `tenferro-internal-cpu-kernels` is new for v0.4.0.
+   **New-package gate:** `tenferro-internal-cpu-kernels` is new for v0.3.0.
    The command above must abort before publishing anything unless the user's
    approval names exactly `tenferro-internal-cpu-kernels`. After recording that
    exact approval, the human operator asserts it concretely with:

@@ -82,13 +82,13 @@ README, service, facade, feature-default, or MSRV-matrix change was made.
 Residual: publish deep crates only after matching dependencies are available on
 crates.io; package verification should then be rerun.
 
-## 2026-08-09 v0.4 final-review hardening
+## 2026-08-09 v0.3 final-review hardening
 
 Added `scripts/release-publish.py` as the fail-closed human operator path for
 Phase 3. It verifies the clean detached checkout against the pushed remote tag
 and `origin/main`, structurally validates every workspace git pin against both
 its revision manifest and exact crates.io version, and requires exact approval
-for each package that is new to crates.io. In particular, v0.4 publication
+for each package that is new to crates.io. In particular, v0.3 publication
 cannot proceed without an approval assertion naming
 `tenferro-internal-cpu-kernels` exactly.
 
