@@ -81,3 +81,59 @@ current workspace symbols; tensor-core verification passed. No dependency,
 README, service, facade, feature-default, or MSRV-matrix change was made.
 Residual: publish deep crates only after matching dependencies are available on
 crates.io; package verification should then be rerun.
+
+## 2026-08-09 v0.4 final-review hardening
+
+Added `scripts/release-publish.py` as the fail-closed human operator path for
+Phase 3. It verifies the clean detached checkout against the pushed remote tag
+and `origin/main`, structurally validates every workspace git pin against both
+its revision manifest and exact crates.io version, and requires exact approval
+for each package that is new to crates.io. In particular, v0.4 publication
+cannot proceed without an approval assertion naming
+`tenferro-internal-cpu-kernels` exactly.
+
+Publication now proceeds one DAG node at a time. Each node is packaged and its
+actual archive files, normalized metadata, README, and tagged-commit provenance
+are checked before and after `cargo publish --dry-run`; dependent packaging
+starts only after prerequisite registry archives are visible with matching
+provenance. A restarted run skips an existing target version only after the
+same registry-archive provenance check. Focused tests use injected transports
+and in-memory archives, so unit tests perform no network access. Live validation
+also confirmed all current strided, CubeCL, Cubek, and computegraph pin
+manifests and declared registry versions.
+
+### Final-review round 1 corrections
+
+Restart approval now distinguishes package existence from exact target-version
+existence. The documented approval remains valid after the newly approved crate
+has published, but only when its target version exists and its downloaded
+archive passes full verification; an existing package without that version is a
+stale approval and aborts.
+
+Archive provenance no longer trusts the VCS marker alone. Every source-derived
+regular archive member is mapped to the tagged package tree and compared
+byte-for-byte, and the archive list must equal Cargo's tagged package selection.
+Normalized `Cargo.toml`, generated `Cargo.lock`, and
+`.cargo_vcs_info.json` have explicit generated-file handling, while
+`Cargo.toml.orig` must match the tagged source manifest. This intentionally does
+not require source files omitted by Cargo's packaging rules. Injected command,
+registry, archive, source-tree, clock, checkout, metadata, and order hooks cover
+restart, propagation, failure, and irreversible-command ordering without
+network access or publication. These tests and the publish-layout tests run in
+the normal `ci-config` profile.
+
+### Final-review round 2 corrections
+
+Every registry comparison now starts from a newly generated and inspected local
+archive from the clean tag. The helper retains the complete regular-file byte
+map and requires both dry-run and crates.io archives to match it exactly, closing
+the gap for normalized dependency changes, `Cargo.lock`, and semantically valid
+but byte-different VCS metadata. Resume follows the same DAG sequence: attest
+prerequisite registry archives, create the local exact-tag archive, then compare
+the downloaded target before skip.
+
+Tar member prefix, traversal, and duplicate validation now runs before directory
+entries are skipped. Network response truncation and HTTP protocol/read errors
+are converted to bounded, actionable release failures. Focused regressions cover
+generated-file mutations, malicious traversal directories, HTTP failures, exact
+resume comparison, and prerequisite-before-dependent packaging.

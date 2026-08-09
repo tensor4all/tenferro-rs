@@ -54,10 +54,10 @@ webgpu = [
 rocm = []
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.2.0" }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.2.0", default-features = false }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.4.0" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.4.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.4.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.4.0", default-features = false }
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-common = { workspace = true, optional = true }

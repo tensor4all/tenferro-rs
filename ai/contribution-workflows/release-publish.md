@@ -71,9 +71,22 @@ Violating any of these aborts the release.
 
 ## Phase 3 — Publish From The Tag
 
-1. `git worktree add <fresh-path> vX.Y.Z`; confirm the tree is clean and
-   `python3 scripts/check-publish-layout.py` passes unchanged.
-2. Publish publishable crates in dependency order. As of 2026-07 the order
+Only a human maintainer with crates.io ownership runs the publication helper.
+Agents must stop after validation and must never execute a publication.
+
+1. Fetch the remote state and create a detached worktree at the pushed tag:
+
+   ```bash
+   git fetch origin main --tags
+   git worktree add --detach <fresh-path> vX.Y.Z
+   cd <fresh-path>
+   ```
+
+   Do not make any changes in this worktree. The helper fetches `origin` again
+   and aborts before publication unless the worktree is clean and detached,
+   `HEAD` is the exact pushed remote `vX.Y.Z` tag commit, and that commit is an
+   ancestor of `origin/main`.
+2. Publish publishable crates in dependency order. As of 2026-08 the order
    is:
 
    ```text
@@ -82,10 +95,10 @@ Violating any of these aborts the release.
    tenferro-tensor-core
    tenferro-tensor
    tenferro-internal-cpu-kernels
-   tenferro-cpu
-   tenferro-gpu
    tenferro-internal-ops
    tenferro-runtime
+   tenferro-cpu
+   tenferro-gpu
    tenferro-xla
    tenferro-ad
    tenferro-einsum
@@ -99,14 +112,62 @@ Violating any of these aborts the release.
    package. When workspace membership or dependencies change, recompute the
    order from `cargo metadata` (topological sort of workspace members over
    their `tenferro-*` dependencies) instead of trusting this list.
-3. For each crate run `cargo publish -p <crate>`. A dependent crate fails
-   until the registry index has its dependencies; wait roughly 30 seconds
-   and retry before treating a failure as real.
-4. If any crate cannot publish without a manifest change: stop publishing,
-   fix the manifest on `main` through Phase 1, and restart at Phase 2 with
-   the next patch version. Crates already published stay published; the
-   remaining crates ship only at the new version, so prefer aborting before
-   any crate has been published when possible.
+3. Run the fail-closed preflight without `--execute` first. It structurally
+   parses every git dependency in `[workspace.dependencies]`, checks its exact
+   registry package/version and pinned-revision manifest, queries crates.io,
+   validates the remote tag/clean checkout invariants, and verifies provenance
+   for any target versions already present on crates.io:
+
+   ```bash
+   python3 scripts/release-publish.py X.Y.Z
+   ```
+
+   **New-package gate:** `tenferro-internal-cpu-kernels` is new for v0.4.0.
+   The command above must abort before publishing anything unless the user's
+   approval names exactly `tenferro-internal-cpu-kernels`. After recording that
+   exact approval, the human operator asserts it concretely with:
+
+   ```bash
+   python3 scripts/release-publish.py X.Y.Z \
+     --approve-new-package tenferro-internal-cpu-kernels
+   ```
+
+   Never infer this approval from a general release request. On restart, keep
+   the exact command unchanged: the helper accepts that approval after the
+   package exists only when crates.io also has the target version, whose archive
+   must still pass all checks before it is skipped. It rejects the approval as
+   stale when the package exists but the target version does not.
+4. After the preflight passes, the human operator repeats the same exact command
+   with `--execute`:
+
+   ```bash
+   python3 scripts/release-publish.py X.Y.Z \
+     --approve-new-package tenferro-internal-cpu-kernels \
+     --execute
+   ```
+
+   Before each `cargo publish`, the helper waits for every prerequisite registry
+   archive, then runs `cargo package` and inspects that exact local `.crate` file.
+   It checks the file list and normalized metadata (name, version, description,
+   license, repository, homepage, documentation, README, `rust-version`,
+   keywords, categories, and `include`/`exclude`), verifies
+   `.cargo_vcs_info.json` equals the clean tagged commit, and compares every
+   source-derived regular archive file byte-for-byte with the tagged package
+   tree. The file list must equal `cargo package --list` for that tag.
+   `Cargo.toml.orig` must equal the tagged source manifest. The helper retains
+   every regular file's exact bytes, including Cargo's normalized `Cargo.toml`,
+   generated `Cargo.lock`, and VCS file, and requires the dry-run and downloaded
+   registry archives to match them exactly. Unmapped, changed, or required
+   missing files abort. It packages, dry-runs, and publishes one crate at a time.
+   Do not pre-package the whole workspace: lower-layer registry versions must
+   exist before dependent packages can resolve.
+5. The helper is restart-safe and fail-closed: it skips an already-published
+   target version only after recreating the exact local archive from the clean
+   tag, then downloading its registry archive and matching every regular file's
+   bytes as well as tagged-source provenance. Any missing approval, metadata/provenance
+   mismatch, network ambiguity, command failure, or required manifest change
+   aborts publication. Fix manifest problems on `main` through Phase 1 and
+   restart at Phase 2 with the next patch version.
 
 ## Phase 4 — Verify And Close
 

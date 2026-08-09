@@ -8,6 +8,7 @@ registry version Cargo needs for packaging.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -95,13 +96,106 @@ def markdown_section(text: str, heading: str) -> str:
 
 
 def publishable_crates(metadata: dict) -> set[str]:
+    workspace_members = set(metadata["workspace_members"])
     return {
         package["name"]
         for package in metadata["packages"]
-        if Path(package["manifest_path"]).parent.parent == ROOT / "crates"
-        and package["name"].startswith("tenferro-")
-        and package.get("publish") != []
+        if package["id"] in workspace_members and package.get("publish") != []
     }
+
+
+def phase3_publication_order(
+    release_text: str, errors: list[str]
+) -> list[str] | None:
+    heading = "## Phase 3 — Publish From The Tag"
+    lines = release_text.splitlines()
+    headings: list[int] = []
+    active_marker: tuple[str, int] | None = None
+    for index, line in enumerate(lines):
+        fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+        if active_marker is not None:
+            marker_char, marker_len = active_marker
+            if (
+                fence
+                and fence.group(1)[0] == marker_char
+                and len(fence.group(1)) >= marker_len
+                and not fence.group(2).strip()
+            ):
+                active_marker = None
+        elif fence:
+            marker = fence.group(1)
+            active_marker = (marker[0], len(marker))
+        elif re.fullmatch(rf" {{0,3}}{re.escape(heading)}", line):
+            headings.append(index)
+
+    if len(headings) != 1:
+        errors.append("release workflow must contain exactly one exact Phase 3 heading")
+        return None
+
+    text_fences: list[list[str]] = []
+    active_fence: tuple[str, int, str, list[str]] | None = None
+    for line in lines[headings[0] + 1 :]:
+        fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+        if active_fence is None:
+            if re.match(r"^ {0,3}#{1,6}(?:[ \t]+|$)", line):
+                break
+            if fence:
+                marker, info = fence.groups()
+                active_fence = (marker[0], len(marker), info.strip(), [])
+            continue
+
+        marker_char, marker_len, info, contents = active_fence
+        if (
+            fence
+            and fence.group(1)[0] == marker_char
+            and len(fence.group(1)) >= marker_len
+            and not fence.group(2).strip()
+        ):
+            if info == "text":
+                text_fences.append(contents)
+            active_fence = None
+        else:
+            contents.append(line)
+
+    if active_fence is not None or len(text_fences) != 1:
+        errors.append(
+            "release workflow Phase 3 must contain exactly one complete text fence"
+        )
+        return None
+    return [line.strip() for line in text_fences[0] if line.strip()]
+
+
+def check_release_order(
+    metadata: dict, release_text: str, errors: list[str]
+) -> None:
+    order = phase3_publication_order(release_text, errors)
+    if order is None:
+        return
+    expected = publishable_crates(metadata)
+    if len(order) != len(set(order)):
+        errors.append("release publish order must not contain duplicate crates")
+    missing = sorted(expected - set(order))
+    unexpected = sorted(set(order) - expected)
+    if missing:
+        errors.append(f"release publish order is missing crates: {missing}")
+    if unexpected:
+        errors.append(f"release publish order has unexpected crates: {unexpected}")
+    if missing or unexpected or len(order) != len(set(order)):
+        return
+
+    positions = {crate: index for index, crate in enumerate(order)}
+    for package in metadata["packages"]:
+        crate = package["name"]
+        if crate not in expected:
+            continue
+        for dependency in package["dependencies"]:
+            dependency_name = dependency["name"]
+            if dependency["kind"] != "dev" and dependency_name in expected:
+                if positions[dependency_name] > positions[crate]:
+                    errors.append(
+                        f"release publish order must place dependency "
+                        f"{dependency_name!r} before {crate!r}"
+                    )
 
 
 def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -> None:
@@ -157,15 +251,24 @@ def check_workspace_metadata(root_text: str, errors: list[str]) -> None:
 
 
 def check_workspace_dependencies(root_text: str, errors: list[str]) -> None:
-    for line_no, line in enumerate(root_text.splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    try:
+        manifest = tomllib.loads(root_text)
+    except tomllib.TOMLDecodeError as error:
+        errors.append(f"Cargo.toml has invalid TOML: {error}")
+        return
+    dependencies = manifest.get("workspace", {}).get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        errors.append("Cargo.toml [workspace.dependencies] must be a table")
+        return
+    for name, dependency in dependencies.items():
+        if not isinstance(dependency, dict) or "git" not in dependency:
             continue
-        if "git =" in stripped and "version =" not in stripped:
-            errors.append(
-                f"Cargo.toml:{line_no}: git dependency must include a version "
-                "requirement for crates.io packaging"
-            )
+        for key in ("version", "rev"):
+            if not isinstance(dependency.get(key), str) or not dependency[key]:
+                errors.append(
+                    f"Cargo.toml workspace git dependency {name!r} must include "
+                    f"a {key} for crates.io packaging"
+                )
 
 
 def workspace_version(root_text: str) -> str:
@@ -349,7 +452,11 @@ def main() -> int:
     errors: list[str] = []
     root_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     metadata = cargo_metadata()
+    release_text = (ROOT / "ai/contribution-workflows/release-publish.md").read_text(
+        encoding="utf-8"
+    )
     check_workspace_members(metadata, root_text, errors)
+    check_release_order(metadata, release_text, errors)
     check_workspace_metadata(root_text, errors)
     check_workspace_dependencies(root_text, errors)
     check_package_metadata(root_text, errors)

@@ -132,6 +132,15 @@ class RunProfileTests(unittest.TestCase):
             commands.index("bash scripts/build_docs_site.sh"),
         )
 
+    def test_ci_config_runs_release_publication_checks(self) -> None:
+        commands = commands_for("ci-config")
+        for command in (
+            "python3 scripts/test-release-publish.py",
+            "python3 scripts/test-check-publish-layout.py",
+            "python3 scripts/check-publish-layout.py",
+        ):
+            self.assertIn(command, commands)
+
     def test_ci_config_checks_storage_ownership_contract_ledger(self) -> None:
         commands = commands_for("ci-config")
         self.assertIn(
