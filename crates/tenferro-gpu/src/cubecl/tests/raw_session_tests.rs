@@ -3,7 +3,7 @@
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
 
-use crate::cuda::{gpu_available, with_cuda_exec_session, CudaBackend, GpuExtensionCapability};
+use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
 
 use super::*;
 
@@ -19,7 +19,7 @@ fn raw_session_exposes_stream_and_runtime_identity() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         let identity = session.runtime_identity();
         session
             .with_raw("test.raw_identity", |raw| {
@@ -44,7 +44,7 @@ fn raw_session_allocates_output_and_bytes() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         session
             .with_raw("test.raw_alloc", |raw| {
                 let _output = raw.alloc_output::<f32>(&[4])?;
@@ -62,7 +62,7 @@ fn raw_session_reports_capabilities() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         assert!(session.supports(GpuExtensionCapability::CubeClKernel));
         assert!(session.supports(GpuExtensionCapability::NativeModule));
         assert!(session.supports(GpuExtensionCapability::RuntimeCompilation));
@@ -79,7 +79,7 @@ fn raw_session_context_is_restored_after_error_callback() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         let result: tenferro_tensor::Result<()> = session.with_raw("test.raw_error", |_raw| {
             Err(tenferro_tensor::Error::runtime_state(
                 "test.raw_error",
@@ -103,7 +103,7 @@ fn raw_tensor_ref_carries_validated_span() {
     let Tensor::F32(gpu_typed) = &gpu else {
         unreachable!("f32 tensor")
     };
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         session
             .with_raw("test.raw_tensor", |raw| {
                 let reference = raw.tensor(gpu_typed)?;
@@ -120,7 +120,7 @@ fn raw_resource_guard_is_runtime_scoped_and_type_keyed() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    with_cuda_exec_session(&mut backend, |session| {
+    with_cuda_exec(&mut backend, |session| {
         session
             .with_raw("test.raw_resource", |raw| {
                 let guard = raw.resource(|| Ok(String::from("cached-value")))?;

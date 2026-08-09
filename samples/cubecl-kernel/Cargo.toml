@@ -1,0 +1,16 @@
+[package]
+name = "cubecl-kernel-sample"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# Downstream-style package line: downstream extern kernel crates depend on the
+# published crates.io `t4a-cubecl = =0.10.0`, never a git rev. Within this
+# workspace the root `[patch.crates-io]` redirects to the fork so all crates
+# share one CubeCL runtime type.
+cubecl = { package = "t4a-cubecl", version = "=0.10.0", features = ["cuda"] }
+cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.0" }
+tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda"] }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }

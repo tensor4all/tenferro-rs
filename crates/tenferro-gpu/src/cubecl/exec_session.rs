@@ -16,8 +16,50 @@ use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, Type
 use super::identity::GpuExtensionCapability;
 use super::runtime::RawContextRestore;
 use super::{
-    raw, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity,
+    raw, session_cubecl, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime,
+    CudaRuntimeIdentity,
 };
+
+/// Best-effort exit flush for a `with_cubecl` session.
+///
+/// Flushes once eagerly (returned to the caller as an error if it fails) and
+/// once more on `Drop` so a panic/unwind path still drains pending CubeCL
+/// work.
+struct CubeclExitFlush<'a> {
+    op: &'static str,
+    client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    flushed: bool,
+}
+
+impl<'a> CubeclExitFlush<'a> {
+    fn new(
+        op: &'static str,
+        client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    ) -> Self {
+        Self {
+            op,
+            client,
+            flushed: false,
+        }
+    }
+
+    /// Flush now and return the typed result.
+    fn flush_now(&mut self) -> crate::Result<()> {
+        self.client
+            .flush()
+            .map_err(|err| crate::Error::backend_source(self.op, err))?;
+        self.flushed = true;
+        Ok(())
+    }
+}
+
+impl Drop for CubeclExitFlush<'_> {
+    fn drop(&mut self) {
+        if !self.flushed {
+            let _ = self.client.flush();
+        }
+    }
+}
 
 /// Marker for the concrete erased CUDA execution-session target.
 #[doc(hidden)]
@@ -168,6 +210,47 @@ impl CudaExecSession<'_> {
         // the current thread.
         let mut session = unsafe { raw::Session::new(runtime, cache, stream) };
         f(&mut session)
+    }
+
+    /// Borrow the public tenferro-wide CubeCL session for one operation.
+    ///
+    /// The session exposes the exact tenferro CubeCL client bound to this
+    /// runtime. Pending CubeCL work is flushed before entering and again on
+    /// exit (including `Err` and unwind) so a later raw-session or host read
+    /// observes the enqueued work. The success path does not synchronize.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// fn check(session: &mut CudaExecSession<'_>) {
+    ///     let _ = session.with_cubecl("test.cubecl", |_cubecl| Ok(()));
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn with_cubecl<R>(
+        &mut self,
+        op: &'static str,
+        f: impl for<'s> FnOnce(&session_cubecl::Session<'s>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        let runtime = self.backend.runtime().clone();
+        runtime.flush_cubecl(op)?;
+        let session = unsafe { session_cubecl::Session::new(runtime) };
+        // Best-effort exit flush on every path via Drop.
+        let mut _flush_guard = CubeclExitFlush::new(op, session.client());
+        let result = f(&session);
+        let flush_result = _flush_guard.flush_now();
+        match result {
+            Ok(value) => {
+                flush_result?;
+                Ok(value)
+            }
+            Err(err) => {
+                let _ = flush_result;
+                Err(err)
+            }
+        }
     }
 
     #[doc(hidden)]

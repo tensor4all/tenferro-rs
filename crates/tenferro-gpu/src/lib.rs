@@ -48,6 +48,18 @@ pub mod cuda {
         GpuExtensionCapability,
     };
 
+    /// Public tenferro-wide CubeCL session (issue #1597).
+    ///
+    /// Exposes a narrow prelude of the CubeCL types needed to write and launch
+    /// `#[cube]` kernels against tenferro's GPU runtime. This module does not
+    /// re-export the whole of `cubecl`; downstream crates declare the framework
+    /// `t4a-cubecl` package explicitly.
+    pub mod cubecl {
+        pub use super::super::cubecl::session_cubecl::Session;
+        // Narrow prelude: only the types needed to describe a CubeCL launch.
+        pub use ::cubecl::prelude::{ArrayArg, CubeCount, CubeDim, TensorBinding};
+    }
+
     /// Type-safe raw CUDA extension session (issue #1597).
     pub mod raw {
         pub use super::super::cubecl::raw::{

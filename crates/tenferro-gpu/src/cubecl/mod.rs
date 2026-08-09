@@ -117,6 +117,7 @@ mod permutation;
 pub(crate) mod raw;
 mod runtime;
 mod runtime_adapter;
+pub(crate) mod session_cubecl;
 
 use dispatch::{
     alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
