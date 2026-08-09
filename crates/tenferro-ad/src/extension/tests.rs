@@ -269,12 +269,33 @@ fn eager_extension_cpu_input_signature_is_accepted_before_factory() {
 }
 
 #[test]
+fn eager_extension_targeted_install_is_idempotent_for_fresh_modules() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let before = ctx.runtime().epoch().unwrap();
+    execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap();
+    let first = ctx.runtime().epoch().unwrap();
+    execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap();
+    let second = ctx.runtime().epoch().unwrap();
+
+    assert!(first > before);
+    assert_eq!(second, first);
+}
+
+#[test]
 fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let target = EagerExtensionTarget {
         engine_id: tenferro_cpu::runtime_engine_id().unwrap(),
         backend_kind: EagerExtensionBackendKind::Cpu,
     };
+    let before = ctx.runtime().epoch().unwrap();
     let barrier = Arc::new(Barrier::new(3));
     let handles = (0..2)
         .map(|_| {
@@ -284,7 +305,7 @@ fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
             let target_engine_id = target.engine_id.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                ctx.replace_extension_module_for_engine(
+                ctx.ensure_extension_module_for_engine(
                     BridgeModule::for_engine(engine_id),
                     BridgeProbe::one().family_id(),
                     &target_engine_id,
@@ -294,12 +315,20 @@ fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
         .collect::<Vec<_>>();
     barrier.wait();
 
-    for handle in handles {
-        handle
-            .join()
-            .expect("targeted eager installation thread panicked")
-            .unwrap();
-    }
+    let epochs = handles
+        .into_iter()
+        .map(|handle| {
+            handle
+                .join()
+                .expect("targeted eager installation thread panicked")
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(epochs.len(), 2);
+    assert!(epochs.iter().all(|epoch| *epoch == epochs[0]));
+    assert!(epochs[0] > before);
+    assert_eq!(ctx.runtime().epoch().unwrap(), epochs[0]);
+
     let snapshot = ctx.runtime().snapshot().unwrap();
     assert_eq!(snapshot.extension_module_count(), 1);
     assert!(snapshot.has_extension_engine(BridgeProbe::one().family_id(), &target.engine_id));

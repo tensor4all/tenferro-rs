@@ -466,6 +466,42 @@ fn install_same_module_arc_is_noop_and_preserves_epoch_and_identities(
 }
 
 #[test]
+fn ensure_same_module_id_and_target_registration_is_noop_for_fresh_module_arc(
+) -> Result<(), Box<dyn StdError>> {
+    let tuple = fixed("ensure", "tenferro.family.ensure", "ensure");
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.ensure",
+        ModuleAction::Register(tuple.clone()),
+    ))?;
+    let before = runtime.snapshot()?;
+    let before_identity = before
+        .extension_slot_identity_for_test(tuple.family, &tuple.engine)
+        .expect("extension identity");
+
+    let returned = runtime.reconfigure(|edit| {
+        edit.ensure_extension_module_for_engine(
+            module(
+                "tenferro.module.ensure",
+                ModuleAction::DuplicateEngine(tuple.clone()),
+            ),
+            tuple.family,
+            &tuple.engine,
+        )?;
+        Ok(())
+    })?;
+
+    assert_eq!(returned, before.epoch());
+    let after = runtime.snapshot()?;
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(
+        after.extension_slot_identity_for_test(tuple.family, &tuple.engine),
+        Some(before_identity)
+    );
+
+    Ok(())
+}
+
+#[test]
 fn install_unequal_same_id_is_conflicting_module_and_publishes_nothing(
 ) -> Result<(), Box<dyn StdError>> {
     let first = fixed("conflict-a", "tenferro.family.conflict-a", "conflict-a");

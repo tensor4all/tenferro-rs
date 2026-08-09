@@ -300,7 +300,7 @@ pub fn apply_eager_with_targeted_extension_session(
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
     validate_eager_extension_input_signature(&ctx, &target, &input_reads)?;
     let module = module_factory(target.clone())?;
-    ctx.replace_extension_module_for_engine(module, op.family_id(), &target.engine_id)?;
+    ctx.ensure_extension_module_for_engine(module, op.family_id(), &target.engine_id)?;
     let outputs = ctx.with_extension_execution_context(|extension_ctx| {
         execute(op.as_ref(), &input_reads, extension_ctx)
     })??;

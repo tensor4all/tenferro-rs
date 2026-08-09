@@ -1396,7 +1396,7 @@ impl EagerRuntime {
             })
     }
 
-    pub(crate) fn replace_extension_module_for_engine(
+    pub(crate) fn ensure_extension_module_for_engine(
         &self,
         module: Arc<dyn ExtensionModule>,
         family_id: &'static str,
@@ -1405,11 +1405,11 @@ impl EagerRuntime {
         let _install_guard = self.lock_extension_install()?;
         self.runtime
             .reconfigure(|edit| {
-                edit.replace_extension_module_for_engine(module, family_id, engine_id)?;
+                edit.ensure_extension_module_for_engine(module, family_id, engine_id)?;
                 Ok(())
             })
             .map_err(|source| {
-                runtime_state_source("EagerRuntime::replace_extension_module_for_engine", source)
+                runtime_state_source("EagerRuntime::ensure_extension_module_for_engine", source)
             })
     }
 
