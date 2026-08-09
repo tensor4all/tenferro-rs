@@ -26,7 +26,10 @@ use plan::{extension_plan_key_for_runtime, with_cufft_plan_for_batch, CufftPlanE
 const OP: &str = "cuda_fft";
 
 #[derive(Debug, thiserror::Error)]
-#[error("CUDA FFT requires device/runtime residency: {source}")]
+#[error(
+    "CUDA FFT expected GPU tensor owned by this runtime; host tensors must use {}, and foreign-runtime tensors must use their owning runtime: {source}",
+    concat!("upload", "_tensor()")
+)]
 struct CudaFftPlacementError {
     #[source]
     source: tenferro_tensor::Error,

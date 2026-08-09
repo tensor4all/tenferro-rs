@@ -286,16 +286,13 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
 /// preparation. It reuses the backend's existing fill-zero kernel and never
 /// uploads a host tensor or exposes a device pointer to the caller.
 ///
-/// # Examples
+/// # Errors
 ///
-/// ```
-/// use tenferro_gpu::cuda::CudaRuntime;
-/// use tenferro_gpu::cuda::interop::alloc_zero_output;
-/// use tenferro_tensor::TypedTensor;
-///
-/// let _alloc: fn(&CudaRuntime, &[usize]) -> tenferro_tensor::Result<TypedTensor<f32>> =
-///     alloc_zero_output::<f32>;
-/// ```
+/// Returns [`crate::Error::Validation`] with
+/// [`crate::ValidationError::InvalidArgument`] when the shape product or
+/// launch count overflows, [`crate::Error::RuntimeState`] when the
+/// output is not resident on `rt`, or [`crate::Error::BackendSource`] when
+/// allocation or backend resource inspection fails.
 #[doc(hidden)]
 pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
 where

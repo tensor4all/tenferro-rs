@@ -46,8 +46,8 @@ pub fn gpu_available() -> bool {
 ///
 /// Cloning the identity preserves the underlying executable runtime witness;
 /// constructing another runtime, even for the same device ordinal, produces a
-/// distinct identity. The token intentionally carries no provider or device
-/// identifier and grants no execution authority.
+/// distinct identity. The cache key intentionally carries no provider or
+/// device identifier and grants no execution authority.
 #[derive(Clone, Debug)]
 pub struct CudaRuntimeIdentity {
     marker: Arc<u8>,
@@ -60,11 +60,11 @@ impl CudaRuntimeIdentity {
         }
     }
 
-    /// Return a stable, non-authoritative token for owner-scoped caches.
+    /// Return a stable, non-authoritative cache key for owner-scoped caches.
     ///
-    /// The token is derived from the retained identity allocation, so cloning
-    /// or moving this witness preserves it while independently constructed
-    /// identities remain distinct while their witnesses are retained. It does
+    /// The cache key is derived from the retained identity allocation, so
+    /// cloning or moving this witness preserves it while independently
+    /// constructed identities remain distinct while their witnesses are retained. It does
     /// not expose a CUDA handle, context, stream, or execution authority.
     ///
     /// # Examples
@@ -72,7 +72,7 @@ impl CudaRuntimeIdentity {
     /// ```
     /// use tenferro_gpu::cuda::CudaRuntimeIdentity;
     ///
-    /// let _token: fn(&CudaRuntimeIdentity) -> usize =
+    /// let _cache_key: fn(&CudaRuntimeIdentity) -> usize =
     ///     CudaRuntimeIdentity::cache_discriminator;
     /// ```
     #[doc(hidden)]

@@ -204,7 +204,7 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
     let mut cpu = CpuBackend::new();
     let host = complex_f64(&[4], 0.5);
     let mut backend = support::cuda_backend();
-    let first_token = backend.runtime_identity().cache_discriminator();
+    let first_key = backend.runtime_identity().cache_discriminator();
     let mut executor = FftExecutor::default();
 
     run_executor_case(
@@ -223,10 +223,7 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
 
     let backend = Box::new(backend);
     let mut backend = *backend;
-    assert_eq!(
-        backend.runtime_identity().cache_discriminator(),
-        first_token
-    );
+    assert_eq!(backend.runtime_identity().cache_discriminator(), first_key);
     run_executor_case(
         &mut executor,
         &mut cpu,
@@ -244,8 +241,8 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
     assert_eq!(moved_stats.misses, 1);
 
     let mut independent = support::cuda_backend();
-    let independent_token = independent.runtime_identity().cache_discriminator();
-    assert_ne!(first_token, independent_token);
+    let independent_key = independent.runtime_identity().cache_discriminator();
+    assert_ne!(first_key, independent_key);
     run_executor_case(
         &mut executor,
         &mut cpu,

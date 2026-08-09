@@ -17,6 +17,10 @@ fn assert_placement_error(result: tenferro_tensor::Result<Tensor>) {
     else {
         panic!("placement mismatch returned the wrong error variant: {error:?}");
     };
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("expected GPU tensor"), "{diagnostic}");
+    assert!(diagnostic.contains("upload_tensor()"), "{diagnostic}");
+    assert!(diagnostic.contains("owning runtime"), "{diagnostic}");
     let placement_source = source
         .source()
         .expect("placement wrapper must retain the backend error source");

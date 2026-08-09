@@ -259,10 +259,23 @@ pub fn apply_eager_with_extension_session(
 ///
 /// # Errors
 ///
-/// Returns the same input/context errors as
-/// [`apply_eager_with_extension_session`]. Factory errors are propagated
-/// unchanged. Input ingress and module-family/engine mismatches retain their
-/// typed runtime sources.
+/// Returns [`tenferro_runtime::Error::Validation`] with
+/// [`tenferro_tensor::ValidationError::InvalidArgument`] when `inputs` is empty
+/// or its length differs from the extension's declared input count. Returns
+/// [`tenferro_runtime::Error::ContextMismatch`] when tensors belong to
+/// different eager runtimes.
+///
+/// Returns [`tenferro_runtime::Error::RuntimeStateSource`] when the selected
+/// engine is missing through
+/// [`tenferro_runtime::RuntimeConfigError::MissingEngine`], an input has no
+/// ingress through [`tenferro_runtime::PrepareError::NoInputIngress`], or the
+/// factory module does not register the operation family for the selected engine. The module
+/// mismatch retains [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`]
+/// through [`tenferro_runtime::RuntimeReconfigureError`] in the source chain.
+/// Errors returned by `module_factory` are propagated unchanged. Errors
+/// returned by `execute` are propagated as
+/// [`tenferro_runtime::Error::TensorRuntime`]; session, cache, and output
+/// registration failures retain their typed runtime sources.
 #[doc(hidden)]
 pub fn apply_eager_with_targeted_extension_session(
     op: Arc<dyn ExtensionOp>,

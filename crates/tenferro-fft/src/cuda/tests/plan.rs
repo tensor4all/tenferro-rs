@@ -1,3 +1,6 @@
+// INVARIANT: This module stays cohesive above the soft line-count trigger:
+// every test shares the fake cuFFT state and plan/cache lifecycle helpers, with
+// no clear low-risk boundary for a split.
 use std::ffi::c_void;
 use std::hash::Hasher;
 use std::mem::size_of;

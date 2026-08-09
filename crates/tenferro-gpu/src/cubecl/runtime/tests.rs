@@ -15,15 +15,15 @@ fn selected_device_lookup_classifies_only_cuda_invalid_device() {
 #[test]
 fn cuda_runtime_identity_is_clone_stable_and_instance_scoped() {
     let first = CudaRuntimeIdentity::fresh();
-    let first_token = first.cache_discriminator();
+    let first_key = first.cache_discriminator();
     let clone = first.clone();
     let moved = clone;
     let independent = CudaRuntimeIdentity::fresh();
 
     assert_eq!(first, moved);
-    assert_eq!(first_token, moved.cache_discriminator());
+    assert_eq!(first_key, moved.cache_discriminator());
     assert_ne!(first, independent);
-    assert_ne!(first_token, independent.cache_discriminator());
+    assert_ne!(first_key, independent.cache_discriminator());
 }
 
 #[test]
