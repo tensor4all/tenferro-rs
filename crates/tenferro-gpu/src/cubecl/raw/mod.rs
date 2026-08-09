@@ -415,6 +415,11 @@ impl<'s> Session<'s> {
     /// `dst` and `src` must be aligned device spans of at least `nbytes`
     /// bytes, backed by allocations that outlive the (unsynchronized) copy;
     /// `dst` must be uniquely owned for writing and `src` must not alias it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the driver rejects the
+    /// device-to-device copy.
     pub unsafe fn copy_bytes(
         &self,
         dst: *mut std::ffi::c_void,

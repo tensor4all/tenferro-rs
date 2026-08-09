@@ -191,6 +191,11 @@ impl CudaExecSession<'_> {
     ///
     /// This is the only host barrier on the success path; ordinary successful
     /// session operations only enqueue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CUDA stream
+    /// synchronization fails.
     pub fn synchronize(&mut self) -> crate::Result<()> {
         self.backend.runtime().synchronize()
     }
@@ -269,6 +274,11 @@ impl CudaExecSession<'_> {
     /// }
     /// let _ = check;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's error, or [`crate::Error::BackendSource`] when
+    /// pending CubeCL work cannot be flushed on entry or exit.
     pub fn with_cubecl<R>(
         &mut self,
         op: &'static str,
