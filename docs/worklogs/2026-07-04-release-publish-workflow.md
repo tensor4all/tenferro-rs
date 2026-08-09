@@ -82,13 +82,13 @@ README, service, facade, feature-default, or MSRV-matrix change was made.
 Residual: publish deep crates only after matching dependencies are available on
 crates.io; package verification should then be rerun.
 
-## 2026-08-09 v0.4 final-review hardening
+## 2026-08-09 v0.3 final-review hardening
 
 Added `scripts/release-publish.py` as the fail-closed human operator path for
 Phase 3. It verifies the clean detached checkout against the pushed remote tag
 and `origin/main`, structurally validates every workspace git pin against both
 its revision manifest and exact crates.io version, and requires exact approval
-for each package that is new to crates.io. In particular, v0.4 publication
+for each package that is new to crates.io. In particular, v0.3 publication
 cannot proceed without an approval assertion naming
 `tenferro-internal-cpu-kernels` exactly.
 
@@ -137,3 +137,49 @@ entries are skipped. Network response truncation and HTTP protocol/read errors
 are converted to bounded, actionable release failures. Focused regressions cover
 generated-file mutations, malicious traversal directories, HTTP failures, exact
 resume comparison, and prerequisite-before-dependent packaging.
+
+## 2026-08-09 SemVer proposal gate
+
+The release guidance previously accepted a requested target before deriving an
+independent SemVer target. That allowed a dependency release to be mistaken for
+a reason to align tenferro with an independently versioned repository.
+
+Phase 0 now derives one proposal from the latest matching published stable
+baseline and its provenance tag, then classifies changes actually merged since
+that tag as breaking, feature, or fix-only. Accepted issues count only when they
+link to merged implementation. The explicit pre-1.0 and 1.0+ table makes the
+result reviewable. A conflicting supplied target requires explicit confirmation
+and a recorded reason before edits. Approved never-published packages are
+excluded from baseline agreement, while unpublished newer tags are treated as
+anomalies rather than baselines.
+
+The human-only publication boundary is unchanged: agents stop after validation,
+and only a maintainer with crates.io ownership runs Phase 3 publication.
+
+The RED pressure scenario omitted the skill and requested tenferro 0.4.0 after
+strided-rs 0.4.0. The response treated that request as sufficient instead of
+deriving and proposing tenferro 0.3.0 from the published 0.2.0 baseline. The
+new documentation contract test was then observed failing before the workflow
+and adapters were updated.
+
+Four fresh GREEN pressure scenarios passed against the updated guidance: a
+0.2.0 feature proposed 0.3.0 and stopped on a requested 0.4.0 conflict; a
+0.2.3 fix proposed 0.2.4; a 1.4.2 breaking change proposed 2.0.0; and an
+explicitly reasoned 0.4.0 override proceeded with a recording requirement.
+
+The initial `ci-config` run passed all Python/config suites but stopped because
+`actionlint` was unavailable. The controller's subsequent run and the fix-round
+run with pinned actionlint 1.7.7 completed the full profile successfully.
+
+A quality-review correction aligned every adapter with the canonical human-only
+boundary: agents stop after validation, and a human maintainer alone runs Phase
+3 publication. Contract tests now assert the exact SemVer rows, ordering of
+provenance before the proposal, the conflict halt, the human-only boundary, and
+byte equality of the three skill adapters.
+
+Validation commands:
+
+- `python3 scripts/test-release-publish.py`
+- `python3 scripts/ci/run_profile.py ci-config`
+- byte comparisons of the three `SKILL.md` adapters
+- `git diff --check`

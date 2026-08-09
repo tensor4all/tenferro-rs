@@ -18,13 +18,13 @@ Hard invariants (abort the release if any would be violated):
 
 Keep the interaction incremental:
 
-1. Confirm the target version and that `origin/main` is green and clean.
+1. Derive and present the canonical workflow's SemVer proposal before editing;
+   stop for explicit confirmation when the requested target differs.
 2. Phase 1: version-bump PR (workspace version plus every internal
    cross-crate `version = "..."` requirement) and the full pre-push
    checklist.
 3. Phase 2: tag the merged commit and push the tag.
-4. Phase 3: publish crates in dependency order from a worktree of the tag,
-   waiting for the registry index between crates. Confirm with the user
-   immediately before the first `cargo publish`.
-5. Phase 4: verify crates.io versions and `.cargo_vcs_info.json`
-   provenance, then clean up.
+4. At Phase 3, stop after validation; a human maintainer runs Phase 3
+   publication from the tag.
+5. After human publication, Phase 4 verifies crates.io versions and
+   `.cargo_vcs_info.json` provenance, then cleans up.

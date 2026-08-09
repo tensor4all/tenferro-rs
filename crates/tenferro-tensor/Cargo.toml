@@ -25,12 +25,12 @@ name = "tenferro_tensor"
 default = []
 
 [dependencies]
-tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.4.0" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.3.0" }
 num-traits.workspace = true
 num-complex.workspace = true
 smallvec.workspace = true
 strided-kernel.workspace = true
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.4.0" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.3.0" }
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -29,9 +29,9 @@ webgpu = []
 rocm = []
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.4.0" }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.4.0", default-features = false }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.4.0" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.3.0" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0", default-features = false }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.3.0" }
 computegraph.workspace = true
 num-complex.workspace = true
 thiserror.workspace = true

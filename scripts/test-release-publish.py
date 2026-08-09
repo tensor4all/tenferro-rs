@@ -23,6 +23,62 @@ RELEASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE)
 
 
+class ReleaseDocumentationContractTests(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[1]
+    SKILL_PATHS = (
+        ".agents/skills/tenferro-release-publish/SKILL.md",
+        ".claude/skills/tenferro-release-publish/SKILL.md",
+        ".kimi/skills/tenferro-release-publish/SKILL.md",
+    )
+
+    def test_canonical_workflow_requires_semver_proposal_before_edits(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
+        for phrase in (
+            "latest published stable version",
+            "before changing manifests",
+            "independently versioned",
+            "stop for explicit confirmation and a reason",
+            "unimplemented accepted issues do not affect",
+            "Agents must stop after validation and must never execute a publication.",
+        ):
+            self.assertIn(phrase, normalized)
+        self.assertIn(
+            """| Baseline | `breaking` | `feature` | `fix-only` |
+   | --- | --- | --- | --- |
+   | `0.Y.Z` | `0.(Y+1).0` | `0.(Y+1).0` | `0.Y.(Z+1)` |
+   | `X.Y.Z`, `X >= 1` | `(X+1).0.0` | `X.(Y+1).0` | `X.Y.(Z+1)` |""",
+            text,
+        )
+        self.assertLess(
+            normalized.index("provenance tag"), normalized.index("one proposed")
+        )
+
+    def test_release_adapters_reference_the_proposal_gate_and_human_boundary(self) -> None:
+        paths = (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md")
+        for relative in paths:
+            text = (self.ROOT / relative).read_text()
+            normalized = " ".join(text.split())
+            self.assertIn("ai/contribution-workflows/release-publish.md", text)
+            self.assertIn("before editing", text)
+            self.assertIn("SemVer proposal", text)
+            self.assertIn(
+                "stop after validation; a human maintainer runs Phase 3 publication from the tag.",
+                normalized,
+            )
+            for contradictory in (
+                "Phase 3: publish crates in dependency order from a worktree of the tag",
+                "Proceed phase by phase — version-bump PR, tag, dependency-order publish from a worktree of the tag",
+                "confirm with the user immediately before the first `cargo publish`",
+            ):
+                self.assertNotIn(contradictory.lower(), normalized.lower())
+
+    def test_release_skill_adapters_are_byte_identical(self) -> None:
+        expected = (self.ROOT / self.SKILL_PATHS[0]).read_bytes()
+        for relative in self.SKILL_PATHS[1:]:
+            self.assertEqual(expected, (self.ROOT / relative).read_bytes())
+
+
 class GitDependencyTests(unittest.TestCase):
     def test_parses_commented_multiline_workspace_git_dependencies(self) -> None:
         manifest = """\
