@@ -360,6 +360,20 @@ impl<'s> Session<'s> {
     /// runtime domain, or is not resident on this session's device, or
     /// [`crate::Error::BackendSource`] when CubeCL cannot inspect the retained
     /// resource.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::{DeviceBytes, Session};
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// fn check<'s>(
+    ///     raw: &Session<'s>,
+    ///     tensor: &TypedTensor<f32>,
+    /// ) -> tenferro_tensor::Result<DeviceBytes<'s>> {
+    ///     raw.retain_tensor(tensor, "test.retain_tensor")
+    /// }
+    /// ```
     pub fn retain_tensor<T>(
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,

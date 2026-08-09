@@ -30,8 +30,9 @@ fn raw_session_exposes_stream_and_runtime_identity() {
             })
             .unwrap();
     });
-    // Context/device must be restored after the session; a subsequent backend
-    // operation that needs the primary context must still work.
+    // Context/device should be best-effort restored after the session; a
+    // subsequent backend operation that needs the primary context must still
+    // work when restoration succeeds.
     assert!(session_after_raw_still_runs(&mut backend));
 }
 

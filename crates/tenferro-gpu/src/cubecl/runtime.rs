@@ -414,7 +414,8 @@ impl CudaRuntime {
     ///
     /// Returns [`crate::Error::BackendSource`] when the tenferro primary
     /// context cannot be activated (device or context driver failure); a
-    /// partial activation is rolled back before the error is returned.
+    /// partial activation is best-effort rolled back before the error is
+    /// returned (rollback failures are discarded).
     ///
     /// # Examples
     ///

@@ -190,10 +190,7 @@ impl CudaExecSession<'_> {
     /// Block the host until work enqueued on the session's stream completes.
     ///
     /// This is the only host barrier on the success path; ordinary successful
-    /// session operations only enqueue. `with_cubecl` and `with_raw` (the
-    /// extension sub-sessions) are added by the follow-up extension-session
-    /// work; this task establishes the public boundary and the
-    /// capability/identity surface only.
+    /// session operations only enqueue.
     pub fn synchronize(&mut self) -> crate::Result<()> {
         self.backend.runtime().synchronize()
     }

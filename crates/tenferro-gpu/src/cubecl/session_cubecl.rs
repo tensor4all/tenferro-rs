@@ -117,6 +117,17 @@ impl<'s> Session<'s> {
     /// byte length, or launch count overflows, [`crate::Error::RuntimeState`]
     /// when the output is not resident, or [`crate::Error::BackendSource`]
     /// when allocation or backend resource inspection fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::cubecl::Session;
+    ///
+    /// fn check(session: &Session<'_>) -> tenferro_tensor::Result<()> {
+    ///     let _ = session.alloc_zero_output::<f32>(&[4])?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn alloc_zero_output<T>(&self, shape: &[usize]) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
