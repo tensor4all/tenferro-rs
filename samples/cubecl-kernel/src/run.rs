@@ -20,6 +20,13 @@ use crate::kernel::scale;
 ///
 /// Hardware-gated: `cuda_devices` returns an error when no CUDA device is
 /// reachable, so this is safe to call from a hardware-gated test.
+///
+/// # Errors
+///
+/// Returns a runtime-state error when no CUDA device is reachable, the CUDA
+/// backend or session cannot be created, the kernel launch or explicit
+/// synchronization fails, or a downloaded value mismatches the expected
+/// scaled output.
 pub fn run_scale_check() -> tenferro_tensor::Result<()> {
     const OP: &str = "cubecl-kernel-sample.scale";
     let devices = tenferro_gpu::cuda::cuda_devices()
