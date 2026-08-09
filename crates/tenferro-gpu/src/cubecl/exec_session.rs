@@ -210,8 +210,10 @@ impl CudaExecSession<'_> {
     /// # Errors
     ///
     /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose or
-    /// flush the stream, or when the CUDA context cannot be entered or
-    /// restored.
+    /// flush the stream, or when the CUDA context cannot be entered. Context
+    /// restoration on exit is best-effort: a failure to restore the caller's
+    /// previous device/context is logged to stderr rather than propagated, so
+    /// a callback result is never replaced by a restore error.
     ///
     /// # Examples
     ///

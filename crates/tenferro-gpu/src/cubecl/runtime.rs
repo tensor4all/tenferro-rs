@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::sync::Arc;
 
 use cubecl::client::ComputeClient;
@@ -67,10 +68,23 @@ impl RawContextRestore {
         cudarc::runtime::result::device::set(device)
             .map_err(|err| crate::Error::backend_source(op, err))?;
         if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
-            // Roll the device activation back so a partial activation failure
-            // cannot leave the caller's thread on a different device.
+            // Roll the device and context back so a partial activation failure
+            // cannot leave the caller's thread on a different device or with a
+            // different current context (setting the device can implicitly
+            // change the thread's current context to the new primary).
             if let Ok(previous_device) = saved_device {
                 let _ = cudarc::runtime::result::device::set(previous_device);
+            }
+            match saved_context {
+                Ok(Some(previous)) => {
+                    let _ = unsafe { cudarc::driver::result::ctx::set_current(previous) };
+                }
+                Ok(None) => {
+                    let _ = unsafe {
+                        cudarc::driver::result::ctx::set_current(std::ptr::null_mut())
+                    };
+                }
+                Err(_) => {}
             }
             return Err(crate::Error::backend_source(op, err));
         }
@@ -82,9 +96,11 @@ impl RawContextRestore {
     }
 
     fn restore(&self) {
+        let mut stderr = std::io::stderr();
         if let Ok(device) = self.saved_device {
             if let Err(err) = cudarc::runtime::result::device::set(device) {
-                eprintln!(
+                let _ = writeln!(
+                    stderr,
                     "tenferro-gpu: failed to restore CUDA device during {}: {err:?}",
                     self.op
                 );
@@ -93,7 +109,8 @@ impl RawContextRestore {
         match self.saved_context {
             Ok(Some(context)) => {
                 if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
-                    eprintln!(
+                    let _ = writeln!(
+                        stderr,
                         "tenferro-gpu: failed to restore CUDA context during {}: {err:?}",
                         self.op
                     );
@@ -105,7 +122,8 @@ impl RawContextRestore {
                 if let Err(err) = unsafe {
                     cudarc::driver::result::ctx::set_current(std::ptr::null_mut())
                 } {
-                    eprintln!(
+                    let _ = writeln!(
+                        stderr,
                         "tenferro-gpu: failed to clear CUDA context during {}: {err:?}",
                         self.op
                     );
@@ -442,8 +460,7 @@ impl CudaRuntime {
         self.inner.allocation_domain
     }
 
-    #[doc(hidden)]
-    pub fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+    pub(crate) fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
         self.inner.set_current_cuda_context(op)
     }
 
