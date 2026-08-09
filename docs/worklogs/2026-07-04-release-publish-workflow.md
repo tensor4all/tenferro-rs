@@ -256,3 +256,22 @@ Focused tests cover initial and already-published restart states both before and
 after bootstrap dependencies become registry-visible, and assert that each
 patch remains confined to its target crate commands. The helper suite, Python
 byte-compilation, and `git diff --check` passed. No publication command was run.
+
+## 2026-08-10 registry restart Cargo.lock drift
+
+Restart preflight against the published GPU archive showed that Cargo can
+regenerate a package `Cargo.lock` with a newer registry dependency version even
+when the immutable tagged source and every other archive member are unchanged.
+Because `Cargo.lock` is Cargo-generated package state rather than tagged source,
+already-published target versions and prerequisites that were registry-visible
+when the helper started may differ from the fresh local package in that member's
+bytes only.
+
+The exception remains narrow: both archives must contain the identical file set,
+including `Cargo.lock`; normalized and original manifests, VCS provenance, and
+every other member remain byte-identical and retain existing metadata and tagged
+source validation. Publish dry-runs and immediate post-upload registry checks
+remain exact for all members, including `Cargo.lock`, because those archives are
+created within the same helper run. Focused tests cover accepted restart lock
+drift, rejected non-lock and missing-lock changes, the strict dry-run boundary,
+and the existing-prerequisite path. No publication command was run.

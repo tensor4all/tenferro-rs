@@ -179,15 +179,20 @@ Agents must stop after validation and must never execute a publication.
    tree. The file list must equal `cargo package --list` for that tag.
    `Cargo.toml.orig` must equal the tagged source manifest. The helper retains
    every regular file's exact bytes, including Cargo's normalized `Cargo.toml`,
-   generated `Cargo.lock`, and VCS file, and requires the dry-run and downloaded
-   registry archives to match them exactly. Unmapped, changed, or required
-   missing files abort. It packages, dry-runs, and publishes one crate at a time.
+   generated `Cargo.lock`, and VCS file. Dry-run and immediate post-upload
+   registry archives must match every member exactly. For target versions and
+   prerequisites already registry-visible when the helper starts, only
+   `Cargo.lock` bytes may differ from the fresh local package; the identical file
+   set (including `Cargo.lock`) and every other comparison remain required.
+   Unmapped, changed, or required missing files abort. It packages, dry-runs,
+   and publishes one crate at a time.
    Do not pre-package the whole workspace: lower-layer registry versions must
    exist before dependent packages can resolve.
 5. The helper is restart-safe and fail-closed: it skips an already-published
-   target version only after recreating the exact local archive from the clean
-   tag, then downloading its registry archive and matching every regular file's
-   bytes as well as tagged-source provenance. Any missing approval, metadata/provenance
+   target version only after recreating the local archive from the clean tag,
+   then downloading its registry archive and matching every regular file's bytes
+   except the generated `Cargo.lock` restart exception above, as well as
+   tagged-source provenance. Any missing approval, metadata/provenance
    mismatch, network ambiguity, command failure, or required manifest change
    aborts publication. Fix manifest problems on `main` through Phase 1 and
    restart at Phase 2 with the next patch version.

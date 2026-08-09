@@ -258,7 +258,43 @@ include = ["src/**", "README.md"]
         self.assertIn("tenferro-fixture-0.4.0/README.md", inspection.files)
         self.assertEqual(inspection.contents["Cargo.lock"], b"# generated\n")
 
-    def test_registry_archive_must_match_local_generated_files_exactly(self) -> None:
+    def test_registry_restart_allows_only_cargo_lock_byte_drift(self) -> None:
+        local = self.inspect(self.archive())
+        inspection = RELEASE.inspect_crate_archive(
+            self.archive(changes={"Cargo.lock": b"# registry resolution\nversion = 4\n"}),
+            "tenferro-fixture",
+            "0.4.0",
+            self.COMMIT,
+            "crates/tenferro-fixture",
+            self.reader,
+            set(local.contents),
+            local.contents,
+            allow_registry_lock_drift=True,
+        )
+        self.assertNotEqual(
+            inspection.contents["Cargo.lock"], local.contents["Cargo.lock"]
+        )
+
+        for changes in (
+            {"src/lib.rs": b"tampered\n"},
+            {"Cargo.toml": self.NORMALIZED_MANIFEST + b"\n# changed\n"},
+            {"Cargo.lock": None},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.inspect_crate_archive(
+                        self.archive(changes=changes),
+                        "tenferro-fixture",
+                        "0.4.0",
+                        self.COMMIT,
+                        "crates/tenferro-fixture",
+                        self.reader,
+                        set(local.contents),
+                        local.contents,
+                        allow_registry_lock_drift=True,
+                    )
+
+    def test_dry_run_exact_comparison_rejects_cargo_lock_drift(self) -> None:
         local = self.inspect(self.archive())
         mutations = (
             {
@@ -527,7 +563,9 @@ class OrchestrationTests(unittest.TestCase):
                     client.package_versions["crate-a"] = True
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 events.append(f"inspect:{data.decode()}")
                 expected_contents = args[-1]
                 if expected_contents is not None:
@@ -618,7 +656,7 @@ class OrchestrationTests(unittest.TestCase):
                 metadata_loader=lambda **_kwargs: metadata,
                 order_loader=lambda _text: ["tenferro-runtime", "tenferro-cpu"],
                 package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
-                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                     {}, (), {"Cargo.toml": b"generated"}
                 ),
                 source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
@@ -754,7 +792,7 @@ class OrchestrationTests(unittest.TestCase):
                 metadata_loader=lambda **_kwargs: metadata,
                 order_loader=lambda _text: crates,
                 package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
-                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                     {}, (), {"Cargo.toml": b"generated"}
                 ),
                 source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
@@ -885,8 +923,8 @@ class OrchestrationTests(unittest.TestCase):
                         ["cargo", "publish", "--dry-run"],
                         runner=runner,
                         root=root,
-                        archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
-                            {}, (), {}
+                        archive_inspector=lambda *_args, **_kwargs: (
+                            RELEASE.ArchiveInspection({}, (), {})
                         ),
                     )
 
@@ -945,7 +983,9 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(b"exact-tag")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 expected_contents = args[-1]
                 events.append(f"inspect:{data.decode()}")
                 if data == b"new-crate":
@@ -985,6 +1025,68 @@ class OrchestrationTests(unittest.TestCase):
             ],
         )
 
+    def test_restart_allows_lock_drift_for_existing_prerequisite_attestation(self) -> None:
+        lock_drift_settings: list[tuple[str, bool]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.workspace(root)
+            metadata = self.metadata(root, ["crate-a", "crate-b"])
+            metadata["packages"][1]["dependencies"] = [
+                {"name": "crate-a", "kind": "normal"}
+            ]
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            def inspect(
+                _data: bytes,
+                crate: str,
+                *_args: object,
+                allow_registry_lock_drift: bool = False,
+            ) -> RELEASE.ArchiveInspection:
+                lock_drift_settings.append((crate, allow_registry_lock_drift))
+                return RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated", "Cargo.lock": b"local"}
+                )
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                False,
+                root=root,
+                runner=runner,
+                client=FakeClient({"crate-a": True, "crate-b": True}, []),
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: ["crate-a", "crate-b"],
+                package_files_loader=lambda *_args, **_kwargs: {
+                    "Cargo.toml",
+                    "Cargo.lock",
+                },
+                archive_inspector=inspect,
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        self.assertEqual(
+            lock_drift_settings,
+            [
+                ("crate-a", False),
+                ("crate-a", True),
+                ("crate-a", True),
+                ("crate-b", False),
+                ("crate-b", True),
+            ],
+        )
+
     def test_resume_packages_only_after_prerequisite_archive_is_attested(self) -> None:
         events: list[str] = []
         with tempfile.TemporaryDirectory() as directory:
@@ -1004,7 +1106,9 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(f"local:{crate}".encode())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 crate = args[0]
                 expected_contents = args[-1]
                 events.append(f"inspect:{data.decode()}")
@@ -1058,7 +1162,7 @@ class OrchestrationTests(unittest.TestCase):
             lambda _path: None,
             {"Cargo.toml"},
             {"Cargo.toml": b"generated"},
-            archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+            archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                 {}, (), {"Cargo.toml": b"generated"}
             ),
             attempts=3,
@@ -1085,7 +1189,7 @@ class OrchestrationTests(unittest.TestCase):
                 lambda _path: None,
                 {"Cargo.toml"},
                 {"Cargo.toml": b"generated"},
-                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                     {}, (), {"Cargo.toml": b"generated"}
                 ),
                 attempts=3,

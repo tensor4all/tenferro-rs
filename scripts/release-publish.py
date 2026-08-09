@@ -346,6 +346,8 @@ def inspect_crate_archive(
     source_reader: TaggedSourceReader,
     expected_files: set[str],
     expected_contents: Mapping[str, bytes] | None = None,
+    *,
+    allow_registry_lock_drift: bool = False,
 ) -> ArchiveInspection:
     prefix = f"{expected_name}-{expected_version}/"
     try:
@@ -394,6 +396,8 @@ def inspect_crate_archive(
                     f"missing {missing_expected}, unexpected {unexpected}"
                 )
             required = {"Cargo.toml", "Cargo.toml.orig", ".cargo_vcs_info.json"}
+            if allow_registry_lock_drift:
+                required.add("Cargo.lock")
             missing = sorted(required - actual_files)
             if missing:
                 raise ReleaseError(f"crate archive is missing required files: {missing}")
@@ -402,6 +406,7 @@ def inspect_crate_archive(
                     relative
                     for relative in actual_files
                     if expected_contents.get(relative) != contents[relative]
+                    and not (allow_registry_lock_drift and relative == "Cargo.lock")
                 )
                 if set(expected_contents) != actual_files:
                     raise ReleaseError(
@@ -700,6 +705,7 @@ def inspect_registry_archive(
     expected_files: set[str],
     expected_contents: Mapping[str, bytes],
     *,
+    allow_registry_lock_drift: bool = False,
     archive_inspector: Callable = inspect_crate_archive,
 ) -> ArchiveInspection:
     return archive_inspector(
@@ -711,6 +717,7 @@ def inspect_registry_archive(
         source_reader,
         expected_files,
         expected_contents,
+        allow_registry_lock_drift=allow_registry_lock_drift,
     )
 
 
@@ -724,6 +731,7 @@ def await_registry_archive(
     expected_files: set[str],
     expected_contents: Mapping[str, bytes],
     *,
+    allow_registry_lock_drift: bool = False,
     archive_inspector: Callable = inspect_crate_archive,
     attempts: int = 40,
     delay: float = 30.0,
@@ -744,6 +752,7 @@ def await_registry_archive(
                     source_reader,
                     expected_files,
                     expected_contents,
+                    allow_registry_lock_drift=allow_registry_lock_drift,
                     archive_inspector=archive_inspector,
                 )
             except ReleaseError as error:
@@ -992,6 +1001,7 @@ def publish_release(
                 source_reader,
                 expected_files_by_crate[prerequisite],
                 expected_contents_by_crate[prerequisite],
+                allow_registry_lock_drift=version_exists[prerequisite],
                 archive_inspector=archive_inspector,
                 attempts=attempts,
                 delay=delay,
@@ -1027,6 +1037,7 @@ def publish_release(
                 source_reader,
                 expected_files,
                 local_inspection.contents,
+                allow_registry_lock_drift=True,
                 archive_inspector=archive_inspector,
             )
             print_inspection(crate, inspection)
