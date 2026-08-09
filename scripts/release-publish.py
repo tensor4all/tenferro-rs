@@ -922,9 +922,7 @@ def publish_release(
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
     runtime_bootstrap_args: list[str] = []
-    if not version_exists.get("tenferro-runtime", True) and not version_exists.get(
-        "tenferro-cpu", True
-    ):
+    if not version_exists.get("tenferro-cpu", True):
         cpu_path = (root / package_root(packages["tenferro-cpu"], root=root)).resolve()
         runtime_bootstrap_args = [
             "--no-verify",

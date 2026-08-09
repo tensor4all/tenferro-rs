@@ -216,12 +216,13 @@ cannot bootstrap either absent registry version.
 Clean-tag experiments established the narrow recovery: runtime package,
 publish dry-run, and publish use `--no-verify` plus
 `--config 'patch.crates-io.tenferro-cpu.path="ABS_TAG_PATH/crates/tenferro-cpu"'`
-only while both runtime and CPU 0.3.0 are registry-absent. The path comes from
-the selected release checkout's Cargo metadata and is encoded as an inline TOML
-string. The helper still inspects and compares the package, `tmp-crate`, and
-`tmp-registry` archives; the experiment found all three byte-identical. Once
-runtime is registry-visible with matching provenance, the existing prerequisite
-wait permits CPU to package and publish normally, without the patch.
+whenever CPU 0.3.0 is registry-absent, including a restart after runtime is
+registry-visible. The path comes from the selected release checkout's Cargo
+metadata and is encoded as an inline TOML string. The helper still inspects and
+compares the package, `tmp-crate`, and `tmp-registry` archives; the experiment
+found all three byte-identical. The existing prerequisite wait permits CPU to
+package and publish normally, without the patch. Once CPU is registry-visible,
+runtime packaging no longer needs the bootstrap patch.
 
 `--release-root PATH` lets the corrected helper on `origin/main` operate on the
 clean detached immutable tag checkout. `verify_release_checkout(root=...)`

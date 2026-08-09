@@ -567,7 +567,7 @@ class OrchestrationTests(unittest.TestCase):
             ],
         )
 
-    def test_runtime_bootstrap_patches_tag_cpu_only_while_both_are_missing(self) -> None:
+    def assert_runtime_bootstrap_commands(self, runtime_exists: bool) -> None:
         cargo_commands: list[list[str]] = []
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'tag "checkout\\special'
@@ -581,7 +581,7 @@ class OrchestrationTests(unittest.TestCase):
                 {"name": "tenferro-runtime", "kind": "normal"}
             ]
             client = FakeClient(
-                {"tenferro-runtime": False, "tenferro-cpu": False}, []
+                {"tenferro-runtime": runtime_exists, "tenferro-cpu": False}, []
             )
 
             def runner(
@@ -633,27 +633,33 @@ class OrchestrationTests(unittest.TestCase):
             cargo_commands,
             [
                 ["cargo", "package", "-p", "tenferro-runtime", "--locked", *bootstrap],
-                [
-                    "cargo",
-                    "publish",
-                    "--dry-run",
-                    "-p",
-                    "tenferro-runtime",
-                    "--locked",
-                    "--registry",
-                    "crates-io",
-                    *bootstrap,
-                ],
-                [
-                    "cargo",
-                    "publish",
-                    "-p",
-                    "tenferro-runtime",
-                    "--locked",
-                    "--registry",
-                    "crates-io",
-                    *bootstrap,
-                ],
+                *(
+                    []
+                    if runtime_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-runtime",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                            *bootstrap,
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-runtime",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                            *bootstrap,
+                        ],
+                    ]
+                ),
                 ["cargo", "package", "-p", "tenferro-cpu", "--locked"],
                 [
                     "cargo",
@@ -676,6 +682,12 @@ class OrchestrationTests(unittest.TestCase):
                 ],
             ],
         )
+
+    def test_runtime_bootstrap_patches_tag_cpu_while_both_are_missing(self) -> None:
+        self.assert_runtime_bootstrap_commands(runtime_exists=False)
+
+    def test_runtime_bootstrap_patches_tag_cpu_on_restart_after_runtime_publish(self) -> None:
+        self.assert_runtime_bootstrap_commands(runtime_exists=True)
 
     def test_rejects_differing_dry_run_staging_archives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
