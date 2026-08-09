@@ -22,7 +22,7 @@ all-features = true
 name = "tenferro_internal_cpu_kernels"
 
 [dependencies]
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.4.0" }
 num-complex.workspace = true
 num-traits.workspace = true
 strided-kernel.workspace = true
