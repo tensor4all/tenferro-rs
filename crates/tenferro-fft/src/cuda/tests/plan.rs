@@ -1,6 +1,7 @@
-// INVARIANT: This module stays cohesive above the soft line-count trigger:
-// every test shares the fake cuFFT state and plan/cache lifecycle helpers, with
-// no clear low-risk boundary for a split.
+// INVARIANT: This module tests one private owner, `CufftPlanEntry`, across
+// construction, execution, retirement, cache-key, and source-contract edges.
+// The source-contract tail inspects this same safety boundary; splitting it
+// would require widening test-only access to the private plan fixtures.
 use std::ffi::c_void;
 use std::hash::Hasher;
 use std::mem::size_of;

@@ -289,8 +289,8 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
 /// # Errors
 ///
 /// Returns [`crate::Error::Validation`] with
-/// [`crate::ValidationError::InvalidArgument`] when the shape product or
-/// launch count overflows, [`crate::Error::RuntimeState`] when the
+/// [`crate::ValidationError::InvalidArgument`] when the shape product, output
+/// byte length, or launch count overflows, [`crate::Error::RuntimeState`] when the
 /// output is not resident on `rt`, or [`crate::Error::BackendSource`] when
 /// allocation or backend resource inspection fails.
 #[doc(hidden)]

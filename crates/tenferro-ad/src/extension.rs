@@ -269,13 +269,18 @@ pub fn apply_eager_with_extension_session(
 /// engine is missing through
 /// [`tenferro_runtime::RuntimeConfigError::MissingEngine`], an input has no
 /// ingress through [`tenferro_runtime::PrepareError::NoInputIngress`], or the
-/// factory module does not register the operation family for the selected engine. The module
-/// mismatch retains [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`]
+/// factory module does not register the operation family for the selected
+/// engine. A module mismatch retains
+/// [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`], while a
+/// module configuration failure retains
+/// [`tenferro_runtime::RuntimeConfigError::ExtensionModule`]; both are wrapped
 /// through [`tenferro_runtime::RuntimeReconfigureError`] in the source chain.
 /// Errors returned by `module_factory` are propagated unchanged. Errors
 /// returned by `execute` are propagated as
-/// [`tenferro_runtime::Error::TensorRuntime`]; session, cache, and output
-/// registration failures retain their typed runtime sources.
+/// [`tenferro_runtime::Error::TensorRuntime`]. Returns
+/// [`tenferro_runtime::Error::Internal`] if execution produces the wrong number
+/// of outputs; session, cache, and output registration failures retain their
+/// typed runtime sources.
 #[doc(hidden)]
 pub fn apply_eager_with_targeted_extension_session(
     op: Arc<dyn ExtensionOp>,
