@@ -6,6 +6,8 @@ mod descriptor;
 mod ffi;
 #[path = "tests/plan.rs"]
 mod plan;
+#[path = "tests/source_contract.rs"]
+mod source_contract;
 
 #[test]
 fn placement_error_explains_explicit_transfer_and_runtime_ownership() {
