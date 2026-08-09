@@ -506,7 +506,10 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(b"package")
                 elif command[:3] == ["cargo", "publish", "--dry-run"]:
                     events.append("dry-run")
-                    archive.write_bytes(b"dry-run")
+                    for staging in ("tmp-crate", "tmp-registry"):
+                        staged = archive.parent / staging / archive.name
+                        staged.parent.mkdir()
+                        staged.write_bytes(b"dry-run")
                 elif command[:2] == ["cargo", "publish"]:
                     events.append("publish")
                     client.package_versions["crate-a"] = True
@@ -551,6 +554,36 @@ class OrchestrationTests(unittest.TestCase):
                 "inspect:crate-a",
             ],
         )
+
+    def test_rejects_differing_dry_run_staging_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                archives = (("tmp-crate", b"first"), ("tmp-registry", b"second"))
+                for staging, contents in archives:
+                    staged = archive.parent / staging / archive.name
+                    staged.parent.mkdir(parents=True)
+                    staged.write_bytes(contents)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with self.assertRaisesRegex(RELEASE.ReleaseError, "differing archives"):
+                RELEASE.build_and_inspect_archive(
+                    metadata,
+                    "crate-a",
+                    self.VERSION,
+                    self.COMMIT,
+                    "crates/crate-a",
+                    lambda _path: None,
+                    {"Cargo.toml"},
+                    ["cargo", "publish", "--dry-run"],
+                    runner=runner,
+                    root=root,
+                )
 
     def test_resume_accepts_new_package_approval_and_attests_before_skip(self) -> None:
         events: list[str] = []

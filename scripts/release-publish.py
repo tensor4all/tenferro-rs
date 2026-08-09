@@ -779,17 +779,30 @@ def build_and_inspect_archive(
     archive_inspector: Callable = inspect_crate_archive,
 ) -> ArchiveInspection:
     path = archive_path(metadata, crate, version)
+    candidates = (
+        path,
+        path.parent / "tmp-crate" / path.name,
+        path.parent / "tmp-registry" / path.name,
+    )
     try:
-        path.unlink(missing_ok=True)
+        for candidate in candidates:
+            candidate.unlink(missing_ok=True)
     except OSError as error:
-        raise ReleaseError(f"could not remove stale Cargo archive {path}: {error}") from error
+        raise ReleaseError(
+            f"could not remove stale Cargo archive {candidate}: {error}"
+        ) from error
     runner(command, cwd=root, capture=False)
-    if not path.is_file():
-        raise ReleaseError(f"Cargo did not create expected archive {path}")
+    archives = [candidate for candidate in candidates if candidate.is_file()]
+    if not archives:
+        raise ReleaseError(
+            f"Cargo did not create expected archive at any of: {', '.join(map(str, candidates))}"
+        )
     try:
-        archive_data = path.read_bytes()
+        archive_data = archives[0].read_bytes()
+        if any(candidate.read_bytes() != archive_data for candidate in archives[1:]):
+            raise ReleaseError(f"Cargo created differing archives: {archives}")
     except OSError as error:
-        raise ReleaseError(f"could not read Cargo archive {path}: {error}") from error
+        raise ReleaseError(f"could not read Cargo archive {archives[0]}: {error}") from error
     inspection = archive_inspector(
         archive_data,
         crate,
