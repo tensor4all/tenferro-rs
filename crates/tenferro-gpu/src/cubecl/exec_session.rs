@@ -204,8 +204,9 @@ impl CudaExecSession<'_> {
     /// CubeCL stream is captured on the current thread, pending CubeCL work is
     /// flushed, the calling thread's previous device/context is saved, the
     /// tenferro primary context is activated, the callback runs, and the
-    /// previous device/context is restored on return, `Err`, or unwind. The
-    /// success path does not synchronize.
+    /// previous device/context is best-effort restored on return, `Err`, or
+    /// unwind (restoration failures are logged to stderr). The success path
+    /// does not synchronize.
     ///
     /// # Errors
     ///
