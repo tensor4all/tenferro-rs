@@ -38,6 +38,18 @@ caller-visible operation before or after FFT execution.
 
 ### CUDA/cuFFT execution
 
+#### Scoped pointer safety supersedes initial async intent
+
+An earlier design intent allowed cached cuFFT calls to remain asynchronous
+between cache-eviction events. An independent safety review superseded that
+intent for #967: scoped CubeCL raw pointers do not carry a completion witness,
+so a vendor call must not outlive the pointer callback that borrowed its
+allocation. The current baseline synchronizes the bound CUDA stream inside the
+innermost output-pointer callback, after vendor enqueue and before input,
+output, or stream scopes return. Future asynchronous execution requires a
+separately accepted event-backed external-use ownership design; that work is
+outside #967.
+
 `tenferro-gpu` owns the CUDA provider, including `CudaBackend` and
 `CudaRuntime`. The CUDA FFT adapter is owned by `tenferro-fft` and uses the
 dynamically loaded cuFFT library. Non-empty `TENFERRO_CUFFT_PATH` entries are
@@ -106,9 +118,10 @@ The cuFFT adapter binds each plan to the current CubeCL stream and
 synchronizes that stream inside the innermost output-pointer callback, after
 vendor enqueue and before that callback returns. Successful pointer use
 therefore completes before the input-pointer and scoped stream callbacks
-return. Input/output leases retain the prepared CubeCL handles and the exact
-CUDA runtime through that barrier; if synchronization fails, both leases are
-intentionally retained so vendor work cannot race allocation reclamation. The
+return. Read and exclusive-write leases retain the prepared CubeCL handles
+and exact CUDA runtime through that barrier; if synchronization fails, both
+leases are intentionally retained so vendor work cannot race allocation
+reclamation. The
 current `CudaRuntime` exposes one serialized CubeCL current
 stream, and the mutable CUDA FFT session serializes plan rebinding and
 execution on that stream. The stream is therefore omitted from the cache key,

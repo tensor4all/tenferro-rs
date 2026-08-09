@@ -150,29 +150,21 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// Apply an extension op to eager tensors through a direct prepared-operation
 /// callback receiving a non-owning backend session.
 ///
-/// The eager runtime owner resolves the exact engine and closed backend kind
-/// before invoking `module_factory`. Extension crates use that target to build
-/// their module; this bridge does not infer placement from tensor values or
-/// construct an engine identifier on their behalf. The module is installed and
-/// the callback is entered under the same borrowed backend session.
+/// This is the original eager extension bridge: callers provide the already
+/// selected module, which is installed with the eager runtime's ordinary
+/// extension-module semantics before the callback runs.
 ///
 /// # Examples
-///
-/// This low-level bridge validates the installed module before entering the
-/// backend session. A module that does not register the operation family for
-/// the selected engine is rejected with a typed runtime source.
 ///
 /// ```rust
 /// use std::any::Any;
 /// use std::hash::Hasher;
 /// use std::sync::Arc;
 ///
-/// use tenferro_ad::extension::{
-///     apply_eager_with_extension_session, EagerExtensionTarget, ExtensionOp,
-/// };
+/// use tenferro_ad::extension::{apply_eager_with_extension_session, ExtensionOp};
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_ops::{ExtensionShapeContext, SymDim};
+/// use tenferro_ops::ExtensionShapeContext;
 /// use tenferro_runtime::{
 ///     ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
 /// };
@@ -182,48 +174,32 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// struct ExampleOp;
 ///
 /// impl ExtensionOp for ExampleOp {
-///     fn family_id(&self) -> &'static str {
-///         "example.eager-bridge.v1"
-///     }
+///     fn family_id(&self) -> &'static str { "example.eager-bridge.v1" }
 ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
 ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
 ///         other.as_any().downcast_ref::<Self>().is_some()
 ///     }
-///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-///         Arc::new(Self)
-///     }
-///     fn as_any(&self) -> &dyn Any {
-///         self
-///     }
-///     fn input_count(&self) -> usize {
-///         1
-///     }
-///     fn output_count(&self) -> usize {
-///         1
-///     }
+///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(Self) }
+///     fn as_any(&self) -> &dyn Any { self }
+///     fn input_count(&self) -> usize { 1 }
+///     fn output_count(&self) -> usize { 1 }
 ///     fn infer_output_meta(
 ///         &self,
 ///         ctx: &mut ExtensionShapeContext<'_>,
-///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<tenferro_ops::SymDim>)>> {
 ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
 ///     }
 /// }
 ///
 /// #[derive(Debug)]
-/// struct ExampleModule {
-///     id: ExtensionModuleId,
-/// }
+/// struct ExampleModule(ExtensionModuleId);
 ///
 /// impl ExtensionModule for ExampleModule {
-///     fn module_id(&self) -> &ExtensionModuleId {
-///         &self.id
-///     }
+///     fn module_id(&self) -> &ExtensionModuleId { &self.0 }
 ///     fn configure(
 ///         &self,
 ///         _registrar: &mut ExtensionModuleRegistrar<'_>,
-///     ) -> Result<(), ExtensionModuleError> {
-///         Ok(())
-///     }
+///     ) -> Result<(), ExtensionModuleError> { Ok(()) }
 /// }
 ///
 /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
@@ -234,12 +210,15 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// let result = apply_eager_with_extension_session(
 ///     Arc::new(ExampleOp),
 ///     &[&input],
-///     |_target: EagerExtensionTarget| {
-///         Ok(Arc::new(ExampleModule {
-///             id: ExtensionModuleId::new("example.eager-bridge.module").unwrap(),
-///         }) as Arc<dyn ExtensionModule>)
+///     Arc::new(ExampleModule(ExtensionModuleId::new(
+///         "example.eager-bridge.module",
+///     )?)),
+///     |_op, _inputs, _session| {
+///         Err(tenferro_tensor::Error::Unsupported {
+///             op: "example",
+///             message: "demonstration failure".into(),
+///         })
 ///     },
-///     |_op, _inputs, _session| unreachable!("module validation runs first"),
 /// );
 /// assert!(result.is_err());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -249,15 +228,43 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 ///
 /// Returns `Error::Validation` with `InvalidArgument` when `inputs` is empty
 /// or its length differs from the extension's declared input count. Returns
-/// `Error::ContextMismatch` when tensors belong to different eager runtimes.
-/// The module factory's [`tenferro_runtime::Error`] is propagated unchanged.
-/// An input rejected by the selected engine's ingress is returned as
-/// `Error::RuntimeStateSource` retaining [`tenferro_runtime::PrepareError::NoInputIngress`]
-/// with the input index and placement. A selected-engine or module-family
-/// mismatch retains [`RuntimeConfigError`] through the runtime reconfiguration
-/// source chain; backend and extension failures retain their typed sources.
-#[doc(hidden)]
+/// `Error::ContextMismatch` when tensors belong to different eager runtimes;
+/// backend, extension, and runtime-state failures retain their typed sources.
 pub fn apply_eager_with_extension_session(
+    op: Arc<dyn ExtensionOp>,
+    inputs: &[&EagerTensor],
+    module: Arc<dyn ExtensionModule>,
+    execute: impl FnOnce(
+            &dyn ExtensionOp,
+            &[TensorRead<'_>],
+            &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+        ) -> tenferro_tensor::Result<Vec<Tensor>>
+        + Send,
+) -> Result<Vec<EagerTensor>> {
+    let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
+    ctx.install_extension_module(module)?;
+    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
+        execute(op.as_ref(), &input_reads, extension_ctx)
+    })??;
+    finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
+}
+
+/// Apply an eager extension through the owner-selected engine and backend kind.
+///
+/// This narrow sibling-crate bridge is used by FFT, whose module factory must
+/// follow the eager runtime's exact backend selection. It validates ingress
+/// before factory invocation and transactionally validates the resulting module
+/// for the exact operation family/engine pair before entering the session.
+///
+/// # Errors
+///
+/// Returns the same input/context errors as
+/// [`apply_eager_with_extension_session`]. Factory errors are propagated
+/// unchanged. Input ingress and module-family/engine mismatches retain their
+/// typed runtime sources.
+#[doc(hidden)]
+pub fn apply_eager_with_targeted_extension_session(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&EagerTensor],
     module_factory: impl FnOnce(

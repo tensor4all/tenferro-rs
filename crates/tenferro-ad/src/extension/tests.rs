@@ -3,8 +3,8 @@ use std::hash::Hasher;
 use std::sync::{Arc, Barrier, Mutex};
 
 use super::{
-    apply_eager_with_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
-    ExtensionOp,
+    apply_eager_with_extension_session, apply_eager_with_targeted_extension_session,
+    EagerExtensionBackendKind, EagerExtensionTarget, ExtensionOp,
 };
 use crate::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
@@ -197,10 +197,36 @@ fn execute_probe(
     input: &EagerTensor,
     factory: impl FnOnce(EagerExtensionTarget) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>>,
 ) -> tenferro_runtime::Result<Vec<EagerTensor>> {
-    apply_eager_with_extension_session(op, &[input], factory, |_op, inputs, ctx| {
+    apply_eager_with_targeted_extension_session(op, &[input], factory, |_op, inputs, ctx| {
         let output = TensorStructural::to_contiguous_read(ctx.backend_mut(), inputs[0].clone())?;
         Ok(vec![output])
     })
+}
+
+fn execute_legacy_probe(
+    op: Arc<dyn ExtensionOp>,
+    input: &EagerTensor,
+    module: Arc<dyn ExtensionModule>,
+) -> tenferro_runtime::Result<Vec<EagerTensor>> {
+    apply_eager_with_extension_session(op, &[input], module, |_op, inputs, ctx| {
+        let output = TensorStructural::to_contiguous_read(ctx.backend_mut(), inputs[0].clone())?;
+        Ok(vec![output])
+    })
+}
+
+#[test]
+fn legacy_eager_extension_bridge_keeps_arc_module_contract() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+    let outputs = execute_legacy_probe(
+        Arc::new(BridgeProbe::one()),
+        &input,
+        BridgeModule::for_engine(engine_id),
+    )
+    .unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[1]);
 }
 
 #[test]
@@ -288,7 +314,7 @@ fn eager_extension_input_context_mismatch_is_reported_before_factory() {
     let called = Arc::new(Mutex::new(false));
     let called_by_factory = Arc::clone(&called);
 
-    let error = apply_eager_with_extension_session(
+    let error = apply_eager_with_targeted_extension_session(
         Arc::new(BridgeProbe::two()),
         &[&lhs, &rhs],
         move |_target| {

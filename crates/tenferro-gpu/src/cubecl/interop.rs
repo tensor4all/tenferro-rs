@@ -57,32 +57,59 @@ impl DeviceByteBuffer {
     }
 }
 
-/// Retain one prepared CubeCL allocation and its exact CUDA runtime while a
-/// vendor library may use the allocation through a scoped raw pointer.
+/// Prepared external-use allocation retained with its exact CUDA runtime.
 ///
-/// This hidden sibling-crate extension contract is consumed by
-/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. The
-/// bridge is intentionally owner-scoped: the pointer is available
-/// only during [`Self::with_device_ptr`], while the prepared handle and runtime
-/// remain owned by the lease until it is dropped. Callers that cannot prove the
-/// vendor stream completed must intentionally retain the lease.
-#[doc(hidden)]
+/// The pointer remains owner-scoped: it is exposed only during
+/// `with_device_ptr`, while the prepared handle and runtime stay alive until
+/// the lease is dropped. A failed vendor-stream barrier must retain the whole
+/// lease rather than reclaiming an allocation that may still be in use.
 #[derive(Debug)]
-pub struct CudaExternalUseLease {
+struct CudaExternalUseCore {
     // Keep the prepared allocation handle before the runtime so it is released
     // while the retained CUDA context is still alive.
     handle: cubecl_runtime::server::Handle,
     runtime: CudaRuntime,
 }
 
-impl CudaExternalUseLease {
-    /// Prepare and retain a CubeCL-backed tensor for one external CUDA use.
+impl CudaExternalUseCore {
+    fn new(handle: cubecl_runtime::server::Handle, runtime: &CudaRuntime) -> Self {
+        Self {
+            handle,
+            runtime: runtime.clone(),
+        }
+    }
+
+    fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        let resource = self
+            .runtime
+            .client()
+            .get_resource(self.handle.clone())
+            .map_err(|err| crate::Error::backend_source("cuda_external_use_lease", err))?;
+        let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, "cuda_external_use_lease")?;
+        callback(ptr);
+        Ok(())
+    }
+}
+
+/// Read-only external CUDA use lease.
+///
+/// This hidden sibling-crate extension contract is consumed by
+/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. Read
+/// leases require a shared tensor borrow and prepare a provider-native read.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CudaExternalUseReadLease {
+    core: CudaExternalUseCore,
+}
+
+impl CudaExternalUseReadLease {
+    /// Prepare and retain a read-only CubeCL-backed tensor for external use.
     ///
     /// # Errors
     ///
-    /// Returns a typed runtime-state error when `tensor` is host-backed or is
-    /// owned by a different CUDA runtime, or a typed preparation error when
-    /// its provider handle cannot be prepared.
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+    /// belongs to a different CUDA runtime, or its provider handle cannot be
+    /// prepared.
     pub fn new<T, R>(
         runtime: &CudaRuntime,
         tensor: &TypedTensor<T, R>,
@@ -95,31 +122,68 @@ impl CudaExternalUseLease {
         dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
         let handle = dispatch::prepared_tensor_access(tensor, op)?.into_handle();
         Ok(Self {
-            handle,
-            runtime: runtime.clone(),
+            core: CudaExternalUseCore::new(handle, runtime),
         })
     }
 
-    /// Borrow the retained CUDA device pointer for the duration of `callback`.
-    ///
-    /// The allocation handle and exact runtime are retained by `self` for the
-    /// whole lease, so the pointer cannot outlive the owner-scoped external
-    /// use. The caller must synchronize the vendor stream before dropping this
-    /// lease when the vendor operation is asynchronous.
+    /// Borrow the retained device pointer for one scoped external call.
     ///
     /// # Errors
     ///
-    /// Returns a typed backend error when CubeCL cannot inspect the retained
-    /// resource, or a typed validation error when its address exceeds `usize`.
+    /// Returns [`crate::Error::BackendSource`] when the retained resource
+    /// cannot be inspected, or a typed validation error when its address does
+    /// not fit the host `usize` range.
     pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
-        let resource = self
-            .runtime
-            .client()
-            .get_resource(self.handle.clone())
-            .map_err(|err| crate::Error::backend_source("cuda_external_use_lease", err))?;
-        let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, "cuda_external_use_lease")?;
-        callback(ptr);
-        Ok(())
+        self.core.with_device_ptr(callback)
+    }
+}
+
+/// Exclusive-write external CUDA use lease.
+///
+/// This hidden sibling-crate extension contract is consumed by
+/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. A write
+/// lease requires an exclusive mutable tensor borrow and prepares a
+/// provider-native write, so vendor output cannot be obtained from a read-only
+/// handle.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CudaExternalUseWriteLease {
+    core: CudaExternalUseCore,
+}
+
+impl CudaExternalUseWriteLease {
+    /// Prepare and retain an exclusively writable CubeCL-backed tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+    /// belongs to a different CUDA runtime, or its provider handle cannot be
+    /// prepared.
+    pub fn new<T, R>(
+        runtime: &CudaRuntime,
+        tensor: &mut TypedTensor<T, R>,
+        op: &'static str,
+    ) -> crate::Result<Self>
+    where
+        T: TensorScalar + 'static,
+        R: TensorRank,
+    {
+        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
+        let handle = dispatch::prepared_tensor_write_access(tensor, op)?.into_handle();
+        Ok(Self {
+            core: CudaExternalUseCore::new(handle, runtime),
+        })
+    }
+
+    /// Borrow the retained device pointer for one scoped external call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the retained resource
+    /// cannot be inspected, or a typed validation error when its address does
+    /// not fit the host `usize` range.
+    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        self.core.with_device_ptr(callback)
     }
 }
 

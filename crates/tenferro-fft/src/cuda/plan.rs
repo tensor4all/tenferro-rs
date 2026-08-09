@@ -14,7 +14,8 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use tenferro_gpu::cuda::interop::{
-    alloc_device_bytes, with_raw_cuda_stream, CudaExternalUseLease, DeviceByteBuffer,
+    alloc_device_bytes, with_raw_cuda_stream, CudaExternalUseReadLease, CudaExternalUseWriteLease,
+    DeviceByteBuffer,
 };
 use tenferro_gpu::cuda::CudaRuntime;
 use tenferro_runtime::ExtensionCacheKey;
@@ -397,7 +398,14 @@ pub(crate) trait CufftExternalUseLease {
     fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError>;
 }
 
-impl CufftExternalUseLease for CudaExternalUseLease {
+impl CufftExternalUseLease for CudaExternalUseReadLease {
+    fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
+        self.with_device_ptr(callback)
+            .map_err(|source| CudaFftError::interop("cufft_execute_pointer", source))
+    }
+}
+
+impl CufftExternalUseLease for CudaExternalUseWriteLease {
     fn with_ptr(&self, callback: impl FnOnce(*mut c_void)) -> Result<(), CudaFftError> {
         self.with_device_ptr(callback)
             .map_err(|source| CudaFftError::interop("cufft_execute_pointer", source))
@@ -676,7 +684,7 @@ impl CufftPlanEntry {
     fn execute_pair<T, U>(
         &self,
         input: &TypedTensor<T>,
-        output: &TypedTensor<U>,
+        output: &mut TypedTensor<U>,
         call: impl FnMut(&CufftApi, CufftHandle, *mut c_void, *mut c_void) -> CufftStatus,
         function: &'static str,
     ) -> Result<(), CudaFftError>
@@ -684,9 +692,9 @@ impl CufftPlanEntry {
         T: TensorScalar + 'static,
         U: TensorScalar + 'static,
     {
-        let input_lease = CudaExternalUseLease::new(&self.runtime, input, OP)
+        let input_lease = CudaExternalUseReadLease::new(&self.runtime, input, OP)
             .map_err(|source| CudaFftError::interop("cufft_execute_input_lease", source))?;
-        let output_lease = CudaExternalUseLease::new(&self.runtime, output, OP)
+        let output_lease = CudaExternalUseWriteLease::new(&self.runtime, output, OP)
             .map_err(|source| CudaFftError::interop("cufft_execute_output_lease", source))?;
         let scopes = TypedExecutionScopes {
             runtime: &self.runtime,

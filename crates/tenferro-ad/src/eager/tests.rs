@@ -531,7 +531,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     let outputs = crate::extension::apply_eager_with_extension_session(
         Arc::new(ReadPathFallbackProbe),
         &[&x_t],
-        |_target| Ok(ReadPathFallbackModule::module()),
+        ReadPathFallbackModule::module(),
         |op, inputs, ctx| {
             op.as_any()
                 .downcast_ref::<ReadPathFallbackProbe>()

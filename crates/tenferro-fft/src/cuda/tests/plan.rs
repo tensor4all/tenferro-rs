@@ -1096,8 +1096,18 @@ fn workspace_and_execution_keep_ffi_pointers_scoped() {
         .and_then(|(_, rest)| rest.split_once("    pub(crate) fn retained_bytes"))
         .map(|(section, _)| section)
         .unwrap_or_else(|| unreachable!("execute pair source section should exist"));
-    assert!(execute_pair_section.contains("CudaExternalUseLease"));
+    assert!(execute_pair_section.contains("CudaExternalUseReadLease"));
+    assert!(execute_pair_section.contains("CudaExternalUseWriteLease"));
+    assert!(execute_pair_section.contains("output: &mut TypedTensor"));
     assert!(execute_pair_section.contains("enqueue_plan_execution"));
+
+    let interop_source = include_str!("../../../../tenferro-gpu/src/cubecl/interop.rs");
+    assert!(interop_source.contains("CudaExternalUseReadLease"));
+    assert!(interop_source.contains("tensor: &TypedTensor<T, R>"));
+    assert!(interop_source.contains("prepared_tensor_access(tensor, op)"));
+    assert!(interop_source.contains("CudaExternalUseWriteLease"));
+    assert!(interop_source.contains("tensor: &mut TypedTensor<T, R>"));
+    assert!(interop_source.contains("prepared_tensor_write_access(tensor, op)"));
 }
 
 #[test]

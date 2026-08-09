@@ -200,9 +200,14 @@ variables:
 
 The cuFFT loader tries non-empty override entries first, then
 `libcufft.so.11`, `libcufft.so.10`, and bare `libcufft.so`, covering CUDA
-12/cuFFT 11 and CUDA 11/cuFFT 10. The vendor cuFFT call synchronizes its
-bound stream inside the innermost output-pointer callback, after enqueue and
-before that callback returns. Successful pointer use therefore completes before
+12/cuFFT 11 and CUDA 11/cuFFT 10. The initially intended asynchronous
+between-eviction cuFFT execution is superseded for #967 by an independent
+scoped-pointer safety review: CubeCL raw pointers have no completion witness.
+The current baseline therefore synchronizes the bound stream inside the
+innermost output-pointer callback, after enqueue and before that callback
+returns. Future asynchronous execution needs a separately accepted
+event-backed external-use ownership design and is outside #967. Successful
+pointer use therefore completes before
 the input-pointer and raw-stream callbacks return; later CubeCL postprocessing
 stays stream-managed and explicit download synchronizes the final output. A
 synchronization failure retains the prepared allocation leases and exact CUDA
@@ -315,11 +320,13 @@ Operation crates that need to launch their own CubeCL kernels, such as
 instead. `tenferro-fft` uses the same boundary for cuFFT workspace allocation,
 current-stream access, typed device-pointer access, and the on-device scaling
 helper. The provider owns each allocation and exposes raw streams and pointers
-only through scoped callbacks. `CudaExternalUseLease` additionally retains a
-prepared CubeCL buffer handle and exact `CudaRuntime` while cuFFT may use the
-buffer; a successful stream barrier drops the lease, while a failed barrier
-intentionally retains it. cuFFT loading, opaque plans, and plan-cache entries
-remain owned by `tenferro-fft`.
+only through scoped callbacks. The split `CudaExternalUseReadLease` and
+`CudaExternalUseWriteLease` contracts additionally retain prepared CubeCL
+buffer handles and the exact `CudaRuntime` while cuFFT may use the buffers; the
+write lease requires an exclusive mutable tensor preparation. A successful
+stream barrier drops both leases, while a failed barrier intentionally retains
+them. cuFFT loading, opaque plans, and plan-cache entries remain owned by
+`tenferro-fft`.
 
 That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:

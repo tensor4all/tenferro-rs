@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::{
-    apply_eager_with_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
+    apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
 };
 use tenferro_ad::EagerTensor;
 use tenferro_cpu::CpuBackend;
@@ -178,7 +178,7 @@ fn apply_eager_fft(
 
     let op = Arc::new(op);
     let execute_op = Arc::clone(&op);
-    let mut outputs = apply_eager_with_extension_session(
+    let mut outputs = apply_eager_with_targeted_extension_session(
         op,
         &[input],
         eager_extension_module,

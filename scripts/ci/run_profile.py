@@ -70,6 +70,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/test-gen-dep-graph.py",
         "python3 scripts/test-doc-consistency.py",
         "python3 scripts/test-repository-rules-review.py",
+        "python3 scripts/test-check-guide-dependency-snippets.py",
         "python3 scripts/check-guide-dependency-snippets.py",
         "python3 scripts/check-operation-categories.py --fail-on-findings",
         "bash scripts/build_docs_site.sh",

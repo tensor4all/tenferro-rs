@@ -27,6 +27,13 @@ pub fn upload_cuda(runtime: &tenferro_gpu::cuda::CudaRuntime, tensor: &Tensor) -
 
 /// Download a CUDA tensor; `download_tensor` performs the one required stream
 /// synchronization before reading the payload.
+///
+/// # Errors
+///
+/// Returns [`tenferro_gpu::Error::RuntimeState`] for host-backed or foreign
+/// tensors, [`tenferro_gpu::Error::BackendSource`] when synchronization or
+/// readback fails, or a typed validation error when device data cannot be
+/// decoded.
 pub fn download_cuda(
     runtime: &tenferro_gpu::cuda::CudaRuntime,
     tensor: &Tensor,

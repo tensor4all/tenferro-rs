@@ -724,7 +724,7 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
     apply_eager_with_extension_session(
         op,
         inputs,
-        |_target| eager_cpu_extension_module(),
+        eager_cpu_extension_module()?,
         move |_op, input_reads, ctx| execute_linalg_extension_reads(&execute_op, input_reads, ctx),
     )
 }
