@@ -577,15 +577,21 @@ impl<'s> Session<'s> {
             match arg {
                 KernelArg::Scalar(bytes) => {
                     scalar_storage.push(bytes.clone().into_boxed_slice());
-                    let last_ptr =
-                        scalar_storage.last().unwrap().as_ptr() as *const std::ffi::c_void;
+                    // The slot was just pushed, so `len - 1` is always valid;
+                    // index instead of unwrapping to keep `launch` panic-free.
+                    let slot = &scalar_storage[scalar_storage.len() - 1];
+                    let last_ptr = slot.as_ptr() as *const std::ffi::c_void;
                     kernel_params.push(last_ptr as *mut std::ffi::c_void);
                 }
                 KernelArg::DevicePtr(ptr, _) => {
-                    ptr_storage.push(Box::new(*ptr));
-                    let slot_ref = &mut **ptr_storage.last_mut().unwrap();
-                    let slot = (slot_ref as *mut *mut std::ffi::c_void) as *mut std::ffi::c_void;
-                    kernel_params.push(slot);
+                    // The Box's heap allocation is stable across the move into
+                    // `ptr_storage`; the parameter slot points at the location
+                    // holding the device address (pointer-to-pointer, as CUDA
+                    // kernel params require), and is pushed as a byte address.
+                    let mut slot_box = Box::new(*ptr);
+                    let slot = (&mut *slot_box) as *mut *mut std::ffi::c_void;
+                    kernel_params.push(slot as *mut std::ffi::c_void);
+                    ptr_storage.push(slot_box);
                 }
             }
         }
