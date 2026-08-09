@@ -183,3 +183,23 @@ Validation commands:
 - `python3 scripts/ci/run_profile.py ci-config`
 - byte comparisons of the three `SKILL.md` adapters
 - `git diff --check`
+
+## 2026-08-09 Cargo 1.97 dry-run staging fix
+
+The first human v0.3 publication attempt stopped safely before uploading any
+crate. `cargo publish --dry-run` succeeded, but Cargo 1.97 staged its archive at
+both `target/package/tmp-crate/` and `target/package/tmp-registry/` instead of
+retaining `target/package/<crate>-<version>.crate`. The helper removed and then
+checked only the latter path, so it reported a false missing-archive failure.
+
+The shared archive inspection boundary now clears and discovers all three exact
+Cargo locations, rejects a missing archive, requires multiple generated copies
+to be byte-identical, and then applies the existing full archive and expected
+content checks. Read failures identify the exact candidate path. This preserves
+the fail-closed contract rather than skipping dry-run archive attestation.
+
+TDD regressions model Cargo's staged paths, reject differing copies, and verify
+read-error attribution. A real Cargo 1.97 run on `tenferro-core-ops` confirmed
+that `cargo package`, `tmp-crate`, and `tmp-registry` archives were byte-identical
+and that the repaired helper completed package-to-dry-run attestation without
+uploading. The focused release-helper suite passed with 30 tests.

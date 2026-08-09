@@ -7,6 +7,7 @@ import http.client
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -506,7 +507,10 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(b"package")
                 elif command[:3] == ["cargo", "publish", "--dry-run"]:
                     events.append("dry-run")
-                    archive.write_bytes(b"dry-run")
+                    for staging in ("tmp-crate", "tmp-registry"):
+                        staged = archive.parent / staging / archive.name
+                        staged.parent.mkdir()
+                        staged.write_bytes(b"dry-run")
                 elif command[:2] == ["cargo", "publish"]:
                     events.append("publish")
                     client.package_versions["crate-a"] = True
@@ -551,6 +555,119 @@ class OrchestrationTests(unittest.TestCase):
                 "inspect:crate-a",
             ],
         )
+
+    def test_rejects_differing_dry_run_staging_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                archives = (("tmp-crate", b"first"), ("tmp-registry", b"second"))
+                for staging, contents in archives:
+                    staged = archive.parent / staging / archive.name
+                    staged.parent.mkdir(parents=True)
+                    staged.write_bytes(contents)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with self.assertRaisesRegex(RELEASE.ReleaseError, "differing archives"):
+                RELEASE.build_and_inspect_archive(
+                    metadata,
+                    "crate-a",
+                    self.VERSION,
+                    self.COMMIT,
+                    "crates/crate-a",
+                    lambda _path: None,
+                    {"Cargo.toml"},
+                    ["cargo", "publish", "--dry-run"],
+                    runner=runner,
+                    root=root,
+                )
+
+    def test_archive_status_failure_names_failing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+            failing_archive = archive.parent / "tmp-crate" / archive.name
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                archive.parent.mkdir(parents=True)
+                archive.write_bytes(b"valid")
+                failing_archive.parent.mkdir()
+                failing_archive.write_bytes(b"same")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            original_stat = Path.stat
+
+            def stat(path: Path, *, follow_symlinks: bool = True) -> object:
+                if path == failing_archive:
+                    raise OSError("test status failure")
+                return original_stat(path, follow_symlinks=follow_symlinks)
+
+            with mock.patch.object(Path, "stat", stat):
+                with self.assertRaisesRegex(
+                    RELEASE.ReleaseError, re.escape(str(failing_archive))
+                ):
+                    RELEASE.build_and_inspect_archive(
+                        metadata,
+                        "crate-a",
+                        self.VERSION,
+                        self.COMMIT,
+                        "crates/crate-a",
+                        lambda _path: None,
+                        {"Cargo.toml"},
+                        ["cargo", "publish", "--dry-run"],
+                        runner=runner,
+                        root=root,
+                        archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                            {}, (), {}
+                        ),
+                    )
+
+    def test_archive_read_failure_names_failing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+            failing_archive = archive.parent / "tmp-registry" / archive.name
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                for staging in ("tmp-crate", "tmp-registry"):
+                    staged = archive.parent / staging / archive.name
+                    staged.parent.mkdir(parents=True)
+                    staged.write_bytes(b"same")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes(path: Path) -> bytes:
+                if path == failing_archive:
+                    raise OSError("test read failure")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes):
+                with self.assertRaisesRegex(
+                    RELEASE.ReleaseError, re.escape(str(failing_archive))
+                ):
+                    RELEASE.build_and_inspect_archive(
+                        metadata,
+                        "crate-a",
+                        self.VERSION,
+                        self.COMMIT,
+                        "crates/crate-a",
+                        lambda _path: None,
+                        {"Cargo.toml"},
+                        ["cargo", "publish", "--dry-run"],
+                        runner=runner,
+                        root=root,
+                    )
 
     def test_resume_accepts_new_package_approval_and_attests_before_skip(self) -> None:
         events: list[str] = []

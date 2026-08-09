@@ -9,6 +9,7 @@ import io
 import json
 import re
 import runpy
+import stat
 import subprocess
 import sys
 import tarfile
@@ -779,17 +780,48 @@ def build_and_inspect_archive(
     archive_inspector: Callable = inspect_crate_archive,
 ) -> ArchiveInspection:
     path = archive_path(metadata, crate, version)
+    candidates = (
+        path,
+        path.parent / "tmp-crate" / path.name,
+        path.parent / "tmp-registry" / path.name,
+    )
     try:
-        path.unlink(missing_ok=True)
+        for candidate in candidates:
+            candidate.unlink(missing_ok=True)
     except OSError as error:
-        raise ReleaseError(f"could not remove stale Cargo archive {path}: {error}") from error
+        raise ReleaseError(
+            f"could not remove stale Cargo archive {candidate}: {error}"
+        ) from error
     runner(command, cwd=root, capture=False)
-    if not path.is_file():
-        raise ReleaseError(f"Cargo did not create expected archive {path}")
-    try:
-        archive_data = path.read_bytes()
-    except OSError as error:
-        raise ReleaseError(f"could not read Cargo archive {path}: {error}") from error
+    archives = []
+    for candidate in candidates:
+        try:
+            status = candidate.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ReleaseError(
+                f"could not inspect Cargo archive {candidate}: {error}"
+            ) from error
+        if not stat.S_ISREG(status.st_mode):
+            raise ReleaseError(
+                f"Cargo archive candidate is not a regular file: {candidate}"
+            )
+        archives.append(candidate)
+    if not archives:
+        raise ReleaseError(
+            f"Cargo did not create expected archive at any of: {', '.join(map(str, candidates))}"
+        )
+    archive_data = None
+    for candidate in archives:
+        try:
+            candidate_data = candidate.read_bytes()
+        except OSError as error:
+            raise ReleaseError(f"could not read Cargo archive {candidate}: {error}") from error
+        if archive_data is None:
+            archive_data = candidate_data
+        elif candidate_data != archive_data:
+            raise ReleaseError(f"Cargo created differing archives: {archives}")
     inspection = archive_inspector(
         archive_data,
         crate,
