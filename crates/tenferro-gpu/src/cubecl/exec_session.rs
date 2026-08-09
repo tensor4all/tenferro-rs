@@ -147,6 +147,43 @@ impl CudaExecSession<'_> {
         self.backend.runtime().allocation_domain()
     }
 
+    /// Validate that a dense GPU tensor is resident on this exact session:
+    /// CubeCL-backed, same allocation domain, and placed on this runtime's
+    /// CUDA device. Rejects host tensors, foreign-backend buffers, and
+    /// foreign-runtime/device tensors without an implicit transfer.
+    ///
+    /// This is the credentialed public-seam residency guard for extension
+    /// crates that receive a session but must validate inputs before entering
+    /// a `with_raw`/`with_cubecl` sub-session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this exact session runtime/device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible.
+    /// fn check(session: &CudaExecSession<'_>, tensor: &tenferro_tensor::Tensor) -> tenferro_tensor::Result<()> {
+    ///     session.ensure_gpu_resident(tensor, "test.ensure_gpu_resident")
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn ensure_gpu_resident(&self, input: &Tensor, op: &'static str) -> crate::Result<()> {
+        match input {
+            Tensor::F32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::F64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::I32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::I64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::Bool(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::C32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::C64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+        }
+    }
+
     /// Block the host until work enqueued on the session's stream completes.
     ///
     /// This is the only host barrier on the success path; ordinary successful

@@ -14,10 +14,10 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
+use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
-use tenferro_tensor::{TensorRank, TensorScalar, TypedTensor};
+use tenferro_tensor::{TensorRank, TensorScalar, TensorWrite, TypedTensor};
 
 use super::runtime::CudaRuntime;
 
@@ -102,6 +102,41 @@ impl<'s> Session<'s> {
         T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
     {
         super::interop::alloc_output(&self.runtime, shape)
+    }
+
+    /// Allocate a dense GPU tensor zero-filled with the session's device.
+    ///
+    /// Reuses the backend's fill-zero structural kernel; it never uploads a
+    /// host tensor or exposes a device pointer to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when the shape product, output
+    /// byte length, or launch count overflows, [`crate::Error::RuntimeState`]
+    /// when the output is not resident, or [`crate::Error::BackendSource`]
+    /// when allocation or backend resource inspection fails.
+    pub fn alloc_zero_output<T>(&self, shape: &[usize]) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+    {
+        super::interop::alloc_zero_output(&self.runtime, shape)
+    }
+
+    /// Scale a mutable CUDA tensor in place by a real factor.
+    ///
+    /// Supports F32, F64, C32, and C64 payloads; the factor is interpreted as
+    /// a real scalar for complex payloads. This is the op-family scale
+    /// primitive used for normalization after a vendor transform; it never
+    /// exposes a device pointer to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this session's runtime, a typed layout error for a non-zero-offset
+    /// discontinuous view, or the typed unsupported-dtype error for other
+    /// payloads.
+    pub fn scale_tensor_write(&self, output: TensorWrite<'_>, factor: f64) -> crate::Result<()> {
+        super::interop::scale_tensor_write(&self.runtime, output, factor)
     }
 
     /// Return the cube count for a one-dimensional kernel domain of `len`.

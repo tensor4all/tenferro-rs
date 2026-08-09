@@ -55,6 +55,93 @@ fn cubecl_session_allocates_and_binds_output() {
 }
 
 #[test]
+fn cubecl_session_allocates_zero_filled_output() {
+    if !gpu_available() {
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    with_cuda_exec(&mut backend, |session| {
+        let output = session
+            .with_cubecl("test.cubecl_alloc_zero", |cubecl| {
+                cubecl.alloc_zero_output::<f32>(&[16])
+            })
+            .unwrap();
+        // The fill kernel must produce semantic zeros on the device.
+        let result = session
+            .with_raw("test.cubecl_alloc_zero_raw", |raw| {
+                raw.download_tensor::<f32>(&output, "test.cubecl_alloc_zero_raw")
+            })
+            .unwrap();
+        let values = result.host_data().unwrap();
+        assert_eq!(values.len(), 16);
+        assert!(values.iter().all(|&v| v == 0.0));
+    });
+}
+
+#[test]
+fn cubecl_session_scales_output_in_place() {
+    if !gpu_available() {
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    with_cuda_exec(&mut backend, |session| {
+        // Allocate and seed [1.0, 2.0, 3.0, 4.0] on device, then scale by 3
+        // and read back, returning the typed tensor from the raw entrance.
+        let output = session
+            .with_raw("test.cubecl_scale_raw", |raw| {
+                let mut output = raw.alloc_output::<f32>(&[4])?;
+                let seed = [1.0f32, 2.0, 3.0, 4.0];
+                let seed_bytes = unsafe {
+                    std::slice::from_raw_parts(seed.as_ptr().cast::<u8>(), seed.len() * 4)
+                };
+                let uploaded = raw.upload_bytes(seed_bytes, "test.cubecl_scale_seed")?;
+                let mut dst = raw.tensor_mut(&mut output)?;
+                let dst_ptr = unsafe { dst.raw_ptr() };
+                let mut copy_result = Ok(());
+                // SAFETY: `uploaded` is an uploaded workspace of the same
+                // byte size as `dst`, both on this runtime's stream; `dst`
+                // uniquely owns the destination span.
+                unsafe {
+                    uploaded.with_ptr(|src_ptr| {
+                        copy_result = raw.copy_bytes(
+                            dst_ptr,
+                            src_ptr,
+                            seed_bytes.len(),
+                            "test.cubecl_scale_copy",
+                        );
+                    });
+                }
+                copy_result?;
+                Ok(output)
+            })
+            .unwrap();
+        let mut output_enum = tenferro_tensor::Tensor::F32(output);
+        session
+            .with_cubecl("test.cubecl_scale", |cubecl| {
+                cubecl.scale_tensor_write(
+                    tenferro_tensor::TensorWrite::from_tensor(&mut output_enum),
+                    3.0,
+                )
+            })
+            .unwrap();
+        let typed = match output_enum {
+            tenferro_tensor::Tensor::F32(typed) => typed,
+            _ => unreachable!(),
+        };
+        let bytes = session
+            .with_raw("test.cubecl_scale_raw2", |raw| {
+                raw.download_tensor::<f32>(&typed, "test.cubecl_scale_raw2")
+            })
+            .unwrap();
+        let values = bytes.host_data().unwrap();
+        assert_eq!(values[0], 3.0);
+        assert_eq!(values[1], 6.0);
+        assert_eq!(values[2], 9.0);
+        assert_eq!(values[3], 12.0);
+    });
+}
+
+#[test]
 fn cubecl_session_flushes_on_exit_so_raw_sees_work() {
     if !gpu_available() {
         return;
