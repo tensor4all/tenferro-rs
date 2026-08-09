@@ -586,6 +586,49 @@ class OrchestrationTests(unittest.TestCase):
                     root=root,
                 )
 
+    def test_archive_status_failure_names_failing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+            failing_archive = archive.parent / "tmp-crate" / archive.name
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                archive.parent.mkdir(parents=True)
+                archive.write_bytes(b"valid")
+                failing_archive.parent.mkdir()
+                failing_archive.write_bytes(b"same")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            original_stat = Path.stat
+
+            def stat(path: Path, *, follow_symlinks: bool = True) -> object:
+                if path == failing_archive:
+                    raise OSError("test status failure")
+                return original_stat(path, follow_symlinks=follow_symlinks)
+
+            with mock.patch.object(Path, "stat", stat):
+                with self.assertRaisesRegex(
+                    RELEASE.ReleaseError, re.escape(str(failing_archive))
+                ):
+                    RELEASE.build_and_inspect_archive(
+                        metadata,
+                        "crate-a",
+                        self.VERSION,
+                        self.COMMIT,
+                        "crates/crate-a",
+                        lambda _path: None,
+                        {"Cargo.toml"},
+                        ["cargo", "publish", "--dry-run"],
+                        runner=runner,
+                        root=root,
+                        archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                            {}, (), {}
+                        ),
+                    )
+
     def test_archive_read_failure_names_failing_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

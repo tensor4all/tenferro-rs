@@ -9,6 +9,7 @@ import io
 import json
 import re
 import runpy
+import stat
 import subprocess
 import sys
 import tarfile
@@ -792,7 +793,21 @@ def build_and_inspect_archive(
             f"could not remove stale Cargo archive {candidate}: {error}"
         ) from error
     runner(command, cwd=root, capture=False)
-    archives = [candidate for candidate in candidates if candidate.is_file()]
+    archives = []
+    for candidate in candidates:
+        try:
+            status = candidate.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ReleaseError(
+                f"could not inspect Cargo archive {candidate}: {error}"
+            ) from error
+        if not stat.S_ISREG(status.st_mode):
+            raise ReleaseError(
+                f"Cargo archive candidate is not a regular file: {candidate}"
+            )
+        archives.append(candidate)
     if not archives:
         raise ReleaseError(
             f"Cargo did not create expected archive at any of: {', '.join(map(str, candidates))}"
