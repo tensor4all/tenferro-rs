@@ -23,6 +23,36 @@ RELEASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE)
 
 
+class ReleaseDocumentationContractTests(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def test_canonical_workflow_requires_semver_proposal_before_edits(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        for phrase in (
+            "latest published stable version",
+            "breaking",
+            "feature",
+            "fix-only",
+            "before changing manifests",
+            "independently versioned",
+            "explicit confirmation",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_adapters_reference_the_proposal_gate(self) -> None:
+        paths = (
+            ".agents/skills/tenferro-release-publish/SKILL.md",
+            ".claude/skills/tenferro-release-publish/SKILL.md",
+            ".kimi/skills/tenferro-release-publish/SKILL.md",
+            ".opencode/commands/tenferro-release-publish.md",
+        )
+        for relative in paths:
+            text = (self.ROOT / relative).read_text()
+            self.assertIn("ai/contribution-workflows/release-publish.md", text)
+            self.assertIn("before editing", text)
+            self.assertIn("SemVer proposal", text)
+
+
 class GitDependencyTests(unittest.TestCase):
     def test_parses_commented_multiline_workspace_git_dependencies(self) -> None:
         manifest = """\

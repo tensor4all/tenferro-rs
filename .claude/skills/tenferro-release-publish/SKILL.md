@@ -18,7 +18,8 @@ Hard invariants (abort the release if any would be violated):
 
 Keep the interaction incremental:
 
-1. Confirm the target version and that `origin/main` is green and clean.
+1. Derive and present the canonical workflow's SemVer proposal before editing;
+   stop for explicit confirmation when the requested target differs.
 2. Phase 1: version-bump PR (workspace version plus every internal
    cross-crate `version = "..."` requirement) and the full pre-push
    checklist.

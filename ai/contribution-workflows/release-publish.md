@@ -26,13 +26,34 @@ Violating any of these aborts the release.
    whose declared `version` exists on crates.io, because `cargo publish`
    strips the `git` source and keeps only `version`.
 
-## Phase 0 — Preconditions
+## Phase 0 — SemVer Proposal And Preconditions
 
-- Fresh worktree of the latest `origin/main`; clean tree; CI green on
-  `origin/main`.
-- Pick the new version `X.Y.Z`. Pre-1.0 convention: breaking changes bump
-  the minor version; compatible fixes bump the patch version.
-- Run `python3 scripts/check-publish-layout.py` and fix findings first.
+Complete this phase before changing manifests or making any other release edit.
+
+1. Query crates.io for each existing publishable workspace crate and establish
+   the latest matching published stable baseline and its provenance tag. An
+   approved package that has never been published does not participate in
+   baseline agreement. If the published versions or their provenance do not
+   agree, stop and resolve the mismatch. A newer tag that was not published is
+   an anomaly, not a baseline; stop and resolve it before continuing.
+2. Inspect merged PRs, accepted issues, and release evidence since the matching
+   provenance tag. Classify the highest-impact change as `breaking`, `feature`,
+   or `fix-only`.
+3. Apply this SemVer table to the latest published stable version:
+
+   | Baseline | `breaking` | `feature` | `fix-only` |
+   | --- | --- | --- | --- |
+   | `0.Y.Z` | `0.(Y+1).0` | `0.(Y+1).0` | `0.Y.(Z+1)` |
+   | `X.Y.Z`, `X >= 1` | `(X+1).0.0` | `X.(Y+1).0` | `X.Y.(Z+1)` |
+
+4. Present the baseline and provenance, classified evidence, and one proposed
+   target before changing manifests. If the user supplied a different target,
+   stop for explicit confirmation and a reason; proceed only after recording
+   the confirmed override. Never align independently versioned repositories:
+   a dependency's version is not evidence for this repository's target.
+5. Use a fresh worktree of the latest `origin/main`; require a clean tree and
+   green CI on `origin/main`.
+6. Run `python3 scripts/check-publish-layout.py` and fix findings first.
 
 ## Phase 1 — Version-Bump PR To Main
 

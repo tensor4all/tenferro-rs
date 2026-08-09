@@ -5,7 +5,9 @@ description: Release a new tenferro-rs version - bump the workspace version on m
 Use `$ARGUMENTS` as the target version or initial request if present.
 
 Follow `ai/contribution-workflows/release-publish.md` as the canonical
-workflow. Read it fully before acting.
+workflow. Read it fully before acting. Derive and present its SemVer proposal
+before editing; stop for explicit confirmation when the requested target
+differs.
 
 Hard invariants (abort the release if any would be violated): publish only
 from a pushed, tagged, main-lineage commit; land the version bump on `main`

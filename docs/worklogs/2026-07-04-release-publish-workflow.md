@@ -137,3 +137,33 @@ entries are skipped. Network response truncation and HTTP protocol/read errors
 are converted to bounded, actionable release failures. Focused regressions cover
 generated-file mutations, malicious traversal directories, HTTP failures, exact
 resume comparison, and prerequisite-before-dependent packaging.
+
+## 2026-08-09 SemVer proposal gate
+
+The release guidance previously accepted a requested target before deriving an
+independent SemVer target. That allowed a dependency release to be mistaken for
+a reason to align tenferro with an independently versioned repository.
+
+Phase 0 now derives one proposal from the latest matching published stable
+baseline and its provenance tag, then classifies merged evidence since that tag
+as breaking, feature, or fix-only. The explicit pre-1.0 and 1.0+ table makes the
+result reviewable. A conflicting supplied target requires explicit confirmation
+and a recorded reason before edits. Approved never-published packages are
+excluded from baseline agreement, while unpublished newer tags are treated as
+anomalies rather than baselines.
+
+The human-only publication boundary is unchanged: agents stop after validation,
+and only a maintainer with crates.io ownership runs Phase 3 publication.
+
+The RED pressure scenario omitted the skill and requested tenferro 0.4.0 after
+strided-rs 0.4.0. The response treated that request as sufficient instead of
+deriving and proposing tenferro 0.3.0 from the published 0.2.0 baseline. The
+new documentation contract test was then observed failing before the workflow
+and adapters were updated.
+
+Validation commands:
+
+- `python3 scripts/test-release-publish.py`
+- `python3 scripts/ci/run_profile.py ci-config`
+- byte comparisons of the three `SKILL.md` adapters
+- `git diff --check`
