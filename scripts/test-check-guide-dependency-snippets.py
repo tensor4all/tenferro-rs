@@ -27,12 +27,18 @@ def test_all_guides_reject_commit_checkout_hashes() -> None:
         guide.parent.mkdir(parents=True)
         guide.write_text(
             "```bash\ngit clone https://example.invalid/repo.git\n"
-            "git checkout 0123456789abcdef\n```\n",
+            "git checkout 0123456789abcdef\n"
+            "git -C repo checkout deadbeef\n"
+            "git checkout -b work cafe1234\n```\n",
             encoding="utf-8",
         )
 
         findings = CHECKER.guide_commit_checkout_hashes(root)
-        assert findings == [(guide, 3, "0123456789abcdef")]
+        assert findings == [
+            (guide, 3, "0123456789abcdef"),
+            (guide, 4, "deadbeef"),
+            (guide, 5, "cafe1234"),
+        ]
         try:
             CHECKER.validate_no_guide_commit_checkout_hashes(root)
         except RuntimeError as error:

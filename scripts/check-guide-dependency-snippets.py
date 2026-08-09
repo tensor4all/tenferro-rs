@@ -242,8 +242,8 @@ CASES = (
 
 
 _COMMIT_CHECKOUT_HASH = re.compile(
-    r"\bgit\s+(?:-[^\s]+\s+)*checkout\s+(?:(?:--[^\s]+)\s+)*"
-    r"(?P<commit>[0-9a-f]{7,40})(?![0-9a-f])\b",
+    r"\bgit\b[^\n]*?\bcheckout\b[^\n]*?"
+    r"(?P<commit>(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f]))",
     flags=re.IGNORECASE,
 )
 
