@@ -734,7 +734,7 @@ impl Drop for CufftPlanEntry {
 pub(crate) fn extension_plan_key_for_runtime(key: &CufftPlanKey) -> ExtensionCacheKey {
     let mut hasher = DefaultHasher::new();
     key.hash(&mut hasher);
-    hasher.write_usize(key.runtime_identity.cache_discriminator());
+    key.runtime_identity.hash(&mut hasher);
     ExtensionCacheKey::new(
         FFT_EXTENSION_FAMILY_ID,
         CUFFT_CACHE_NAMESPACE,

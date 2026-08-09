@@ -1,6 +1,7 @@
 //! CubeCL CUDA runtime initialization and synchronization.
 
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use cubecl::client::ComputeClient;
@@ -59,28 +60,6 @@ impl CudaRuntimeIdentity {
             marker: Arc::new(0),
         }
     }
-
-    /// Return a stable, non-authoritative cache key for owner-scoped caches.
-    ///
-    /// The cache key is derived from the retained identity allocation, so
-    /// cloning or moving this witness preserves it while independently
-    /// constructed identities remain distinct while their witnesses are retained. It does
-    /// not expose a CUDA handle, context, stream, or execution authority.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_gpu::cuda::CudaRuntimeIdentity;
-    ///
-    /// let _cache_key: fn(&CudaRuntimeIdentity) -> usize =
-    ///     CudaRuntimeIdentity::cache_discriminator;
-    /// ```
-    #[doc(hidden)]
-    pub fn cache_discriminator(&self) -> usize {
-        // INVARIANT: `marker` is retained by every clone of this identity, so
-        // its Arc allocation address is move/clone-invariant while witnessed.
-        Arc::as_ptr(&self.marker) as usize
-    }
 }
 
 impl PartialEq for CudaRuntimeIdentity {
@@ -90,6 +69,14 @@ impl PartialEq for CudaRuntimeIdentity {
 }
 
 impl Eq for CudaRuntimeIdentity {}
+
+impl Hash for CudaRuntimeIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // INVARIANT: `marker` is retained by every clone of this identity, so
+        // its Arc allocation address is move/clone-invariant while witnessed.
+        state.write_usize(Arc::as_ptr(&self.marker) as usize);
+    }
+}
 
 /// CubeCL CUDA runtime wrapper.
 ///

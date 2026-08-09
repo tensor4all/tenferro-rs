@@ -1,10 +1,12 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 
 use super::common::*;
 use super::support;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache};
-use tenferro_gpu::cuda::gpu_available;
+use tenferro_gpu::cuda::{gpu_available, CudaRuntimeIdentity};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_tensor::TensorRead;
 
@@ -194,6 +196,12 @@ fn cuda_caller_owned_cache_keys_include_runtime_identity() {
     assert_eq!(stats.misses, 2);
 }
 
+fn identity_hash(identity: &CudaRuntimeIdentity) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    identity.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
 fn cuda_caller_owned_cache_reuses_after_runtime_move() {
@@ -204,7 +212,7 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
     let mut cpu = CpuBackend::new();
     let host = complex_f64(&[4], 0.5);
     let mut backend = support::cuda_backend();
-    let first_key = backend.runtime_identity().cache_discriminator();
+    let first_key = identity_hash(&backend.runtime_identity());
     let mut executor = FftExecutor::default();
 
     run_executor_case(
@@ -223,7 +231,7 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
 
     let backend = Box::new(backend);
     let mut backend = *backend;
-    assert_eq!(backend.runtime_identity().cache_discriminator(), first_key);
+    assert_eq!(identity_hash(&backend.runtime_identity()), first_key);
     run_executor_case(
         &mut executor,
         &mut cpu,
@@ -241,7 +249,7 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
     assert_eq!(moved_stats.misses, 1);
 
     let mut independent = support::cuda_backend();
-    let independent_key = independent.runtime_identity().cache_discriminator();
+    let independent_key = identity_hash(&independent.runtime_identity());
     assert_ne!(first_key, independent_key);
     run_executor_case(
         &mut executor,
