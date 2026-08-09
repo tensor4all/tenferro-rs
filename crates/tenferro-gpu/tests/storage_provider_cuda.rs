@@ -109,9 +109,12 @@ fn cuda_provider_does_not_expose_safe_unscoped_raw_access() {
         !lib.contains("pub fn handle(") && !lib.contains("pub fn device_ptr("),
         "CUDA provider handles and pointers must not be safe unscoped accessors"
     );
+    // The hidden cuda::interop bridge no longer exposes a callback boundary;
+    // device pointers are now reachable only through the public raw session's
+    // `unsafe fn raw_ptr` on a session-lifetime-scoped TensorRef/TensorMut.
     assert!(
-        interop.contains("pub fn with_typed_device_ptr")
+        !interop.contains("pub fn with_typed_device_ptr")
             && !interop.contains("pub fn typed_device_ptr("),
-        "raw CUDA access must stay inside an explicit callback boundary"
+        "CUDA interop must not expose a typed device-pointer function"
     );
 }

@@ -95,7 +95,7 @@ fn cubecl_session_scales_output_in_place() {
                     std::slice::from_raw_parts(seed.as_ptr().cast::<u8>(), seed.len() * 4)
                 };
                 let uploaded = raw.upload_bytes(seed_bytes, "test.cubecl_scale_seed")?;
-                let mut dst = raw.tensor_mut(&mut output)?;
+                let dst = raw.tensor_mut(&mut output)?;
                 let dst_ptr = unsafe { dst.raw_ptr() };
                 let mut copy_result = Ok(());
                 // SAFETY: `uploaded` is an uploaded workspace of the same

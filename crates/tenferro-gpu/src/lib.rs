@@ -48,16 +48,6 @@ pub mod cuda {
         CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity, GpuExtensionCapability,
     };
 
-    /// Provider-specific CUDA interop scoped to an active execution session.
-    ///
-    /// TEMPORARY until the cuFFT (#1597) and direct-CUDA dogfooding rows are
-    /// fully on the public seam; consumers must migrate to `cuda::raw`/
-    /// `cuda::cubecl` sessions.
-    #[doc(hidden)]
-    pub mod interop {
-        pub use super::super::cubecl::interop::*;
-    }
-
     /// Public tenferro-wide CubeCL session (issue #1597).
     ///
     /// Exposes a narrow prelude of the CubeCL types needed to write and launch

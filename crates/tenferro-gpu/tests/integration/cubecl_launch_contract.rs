@@ -1164,22 +1164,26 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
 
     let interop_source = cubecl_source("interop.rs");
     assert!(
-        !interop_source.contains("pub fn typed_device_ptr"),
-        "CUDA interop must not expose an unscoped typed pointer function"
+        !interop_source.contains("pub fn with_typed_device_ptr")
+            && !interop_source.contains("pub fn typed_device_ptr"),
+        "CUDA interop must not expose a typed device-pointer function"
     );
-    let interop_ptr = source_section(
-        &interop_source,
-        "pub fn with_typed_device_ptr<T: TensorScalar + 'static>(",
-        "/// Download a dense CubeCL-backed typed tensor",
-    );
+    // Device pointers are exposed only on the public raw session through a
+    // session-lifetime-scoped TensorRef whose unsafe `raw_ptr` requires an
+    // explicit caller safety contract.
+    let raw_source = cubecl_source("raw/mod.rs");
+    let raw_tensor = source_section(&raw_source, "pub fn tensor<T>(", "pub fn tensor_mut<T>(");
     assert_ordered_needles(
-        "interop::with_typed_device_ptr",
-        interop_ptr,
+        "raw::Session::tensor",
+        raw_tensor,
         &[
-            "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
-            "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
-            ".get_resource(prepared.into_handle())",
+            "super::dispatch::cubecl_buffer(tensor, \"raw.tensor\")?;",
+            "cuda_device_ptr_from_addr(resource.resource().ptr, \"raw.tensor\")?;",
         ],
+    );
+    assert!(
+        raw_source.contains("pub unsafe fn raw_ptr(&self) -> *mut std::ffi::c_void"),
+        "raw TensorRef must expose the pointer only through an unsafe scoped accessor"
     );
 
     let gemm_source = cubecl_source("gemm.rs");
@@ -1217,18 +1221,26 @@ fn cubecl_workspace_pointer_is_scoped_to_owner_borrow() {
 fn cubecl_stream_pointer_is_scoped_to_runtime_borrow() {
     let interop_source = cubecl_source("interop.rs");
     assert!(
-        !interop_source.contains("pub fn raw_cuda_stream("),
+        !interop_source.contains("pub fn raw_cuda_stream(")
+            && !interop_source.contains("pub fn with_raw_cuda_stream("),
         "CUDA interop must not expose an unscoped stream pointer function"
     );
-    let stream_source = source_section(
-        &interop_source,
-        "pub fn with_raw_cuda_stream(",
-        "/// Return the launch cube count",
+    // The public raw session exposes the stream handle only through a
+    // session-lifetime-scoped StreamRef with an unsafe accessor.
+    let raw_source = cubecl_source("raw/mod.rs");
+    let stream_method = source_section(
+        &raw_source,
+        "pub fn stream(&self) -> StreamRef<'s>",
+        "pub fn tensor<T>(",
     );
     assert_ordered_needles(
-        "interop::with_raw_cuda_stream",
-        stream_source,
-        &["raw_cuda_stream()", "map_err"],
+        "raw::Session::stream",
+        stream_method,
+        &["StreamRef {", "raw: self.stream"],
+    );
+    assert!(
+        raw_source.contains("pub unsafe fn raw_handle(&self) -> u64"),
+        "raw StreamRef must expose the stream handle only through an unsafe accessor"
     );
 }
 
