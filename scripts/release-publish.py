@@ -922,14 +922,14 @@ def publish_release(
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
     bootstrap_args_by_crate: dict[str, list[str]] = {}
-    if not version_exists.get("tenferro-cpu", True):
+    if "tenferro-runtime" in packages and "tenferro-cpu" in packages:
         cpu_path = (root / package_root(packages["tenferro-cpu"], root=root)).resolve()
         bootstrap_args_by_crate["tenferro-runtime"] = [
             "--no-verify",
             "--config",
             f"patch.crates-io.tenferro-cpu.path={json.dumps(str(cpu_path), ensure_ascii=False)}",
         ]
-    if not version_exists.get("tenferro-einsum", True):
+    if "tenferro-xla" in packages and "tenferro-einsum" in packages:
         einsum_path = (
             root / package_root(packages["tenferro-einsum"], root=root)
         ).resolve()

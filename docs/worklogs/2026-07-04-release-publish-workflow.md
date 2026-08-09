@@ -215,14 +215,15 @@ cannot bootstrap either absent registry version.
 
 Clean-tag experiments established the narrow recovery: runtime package,
 publish dry-run, and publish use `--no-verify` plus
-`--config 'patch.crates-io.tenferro-cpu.path="ABS_TAG_PATH/crates/tenferro-cpu"'`
-whenever CPU 0.3.0 is registry-absent, including a restart after runtime is
-registry-visible. The path comes from the selected release checkout's Cargo
-metadata and is encoded as an inline TOML string. The helper still inspects and
-compares the package, `tmp-crate`, and `tmp-registry` archives; the experiment
-found all three byte-identical. The existing prerequisite wait permits CPU to
-package and publish normally, without the patch. Once CPU is registry-visible,
-runtime packaging no longer needs the bootstrap patch.
+`--config 'patch.crates-io.tenferro-cpu.path="ABS_TAG_PATH/crates/tenferro-cpu"'`.
+The path comes from the selected immutable release checkout's Cargo metadata
+and is encoded as an inline TOML string. These command inputs remain identical
+after CPU becomes registry-visible: changing dependency resolution otherwise
+regenerates `Cargo.lock` differently and prevents an already-published runtime
+archive from passing restart attestation. The helper still inspects and compares
+the package, `tmp-crate`, and `tmp-registry` archives; the experiment found all
+three byte-identical. The existing prerequisite wait permits CPU to package and
+publish normally, without the patch.
 
 `--release-root PATH` lets the corrected helper on `origin/main` operate on the
 clean detached immutable tag checkout. `verify_release_checkout(root=...)`
@@ -243,14 +244,15 @@ the human operator may cross that server-acceptance boundary.
 After runtime, CPU, and GPU 0.3.0 became registry-visible, packaging
 `tenferro-xla` exposed the remaining forward versioned dev-dependency:
 `tenferro-einsum 0.3.0` is not yet published and follows XLA in the publication
-order. While that einsum version is absent, only XLA's package, publish dry-run,
-and publish commands now use `--no-verify` plus an inline crates.io patch to the
-absolute einsum package path in the immutable release checkout. The same
-bootstrap remains active when restarting after XLA is visible but einsum is
-not, so XLA can still be repackaged and attested. CPU, einsum, and all other
-crate commands remain unchanged; publication order, human execution approval,
-and archive/provenance comparisons are unchanged.
+order. Only XLA's package, publish dry-run, and publish commands use
+`--no-verify` plus an inline crates.io patch to the absolute einsum package path
+in the immutable release checkout. The bootstrap remains active after einsum
+becomes registry-visible so Cargo receives deterministic inputs and regenerates
+the same `Cargo.lock` for already-published restart attestation. CPU, einsum,
+and all other crate commands remain unchanged; publication order, human
+execution approval, and archive/provenance comparisons are unchanged.
 
-Focused tests cover the initial and restarted states and assert that the patch
-is confined to XLA commands. The helper suite, Python byte-compilation, and
-`git diff --check` passed. No publication command was run.
+Focused tests cover initial and already-published restart states both before and
+after bootstrap dependencies become registry-visible, and assert that each
+patch remains confined to its target crate commands. The helper suite, Python
+byte-compilation, and `git diff --check` passed. No publication command was run.

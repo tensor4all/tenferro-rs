@@ -567,7 +567,9 @@ class OrchestrationTests(unittest.TestCase):
             ],
         )
 
-    def assert_runtime_bootstrap_commands(self, runtime_exists: bool) -> None:
+    def assert_runtime_bootstrap_commands(
+        self, runtime_exists: bool, cpu_exists: bool = False
+    ) -> None:
         cargo_commands: list[list[str]] = []
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'tag "checkout\\special'
@@ -581,7 +583,7 @@ class OrchestrationTests(unittest.TestCase):
                 {"name": "tenferro-runtime", "kind": "normal"}
             ]
             client = FakeClient(
-                {"tenferro-runtime": runtime_exists, "tenferro-cpu": False}, []
+                {"tenferro-runtime": runtime_exists, "tenferro-cpu": cpu_exists}, []
             )
 
             def runner(
@@ -661,25 +663,31 @@ class OrchestrationTests(unittest.TestCase):
                     ]
                 ),
                 ["cargo", "package", "-p", "tenferro-cpu", "--locked"],
-                [
-                    "cargo",
-                    "publish",
-                    "--dry-run",
-                    "-p",
-                    "tenferro-cpu",
-                    "--locked",
-                    "--registry",
-                    "crates-io",
-                ],
-                [
-                    "cargo",
-                    "publish",
-                    "-p",
-                    "tenferro-cpu",
-                    "--locked",
-                    "--registry",
-                    "crates-io",
-                ],
+                *(
+                    []
+                    if cpu_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-cpu",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-cpu",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                    ]
+                ),
             ],
         )
 
@@ -689,7 +697,12 @@ class OrchestrationTests(unittest.TestCase):
     def test_runtime_bootstrap_patches_tag_cpu_on_restart_after_runtime_publish(self) -> None:
         self.assert_runtime_bootstrap_commands(runtime_exists=True)
 
-    def assert_xla_bootstrap_commands(self, xla_exists: bool) -> None:
+    def test_runtime_bootstrap_is_stable_after_runtime_and_cpu_publish(self) -> None:
+        self.assert_runtime_bootstrap_commands(runtime_exists=True, cpu_exists=True)
+
+    def assert_xla_bootstrap_commands(
+        self, xla_exists: bool, einsum_exists: bool = False
+    ) -> None:
         cargo_commands: list[list[str]] = []
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'tag "checkout\\special'
@@ -703,7 +716,7 @@ class OrchestrationTests(unittest.TestCase):
             client = FakeClient(
                 {
                     "tenferro-xla": xla_exists,
-                    "tenferro-einsum": False,
+                    "tenferro-einsum": einsum_exists,
                     "tenferro-cpu": True,
                 },
                 [],
@@ -800,6 +813,9 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_xla_bootstrap_patches_tag_einsum_on_restart_after_xla_publish(self) -> None:
         self.assert_xla_bootstrap_commands(xla_exists=True)
+
+    def test_xla_bootstrap_is_stable_after_xla_and_einsum_publish(self) -> None:
+        self.assert_xla_bootstrap_commands(xla_exists=True, einsum_exists=True)
 
     def test_rejects_differing_dry_run_staging_archives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
