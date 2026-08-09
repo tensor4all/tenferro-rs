@@ -8,6 +8,7 @@ registry version Cargo needs for packaging.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -95,28 +96,70 @@ def markdown_section(text: str, heading: str) -> str:
 
 
 def publishable_crates(metadata: dict) -> set[str]:
+    workspace_members = set(metadata["workspace_members"])
     return {
         package["name"]
         for package in metadata["packages"]
-        if Path(package["manifest_path"]).parent.parent == ROOT / "crates"
-        and package["name"].startswith("tenferro-")
-        and package.get("publish") != []
+        if package["id"] in workspace_members and package.get("publish") != []
     }
+
+
+def phase3_publication_order(
+    release_text: str, errors: list[str]
+) -> list[str] | None:
+    heading = "## Phase 3 — Publish From The Tag"
+    lines = release_text.splitlines()
+    headings = [index for index, line in enumerate(lines) if line == heading]
+    if len(headings) != 1:
+        errors.append("release workflow must contain exactly one exact Phase 3 heading")
+        return None
+
+    start = headings[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(lines))
+            if re.match(r"^#{1,6}(?:[ \t]+|$)", lines[index])
+        ),
+        len(lines),
+    )
+    text_fences: list[list[str]] = []
+    active_fence: tuple[str, int, str, list[str]] | None = None
+    for line in lines[start:end]:
+        fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+        if active_fence is None:
+            if fence:
+                marker, info = fence.groups()
+                active_fence = (marker[0], len(marker), info.strip(), [])
+            continue
+
+        marker_char, marker_len, info, contents = active_fence
+        if (
+            fence
+            and fence.group(1)[0] == marker_char
+            and len(fence.group(1)) >= marker_len
+            and not fence.group(2).strip()
+        ):
+            if info == "text":
+                text_fences.append(contents)
+            active_fence = None
+        else:
+            contents.append(line)
+
+    if active_fence is not None or len(text_fences) != 1:
+        errors.append(
+            "release workflow Phase 3 must contain exactly one complete text fence"
+        )
+        return None
+    return [line.strip() for line in text_fences[0] if line.strip()]
 
 
 def check_release_order(
     metadata: dict, release_text: str, errors: list[str]
 ) -> None:
-    phase = markdown_section(release_text, "Phase 3 — Publish From The Tag")
-    fenced = phase.split("```text", 1)
-    if len(fenced) != 2 or "```" not in fenced[1]:
-        errors.append("release workflow must contain a Phase 3 text publish-order block")
+    order = phase3_publication_order(release_text, errors)
+    if order is None:
         return
-    order = [
-        line.strip()
-        for line in fenced[1].split("```", 1)[0].splitlines()
-        if line.strip()
-    ]
     expected = publishable_crates(metadata)
     if len(order) != len(set(order)):
         errors.append("release publish order must not contain duplicate crates")

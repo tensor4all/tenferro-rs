@@ -39,32 +39,37 @@ VALID_EXPLICIT_FEATURES = VALID_ALL_FEATURES.replace(
 class ReleaseOrderTests(unittest.TestCase):
     def metadata(self) -> dict:
         root = CHECKER.ROOT
+        packages = [
+            {
+                "id": "core-id",
+                "name": "tenferro-core-ops",
+                "manifest_path": str(root / "crates/tenferro-core-ops/Cargo.toml"),
+                "publish": None,
+                "dependencies": [
+                    {"name": "tenferro-runtime", "kind": "dev"},
+                ],
+            },
+            {
+                "id": "runtime-id",
+                "name": "tenferro-runtime",
+                "manifest_path": str(root / "crates/tenferro-runtime/Cargo.toml"),
+                "publish": None,
+                "dependencies": [
+                    {"name": "tenferro-core-ops", "kind": None},
+                    {"name": "tenferro-hidden", "kind": None},
+                ],
+            },
+            {
+                "id": "hidden-id",
+                "name": "tenferro-hidden",
+                "manifest_path": str(root / "crates/tenferro-hidden/Cargo.toml"),
+                "publish": [],
+                "dependencies": [],
+            },
+        ]
         return {
-            "packages": [
-                {
-                    "name": "tenferro-core-ops",
-                    "manifest_path": str(root / "crates/tenferro-core-ops/Cargo.toml"),
-                    "publish": None,
-                    "dependencies": [
-                        {"name": "tenferro-runtime", "kind": "dev"},
-                    ],
-                },
-                {
-                    "name": "tenferro-runtime",
-                    "manifest_path": str(root / "crates/tenferro-runtime/Cargo.toml"),
-                    "publish": None,
-                    "dependencies": [
-                        {"name": "tenferro-core-ops", "kind": None},
-                        {"name": "tenferro-hidden", "kind": None},
-                    ],
-                },
-                {
-                    "name": "tenferro-hidden",
-                    "manifest_path": str(root / "crates/tenferro-hidden/Cargo.toml"),
-                    "publish": [],
-                    "dependencies": [],
-                },
-            ]
+            "packages": packages,
+            "workspace_members": [package["id"] for package in packages],
         }
 
     def release_text(self, order: list[str]) -> str:
@@ -96,6 +101,98 @@ class ReleaseOrderTests(unittest.TestCase):
                 "'tenferro-core-ops' before 'tenferro-runtime'"
             ],
         )
+
+    def test_checks_optional_and_build_dependencies(self) -> None:
+        cases = (
+            {"name": "tenferro-core-ops", "kind": None, "optional": True},
+            {"name": "tenferro-core-ops", "kind": "build", "optional": False},
+        )
+        for dependency in cases:
+            with self.subTest(dependency=dependency):
+                metadata = self.metadata()
+                metadata["packages"][1]["dependencies"] = [dependency]
+                errors: list[str] = []
+                CHECKER.check_release_order(
+                    metadata,
+                    self.release_text(["tenferro-runtime", "tenferro-core-ops"]),
+                    errors,
+                )
+                self.assertEqual(
+                    errors,
+                    [
+                        "release publish order must place dependency "
+                        "'tenferro-core-ops' before 'tenferro-runtime'"
+                    ],
+                )
+
+    def test_rejects_missing_unexpected_and_duplicate_membership(self) -> None:
+        cases = {
+            "missing": (
+                ["tenferro-core-ops"],
+                "release publish order is missing crates: ['tenferro-runtime']",
+            ),
+            "unexpected": (
+                ["tenferro-core-ops", "tenferro-runtime", "other"],
+                "release publish order has unexpected crates: ['other']",
+            ),
+            "duplicate": (
+                ["tenferro-core-ops", "tenferro-runtime", "tenferro-runtime"],
+                "release publish order must not contain duplicate crates",
+            ),
+        }
+        for name, (order, expected) in cases.items():
+            with self.subTest(name=name):
+                errors: list[str] = []
+                CHECKER.check_release_order(
+                    self.metadata(), self.release_text(order), errors
+                )
+                self.assertIn(expected, errors)
+
+    def test_requires_exact_unique_phase_heading(self) -> None:
+        valid = self.release_text(["tenferro-core-ops", "tenferro-runtime"])
+        cases = (
+            valid.replace(
+                "## Phase 3 — Publish From The Tag",
+                "## Phase 3 — Publish From The Tag Extra",
+            ),
+            valid + "\n## Phase 3 — Publish From The Tag\n",
+        )
+        for release_text in cases:
+            with self.subTest(release_text=release_text):
+                errors: list[str] = []
+                CHECKER.check_release_order(self.metadata(), release_text, errors)
+                self.assertEqual(
+                    errors,
+                    ["release workflow must contain exactly one exact Phase 3 heading"],
+                )
+
+    def test_stops_phase_at_the_next_heading(self) -> None:
+        errors: list[str] = []
+        release_text = self.release_text(
+            ["tenferro-core-ops", "tenferro-runtime"]
+        ) + "\n### Other Section\n\n```text\nunrelated\n```\n"
+        CHECKER.check_release_order(self.metadata(), release_text, errors)
+        self.assertEqual(errors, [])
+
+    def test_rejects_missing_ambiguous_and_malformed_text_fences(self) -> None:
+        valid = self.release_text(["tenferro-core-ops", "tenferro-runtime"])
+        cases = (
+            valid.replace("```text", "```bash"),
+            valid + "\n```text\nunrelated\n```\n",
+            valid.removesuffix("```\n"),
+            valid + "\n```\n",
+        )
+        for release_text in cases:
+            with self.subTest(release_text=release_text):
+                errors: list[str] = []
+                CHECKER.check_release_order(self.metadata(), release_text, errors)
+                self.assertEqual(
+                    errors,
+                    [
+                        "release workflow Phase 3 must contain exactly one "
+                        "complete text fence"
+                    ],
+                )
 
 
 class PublishMetadataTests(unittest.TestCase):
@@ -195,28 +292,35 @@ class PublishMetadataTests(unittest.TestCase):
                     any("docs.rs" in error for error in self.check(manifest))
                 )
 
-    def test_discovers_only_publishable_nested_crates(self) -> None:
-        root = CHECKER.ROOT
+    def test_discovers_publishable_workspace_members_without_heuristics(
+        self,
+    ) -> None:
         metadata = {
+            "workspace_members": ["publishable-id", "hidden-id"],
             "packages": [
                 {
-                    "name": "tenferro-fixture",
-                    "manifest_path": str(root / "crates/tenferro-fixture/Cargo.toml"),
+                    "id": "publishable-id",
+                    "name": "future-crate",
+                    "manifest_path": "/anywhere/future/Cargo.toml",
                     "publish": None,
                 },
                 {
+                    "id": "hidden-id",
                     "name": "tenferro-hidden",
-                    "manifest_path": str(root / "crates/tenferro-hidden/Cargo.toml"),
+                    "manifest_path": "/crates/tenferro-hidden/Cargo.toml",
                     "publish": [],
                 },
                 {
-                    "name": "tenferro-nested",
-                    "manifest_path": str(root / "crates/tenferro-nested/deep/Cargo.toml"),
+                    "id": "nonmember-id",
+                    "name": "tenferro-nonmember",
+                    "manifest_path": str(
+                        CHECKER.ROOT / "crates/tenferro-nonmember/Cargo.toml"
+                    ),
                     "publish": None,
                 },
-            ]
+            ],
         }
-        self.assertEqual(CHECKER.publishable_crates(metadata), {"tenferro-fixture"})
+        self.assertEqual(CHECKER.publishable_crates(metadata), {"future-crate"})
 
 
 if __name__ == "__main__":
