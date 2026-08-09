@@ -1172,7 +1172,11 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     // session-lifetime-scoped TensorRef whose unsafe `raw_ptr` requires an
     // explicit caller safety contract.
     let raw_source = cubecl_source("raw/mod.rs");
-    let raw_tensor = source_section(&raw_source, "pub fn tensor<T>(", "pub fn tensor_mut<T>(");
+    let raw_tensor = source_section(
+        &raw_source,
+        "pub fn tensor<'a, T>(",
+        "pub fn tensor_mut<'a, T>(",
+    );
     assert_ordered_needles(
         "raw::Session::tensor",
         raw_tensor,
@@ -1231,7 +1235,7 @@ fn cubecl_stream_pointer_is_scoped_to_runtime_borrow() {
     let stream_method = source_section(
         &raw_source,
         "pub fn stream(&self) -> StreamRef<'s>",
-        "pub fn tensor<T>(",
+        "pub fn tensor<'a, T>(",
     );
     assert_ordered_needles(
         "raw::Session::stream",

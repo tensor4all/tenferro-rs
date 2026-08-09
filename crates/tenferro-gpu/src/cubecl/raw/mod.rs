@@ -344,12 +344,6 @@ impl<'s> Session<'s> {
         super::dispatch::alloc_output(&self.runtime, shape)
     }
 
-    /// Allocate a CubeCL-owned byte workspace returned as [`DeviceBytes`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot allocate or
-    /// inspect the workspace resource.
     /// Retain a clone of a resident tensor's CubeCL allocation handle.
     ///
     /// The returned [`DeviceBytes`] holds a reference-counted clone of the
@@ -382,6 +376,12 @@ impl<'s> Session<'s> {
         })
     }
 
+    /// Allocate a CubeCL-owned byte workspace returned as [`DeviceBytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot allocate or
+    /// inspect the workspace resource.
     pub fn alloc_bytes(&self, nbytes: usize, op: &'static str) -> crate::Result<DeviceBytes<'s>> {
         let inner = super::interop::alloc_device_bytes(&self.runtime, nbytes, op)?;
         Ok(DeviceBytes {

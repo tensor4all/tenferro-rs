@@ -1,5 +1,7 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use std::any::TypeId;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
@@ -80,6 +82,7 @@ pub(super) struct CudaExecSessionMarker;
 #[derive(Debug)]
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl CudaExecSession<'_> {
@@ -591,7 +594,10 @@ impl BackendSessionHost for CudaBackend {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        let mut session = CudaExecSession { backend: self };
+        let mut session = CudaExecSession {
+            backend: self,
+            _not_send_sync: PhantomData,
+        };
         f(&mut session)
     }
 }
