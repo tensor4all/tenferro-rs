@@ -257,6 +257,18 @@ pub enum RuntimeConfigError {
         /// Missing engine identifier.
         engine_id: EngineId,
     },
+    /// An extension module does not register a requested family for an engine.
+    #[error(
+        "extension module {module_id:?} family {family_id:?} has no engine registration for runtime engine {engine_id:?}"
+    )]
+    MissingExtensionEngine {
+        /// Extension module whose engine registration is missing.
+        module_id: ExtensionModuleId,
+        /// Extension family whose engine registration is missing.
+        family_id: &'static str,
+        /// Runtime engine selected by the owner.
+        engine_id: EngineId,
+    },
     /// Engine registration provided no supported storage classes.
     #[error("engine {engine_id:?} has no storage classes")]
     EmptyStorageClasses {

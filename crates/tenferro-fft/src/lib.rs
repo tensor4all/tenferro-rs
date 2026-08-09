@@ -7,7 +7,12 @@
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! On macOS, `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
+//! With the `cuda` feature, `tenferro_gpu::cuda::CudaBackend` executes the
+//! supported one-dimensional F32/F64/C32/C64 operations through dynamically
+//! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
+//! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
+//! explicit download remain stream-managed. On macOS,
+//! `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
 //! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
 //! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses
@@ -135,6 +140,8 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::with_cuda_exec_session;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
@@ -152,6 +159,8 @@ use tenferro_tensor::{
 mod backend;
 mod cache;
 mod cpu;
+#[cfg(feature = "cuda")]
+mod cuda;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
 pub mod prelude;
@@ -1434,6 +1443,12 @@ fn execute_fft_extension_reads_on_session(
     caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if let Some(result) = with_cpu_exec_session(session, |session| {
+        execute_fft_extension_reads_for_capability(op, inputs, session, caches)
+    }) {
+        return result;
+    }
+    #[cfg(feature = "cuda")]
+    if let Some(result) = with_cuda_exec_session(session, |session| {
         execute_fft_extension_reads_for_capability(op, inputs, session, caches)
     }) {
         return result;

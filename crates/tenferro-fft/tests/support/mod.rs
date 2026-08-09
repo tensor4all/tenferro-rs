@@ -24,8 +24,7 @@ pub fn cpu_runtime_with_fft(backend: &CpuBackend) -> Result<Runtime, RuntimeConf
 /// Returns [`tenferro_runtime::Error::RuntimeState`] when constructing the test
 /// runtime fails or when the compiled program returns any output count other
 /// than one. Propagates typed input binding, validation, and backend execution
-/// errors from
-/// [`Runtime::run_compiled`].
+/// errors from [`Runtime::run_compiled`].
 pub fn run_one(program: &CompiledGraph, inputs: &[&Tensor]) -> tenferro_runtime::Result<Tensor> {
     let backend = CpuBackend::new();
     let runtime = cpu_runtime_with_fft(&backend).map_err(|source| {

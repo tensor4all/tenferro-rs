@@ -343,6 +343,11 @@ impl FrozenExtensionSlots {
             .map(|slot| ExtensionEngineSnapshotView { slot })
     }
 
+    pub(super) fn has_engine(&self, family_id: ExtensionFamilyId, engine_id: &EngineId) -> bool {
+        self.by_family_engine
+            .contains_key(&(family_id, engine_id.clone()))
+    }
+
     fn extension_engine_slot(
         &self,
         family_id: ExtensionFamilyId,

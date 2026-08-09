@@ -9,11 +9,14 @@ use std::ffi::c_void;
 use std::fmt;
 
 use cubecl::client::ComputeClient;
-use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
+use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+use num_complex::{Complex32, Complex64};
 
 use crate::{TensorRank, TensorScalar, TypedTensor};
+use tenferro_tensor::{DType, TensorRead, TensorViewMut, TensorWrite, TypedTensorViewMut};
 
+use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.
@@ -51,6 +54,136 @@ impl DeviceByteBuffer {
     /// Return whether this workspace owns a live CubeCL allocation.
     pub fn is_empty(&self) -> bool {
         self.handle.is_none()
+    }
+}
+
+/// Prepared external-use allocation retained with its exact CUDA runtime.
+///
+/// The pointer remains owner-scoped: it is exposed only during
+/// `with_device_ptr`, while the prepared handle and runtime stay alive until
+/// the lease is dropped. A failed vendor-stream barrier must retain the whole
+/// lease rather than reclaiming an allocation that may still be in use.
+#[derive(Debug)]
+struct CudaExternalUseCore {
+    // Keep the prepared allocation handle before the runtime so it is released
+    // while the retained CUDA context is still alive.
+    handle: cubecl_runtime::server::Handle,
+    runtime: CudaRuntime,
+}
+
+impl CudaExternalUseCore {
+    fn new(handle: cubecl_runtime::server::Handle, runtime: &CudaRuntime) -> Self {
+        Self {
+            handle,
+            runtime: runtime.clone(),
+        }
+    }
+
+    fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        let resource = self
+            .runtime
+            .client()
+            .get_resource(self.handle.clone())
+            .map_err(|err| crate::Error::backend_source("cuda_external_use_lease", err))?;
+        let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, "cuda_external_use_lease")?;
+        callback(ptr);
+        Ok(())
+    }
+}
+
+/// Read-only external CUDA use lease.
+///
+/// This hidden sibling-crate extension contract is consumed by
+/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. Read
+/// leases require a shared tensor borrow and prepare a provider-native read.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CudaExternalUseReadLease {
+    core: CudaExternalUseCore,
+}
+
+impl CudaExternalUseReadLease {
+    /// Prepare and retain a read-only CubeCL-backed tensor for external use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+    /// belongs to a different CUDA runtime, or its provider handle cannot be
+    /// prepared.
+    pub fn new<T, R>(
+        runtime: &CudaRuntime,
+        tensor: &TypedTensor<T, R>,
+        op: &'static str,
+    ) -> crate::Result<Self>
+    where
+        T: TensorScalar + 'static,
+        R: TensorRank,
+    {
+        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
+        let handle = dispatch::prepared_tensor_access(tensor, op)?.into_handle();
+        Ok(Self {
+            core: CudaExternalUseCore::new(handle, runtime),
+        })
+    }
+
+    /// Borrow the retained device pointer for one scoped external call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the retained resource
+    /// cannot be inspected, or a typed validation error when its address does
+    /// not fit the host `usize` range.
+    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        self.core.with_device_ptr(callback)
+    }
+}
+
+/// Exclusive-write external CUDA use lease.
+///
+/// This hidden sibling-crate extension contract is consumed by
+/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. A write
+/// lease requires an exclusive mutable tensor borrow and prepares a
+/// provider-native write, so vendor output cannot be obtained from a read-only
+/// handle.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct CudaExternalUseWriteLease {
+    core: CudaExternalUseCore,
+}
+
+impl CudaExternalUseWriteLease {
+    /// Prepare and retain an exclusively writable CubeCL-backed tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+    /// belongs to a different CUDA runtime, or its provider handle cannot be
+    /// prepared.
+    pub fn new<T, R>(
+        runtime: &CudaRuntime,
+        tensor: &mut TypedTensor<T, R>,
+        op: &'static str,
+    ) -> crate::Result<Self>
+    where
+        T: TensorScalar + 'static,
+        R: TensorRank,
+    {
+        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
+        let handle = dispatch::prepared_tensor_write_access(tensor, op)?.into_handle();
+        Ok(Self {
+            core: CudaExternalUseCore::new(handle, runtime),
+        })
+    }
+
+    /// Borrow the retained device pointer for one scoped external call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the retained resource
+    /// cannot be inspected, or a typed validation error when its address does
+    /// not fit the host `usize` range.
+    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
+        self.core.with_device_ptr(callback)
     }
 }
 
@@ -145,6 +278,42 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     dispatch::alloc_output(rt, shape)
+}
+
+/// Allocate and fill a dense CUDA tensor with semantic zeros on `rt`.
+///
+/// This is an owner-scoped bridge for operation-family padding and empty-input
+/// preparation. It reuses the backend's existing fill-zero kernel and never
+/// uploads a host tensor or exposes a device pointer to the caller.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with
+/// [`crate::ValidationError::InvalidArgument`] when the shape product, output
+/// byte length, or launch count overflows, [`crate::Error::RuntimeState`] when the
+/// output is not resident on `rt`, or [`crate::Error::BackendSource`] when
+/// allocation or backend resource inspection fails.
+#[doc(hidden)]
+pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static,
+{
+    let output = alloc_output::<T>(rt, shape)?;
+    dispatch::launch_nullary_into(
+        rt,
+        &output,
+        "alloc_zero_output",
+        dispatch::cube_count_for_len(output.n_elements())?,
+        dispatch::cube_dim_1d(),
+        |client, count, dim, out| unsafe {
+            // SAFETY: `launch_nullary_into` validates output residency and
+            // the launch domain; the fill kernel bounds every write by len.
+            crate::kernels::structural::fill_zero_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                client, count, dim, out,
+            );
+        },
+    )?;
+    Ok(output)
 }
 
 /// Validate that a tensor is backed by a CubeCL buffer.
@@ -331,3 +500,342 @@ fn device_bytes_from_handle(
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, op)?,
     })
 }
+
+const SCALE_OP: &str = "scale_tensor_write";
+
+/// Scale a writable CUDA tensor in place by a real device-resident factor.
+///
+/// The output retains its existing placement and allocation owner. Only
+/// compact, zero-offset writable targets are accepted because the shared
+/// structural kernels operate on a one-dimensional contiguous array.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use tenferro_gpu::cuda::{
+///     cuda_devices, download_tensor, gpu_available, upload_tensor, CudaRuntime,
+/// };
+/// use tenferro_gpu::cuda::interop::scale_tensor_write;
+/// use tenferro_tensor::{Tensor, TensorWrite};
+///
+/// if !gpu_available() {
+///     return Ok(());
+/// }
+/// let Some(device) = cuda_devices()?.into_iter().next() else {
+///     return Ok(());
+/// };
+/// let runtime = CudaRuntime::new(device.id())?;
+/// let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0])?;
+/// let mut output = upload_tensor(&runtime, &host)?;
+/// scale_tensor_write(&runtime, TensorWrite::from_tensor(&mut output), 0.25)?;
+/// let scaled = download_tensor(&runtime, &output)?;
+/// assert_eq!(scaled.as_slice::<f32>()?, &[0.25, 0.5]);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns a typed unsupported-dtype error for integer and boolean outputs,
+/// or a runtime/validation error when the output is host-backed, belongs to a
+/// different CUDA runtime, has an invalid buffer/layout, or cannot be bound.
+#[doc(hidden)]
+pub fn scale_tensor_write(
+    rt: &CudaRuntime,
+    output: TensorWrite<'_>,
+    factor: f64,
+) -> crate::Result<()> {
+    ensure_tensor_write_resident(rt, &output, SCALE_OP)?;
+    let dtype = output.dtype();
+    if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+        return Err(unsupported_dtype(SCALE_OP, dtype));
+    }
+
+    match output {
+        TensorWrite::Tensor(output) => match output {
+            crate::Tensor::F32(output) => {
+                scale_typed_tensor(rt, output, factor as f32, launch_scale_f32)
+            }
+            crate::Tensor::F64(output) => scale_typed_tensor(rt, output, factor, launch_scale_f64),
+            crate::Tensor::C32(output) => scale_typed_tensor(
+                rt,
+                output,
+                Complex32::new(factor as f32, 0.0),
+                launch_scale_c32,
+            ),
+            crate::Tensor::C64(output) => {
+                scale_typed_tensor(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
+            }
+            _ => Err(unsupported_dtype(SCALE_OP, dtype)),
+        },
+        TensorWrite::View(mut output) => match &mut output {
+            TensorViewMut::F32(output) => {
+                scale_typed_view(rt, output, factor as f32, launch_scale_f32)
+            }
+            TensorViewMut::F64(output) => scale_typed_view(rt, output, factor, launch_scale_f64),
+            TensorViewMut::C32(output) => scale_typed_view(
+                rt,
+                output,
+                Complex32::new(factor as f32, 0.0),
+                launch_scale_c32,
+            ),
+            TensorViewMut::C64(output) => {
+                scale_typed_view(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
+            }
+            _ => Err(unsupported_dtype(SCALE_OP, dtype)),
+        },
+    }
+}
+
+fn ensure_tensor_write_resident(
+    rt: &CudaRuntime,
+    output: &TensorWrite<'_>,
+    op: &'static str,
+) -> crate::Result<()> {
+    let read = output.as_read();
+    match &read {
+        TensorRead::Tensor(output) => match *output {
+            crate::Tensor::F32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::F64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::I32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::I64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::Bool(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::C32(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+            crate::Tensor::C64(output) => dispatch::ensure_resident_on_runtime(rt, output, op),
+        },
+        TensorRead::View(output) => match output {
+            crate::TensorView::F32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::F64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::I32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::I64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::Bool(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::C32(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+            crate::TensorView::C64(output) => {
+                dispatch::ensure_view_resident_on_runtime(rt, output, op)
+            }
+        },
+    }
+}
+
+/// Shared typed scaling bridge used by CUDA operation-family code that already
+/// owns a typed mutable tensor and factor.
+pub(crate) fn scale_typed_tensor<T, F>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensor<T>,
+    factor: T,
+    launch: F,
+) -> crate::Result<()>
+where
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    F: FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+{
+    scale_typed_tensor_for_op(rt, output, factor, SCALE_OP, launch)
+}
+
+pub(crate) fn scale_typed_tensor_for_op<T, F>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensor<T>,
+    factor: T,
+    op: &'static str,
+    launch: F,
+) -> crate::Result<()>
+where
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    F: FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+{
+    dispatch::ensure_resident_on_runtime(rt, output, op)?;
+    let len = output.n_elements();
+    validate_scale_buffer(op, len, output.buffer().len())?;
+    if len == 0 {
+        return Ok(());
+    }
+    let count = dispatch::cube_count_for_len(len)?;
+    let dim = dispatch::cube_dim_1d();
+    let mut output_view = output.as_view_mut();
+    let output_arg = dispatch::typed_view_mut_array_arg(&mut output_view, op)?;
+    launch_scaled(rt, output_arg, factor, count, dim, op, launch)
+}
+
+fn scale_typed_view<T, F>(
+    rt: &CudaRuntime,
+    output: &mut TypedTensorViewMut<'_, T>,
+    factor: T,
+    launch: F,
+) -> crate::Result<()>
+where
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    F: FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+{
+    dispatch::ensure_view_mut_resident_on_runtime(rt, output, SCALE_OP)?;
+    if output.offset() != 0 || !output.is_col_major_contiguous()? {
+        return Err(crate::Error::invalid_argument(
+            SCALE_OP,
+            "layout",
+            "CUDA tensor scaling requires a zero-offset column-major view",
+        ));
+    }
+    let len = output.n_elements();
+    let buffer_len = output
+        .backend_buffer()
+        .ok_or_else(|| crate::Error::runtime_state(SCALE_OP, "expected a CUDA backend buffer"))?
+        .len();
+    validate_scale_buffer(SCALE_OP, len, buffer_len)?;
+    if len == 0 {
+        return Ok(());
+    }
+    let count = dispatch::cube_count_for_len(len)?;
+    let dim = dispatch::cube_dim_1d();
+    let output_arg = dispatch::typed_view_mut_array_arg(output, SCALE_OP)?;
+    launch_scaled(rt, output_arg, factor, count, dim, SCALE_OP, launch)
+}
+
+fn validate_scale_buffer(op: &'static str, len: usize, buffer_len: usize) -> crate::Result<()> {
+    if len > buffer_len {
+        return Err(crate::Error::runtime_state(
+            op,
+            format!(
+                "CUDA tensor scaling output has {len} logical elements but its buffer has {buffer_len}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn launch_scaled<T, F>(
+    rt: &CudaRuntime,
+    output: ArrayArg<CubeclCudaRuntime>,
+    factor: T,
+    count: CubeCount,
+    dim: CubeDim,
+    op: &'static str,
+    launch: F,
+) -> crate::Result<()>
+where
+    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
+    F: FnOnce(
+        &ComputeClient<CubeclCudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CubeclCudaRuntime>,
+        ArrayArg<CubeclCudaRuntime>,
+    ),
+{
+    let factor = upload_typed_tensor(rt, vec![1], vec![factor])?;
+    let factor = dispatch::typed_tensor_array_arg(&factor, op)?;
+    launch(rt.client(), count, dim, output, factor);
+    Ok(())
+}
+
+fn launch_scale_f32(
+    client: &ComputeClient<CubeclCudaRuntime>,
+    count: CubeCount,
+    dim: CubeDim,
+    output: ArrayArg<CubeclCudaRuntime>,
+    factor: ArrayArg<CubeclCudaRuntime>,
+) {
+    // SAFETY: the typed scaling bridge validates residency, buffer length, and
+    // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
+    unsafe {
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
+            f32,
+            CubeclCudaRuntime,
+        >(client, count, dim, output, factor);
+    }
+}
+
+fn launch_scale_f64(
+    client: &ComputeClient<CubeclCudaRuntime>,
+    count: CubeCount,
+    dim: CubeDim,
+    output: ArrayArg<CubeclCudaRuntime>,
+    factor: ArrayArg<CubeclCudaRuntime>,
+) {
+    // SAFETY: the typed scaling bridge validates residency, buffer length, and
+    // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
+    unsafe {
+        crate::kernels::structural::scale_in_place_float_kernel::launch_unchecked::<
+            f64,
+            CubeclCudaRuntime,
+        >(client, count, dim, output, factor);
+    }
+}
+
+fn launch_scale_c32(
+    client: &ComputeClient<CubeclCudaRuntime>,
+    count: CubeCount,
+    dim: CubeDim,
+    output: ArrayArg<CubeclCudaRuntime>,
+    factor: ArrayArg<CubeclCudaRuntime>,
+) {
+    // SAFETY: the typed scaling bridge validates residency, buffer length, and
+    // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
+    unsafe {
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
+            Complex32,
+            CubeclCudaRuntime,
+        >(client, count, dim, output, factor);
+    }
+}
+
+fn launch_scale_c64(
+    client: &ComputeClient<CubeclCudaRuntime>,
+    count: CubeCount,
+    dim: CubeDim,
+    output: ArrayArg<CubeclCudaRuntime>,
+    factor: ArrayArg<CubeclCudaRuntime>,
+) {
+    // SAFETY: the typed scaling bridge validates residency, buffer length, and
+    // the one-dimensional launch domain before this unchecked kernel launch.
+    // INVARIANT: the bridge validates exact runtime residency, a zero-offset
+    // compact span with len <= buffer_len, and cube_count_for_len(len) before
+    // this binding is consumed.
+    unsafe {
+        crate::kernels::structural::scale_in_place_complex_kernel::launch_unchecked::<
+            Complex64,
+            CubeclCudaRuntime,
+        >(client, count, dim, output, factor);
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -55,25 +55,30 @@ pub trait EagerEinsumExt {
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor>;
 }
 
-fn eager_cpu_extension_module() -> Result<Arc<dyn tenferro_runtime::ExtensionModule>> {
+fn eager_cpu_extension_module(
+) -> tenferro_runtime::Result<Arc<dyn tenferro_runtime::ExtensionModule>> {
     static MODULE: OnceLock<Arc<dyn tenferro_runtime::ExtensionModule>> = OnceLock::new();
     if let Some(module) = MODULE.get() {
         return Ok(Arc::clone(module));
     }
 
-    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
+    let engine_id = tenferro_cpu::runtime_engine_id().map_err(|source| {
+        tenferro_runtime::Error::runtime_state_source(
+            "tenferro_einsum::eager_extension_module",
+            ErrorPhase::Execution,
+            source,
+        )
+    })?;
     let module = crate::extension::extension_module::<tenferro_cpu::CpuBackend>(engine_id)
-        .map_err(eager_runtime_config_error)?;
+        .map_err(|source| {
+            tenferro_runtime::Error::runtime_state_source(
+                "tenferro_einsum::eager_extension_module",
+                ErrorPhase::Execution,
+                source,
+            )
+        })?;
     let _ = MODULE.set(Arc::clone(&module));
     Ok(MODULE.get().cloned().unwrap_or(module))
-}
-
-fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {
-    Error::Runtime(tenferro_runtime::Error::runtime_state_source(
-        "tenferro_einsum::eager_extension_module",
-        ErrorPhase::Execution,
-        source,
-    ))
 }
 
 impl EagerEinsumExt for [&EagerTensor] {
@@ -202,11 +207,14 @@ pub fn einsum_subscripts(
         EinsumPlanSpec::Auto(default_auto_options()),
     ));
     let execute_op = Arc::clone(&op);
-    let module = eager_cpu_extension_module()?;
-    let mut outputs =
-        apply_eager_with_extension_session(op, inputs, module, move |_op, input_reads, ctx| {
+    let mut outputs = apply_eager_with_extension_session(
+        op,
+        inputs,
+        eager_cpu_extension_module()?,
+        move |_op, input_reads, ctx| {
             execute_einsum_extension_session_reads(&execute_op, input_reads, ctx)
-        })?;
+        },
+    )?;
     outputs.pop().ok_or_else(|| {
         Error::Runtime(tenferro_runtime::Error::MissingInput(
             "einsum extension produced no eager output".into(),

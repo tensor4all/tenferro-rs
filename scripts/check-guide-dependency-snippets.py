@@ -6,6 +6,7 @@ import argparse
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -241,6 +242,53 @@ CASES = (
 )
 
 
+_COMMIT_HASH = re.compile(r"[0-9a-f]{7,40}", flags=re.IGNORECASE)
+
+
+def checkout_commit_hash(line: str) -> str | None:
+    """Return a standalone commit hash from one shell-style Git checkout."""
+
+    try:
+        tokens = shlex.split(line, comments=True)
+    except ValueError:
+        return None
+    try:
+        git_index = tokens.index("git")
+        checkout_index = tokens.index("checkout", git_index + 1)
+    except ValueError:
+        return None
+    for token in tokens[checkout_index + 1 :]:
+        if token in {"&&", ";", "||"}:
+            break
+        if _COMMIT_HASH.fullmatch(token):
+            return token
+    return None
+
+
+def guide_commit_checkout_hashes(root: pathlib.Path) -> list[tuple[pathlib.Path, int, str]]:
+    """Return commit-hash checkout commands found in every user guide."""
+
+    guides = sorted((root / "docs" / "guides").rglob("*.md"))
+    findings: list[tuple[pathlib.Path, int, str]] = []
+    for path in guides:
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if commit := checkout_commit_hash(line):
+                findings.append((path, line_number, commit))
+    return findings
+
+
+def validate_no_guide_commit_checkout_hashes(root: pathlib.Path) -> None:
+    """Reject rebase-sensitive commit pins in all user-facing guides."""
+
+    findings = guide_commit_checkout_hashes(root)
+    if findings:
+        details = "; ".join(
+            f"{path.relative_to(root)}:{line}: git checkout {commit}"
+            for path, line, commit in findings
+        )
+        raise RuntimeError(f"guide commit checkout hash pin found: {details}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root-dir", default=".", help="Repository root")
@@ -355,6 +403,7 @@ def main() -> int:
     target_dir = root / "target" / "guide-snippet-check"
 
     try:
+        validate_no_guide_commit_checkout_hashes(root)
         for case in CASES:
             run_case(root, target_dir, case)
     except RuntimeError as err:

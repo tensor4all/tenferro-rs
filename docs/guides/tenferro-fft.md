@@ -7,9 +7,10 @@ execution uses `EagerTensorFftExt` behind `autodiff`; traced graphs use
 `TracedTensorFftExt`.
 
 The current implementation provides one-dimensional CPU transforms backed by
-RustFFT and an explicitly selected Apple Metal path backed by CubeK. The public API is ordinary
-Rust extension-trait methods, so most users do not need to work with the
-lower-level extension machinery directly.
+RustFFT, an explicitly selected CUDA path backed by cuFFT, and an explicitly
+selected Apple Metal path backed by CubeK. The public API is ordinary Rust
+extension-trait methods, so most users do not need to work with the lower-level
+extension machinery directly.
 
 ## Setup
 
@@ -34,18 +35,9 @@ tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
 The Apple shared path is not released yet. Until a later release task publishes
-it, use the tested `8ffcc57b` revision and the checkout-relative path
-dependencies below:
-
-```bash
-git clone https://github.com/tensor4all/tenferro-rs.git
-cd tenferro-rs
-git checkout 8ffcc57b
-```
-
-The tenferro workspace at that revision already pins the reviewed CubeCL and
-CubeK Git revisions; applications do not need to declare CubeCL or CubeK
-directly.
+it, use matching path dependencies from the same `tenferro-rs` checkout. The
+workspace pins the reviewed CubeCL and CubeK revisions; applications do not
+need to declare CubeCL or CubeK directly.
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
@@ -66,6 +58,39 @@ tenferro-tensor = { path = "../crates/tenferro-tensor" }
 
 `tenferro-linalg` and the CPU provider are needed by the Cholesky tutorial;
 FFT-only applications may omit `tenferro-linalg`.
+
+For CUDA cuFFT execution from released packages, enable the CUDA feature on
+both the FFT extension and its provider:
+
+```toml
+[dependencies]
+tenferro-fft = { version = "0.2", features = ["cuda"] }
+tenferro-gpu = { version = "0.2", default-features = false, features = ["cuda"] }
+```
+
+The CUDA provider needs a compatible NVIDIA toolkit and driver. Set
+`CUDA_PATH` to the toolkit root used by CubeCL/NVRTC and include its `lib64`
+directory (plus any separately installed CUDA vendor-library directories) in
+`LD_LIBRARY_PATH`. Set `CUBECL_DEBUG_LOG=0` to suppress generated-kernel log
+output. cuFFT is loaded by `tenferro-fft`, not `tenferro-gpu`; use
+`TENFERRO_CUFFT_PATH` for an optional ordered, colon-separated list of explicit
+library paths:
+
+```bash
+export CUDA_PATH=/usr/local/cuda
+export LD_LIBRARY_PATH="$CUDA_PATH/lib64:${LD_LIBRARY_PATH:-}"
+export CUBECL_DEBUG_LOG=0
+export TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.11:/opt/cuda/lib64/libcufft.so.10
+```
+
+The loader tries non-empty `TENFERRO_CUFFT_PATH` entries in order, then falls
+back to `libcufft.so.11`, `libcufft.so.10`, and `libcufft.so`. This covers
+CUDA 12/cuFFT 11 and CUDA 11/cuFFT 10 installations. A path that
+cannot be opened is skipped so a later override or default can work; if no
+candidate can be loaded, or a loaded library cannot provide the required
+cuFFT symbols, the operation returns a typed provider/load error. This lookup
+fallback is only for finding cuFFT: it never selects CPU execution or performs
+an implicit transfer.
 
 ## Current API
 
@@ -88,6 +113,173 @@ normalization modes are:
 | `FftNorm::Ortho` | forward and inverse scaled by `1 / sqrt(n)` |
 
 `Backward` is the default and matches NumPy, PyTorch, and JAX.
+
+### CUDA concrete execution
+
+The CUDA path is explicit: upload a host tensor, run `rfft` with a CUDA
+execution session, verify that the result is still CUDA-resident, synchronize,
+and download only when host assertions are needed. The complete runnable
+example is the source of truth for this guide:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/cuda_fft.rs -->
+```rust
+//! Explicit CUDA cuFFT execution with host/device transfers at visible boundaries.
+
+use num_complex::Complex32;
+use tenferro_fft::{FftNorm, TensorFftExt};
+use tenferro_gpu::cuda::{
+    cuda_devices, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session,
+    CudaBackend,
+};
+use tenferro_runtime::BackendSessionHost;
+use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
+
+const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
+
+fn skip_or_fail(
+    require_cuda: bool,
+    reason: impl std::fmt::Display,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reason = reason.to_string();
+    if require_cuda {
+        return Err(std::io::Error::other(format!(
+            "CUDA FFT tutorial requires CUDA assertions, but {reason}"
+        ))
+        .into());
+    }
+
+    eprintln!("{TUTORIAL_SKIP_MARKER} CUDA FFT tutorial skipped: {reason}");
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let require_cuda = std::env::var("TENFERRO_REQUIRE_CUDA")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    if !gpu_available() {
+        return skip_or_fail(require_cuda, "no usable CUDA device is available");
+    }
+
+    let devices = match cuda_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            return skip_or_fail(
+                require_cuda,
+                format!("CUDA device enumeration failed: {error}"),
+            );
+        }
+    };
+    let Some(device) = devices.into_iter().next() else {
+        return skip_or_fail(
+            require_cuda,
+            "CUDA reported available but device enumeration returned no devices",
+        );
+    };
+
+    // Keep one backend/runtime for the upload, FFT, synchronization, and download.
+    let mut backend = CudaBackend::new(device.id())?;
+    let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
+    let gpu_input = upload_tensor(backend.runtime(), &host)?;
+
+    let input_read = TensorRead::from_tensor(&gpu_input);
+    assert_eq!(input_read.backend_family(), Some("cuda"));
+    assert_eq!(input_read.placement().memory_kind, MemoryKind::Device);
+    let input_domain = input_read
+        .allocation_domain()
+        .ok_or("uploaded tensor has no CUDA allocation domain")?;
+
+    // FFT execution consumes the already uploaded tensor; it does not transfer it.
+    let spectrum = backend.with_backend_session(|session| {
+        with_cuda_exec_session(session, |exec_session| {
+            gpu_input.rfft(None, 0, FftNorm::Backward, exec_session)
+        })
+        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
+            op: "cuda_fft_tutorial",
+            message: "CUDA backend session is unavailable".to_owned(),
+        })?
+    })?;
+
+    // Check residency before crossing the explicit device-to-host boundary.
+    let spectrum_read = TensorRead::from_tensor(&spectrum);
+    assert_eq!(spectrum_read.backend_family(), Some("cuda"));
+    assert_eq!(spectrum_read.placement().memory_kind, MemoryKind::Device);
+    assert_eq!(spectrum_read.allocation_domain(), Some(input_domain));
+    assert_eq!(spectrum.dtype(), DType::C32);
+    assert_eq!(spectrum.shape(), &[3]);
+
+    // The cuFFT vendor call synchronizes inside its innermost output-pointer
+    // callback before pointer and stream callbacks return. The explicit download
+    // below synchronizes stream-managed postprocessing and is the visible
+    // device-to-host boundary for the final output.
+    let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
+    assert_eq!(host_spectrum.dtype(), DType::C32);
+    assert_eq!(host_spectrum.shape(), &[3]);
+    let values = host_spectrum.as_slice::<Complex32>()?;
+    let expected = [
+        Complex32::new(10.0, 0.0),
+        Complex32::new(-2.0, 2.0),
+        Complex32::new(-2.0, 0.0),
+    ];
+    assert_eq!(values.len(), expected.len());
+    for (index, (actual, expected)) in values.iter().zip(expected).enumerate() {
+        assert!(
+            (*actual - expected).norm() <= 1.0e-5,
+            "rfft value {index} differs: actual {actual:?}, expected {expected:?}"
+        );
+    }
+
+    Ok(())
+}
+```
+<!-- end-snippet-source -->
+
+In ordinary docs CI, the CUDA feature is compile-checked and the tutorial
+runner may also run this binary without a CUDA device. In that case the binary
+prints a `TENFERRO_TUTORIAL_SKIP:` diagnostic and the runner reports the
+hardware-dependent tutorial as skipped; it does not claim that the CUDA
+assertions ran. The same explicit skip is used if device enumeration is empty,
+even if the availability probe was positive. A compile-only `--no-run` check
+never attempts CUDA execution.
+
+To require the assertions to execute, set `TENFERRO_REQUIRE_CUDA=1`. With this
+strict mode, unavailable CUDA, device-enumeration errors, or an empty device
+list return failure instead of a skip. A successful command therefore proves
+that this tutorial reached and completed its CUDA assertions. For example, on
+an A100 or another configured CUDA host:
+
+```bash
+TENFERRO_REQUIRE_CUDA=1 \
+CUBECL_DEBUG_LOG=0 \
+CUDA_PATH=/usr/local/cuda \
+LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-} \
+cargo run -p tenferro-tutorial-code --no-default-features \
+  --features cpu-faer,cuda,doc-snippets --bin cuda_fft
+```
+
+CUDA supports one-dimensional transforms with these dtype combinations:
+
+| Operation | CUDA input → output |
+| --- | --- |
+| `fft` | `C32 → C32`, `C64 → C64`, `F32 → C32` (full Hermitian), `F64 → C64` (full Hermitian) |
+| `ifft` | `C32 → C32`, `C64 → C64` |
+| `rfft` | `F32 → C32`, `F64 → C64` (one-sided) |
+| `irfft` | `C32 → F32`, `C64 → F64` |
+
+The input must already be resident on the exact `CudaRuntime` borrowed by the
+execution session. CUDA FFT does not implicitly transfer a host or foreign-
+runtime tensor and never falls back to CPU RustFFT; upload and download are
+caller-visible operations. `n` truncates or zero-pads C2C/R2C input on device,
+with padding allocated and filled as semantic device zeros; C2R uses `n` only
+for the real output length and consumes its validated half-spectrum unchanged.
+Normalization is applied on device using the same `FftNorm` rules described
+above. The cuFFT vendor call synchronizes its bound stream inside the
+innermost output-pointer callback, after enqueue and before pointer use ends,
+so its input-pointer and raw-stream callbacks cannot return while vendor work
+is still using the buffers. Subsequent CUDA normalization, Hermitian completion,
+and axis restoration remain stream-managed; an explicit download synchronizes
+the final output. Cache eviction or clear also synchronizes while plans and
+workspaces are retired. cuFFT/provider failures are returned as typed errors
+rather than producing a host result.
 
 ### Concrete Tensor And TensorRead
 
@@ -341,9 +533,10 @@ gradient.
 ## Status
 
 `tenferro-fft` currently lives in the top-level `tenferro-fft` crate. It
-supports 1D `fft`, `ifft`, `rfft`, and `irfft` through CPU RustFFT on host or
-matching Apple managed tensors, plus the narrower CubeK Metal matrix described
-above. CUDA/cuFFT and multidimensional transforms remain future work.
+supports one-dimensional `fft`, `ifft`, `rfft`, and `irfft` through CPU RustFFT
+on host or matching Apple managed tensors, CUDA cuFFT on exact CUDA residency,
+and the narrower CubeK Metal matrix described above. Multidimensional FFT
+families remain future work; CUDA one-dimensional execution is implemented.
 
 For the general extension mechanism, see
 [Custom Tensor Operations](custom-operations.md).
