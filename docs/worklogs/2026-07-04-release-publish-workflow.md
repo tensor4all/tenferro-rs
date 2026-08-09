@@ -237,3 +237,20 @@ manifest, registry-byte, or provenance comparisons. The source tree was already
 covered by the release's workspace, PR, and main checks. Residual risk remains
 that crates.io may reject the real upload despite the successful dry-run; only
 the human operator may cross that server-acceptance boundary.
+
+## 2026-08-10 v0.3 XLA/einsum forward dev-dependency recovery
+
+After runtime, CPU, and GPU 0.3.0 became registry-visible, packaging
+`tenferro-xla` exposed the remaining forward versioned dev-dependency:
+`tenferro-einsum 0.3.0` is not yet published and follows XLA in the publication
+order. While that einsum version is absent, only XLA's package, publish dry-run,
+and publish commands now use `--no-verify` plus an inline crates.io patch to the
+absolute einsum package path in the immutable release checkout. The same
+bootstrap remains active when restarting after XLA is visible but einsum is
+not, so XLA can still be repackaged and attested. CPU, einsum, and all other
+crate commands remain unchanged; publication order, human execution approval,
+and archive/provenance comparisons are unchanged.
+
+Focused tests cover the initial and restarted states and assert that the patch
+is confined to XLA commands. The helper suite, Python byte-compilation, and
+`git diff --check` passed. No publication command was run.

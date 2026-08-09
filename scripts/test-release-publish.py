@@ -689,6 +689,118 @@ class OrchestrationTests(unittest.TestCase):
     def test_runtime_bootstrap_patches_tag_cpu_on_restart_after_runtime_publish(self) -> None:
         self.assert_runtime_bootstrap_commands(runtime_exists=True)
 
+    def assert_xla_bootstrap_commands(self, xla_exists: bool) -> None:
+        cargo_commands: list[list[str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'tag "checkout\\special'
+            root.mkdir()
+            self.workspace(root)
+            crates = ["tenferro-xla", "tenferro-einsum", "tenferro-cpu"]
+            metadata = self.metadata(root, crates)
+            metadata["packages"][0]["dependencies"] = [
+                {"name": "tenferro-einsum", "kind": "dev"}
+            ]
+            client = FakeClient(
+                {
+                    "tenferro-xla": xla_exists,
+                    "tenferro-einsum": False,
+                    "tenferro-cpu": True,
+                },
+                [],
+            )
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] == "cargo":
+                    cargo_commands.append(command)
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                elif command[:3] == ["cargo", "publish", "--dry-run"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    staged = archive.parent / "tmp-crate" / archive.name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(crate.encode())
+                elif command[:2] == ["cargo", "publish"]:
+                    crate = command[command.index("-p") + 1]
+                    client.package_versions[crate] = True
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                True,
+                root=root,
+                runner=runner,
+                client=client,
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: crates,
+                package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
+                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                ),
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        patch = (
+            "patch.crates-io.tenferro-einsum.path="
+            + json.dumps(str((root / "crates/tenferro-einsum").resolve()))
+        )
+        bootstrap = ["--no-verify", "--config", patch]
+        xla_commands = [command for command in cargo_commands if "tenferro-xla" in command]
+        self.assertEqual(
+            xla_commands,
+            [
+                ["cargo", "package", "-p", "tenferro-xla", "--locked", *bootstrap],
+                *(
+                    []
+                    if xla_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-xla",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                            *bootstrap,
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-xla",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                            *bootstrap,
+                        ],
+                    ]
+                ),
+            ],
+        )
+        self.assertTrue(any("tenferro-cpu" in command for command in cargo_commands))
+        self.assertTrue(any("tenferro-einsum" in command for command in cargo_commands))
+        for command in cargo_commands:
+            if "tenferro-xla" not in command:
+                self.assertNotIn("--no-verify", command)
+                self.assertNotIn(patch, command)
+
+    def test_xla_bootstrap_patches_tag_einsum_while_both_are_missing(self) -> None:
+        self.assert_xla_bootstrap_commands(xla_exists=False)
+
+    def test_xla_bootstrap_patches_tag_einsum_on_restart_after_xla_publish(self) -> None:
+        self.assert_xla_bootstrap_commands(xla_exists=True)
+
     def test_rejects_differing_dry_run_staging_archives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

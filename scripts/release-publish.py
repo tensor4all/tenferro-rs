@@ -921,13 +921,22 @@ def publish_release(
     validate_new_package_approvals(package_exists, version_exists, approvals)
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
-    runtime_bootstrap_args: list[str] = []
+    bootstrap_args_by_crate: dict[str, list[str]] = {}
     if not version_exists.get("tenferro-cpu", True):
         cpu_path = (root / package_root(packages["tenferro-cpu"], root=root)).resolve()
-        runtime_bootstrap_args = [
+        bootstrap_args_by_crate["tenferro-runtime"] = [
             "--no-verify",
             "--config",
             f"patch.crates-io.tenferro-cpu.path={json.dumps(str(cpu_path), ensure_ascii=False)}",
+        ]
+    if not version_exists.get("tenferro-einsum", True):
+        einsum_path = (
+            root / package_root(packages["tenferro-einsum"], root=root)
+        ).resolve()
+        bootstrap_args_by_crate["tenferro-xla"] = [
+            "--no-verify",
+            "--config",
+            f"patch.crates-io.tenferro-einsum.path={json.dumps(str(einsum_path), ensure_ascii=False)}",
         ]
 
     positions = {crate: index for index, crate in enumerate(order)}
@@ -992,7 +1001,7 @@ def publish_release(
         package_dir = package_root(package, root=root)
         expected_files = package_files_loader(crate, runner=runner, root=root)
         expected_files_by_crate[crate] = expected_files
-        bootstrap_args = runtime_bootstrap_args if crate == "tenferro-runtime" else []
+        bootstrap_args = bootstrap_args_by_crate.get(crate, [])
         local_inspection = build_and_inspect_archive(
             metadata,
             crate,
