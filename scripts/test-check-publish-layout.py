@@ -174,6 +174,24 @@ class ReleaseOrderTests(unittest.TestCase):
         CHECKER.check_release_order(self.metadata(), release_text, errors)
         self.assertEqual(errors, [])
 
+    def test_ignores_heading_like_content_inside_non_order_fence(self) -> None:
+        errors: list[str] = []
+        release_text = """\
+## Phase 3 — Publish From The Tag
+
+```bash
+# Build command
+cargo build
+```
+
+```text
+tenferro-core-ops
+tenferro-runtime
+```
+"""
+        CHECKER.check_release_order(self.metadata(), release_text, errors)
+        self.assertEqual(errors, [])
+
     def test_rejects_missing_ambiguous_and_malformed_text_fences(self) -> None:
         valid = self.release_text(["tenferro-core-ops", "tenferro-runtime"])
         cases = (

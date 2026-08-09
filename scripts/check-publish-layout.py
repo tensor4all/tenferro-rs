@@ -109,25 +109,36 @@ def phase3_publication_order(
 ) -> list[str] | None:
     heading = "## Phase 3 — Publish From The Tag"
     lines = release_text.splitlines()
-    headings = [index for index, line in enumerate(lines) if line == heading]
+    headings: list[int] = []
+    active_marker: tuple[str, int] | None = None
+    for index, line in enumerate(lines):
+        fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
+        if active_marker is not None:
+            marker_char, marker_len = active_marker
+            if (
+                fence
+                and fence.group(1)[0] == marker_char
+                and len(fence.group(1)) >= marker_len
+                and not fence.group(2).strip()
+            ):
+                active_marker = None
+        elif fence:
+            marker = fence.group(1)
+            active_marker = (marker[0], len(marker))
+        elif line == heading:
+            headings.append(index)
+
     if len(headings) != 1:
         errors.append("release workflow must contain exactly one exact Phase 3 heading")
         return None
 
-    start = headings[0] + 1
-    end = next(
-        (
-            index
-            for index in range(start, len(lines))
-            if re.match(r"^#{1,6}(?:[ \t]+|$)", lines[index])
-        ),
-        len(lines),
-    )
     text_fences: list[list[str]] = []
     active_fence: tuple[str, int, str, list[str]] | None = None
-    for line in lines[start:end]:
+    for line in lines[headings[0] + 1 :]:
         fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
         if active_fence is None:
+            if re.match(r"^#{1,6}(?:[ \t]+|$)", line):
+                break
             if fence:
                 marker, info = fence.groups()
                 active_fence = (marker[0], len(marker), info.strip(), [])
