@@ -155,9 +155,11 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let _uuid = CudaDeviceInfo::uuid;
+    /// let devices = cuda_devices().unwrap_or_default();
+    /// let uuids: Vec<_> = devices.iter().map(|info| info.uuid()).collect();
+    /// let _ = uuids;
     /// ```
     pub fn uuid(&self) -> CudaDeviceUuid {
         self.uuid
@@ -168,9 +170,14 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let _cc = CudaDeviceInfo::compute_capability;
+    /// let devices = cuda_devices().unwrap_or_default();
+    /// let capabilities: Vec<_> = devices
+    ///     .iter()
+    ///     .map(|info| info.compute_capability())
+    ///     .collect();
+    /// let _ = capabilities;
     /// ```
     pub fn compute_capability(&self) -> CudaComputeCapability {
         self.compute_capability
@@ -181,16 +188,21 @@ impl CudaDeviceInfo {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let _mem = CudaDeviceInfo::total_memory_bytes;
+    /// let devices = cuda_devices().unwrap_or_default();
+    /// let memory: Vec<u64> = devices
+    ///     .iter()
+    ///     .map(|info| info.total_memory_bytes())
+    ///     .collect();
+    /// let _ = memory;
     /// ```
     pub fn total_memory_bytes(&self) -> u64 {
         self.total_memory_bytes
     }
 }
 
-trait DiscoveryDriver {
+pub(crate) trait DiscoveryDriver {
     fn initialize(&self) -> Result<(), BoxError>;
 
     fn device_count(&self) -> Result<u32, BoxError>;
@@ -204,7 +216,7 @@ trait DiscoveryDriver {
     fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError>;
 }
 
-fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
+pub(crate) fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
     driver
         .initialize()
         .map_err(|source| CudaDeviceError::Discovery {

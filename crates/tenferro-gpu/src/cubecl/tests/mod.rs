@@ -13,6 +13,7 @@ use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, ValidationError, V
 
 mod capability_tests;
 mod cubecl_session_tests;
+mod device_tests;
 mod elementwise_tests;
 mod fusion_tests;
 mod gemm_accum_tests;
