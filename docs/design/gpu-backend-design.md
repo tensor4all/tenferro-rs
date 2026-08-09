@@ -236,9 +236,11 @@ does not provide an integer or bool permutation compute descriptor.
 store type-indexed CUDA handles or plans through
 `CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
 and resource owner. The `cufft-plans` cache is an intentional exception to
-that generic provider cache: `tenferro-fft` stores cuFFT plans and workspaces in
-its existing caller- or runtime-owned `FftExecutionCache`, not in a hidden
-`CudaBackend` cache.
+that generic provider cache: `tenferro-fft` stores cuFFT plans in its existing
+caller- or runtime-owned `FftExecutionCache`, not in a hidden `CudaBackend`
+cache. The cuFFT work area is **not** cached: it is a session-scoped CubeCL
+allocation created fresh inside each raw execution session, so the cached plan
+entry charges only its host-side metadata toward the cache byte limit.
 
 The CUDA extension cache has bounded defaults for type entries and logical
 retained bytes. Applications can configure it with
@@ -322,17 +324,20 @@ shape/buffer validation before unsafe CubeCL launch arguments are constructed.
 Sibling operation crates must not import it directly.
 
 Operation crates that need to launch their own CubeCL kernels, such as
-`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda::interop` module
-instead. `tenferro-fft` uses the same boundary for cuFFT workspace allocation,
-current-stream access, typed device-pointer access, and the on-device scaling
-helper. The provider owns each allocation and exposes raw streams and pointers
-only through scoped callbacks. The split `CudaExternalUseReadLease` and
-`CudaExternalUseWriteLease` contracts additionally retain prepared CubeCL
-buffer handles and the exact `CudaRuntime` while cuFFT may use the buffers; the
-write lease requires an exclusive mutable tensor preparation. A successful
-stream barrier drops both leases, while a failed barrier intentionally retains
-them. cuFFT loading, opaque plans, and plan-cache entries remain owned by
-`tenferro-fft`.
+`tenferro-linalg`, enter the public `CudaExecSession` obtained from
+`with_backend_session` and use the `with_cubecl` sub-session (typed CubeCL
+kernels, `tensor_binding`/`array_arg` operands) or the `with_raw` sub-session
+(raw CUDA library calls). `tenferro-fft` uses the same boundary: cuFFT plan
+creation and retirement run under the runtime's scoped context guard
+(`CudaRuntime::with_current_context`), which restores the caller's previous
+device/context on every exit path, and cuFFT execution enters `with_raw` for
+stream binding, workspace allocation, validated tensor spans, and the
+retention guards that pin input/output allocations on a failed synchronization
+barrier (issue #967 invariant). The provider owns each allocation and exposes
+raw streams and pointers only through scoped, session-lifetime-bound
+capabilities; the deleted hidden `cuda::interop` bridge and
+`CudaExternalUse{Read,Write}Lease` leases no longer exist. cuFFT loading,
+opaque plans, and plan-cache entries remain owned by `tenferro-fft`.
 
 That module intentionally exposes only the bridges that cannot live in
 `tenferro-gpu` without creating an operation-crate dependency cycle:

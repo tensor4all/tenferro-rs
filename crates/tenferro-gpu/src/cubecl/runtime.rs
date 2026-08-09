@@ -358,6 +358,35 @@ impl CudaRuntime {
         self.inner.primary_context.context()
     }
 
+    /// Run `f` with the tenferro primary context current on this thread.
+    ///
+    /// Saves the calling thread's current CUDA device/context, activates the
+    /// tenferro primary context for the duration of `f`, and restores the
+    /// saved state on every exit path (normal return, `Err`, and unwind). This
+    /// is the scoped context authority used by vendor-library lifecycle paths
+    /// (plan creation/retirement) that run outside a raw-session callback.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaRuntime;
+    ///
+    /// fn check(rt: &CudaRuntime) -> tenferro_tensor::Result<u64> {
+    ///     rt.with_current_context("test.context", || 7)
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn with_current_context<R>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce() -> R,
+    ) -> crate::Result<R> {
+        let device_ordinal = i32::try_from(self.device_ordinal())
+            .map_err(|source| crate::Error::backend_source(op, source))?;
+        let _guard = RawContextRestore::enter(op, device_ordinal, self.primary_context())?;
+        Ok(f())
+    }
+
     /// Flush pending CubeCL work on the current stream.
     ///
     /// Used by the raw-session enter protocol so raw library calls observe

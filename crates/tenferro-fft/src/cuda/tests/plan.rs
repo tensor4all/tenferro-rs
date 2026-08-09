@@ -19,7 +19,7 @@ use super::super::ffi::{
 };
 use super::super::plan::{
     build_plan, merge_execution_errors, plan_key_discriminator_matches, report_cleanup_failures,
-    retained_bytes_for_workspace, retire_entry_resources, retire_handle, with_cufft_plan_for_batch,
+    retained_entry_bytes, retire_entry_resources, retire_handle, with_cufft_plan_for_batch,
     CufftCleanup, CufftPlanEntry,
 };
 
@@ -231,12 +231,16 @@ fn fake_api() -> CufftApi {
 struct FakeRuntime;
 
 impl CufftCleanup for FakeRuntime {
-    fn set_current(&self) -> Result<(), CudaFftError> {
+    fn with_context<R2>(
+        &self,
+        _op: &'static str,
+        f: impl FnOnce() -> Result<R2, CudaFftError>,
+    ) -> Result<R2, CudaFftError> {
         record("set_current");
         if cleanup_failed("set_current") {
             Err(CudaFftError::test_interop("set_current"))
         } else {
-            Ok(())
+            f()
         }
     }
 
@@ -262,13 +266,17 @@ impl TrackedRuntime {
 }
 
 impl CufftCleanup for TrackedRuntime {
-    fn set_current(&self) -> Result<(), CudaFftError> {
+    fn with_context<R2>(
+        &self,
+        _op: &'static str,
+        f: impl FnOnce() -> Result<R2, CudaFftError>,
+    ) -> Result<R2, CudaFftError> {
         let _ = &self.witness;
         record("set_current");
         if cleanup_failed("set_current") {
             Err(CudaFftError::test_interop("set_current"))
         } else {
-            Ok(())
+            f()
         }
     }
 
@@ -615,16 +623,14 @@ fn constant_hash<T: std::hash::Hash>(value: &T) -> u64 {
 }
 
 #[test]
-fn retained_bytes_include_entry_metadata_and_workspace() {
-    let workspace_bytes = 128;
+fn retained_entry_bytes_charge_host_metadata_only() {
     let expected = size_of::<Arc<CufftLibrary>>()
         + size_of::<CudaRuntime>()
         + size_of::<usize>()
         + size_of::<CufftPlanKey>()
-        + size_of::<CufftHandle>()
-        + workspace_bytes;
+        + size_of::<CufftHandle>();
 
-    assert_eq!(retained_bytes_for_workspace(workspace_bytes), expected);
+    assert_eq!(retained_entry_bytes(), expected);
     assert!(size_of::<CufftPlanEntry>() >= size_of::<usize>());
 }
 

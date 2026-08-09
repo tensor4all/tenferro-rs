@@ -37,14 +37,24 @@ pub(crate) const CUFFT_CACHE_NAMESPACE: &str = "cufft-plans";
 
 /// A cleanup context used by the plan-construction and retirement guards.
 pub(crate) trait CufftCleanup {
-    fn set_current(&self) -> Result<(), CudaFftError>;
+    /// Run `f` with the retained runtime's context current, restoring the
+    /// caller's previous device/context on every exit path.
+    fn with_context<R2>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce() -> Result<R2, CudaFftError>,
+    ) -> Result<R2, CudaFftError>;
     fn synchronize(&self) -> Result<(), CudaFftError>;
 }
 
 impl CufftCleanup for CudaRuntime {
-    fn set_current(&self) -> Result<(), CudaFftError> {
-        self.set_current_cuda_context("cufft_plan_cleanup")
-            .map_err(|source| CudaFftError::interop("cufft_plan_cleanup_context", source))
+    fn with_context<R2>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce() -> Result<R2, CudaFftError>,
+    ) -> Result<R2, CudaFftError> {
+        self.with_current_context(op, f)
+            .map_err(|source| CudaFftError::interop("cufft_plan_cleanup_context", source))?
     }
 
     fn synchronize(&self) -> Result<(), CudaFftError> {
@@ -72,9 +82,12 @@ impl CleanupFailures {
 /// Retire one plan handle without panicking from `Drop` paths.
 ///
 /// The plan is released only after the retained runtime is made current and
-/// its stream synchronization succeeds. If either step fails, the opaque plan,
-/// library witness, and runtime witness are intentionally leaked: destroying
-/// or dropping any of them could race work whose completion was not proven.
+/// its stream synchronization succeeds. The whole retirement (synchronize +
+/// destroy) runs under a context-restoring guard, so the caller's previous
+/// device/context is preserved on every exit path. If any step fails, the
+/// opaque plan, library witness, and runtime witness are intentionally
+/// leaked: destroying or dropping any of them could race work whose
+/// completion was not proven.
 pub(crate) fn retire_handle<R>(
     runtime: &R,
     library: &Arc<CufftLibrary>,
@@ -85,35 +98,29 @@ where
 {
     let mut failures = CleanupFailures::default();
     if handle.is_some() {
-        if let Err(error) = runtime.set_current() {
-            failures.synchronization.push(error);
+        let outcome = runtime.with_context("cufft_plan_cleanup", || {
+            runtime.synchronize()?;
+            if let Some(plan) = *handle {
+                // SAFETY: `plan` was returned by the same retained cuFFT
+                // library's successful `cufftCreate` call and has not been
+                // destroyed before this one-shot retirement path.
+                let status = unsafe { (library.api.destroy)(plan) };
+                map_cufft_status("cufftDestroy", status)?;
+                handle.take();
+            }
+            Ok(())
+        });
+        if let Err(error) = outcome {
+            // A typed destroy failure keeps its CufftStatus; any context or
+            // stream barrier failure is reported as a synchronization failure.
+            match error {
+                CudaFftError::CufftStatus { .. } => failures.destroy = Some(error),
+                _ => failures.synchronization.push(error),
+            }
             failures.resources_deferred = true;
             defer_resources(runtime, library, handle);
             return failures;
         }
-        if let Err(error) = runtime.synchronize() {
-            failures.synchronization.push(error);
-            failures.resources_deferred = true;
-            defer_resources(runtime, library, handle);
-            return failures;
-        }
-    }
-
-    if let Some(plan) = *handle {
-        // SAFETY: `plan` was returned by the same retained cuFFT library's
-        // successful `cufftCreate` call and has not been destroyed before this
-        // one-shot retirement path.
-        let status = unsafe { (library.api.destroy)(plan) };
-        if let Err(error) = map_cufft_status("cufftDestroy", status) {
-            failures.destroy = Some(error);
-            failures.resources_deferred = true;
-            // A failed destroy leaves the opaque plan's ownership uncertain;
-            // keep the complete lifetime bundle with the intentionally leaked
-            // plan.
-            defer_resources(runtime, library, handle);
-            return failures;
-        }
-        handle.take();
     }
     failures
 }
@@ -361,13 +368,16 @@ unsafe impl Send for CufftPlanEntry {}
 // plan is only accessed through the owning mutable session boundary.
 unsafe impl Sync for CufftPlanEntry {}
 
-pub(crate) fn retained_bytes_for_workspace(workspace_bytes: usize) -> usize {
+pub(crate) fn retained_entry_bytes() -> usize {
+    // The cached entry owns only host-side metadata: the library and runtime
+    // witnesses, the plan handle, the workspace-size requirement, and the key.
+    // The CubeCL workspace allocation itself is session-scoped and created
+    // fresh inside each raw execution session, so it is not charged here.
     size_of::<Arc<CufftLibrary>>()
         .saturating_add(size_of::<CudaRuntime>())
         .saturating_add(size_of::<usize>())
         .saturating_add(size_of::<CufftPlanKey>())
         .saturating_add(size_of::<CufftHandle>())
-        .saturating_add(workspace_bytes)
 }
 
 /// Run cuFFT library loading and plan creation only for a non-empty batch.
@@ -402,18 +412,18 @@ impl CufftPlanEntry {
         key: CufftPlanKey,
         descriptor: CufftPlanDescriptor,
     ) -> Result<Self, CudaFftError> {
-        // Make the tenferro primary context current for the cuFFT
-        // create/make-plan sequence, then keep it until the entry is dropped.
-        session
-            .runtime()
-            .set_current_cuda_context(OP)
-            .map_err(|source| CudaFftError::interop("cufft_plan_context", source))?;
+        // Run the cuFFT create/make-plan sequence with the tenferro primary
+        // context current, restoring the caller's previous context afterwards.
         let runtime = session.runtime().clone();
         let runtime_for_cleanup = runtime.clone();
-        let (plan, workspace_size) =
-            build_plan(Arc::clone(&library), runtime_for_cleanup, descriptor)?;
+        let build_result = runtime
+            .with_current_context(OP, || {
+                build_plan(Arc::clone(&library), runtime_for_cleanup, descriptor)
+            })
+            .map_err(|source| CudaFftError::interop("cufft_plan_context", source))?;
+        let (plan, workspace_size) = build_result?;
         let workspace_bytes = workspace_size;
-        let retained_bytes = retained_bytes_for_workspace(workspace_bytes);
+        let retained_bytes = retained_entry_bytes();
         Ok(Self {
             library,
             plan,
