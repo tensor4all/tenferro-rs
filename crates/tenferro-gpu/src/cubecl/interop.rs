@@ -261,6 +261,29 @@ pub fn upload_device_bytes(
     device_bytes_from_handle(rt, handle, op)
 }
 
+/// Retain a clone of a resident tensor's CubeCL allocation handle.
+///
+/// The returned [`DeviceByteBuffer`] holds a reference-counted clone of the
+/// tensor's allocation handle, so the device memory stays alive until the
+/// guard is dropped (or intentionally forgotten). Vendor libraries that
+/// enqueue asynchronous work against the tensor's address can use this to
+/// prevent allocation reclamation racing an in-flight kernel after a failed
+/// synchronization barrier.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed or
+/// belongs to a non-CubeCL backend family, or [`crate::Error::BackendSource`]
+/// when CubeCL cannot inspect the retained resource.
+pub(crate) fn retain_tensor_bytes<T: 'static>(
+    rt: &CudaRuntime,
+    tensor: &TypedTensor<T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<DeviceByteBuffer> {
+    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    device_bytes_from_handle(rt, buffer.handle().clone(), op)
+}
+
 fn device_bytes_from_handle(
     rt: &CudaRuntime,
     handle: cubecl_runtime::server::Handle,

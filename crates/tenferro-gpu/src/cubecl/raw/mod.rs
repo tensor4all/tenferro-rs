@@ -338,6 +338,36 @@ impl<'s> Session<'s> {
     ///
     /// Returns [`crate::Error::BackendSource`] when CubeCL cannot allocate or
     /// inspect the workspace resource.
+    /// Retain a clone of a resident tensor's CubeCL allocation handle.
+    ///
+    /// The returned [`DeviceBytes`] holds a reference-counted clone of the
+    /// tensor's allocation handle, so the device memory stays alive until the
+    /// guard is dropped. Use this when a vendor library enqueues asynchronous
+    /// work against the tensor's address and, on a failed synchronization
+    /// barrier, the guard must be intentionally forgotten so allocation
+    /// reclamation cannot race an in-flight kernel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed or
+    /// belongs to a non-CubeCL backend family, or
+    /// [`crate::Error::BackendSource`] when CubeCL cannot inspect the retained
+    /// resource.
+    pub fn retain_tensor<T>(
+        &self,
+        tensor: &TypedTensor<T, impl TensorRank>,
+        op: &'static str,
+    ) -> crate::Result<DeviceBytes<'s>>
+    where
+        T: 'static,
+    {
+        let inner = super::interop::retain_tensor_bytes(&self.runtime, tensor, op)?;
+        Ok(DeviceBytes {
+            inner,
+            _scope: PhantomData,
+        })
+    }
+
     pub fn alloc_bytes(&self, nbytes: usize, op: &'static str) -> crate::Result<DeviceBytes<'s>> {
         let inner = super::interop::alloc_device_bytes(&self.runtime, nbytes, op)?;
         Ok(DeviceBytes {

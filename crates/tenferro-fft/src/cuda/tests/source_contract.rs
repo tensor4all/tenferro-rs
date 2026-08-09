@@ -67,7 +67,14 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
     assert!(execution_section.contains("raw.tensor_mut(output)"));
     assert!(execution_section.contains("raw.alloc_bytes"));
     assert!(execution_section.contains("raw.synchronize()"));
+    // The execution path must retain the input/output allocation handles so
+    // a failed barrier cannot race reclamation of buffers the vendor may
+    // still be writing to (issue #967 invariant).
+    assert!(execution_section.contains("raw.retain_tensor(input, OP)"));
+    assert!(execution_section.contains("raw.retain_tensor(output, OP)"));
     assert!(execution_section.contains("std::mem::forget(workspace)"));
+    assert!(execution_section.contains("std::mem::forget(input_retained)"));
+    assert!(execution_section.contains("std::mem::forget(output_retained)"));
 
     // The work-area binding helper owns the cufftSetWorkArea symbol together
     // with the match on workspace.with_ptr, outside the execution loop.
@@ -80,14 +87,20 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
     assert!(workspace_binding_section.contains("workspace.with_ptr"));
 
     // The failed-synchronization leak is the deliberate invariant: a vendored
-    // work-area reclamation cannot race an in-flight kernel.
-    let forget_sentence = source
-        .split_once("std::mem::forget(workspace)")
-        .map(|(before, rest)| format!("{before}{}", rest.lines().next().unwrap_or("")))
-        .unwrap_or_else(|| unreachable!("forget sentence should exist"));
+    // work-area reclamation cannot race an in-flight kernel, so the workspace
+    // and both retained input/output handles are forgotten together.
+    let forget_block = source
+        .split_once("if synchronization_error.is_some()")
+        .map(|(_, rest)| {
+            let end = rest.find('}').unwrap_or(0);
+            rest[..end].to_string()
+        })
+        .unwrap_or_else(|| unreachable!("synchronization_error guard should exist"));
     assert!(
-        forget_sentence.contains("synchronization_error"),
-        "workspace forget must be guarded by a synchronization failure"
+        forget_block.contains("std::mem::forget(workspace)")
+            && forget_block.contains("std::mem::forget(input_retained)")
+            && forget_block.contains("std::mem::forget(output_retained)"),
+        "failed synchronization must forget workspace and both retained handles"
     );
 
     let mod_source = include_str!("../mod.rs");

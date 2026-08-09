@@ -561,6 +561,26 @@ impl CufftPlanEntry {
                     execution_error = Some(error);
                     return Ok::<(), tenferro_tensor::Error>(());
                 }
+                // Retention guards hold reference-counted clones of the input
+                // and output allocation handles. On a failed synchronization
+                // barrier they are forgotten below so the allocations cannot be
+                // reclaimed while the vendor may still be writing to them.
+                let input_retained = match raw.retain_tensor(input, OP) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        execution_error =
+                            Some(CudaFftError::interop("cufft_retain_input_handle", error));
+                        return Ok::<(), tenferro_tensor::Error>(());
+                    }
+                };
+                let output_retained = match raw.retain_tensor(output, OP) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        execution_error =
+                            Some(CudaFftError::interop("cufft_retain_output_handle", error));
+                        return Ok::<(), tenferro_tensor::Error>(());
+                    }
+                };
                 let input_ref = match raw.tensor(input) {
                     Ok(reference) => reference,
                     Err(error) => {
@@ -595,11 +615,14 @@ impl CufftPlanEntry {
                         Some(CudaFftError::interop("cufft_execute_synchronize", error));
                 }
                 // INVARIANT: failed synchronization cannot prove vendor
-                // completion. The workspace allocation is forgotten so the
-                // CubeCL buffer is intentionally retained until process exit,
-                // mirroring the retired lease-witness retention.
+                // completion, so the workspace and the input/output retention
+                // guards are forgotten. The CubeCL allocations are then
+                // intentionally retained until process exit, mirroring the
+                // retired lease-witness retention (issue #967).
                 if synchronization_error.is_some() {
                     std::mem::forget(workspace);
+                    std::mem::forget(input_retained);
+                    std::mem::forget(output_retained);
                 }
                 Ok::<(), tenferro_tensor::Error>(())
             })

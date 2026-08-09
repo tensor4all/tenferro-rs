@@ -115,6 +115,38 @@ fn raw_tensor_ref_carries_validated_span() {
 }
 
 #[test]
+fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
+    if !gpu_available() {
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let host = tensor_f32(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]);
+    let gpu = upload(&backend, &host);
+    let Tensor::F32(gpu_typed) = &gpu else {
+        unreachable!("f32 tensor")
+    };
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_retain_tensor", |raw| {
+                let reference = raw.tensor(gpu_typed)?;
+                let retained = raw.retain_tensor(gpu_typed, "test.raw_retain_tensor")?;
+                // SAFETY: both are validated spans for the same tensor within
+                // this raw-session scope; comparing identities is read-only.
+                let ref_ptr = unsafe { reference.raw_ptr() };
+                let mut retained_ptr = std::ptr::null_mut();
+                retained.with_ptr(|ptr| retained_ptr = ptr);
+                assert_eq!(
+                    ref_ptr, retained_ptr,
+                    "retention must pin the same allocation"
+                );
+                assert!(!retained.is_empty());
+                Ok(())
+            })
+            .unwrap();
+    });
+}
+
+#[test]
 fn raw_resource_guard_is_runtime_scoped_and_type_keyed() {
     if !gpu_available() {
         return;
