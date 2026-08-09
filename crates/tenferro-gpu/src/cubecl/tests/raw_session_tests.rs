@@ -3,6 +3,7 @@
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
 
+use crate::cubecl::CudaRuntime;
 use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
 
 use super::*;
@@ -120,26 +121,67 @@ fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
         return;
     }
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    // Clone the runtime handle so the inner scope can upload without
+    // re-borrowing `backend` while the mutable session borrow is live.
+    let rt = backend.runtime().clone();
+    with_cuda_exec(&mut backend, |session| {
+        session
+            .with_raw("test.raw_retain_tensor", |raw| {
+                // Build the tensor inside a scope so it is dropped while the
+                // retained guard below stays live.
+                let (saved_ptr, retained) = {
+                    let host = tensor_f32(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]);
+                    let gpu = upload_tensor(&rt, &host).unwrap();
+                    let Tensor::F32(gpu_typed) = &gpu else {
+                        unreachable!("f32 tensor")
+                    };
+                    let reference = raw.tensor(gpu_typed)?;
+                    // SAFETY: `reference` is a validated span for `gpu_typed`;
+                    // copying the pointer value is read-only and the retained
+                    // guard keeps the allocation alive past the drop below.
+                    let saved_ptr = unsafe { reference.raw_ptr() };
+                    let retained =
+                        raw.retain_tensor(gpu_typed, "test.raw_retain_tensor")?;
+                    (saved_ptr, retained)
+                    // `gpu` (and its owning handle refcount) is dropped here.
+                };
+                let mut retained_ptr = std::ptr::null_mut();
+                retained.with_ptr(|ptr| retained_ptr = ptr);
+                assert_eq!(
+                    saved_ptr, retained_ptr,
+                    "retention must keep the allocation alive across the drop"
+                );
+                assert!(!retained.is_empty());
+                Ok(())
+            })
+            .unwrap();
+    });
+}
+
+#[test]
+fn raw_retain_tensor_rejects_tensor_from_another_runtime() {
+    if !gpu_available() {
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    // Upload on a separate runtime instance: its allocation domain differs
+    // from the session runtime's, so retention must be rejected.
+    let foreign_rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = tensor_f32(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]);
-    let gpu = upload(&backend, &host);
+    let gpu = upload_tensor(&foreign_rt, &host).unwrap();
     let Tensor::F32(gpu_typed) = &gpu else {
         unreachable!("f32 tensor")
     };
     with_cuda_exec(&mut backend, |session| {
         session
-            .with_raw("test.raw_retain_tensor", |raw| {
-                let reference = raw.tensor(gpu_typed)?;
-                let retained = raw.retain_tensor(gpu_typed, "test.raw_retain_tensor")?;
-                // SAFETY: both are validated spans for the same tensor within
-                // this raw-session scope; comparing identities is read-only.
-                let ref_ptr = unsafe { reference.raw_ptr() };
-                let mut retained_ptr = std::ptr::null_mut();
-                retained.with_ptr(|ptr| retained_ptr = ptr);
-                assert_eq!(
-                    ref_ptr, retained_ptr,
-                    "retention must pin the same allocation"
+            .with_raw("test.raw_retain_foreign", |raw| {
+                let err = raw
+                    .retain_tensor(gpu_typed, "test.raw_retain_foreign")
+                    .unwrap_err();
+                assert!(
+                    matches!(err, crate::Error::RuntimeState { .. }),
+                    "foreign-runtime tensor must be rejected: {err}"
                 );
-                assert!(!retained.is_empty());
                 Ok(())
             })
             .unwrap();

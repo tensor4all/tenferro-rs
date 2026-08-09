@@ -272,14 +272,21 @@ pub fn upload_device_bytes(
 ///
 /// # Errors
 ///
-/// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed or
-/// belongs to a non-CubeCL backend family, or [`crate::Error::BackendSource`]
-/// when CubeCL cannot inspect the retained resource.
+/// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+/// belongs to a non-CubeCL backend family, belongs to a different CUDA
+/// runtime domain, or is not resident on `rt`'s device, or
+/// [`crate::Error::BackendSource`] when CubeCL cannot inspect the retained
+/// resource.
 pub(crate) fn retain_tensor_bytes<T: 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
+    // The public raw seam must uphold the resident-tensor contract itself:
+    // validate exact-runtime residency (allocation domain + device placement)
+    // before cloning the handle, so a foreign-runtime or host tensor can never
+    // be retained by a session that does not own it.
+    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
     let buffer = dispatch::cubecl_buffer(tensor, op)?;
     device_bytes_from_handle(rt, buffer.handle().clone(), op)
 }

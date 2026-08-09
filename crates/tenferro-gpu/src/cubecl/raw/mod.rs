@@ -349,8 +349,9 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed or
-    /// belongs to a non-CubeCL backend family, or
+    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+    /// belongs to a non-CubeCL backend family, belongs to a different CUDA
+    /// runtime domain, or is not resident on this session's device, or
     /// [`crate::Error::BackendSource`] when CubeCL cannot inspect the retained
     /// resource.
     pub fn retain_tensor<T>(
