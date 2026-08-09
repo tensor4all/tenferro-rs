@@ -63,7 +63,8 @@ pub mod cuda {
     /// Type-safe raw CUDA extension session (issue #1597).
     pub mod raw {
         pub use super::super::cubecl::raw::{
-            CudaResourceGuard, DeviceBytes, Session, StreamRef, TensorMut, TensorRef,
+            CudaResourceGuard, DeviceBytes, Function, KernelArg, LaunchConfig, Module,
+            NvrtcOptions, Session, StreamRef, TensorMut, TensorRef,
         };
     }
 
