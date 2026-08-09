@@ -44,10 +44,10 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
         ):
             self.assertIn(phrase, normalized)
         self.assertIn(
-            "| `0.Y.Z` | `0.(Y+1).0` | `0.(Y+1).0` | `0.Y.(Z+1)` |", text
-        )
-        self.assertIn(
-            "| `X.Y.Z`, `X >= 1` | `(X+1).0.0` | `X.(Y+1).0` | `X.Y.(Z+1)` |",
+            """| Baseline | `breaking` | `feature` | `fix-only` |
+   | --- | --- | --- | --- |
+   | `0.Y.Z` | `0.(Y+1).0` | `0.(Y+1).0` | `0.Y.(Z+1)` |
+   | `X.Y.Z`, `X >= 1` | `(X+1).0.0` | `X.(Y+1).0` | `X.Y.(Z+1)` |""",
             text,
         )
         self.assertLess(
@@ -58,11 +58,20 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
         paths = (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md")
         for relative in paths:
             text = (self.ROOT / relative).read_text()
+            normalized = " ".join(text.split())
             self.assertIn("ai/contribution-workflows/release-publish.md", text)
             self.assertIn("before editing", text)
             self.assertIn("SemVer proposal", text)
-            self.assertIn("stop after validation", text)
-            self.assertIn("human maintainer runs Phase 3", text)
+            self.assertIn(
+                "stop after validation; a human maintainer runs Phase 3 publication from the tag.",
+                normalized,
+            )
+            for contradictory in (
+                "Phase 3: publish crates in dependency order from a worktree of the tag",
+                "Proceed phase by phase — version-bump PR, tag, dependency-order publish from a worktree of the tag",
+                "confirm with the user immediately before the first `cargo publish`",
+            ):
+                self.assertNotIn(contradictory.lower(), normalized.lower())
 
     def test_release_skill_adapters_are_byte_identical(self) -> None:
         expected = (self.ROOT / self.SKILL_PATHS[0]).read_bytes()
