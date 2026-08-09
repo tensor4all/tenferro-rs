@@ -76,7 +76,7 @@ fn raw_session_reports_capabilities() {
 }
 
 #[test]
-fn raw_session_context_is_restored_after_error_callback() {
+fn raw_session_restores_context_on_error_path_observably() {
     if !gpu_available() {
         return;
     }

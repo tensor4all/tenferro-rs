@@ -232,7 +232,8 @@ workspace, context-restoration guard, resource guard, `CudaDeviceUuid` +
 public API; delete `cuda::interop`.
 **DoD:** no `set_current_cuda_context`, `with_raw_cuda_stream`, callback-escaped
 `*mut c_void`/stream, hand-written `cudaStreamSynchronize`, or
-`flush_cubecl_client` in the workspace; context restores under normal/error/
+`flush_cubecl_client` in the workspace; context restoration is attempted under
+normal/error/
 panic/nested-dual-runtime/dual-thread; per-runtime cache key semantics intact;
 existing numerical/zero-size/batch tests pass; no new host round-trips or
 per-op device-wide sync; workspace+package fixtures resolve a unique CubeCL type.
