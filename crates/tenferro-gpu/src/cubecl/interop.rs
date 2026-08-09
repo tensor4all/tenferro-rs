@@ -106,6 +106,11 @@ impl CudaExternalUseLease {
     /// whole lease, so the pointer cannot outlive the owner-scoped external
     /// use. The caller must synchronize the vendor stream before dropping this
     /// lease when the vendor operation is asynchronous.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed backend error when CubeCL cannot inspect the retained
+    /// resource, or a typed validation error when its address exceeds `usize`.
     pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
         let resource = self
             .runtime
