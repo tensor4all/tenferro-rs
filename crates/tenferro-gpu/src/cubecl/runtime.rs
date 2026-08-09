@@ -47,13 +47,14 @@ pub fn gpu_available() -> bool {
     .unwrap_or(false)
 }
 
-/// RAII guard that restores the thread's previous CUDA device and current
-/// context when dropped.
+/// RAII guard that attempts to restore the thread's previous CUDA device and
+/// current context when dropped.
 ///
 /// Used by the `with_raw` enter/exit protocol: the guard is created after the
 /// calling thread's device/context are saved and the tenferro primary context
-/// is activated. Drop restores the saved state on normal return, `Err`, and
-/// unwind.
+/// is activated. Drop attempts best-effort restoration of the saved state on
+/// normal return, `Err`, and unwind; a restoration failure is logged to
+/// stderr (non-panicking) and never returned.
 pub(crate) struct RawContextRestore {
     saved_device: Result<i32, cudarc::runtime::result::RuntimeError>,
     saved_context: Result<Option<CUcontext>, cudarc::driver::result::DriverError>,

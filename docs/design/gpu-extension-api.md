@@ -144,8 +144,9 @@ pub struct KernelArg<'a> { /* scalar or checked device-address value */ }
    context; activate the tenferro-held primary context.
 4. Construct the unique `raw::Session`.
 5. Enqueue all raw work on the one captured stream.
-6. Restore the previous device/context on normal return, `Err`, and unwind
-   (RAII guard); the success path does NOT synchronize.
+6. Best-effort restore of the previous device/context on normal return,
+   `Err`, and unwind (RAII guard); a restoration failure is logged to stderr
+   and not returned. The success path does NOT synchronize.
 7. If the implementation cannot prove both CubeCL and raw segments use the same
    captured stream, it is **NO-GO** — no extra device-wide sync to mask it.
 

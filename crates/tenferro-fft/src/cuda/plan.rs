@@ -414,7 +414,8 @@ impl CufftPlanEntry {
         descriptor: CufftPlanDescriptor,
     ) -> Result<Self, CudaFftError> {
         // Run the cuFFT create/make-plan sequence with the tenferro primary
-        // context current, restoring the caller's previous context afterwards.
+        // context current; the caller's previous context is best-effort
+        // restored afterwards (failures are logged, not returned).
         let runtime = session.runtime().clone();
         let runtime_for_cleanup = runtime.clone();
         let build_result = runtime
