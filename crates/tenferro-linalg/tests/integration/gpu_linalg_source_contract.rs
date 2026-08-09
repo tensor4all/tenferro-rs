@@ -335,26 +335,26 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
         (
             "fn cholesky_typed",
             "fn triangular_solve_typed",
-            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*potrf\")",
+            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "raw.download_tensor::<i32>(&info, OP)?",
         ),
         (
             "fn svd_typed",
             "fn svd_values_typed",
-            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "raw.download_tensor::<i32>(&info, OP)?",
         ),
         (
             "fn svd_values_typed",
             "fn qr_typed",
-            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "raw.download_tensor::<i32>(&info, OP)?",
         ),
         (
             "fn eigh_typed",
             "fn build_lu_outputs_device",
-            "info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*syevd\")",
+            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "raw.download_tensor::<i32>(&info, OP)?",
         ),
     ] {
         let section = source_section(&source, start, end);
@@ -374,10 +374,10 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
 
     let qr = source_section(&source, "fn qr_typed", "fn eigh_typed");
     for needle in [
-        "geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-        "orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])",
-        "check_solver_info_tensor(backend.runtime(), &geqrf_info, OP, \"cusolverDn*geqrf\")",
-        "check_solver_info_tensor(backend.runtime(), &orgqr_info, OP, \"cusolverDn*orgqr\")",
+        "geqrf_info = raw.alloc_output::<i32>",
+        "orgqr_info = raw.alloc_output::<i32>",
+        "raw.download_tensor::<i32>(&geqrf_info, OP)?",
+        "raw.download_tensor::<i32>(&orgqr_info, OP)?",
     ] {
         assert!(
             qr.contains(needle),
@@ -472,8 +472,8 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
             "SvdDriver::Gesvd",
             "handles.cusolver().gesvdj(",
             "handles.cusolver().gesvd(",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvdj\")",
-            "check_solver_info_tensor(backend.runtime(), &info, OP, \"cusolverDn*gesvd\")",
+            "check_solver_info(OP, \"cusolverDn*gesvdj\"",
+            "check_solver_info(OP, \"cusolverDn*gesvd\"",
         ] {
             assert!(
                 section.contains(needle),
@@ -483,8 +483,8 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "let u = alloc_output::<T>(backend.runtime(), &u_shape)?;",
-        "let v = alloc_output::<T>(backend.runtime(), &v_shape)?;",
+        "let mut u = raw.alloc_output::<T>(&u_shape)?;",
+        "let mut v = raw.alloc_output::<T>(&v_shape)?;",
         "CusolverEigMode::NoVector",
         "batch_u",
         "batch_v",
@@ -496,7 +496,7 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "T::copy_matrix_adjoint(backend.runtime(), &v, &vt_shape, OP)",
+        "T::copy_matrix_adjoint(backend, &v, &vt_shape, OP)",
         "copy_matrix_adjoint_real",
         "copy_matrix_adjoint_complex",
     ] {
@@ -523,10 +523,12 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
 
     for needle in [
         "let transpose_for_gesvd = m < n;",
-        "T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?",
-        "gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)",
-        "T::copy_matrix_adjoint(backend.runtime(), &gesvd_vt, &u_shape, OP)?",
-        "T::copy_matrix_adjoint(backend.runtime(), &gesvd_u, &vt_shape, OP)?",
+        "T::copy_matrix_adjoint(backend, input, &work_shape, OP)?",
+        "handles.cusolver().gesvd_buffer_size(",
+        "gesvd_m_i32",
+        "gesvd_n_i32",
+        "T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, OP)?",
+        "T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, OP)?",
     ] {
         assert!(
             svd.contains(needle),
@@ -534,16 +536,26 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
         );
     }
     for needle in [
-        "let (work, gesvd_m, gesvd_n) = if m < n",
-        "T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?",
-        "gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)",
+        "let (gesvd_m, gesvd_n) = if m < n { (n, m) } else { (m, n) }",
+        "T::copy_matrix_adjoint(backend, input, &work_shape, OP)?",
+        "handles.cusolver().gesvd_buffer_size(",
+        "gesvd_m_i32",
+        "gesvd_n_i32",
     ] {
         assert!(
             svd_values.contains(needle),
             "wide values-only gesvd should solve the device adjoint: missing {needle}"
         );
     }
-    for banned in ["download_tensor", "download_typed_tensor"] {
+    // The wide gesvd orientation must never download factor data (u/s/v) to
+    // the host. The only host read is the solver `i32` info diagnostic via
+    // the raw-session `download_tensor::<i32>`; factor-dtype downloads are
+    // banned.
+    for banned in [
+        "download_tensor::<T>",
+        "download_tensor::<<T as LinalgScalar>::Real>",
+        "download_typed_tensor",
+    ] {
         assert!(
             !svd.contains(banned) && !svd_values.contains(banned),
             "wide gesvd orientation must not download factor data: found {banned}"
@@ -616,48 +628,61 @@ fn gpu_triangular_solve_uses_batched_cublas_when_batching_is_present() {
 fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs() {
     let source = linalg_source();
 
-    for (start, end, residency_check) in [
+    // Every op validates input residency before the zero-dim allocation fast
+    // path. The guard is either the standalone typed residency check before
+    // `if has_zero_dim` (LU path) or a `raw.tensor(input)?` residency probe
+    // inside the `with_raw` fast-path closure before `raw.alloc_output`.
+    for (start, end, check, later) in [
         (
             "fn cholesky_typed",
             "fn triangular_solve_typed",
-            "ensure_cubecl_resident_typed(OP, input)?;",
+            "raw.tensor(input)?;",
+            "raw.alloc_output",
         ),
         (
             "fn lu_typed",
             "fn svd_typed",
             "ensure_cubecl_resident_typed(OP, input)?;",
+            "if has_zero_dim",
         ),
         (
             "fn svd_typed",
             "fn qr_typed",
-            "ensure_cubecl_resident_typed(OP, input)?;",
+            "raw.tensor(input)?;",
+            "raw.alloc_output",
         ),
         (
             "fn qr_typed",
             "fn eigh_typed",
             "ensure_cubecl_resident_typed(OP, input)?;",
+            "if has_zero_dim",
         ),
         (
             "fn eigh_typed",
             "fn validate_nonsingular_gpu",
             "ensure_cubecl_resident_typed(OP, input)?;",
+            "if has_zero_dim",
         ),
     ] {
         let section = source_section(&source, start, end);
-        assert_before(section, residency_check, "if has_zero_dim");
+        assert_before(section, check, later);
     }
 
     let triangular = source_section(&source, "fn triangular_solve_typed_with_op", "fn lu_typed");
+    // The standalone residency guards run before the fast path flag is
+    // computed, and the raw-session fast path re-probes residency via
+    // `raw.tensor` before allocating the empty output.
     assert_before(
         triangular,
         "ensure_cubecl_resident_typed(op, a)?;",
-        "if has_zero_dim",
+        "let zero_dim = has_zero_dim(a.shape()) || has_zero_dim(b.shape());",
     );
     assert_before(
         triangular,
         "ensure_cubecl_resident_typed(op, b)?;",
-        "if has_zero_dim",
+        "let zero_dim = has_zero_dim(a.shape()) || has_zero_dim(b.shape());",
     );
+    assert_before(triangular, "raw.tensor(a)?;", "raw.alloc_output");
 
     let solve = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
     assert_before(
@@ -676,7 +701,7 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         "if has_zero_dim",
     );
     assert!(
-        solve.contains("zero_like_linalg_device_tensor(backend.runtime(), b, OP)"),
+        solve.contains("zero_like_linalg_device_tensor(backend, b, OP)"),
         "GPU solve zero-dim fast path should allocate the result on the GPU"
     );
     assert!(

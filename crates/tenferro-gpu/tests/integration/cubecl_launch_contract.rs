@@ -1170,7 +1170,7 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
     let interop_ptr = source_section(
         &interop_source,
         "pub fn with_typed_device_ptr<T: TensorScalar + 'static>(",
-        "/// Upload host data into a dense GPU tensor",
+        "/// Download a dense CubeCL-backed typed tensor",
     );
     assert_ordered_needles(
         "interop::with_typed_device_ptr",

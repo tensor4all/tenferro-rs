@@ -8,7 +8,6 @@
 use std::ffi::c_void;
 use std::fmt;
 
-use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, TensorBinding};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
@@ -65,43 +64,12 @@ pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::R
     Ok(std::ptr::with_exposed_provenance_mut::<c_void>(addr))
 }
 
-/// Run a closure with the CubeCL compute client.
-///
-/// This is for operation-family kernel launches that cannot be implemented
-/// inside `tenferro-gpu` without creating a dependency cycle.
-pub fn with_cubecl_client<R>(
-    rt: &CudaRuntime,
-    launch: impl FnOnce(&ComputeClient<CubeclCudaRuntime>) -> R,
-) -> R {
-    launch(rt.client())
-}
-
-/// Flush the CubeCL client after an unchecked kernel launch.
-/// # Errors
-///
-/// Returns [`crate::Error::BackendSource`] when CubeCL cannot flush the client.
-pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
-    rt.client()
-        .flush()
-        .map_err(|err| crate::Error::backend_source(op, err))
-}
-
+#[allow(dead_code)] // source-contract: the scoped stream accessor must remain in this module.
 /// Borrow the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
 ///
 /// The stream is passed only to `f`; callers must not retain the raw handle
-/// after the callback returns.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::cuda::CudaRuntime;
-/// use tenferro_gpu::cuda::interop::with_raw_cuda_stream;
-///
-/// # fn example(rt: &CudaRuntime) -> tenferro_tensor::Result<()> {
-/// with_raw_cuda_stream(rt, "example", |_stream| {})?;
-/// # Ok(())
-/// # }
-/// ```
+/// after the callback returns. This internal module is not part of the public
+/// API; crate code receives the stream through [`CudaRuntime::raw_cuda_stream`].
 ///
 /// # Errors
 ///
@@ -147,19 +115,6 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Send + Sync + 'stati
     dispatch::alloc_output(rt, shape)
 }
 
-/// Validate that a tensor is backed by a CubeCL buffer.
-/// # Errors
-///
-/// Returns [`crate::Error::RuntimeState`] when the tensor is host-backed,
-/// belongs to another GPU runtime, or has the wrong backend buffer family.
-pub fn ensure_typed_tensor_resident<T: 'static>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<()> {
-    dispatch::cubecl_buffer(tensor, op)?;
-    Ok(())
-}
-
 /// Build a CubeCL tensor binding for operation-family kernels.
 /// # Errors
 ///
@@ -188,20 +143,9 @@ pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
 ///
 /// The pointer is passed only to `f`, while the residency-checked tensor and
 /// runtime remain borrowed by this call. Callers must not retain the pointer
-/// after `f` returns.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::cuda::interop::with_typed_device_ptr;
-/// use tenferro_gpu::cuda::CudaRuntime;
-/// use tenferro_tensor::TypedTensor;
-///
-/// # fn example(rt: &CudaRuntime, tensor: &TypedTensor<f32>) -> tenferro_tensor::Result<()> {
-/// with_typed_device_ptr(rt, tensor, "example", |_ptr| {})?;
-/// # Ok(())
-/// # }
-/// ```
+/// after `f` returns. This internal module is not part of the public API; the
+/// pointer-escape contract is enforced by source-contract tests.
+#[cfg_attr(not(test), allow(dead_code))] // used by unit tests; kept for the scoped-accessor contract.
 ///
 /// # Errors
 ///
@@ -225,34 +169,6 @@ pub fn with_typed_device_ptr<T: TensorScalar + 'static>(
     let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, op)?;
     f(ptr);
     Ok(())
-}
-
-/// Upload host data into a dense GPU tensor on the runtime's device.
-/// # Errors
-///
-/// Returns [`crate::Error::Validation`] when `shape` and `data` have different
-/// element counts, or [`crate::Error::BackendSource`] when device allocation
-/// fails.
-pub fn upload_typed_tensor<T>(
-    rt: &CudaRuntime,
-    shape: Vec<usize>,
-    data: Vec<T>,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
-{
-    let byte_len = T::as_bytes(&data).len();
-    let handle = rt.client().create_from_slice(T::as_bytes(&data));
-    dispatch::typed_from_cubecl(
-        shape,
-        crate::CubeclBuffer::new(
-            handle,
-            byte_len,
-            rt.device_ordinal(),
-            rt.allocation_domain_id(),
-        ),
-        rt.device_ordinal(),
-    )
 }
 
 /// Download a dense CubeCL-backed typed tensor to host memory.

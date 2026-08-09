@@ -381,11 +381,7 @@ impl<'s> Session<'s> {
     /// Returns [`crate::Error::BackendSource`] when CubeCL cannot upload or
     /// inspect the workspace resource, or [`crate::Error::Validation`] when
     /// the pointer address cannot be represented as `usize`.
-    pub fn upload_bytes(
-        &self,
-        bytes: &[u8],
-        op: &'static str,
-    ) -> crate::Result<DeviceBytes<'s>> {
+    pub fn upload_bytes(&self, bytes: &[u8], op: &'static str) -> crate::Result<DeviceBytes<'s>> {
         let inner = super::interop::upload_device_bytes(&self.runtime, bytes, op)?;
         Ok(DeviceBytes {
             inner,

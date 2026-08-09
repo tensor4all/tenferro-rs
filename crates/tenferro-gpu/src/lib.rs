@@ -44,8 +44,8 @@ pub mod cuda {
         cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
         cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
         with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId,
-        CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
-        GpuExtensionCapability,
+        CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaExtensionCache,
+        CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity, GpuExtensionCapability,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597).
@@ -66,13 +66,6 @@ pub mod cuda {
             CudaResourceGuard, DeviceBytes, Function, KernelArg, LaunchConfig, Module,
             NvrtcOptions, Session, StreamRef, TensorMut, TensorRef,
         };
-    }
-
-    /// Provider-specific CUDA interop scoped to an active execution session.
-    #[doc(hidden)]
-    pub mod interop {
-        pub use super::super::cubecl::interop::*;
-        pub use super::super::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
     }
 }
 

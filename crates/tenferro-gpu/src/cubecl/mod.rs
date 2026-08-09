@@ -440,7 +440,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// assert!(cache.is_empty()?);
@@ -469,7 +469,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// assert!(CudaExtensionCache::new().is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -557,7 +557,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();

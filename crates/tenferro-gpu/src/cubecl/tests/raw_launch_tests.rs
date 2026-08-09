@@ -80,9 +80,9 @@ fn raw_nvrtc_launch_roundtrip() {
 
                 let (shape, flat): (Vec<usize>, Vec<f32>) = download_tensor_typed(&runtime, out)?;
                 assert_eq!(shape, vec![8]);
-                for i in 0..8 {
+                for (i, &value) in flat.iter().enumerate() {
                     let expected = (i as f32 + 1.0) + ((i as f32) + 1.0) * 10.0;
-                    assert!((flat[i] - expected).abs() < 1e-4, "mismatch at {i}");
+                    assert!((value - expected).abs() < 1e-4, "mismatch at {i}");
                 }
                 Ok(())
             })
@@ -144,9 +144,9 @@ fn raw_ptx_load_launch_roundtrip() {
 
                 let (shape, flat): (Vec<usize>, Vec<f32>) = download_tensor_typed(&runtime, out)?;
                 assert_eq!(shape, vec![4]);
-                for i in 0..4 {
+                for (i, &value) in flat.iter().enumerate() {
                     let expected = (i as f32 + 1.0) + 0.5;
-                    assert!((flat[i] - expected).abs() < 1e-4, "mismatch at {i}");
+                    assert!((value - expected).abs() < 1e-4, "mismatch at {i}");
                 }
                 Ok(())
             })
