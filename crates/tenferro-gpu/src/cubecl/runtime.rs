@@ -66,8 +66,14 @@ impl RawContextRestore {
         let saved_context = cudarc::driver::result::ctx::get_current();
         cudarc::runtime::result::device::set(device)
             .map_err(|err| crate::Error::backend_source(op, err))?;
-        unsafe { cudarc::driver::result::ctx::set_current(context) }
-            .map_err(|err| crate::Error::backend_source(op, err))?;
+        if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
+            // Roll the device activation back so a partial activation failure
+            // cannot leave the caller's thread on a different device.
+            if let Ok(previous_device) = saved_device {
+                let _ = cudarc::runtime::result::device::set(previous_device);
+            }
+            return Err(crate::Error::backend_source(op, err));
+        }
         Ok(Self {
             saved_device,
             saved_context,
@@ -84,13 +90,29 @@ impl RawContextRestore {
                 );
             }
         }
-        if let Ok(Some(context)) = self.saved_context {
-            if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
-                eprintln!(
-                    "tenferro-gpu: failed to restore CUDA context during {}: {err:?}",
-                    self.op
-                );
+        match self.saved_context {
+            Ok(Some(context)) => {
+                if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
+                    eprintln!(
+                        "tenferro-gpu: failed to restore CUDA context during {}: {err:?}",
+                        self.op
+                    );
+                }
             }
+            // The thread had no current context before the guard; restore that
+            // state instead of leaving the tenferro primary context current.
+            Ok(None) => {
+                if let Err(err) = unsafe {
+                    cudarc::driver::result::ctx::set_current(std::ptr::null_mut())
+                } {
+                    eprintln!(
+                        "tenferro-gpu: failed to clear CUDA context during {}: {err:?}",
+                        self.op
+                    );
+                }
+            }
+            // The saved-context query itself failed; nothing can be restored.
+            Err(_) => {}
         }
     }
 }
@@ -366,15 +388,20 @@ impl CudaRuntime {
     /// is the scoped context authority used by vendor-library lifecycle paths
     /// (plan creation/retirement) that run outside a raw-session callback.
     ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when the tenferro primary
+    /// context cannot be activated (device or context driver failure); a
+    /// partial activation is rolled back before the error is returned.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_gpu::cuda::CudaRuntime;
     ///
-    /// fn check(rt: &CudaRuntime) -> tenferro_tensor::Result<u64> {
+    /// let _check: fn(&CudaRuntime) -> tenferro_tensor::Result<u64> = |rt| {
     ///     rt.with_current_context("test.context", || 7)
-    /// }
-    /// let _ = check;
+    /// };
     /// ```
     pub fn with_current_context<R>(
         &self,
