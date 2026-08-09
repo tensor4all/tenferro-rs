@@ -797,12 +797,16 @@ def build_and_inspect_archive(
         raise ReleaseError(
             f"Cargo did not create expected archive at any of: {', '.join(map(str, candidates))}"
         )
-    try:
-        archive_data = archives[0].read_bytes()
-        if any(candidate.read_bytes() != archive_data for candidate in archives[1:]):
+    archive_data = None
+    for candidate in archives:
+        try:
+            candidate_data = candidate.read_bytes()
+        except OSError as error:
+            raise ReleaseError(f"could not read Cargo archive {candidate}: {error}") from error
+        if archive_data is None:
+            archive_data = candidate_data
+        elif candidate_data != archive_data:
             raise ReleaseError(f"Cargo created differing archives: {archives}")
-    except OSError as error:
-        raise ReleaseError(f"could not read Cargo archive {archives[0]}: {error}") from error
     inspection = archive_inspector(
         archive_data,
         crate,

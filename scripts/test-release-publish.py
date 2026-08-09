@@ -585,6 +585,46 @@ class OrchestrationTests(unittest.TestCase):
                     root=root,
                 )
 
+    def test_archive_read_failure_names_failing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root, ["crate-a"])
+            archive = root / "target/package/crate-a-0.4.0.crate"
+            failing_archive = archive.parent / "tmp-registry" / archive.name
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                for staging in ("tmp-crate", "tmp-registry"):
+                    staged = archive.parent / staging / archive.name
+                    staged.parent.mkdir(parents=True)
+                    staged.write_bytes(b"same")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            original_read_bytes = Path.read_bytes
+
+            def read_bytes(path: Path) -> bytes:
+                if path == failing_archive:
+                    raise OSError("test read failure")
+                return original_read_bytes(path)
+
+            with mock.patch.object(Path, "read_bytes", read_bytes):
+                with self.assertRaisesRegex(
+                    RELEASE.ReleaseError, str(failing_archive)
+                ):
+                    RELEASE.build_and_inspect_archive(
+                        metadata,
+                        "crate-a",
+                        self.VERSION,
+                        self.COMMIT,
+                        "crates/crate-a",
+                        lambda _path: None,
+                        {"Cargo.toml"},
+                        ["cargo", "publish", "--dry-run"],
+                        runner=runner,
+                        root=root,
+                    )
+
     def test_resume_accepts_new_package_approval_and_attests_before_skip(self) -> None:
         events: list[str] = []
         with tempfile.TemporaryDirectory() as directory:
