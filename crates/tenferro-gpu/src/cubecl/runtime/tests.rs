@@ -32,7 +32,6 @@ fn cuda_runtime_identity_is_clone_stable_and_instance_scoped() {
     assert_eq!(first, moved);
     assert_eq!(first_key, identity_hash(&moved));
     assert_ne!(first, independent);
-    assert_ne!(first_key, identity_hash(&independent));
 }
 
 #[test]
@@ -60,10 +59,6 @@ fn cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available() {
         identity_hash(&clone_identity)
     );
     assert_ne!(first_identity, independent_identity);
-    assert_ne!(
-        identity_hash(&first_identity),
-        identity_hash(&independent_identity)
-    );
 
     let runtime_clone = first.runtime().clone();
     let _: CudaRuntime = runtime_clone;

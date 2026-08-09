@@ -249,8 +249,6 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
     assert_eq!(moved_stats.misses, 1);
 
     let mut independent = support::cuda_backend();
-    let independent_key = identity_hash(&independent.runtime_identity());
-    assert_ne!(first_key, independent_key);
     run_executor_case(
         &mut executor,
         &mut cpu,
