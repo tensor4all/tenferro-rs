@@ -6,6 +6,7 @@ import argparse
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -241,11 +242,27 @@ CASES = (
 )
 
 
-_COMMIT_CHECKOUT_HASH = re.compile(
-    r"\bgit\b[^\n]*?\bcheckout\b[^\n]*?"
-    r"(?P<commit>(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f]))",
-    flags=re.IGNORECASE,
-)
+_COMMIT_HASH = re.compile(r"[0-9a-f]{7,40}", flags=re.IGNORECASE)
+
+
+def checkout_commit_hash(line: str) -> str | None:
+    """Return a standalone commit hash from one shell-style Git checkout."""
+
+    try:
+        tokens = shlex.split(line, comments=True)
+    except ValueError:
+        return None
+    try:
+        git_index = tokens.index("git")
+        checkout_index = tokens.index("checkout", git_index + 1)
+    except ValueError:
+        return None
+    for token in tokens[checkout_index + 1 :]:
+        if token in {"&&", ";", "||"}:
+            break
+        if _COMMIT_HASH.fullmatch(token):
+            return token
+    return None
 
 
 def guide_commit_checkout_hashes(root: pathlib.Path) -> list[tuple[pathlib.Path, int, str]]:
@@ -255,9 +272,8 @@ def guide_commit_checkout_hashes(root: pathlib.Path) -> list[tuple[pathlib.Path,
     findings: list[tuple[pathlib.Path, int, str]] = []
     for path in guides:
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            match = _COMMIT_CHECKOUT_HASH.search(line)
-            if match:
-                findings.append((path, line_number, match.group("commit")))
+            if commit := checkout_commit_hash(line):
+                findings.append((path, line_number, commit))
     return findings
 
 

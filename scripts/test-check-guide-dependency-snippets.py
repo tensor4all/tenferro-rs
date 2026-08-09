@@ -52,7 +52,10 @@ def test_non_commit_checkout_targets_remain_allowed() -> None:
         root = pathlib.Path(tmp)
         guide = root / "docs" / "guides" / "branch.md"
         guide.parent.mkdir(parents=True)
-        guide.write_text("git checkout main\n", encoding="utf-8")
+        guide.write_text(
+            "git checkout main\ngit checkout feature/deadbeef-fix\n",
+            encoding="utf-8",
+        )
         CHECKER.validate_no_guide_commit_checkout_hashes(root)
         assert CHECKER.guide_commit_checkout_hashes(root) == []
 
