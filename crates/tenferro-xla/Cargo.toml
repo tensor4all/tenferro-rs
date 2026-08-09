@@ -36,8 +36,14 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.3.0", default-features = false, features = ["cpu-faer"] }
-tenferro-einsum = { path = "../tenferro-einsum", version = "0.3.0", default-features = false }
+# Path-only (unversioned): tenferro-einsum publishes after tenferro-xla, so a
+# versioned dev-dependency would fail registry resolution during `cargo
+# package`. Dev-dependencies are stripped from the published manifest, so an
+# unversioned path dev-dependency is sufficient.
+# `cpu-faer` is enabled because tenferro-einsum links tenferro-cpu (which
+# cannot compile without a provider feature); no test code uses the CPU backend
+# directly.
+tenferro-einsum = { path = "../tenferro-einsum", default-features = false, features = ["cpu-faer"] }
 
 [[test]]
 name = "integration"

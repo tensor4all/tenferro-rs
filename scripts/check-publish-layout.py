@@ -188,14 +188,86 @@ def check_release_order(
         crate = package["name"]
         if crate not in expected:
             continue
+        # A VERSIONED normal, build, or dev dependency on a publishable crate
+        # that appears later in the canonical order cannot resolve during
+        # `cargo package`, because that crate has not been published yet.
+        # Unversioned (path-only) dev-dependencies are safe: dev-dependencies
+        # are stripped from the published manifest and never carry a registry
+        # version requirement for consumers.
         for dependency in package["dependencies"]:
             dependency_name = dependency["name"]
-            if dependency["kind"] != "dev" and dependency_name in expected:
-                if positions[dependency_name] > positions[crate]:
-                    errors.append(
-                        f"release publish order must place dependency "
-                        f"{dependency_name!r} before {crate!r}"
-                    )
+            if dependency_name not in expected:
+                continue
+            if _is_versioned(dependency) and positions[dependency_name] > positions[crate]:
+                errors.append(
+                    f"release publish order must place dependency "
+                    f"{dependency_name!r} before {crate!r}"
+                )
+
+    cycle = _find_publication_cycle(metadata["packages"], expected)
+    if cycle is not None:
+        chain = " -> ".join(cycle + [cycle[0]])
+        errors.append(f"publication cycle among publishable crates: {chain}")
+
+
+def _is_versioned(dependency: dict) -> bool:
+    """True when the dependency carries a cargo version requirement.
+
+    Path-only manifests (no `version`) report `req == "*"` from cargo
+    metadata. Only versioned edges are published across crates and therefore
+    participate in publish-order and publish-cycle constraints.
+    """
+
+    requirement = dependency.get("req")
+    return isinstance(requirement, str) and requirement != "*"
+
+
+def _find_publication_cycle(
+    packages: list[dict], publishable: set[str]
+) -> list[str] | None:
+    """Return one cycle over publishable crate names, or None when acyclic.
+
+    Only VERSIONED edges participate: an unversioned dev-dependency is
+    stripped from the published manifest and never needs crates.io resolution,
+    so it cannot create a publish-time cycle. Any versioned cycle forces at
+    least one edge to point forward in any linear publication order, so it is
+    reported as a structural publish-cycle before tagging.
+    """
+
+    adjacency = {
+        package["name"]: sorted(
+            dependency["name"]
+            for dependency in package["dependencies"]
+            if dependency["name"] in publishable and _is_versioned(dependency)
+        )
+        for package in packages
+        if package["name"] in publishable
+    }
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {crate: WHITE for crate in adjacency}
+    stack: list[str] = []
+
+    def visit(crate: str) -> list[str] | None:
+        color[crate] = GRAY
+        stack.append(crate)
+        for neighbor in adjacency[crate]:
+            if color[neighbor] == GRAY:
+                return stack[stack.index(neighbor) :]
+            if color[neighbor] == WHITE:
+                cycle = visit(neighbor)
+                if cycle is not None:
+                    return cycle
+        stack.pop()
+        color[crate] = BLACK
+        return None
+
+    for crate in sorted(adjacency):
+        if color[crate] == WHITE:
+            cycle = visit(crate)
+            if cycle is not None:
+                return cycle
+    return None
 
 
 def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -> None:
@@ -371,6 +443,60 @@ def check_crate_metadata(
                 )
 
 
+def _check_internal_dependency_versions(
+    crate: str,
+    manifest_text: str,
+    expected_version: str,
+    errors: list[str],
+    manifest_name: str,
+) -> None:
+    """Require registry versions on internal normal/build path dependencies.
+
+    Normal and build dependencies are kept in the published manifest, so they
+    must carry the exact workspace version for crates.io packaging. Dev
+    dependencies are stripped from the published manifest and never resolve
+    against crates.io for consumers, so they may be path-only (unversioned);
+    when a dev dependency does declare a version it must still match.
+    """
+
+    try:
+        manifest = tomllib.loads(manifest_text)
+    except tomllib.TOMLDecodeError:
+        return
+
+    version_fragment = f'version = "{expected_version}"'
+    # Normal and build dependencies are kept in the published manifest.
+    for table_name in ("dependencies", "build-dependencies"):
+        table = manifest.get(table_name, {})
+        if not isinstance(table, dict):
+            continue
+        for name, spec in table.items():
+            if not isinstance(spec, dict) or "path" not in spec:
+                continue
+            if not spec["path"].startswith("../tenferro-"):
+                continue
+            if spec.get("version") != expected_version:
+                errors.append(
+                    f"{manifest_name} {table_name} tenferro dependency "
+                    f"{name!r} must include {version_fragment} for crates.io packaging"
+                )
+    # Dev dependencies are stripped from the published manifest, so they may
+    # be path-only; any declared version must still match.
+    table = manifest.get("dev-dependencies", {})
+    if isinstance(table, dict):
+        for name, spec in table.items():
+            if not isinstance(spec, dict) or "path" not in spec:
+                continue
+            if not spec["path"].startswith("../tenferro-"):
+                continue
+            declared = spec.get("version")
+            if declared is not None and declared != expected_version:
+                errors.append(
+                    f"{manifest_name} dev-dependencies tenferro dependency "
+                    f"{name!r} must include {version_fragment} for crates.io packaging"
+                )
+
+
 def check_package_metadata(root_text: str, errors: list[str]) -> None:
     expected_version = workspace_version(root_text)
     for crate in TENFERRO_CRATES:
@@ -392,13 +518,9 @@ def check_package_metadata(root_text: str, errors: list[str]) -> None:
                     f"{rel(manifest_path)} package.{key} must inherit workspace metadata"
                 )
         check_crate_metadata(crate, manifest_text, errors, rel(manifest_path))
-        for line_no, line in enumerate(manifest_text.splitlines(), start=1):
-            version_fragment = f'version = "{expected_version}"'
-            if 'path = "../tenferro-' in line and version_fragment not in line:
-                errors.append(
-                    f"{rel(manifest_path)}:{line_no}: tenferro path dependency "
-                    f'must include {version_fragment} for crates.io packaging'
-                )
+        _check_internal_dependency_versions(
+            crate, manifest_text, expected_version, errors, rel(manifest_path)
+        )
 
     tutorial_manifest = ROOT / "docs" / "tutorial-code" / "Cargo.toml"
     if "publish = false" not in section(

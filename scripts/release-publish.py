@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import io
 import json
 import re
 import runpy
+import shlex
 import stat
 import subprocess
 import sys
@@ -609,6 +611,107 @@ def verify_release_checkout(
     return head
 
 
+def verify_release_ci(
+    commit: str,
+    required_checks: set[str],
+    *,
+    runner: Callable = run,
+    owner: str = "tensor4all",
+    repository: str = "tenferro-rs",
+) -> None:
+    """Fail closed unless every required CI check succeeded on exactly this commit.
+
+    Runs the canonical query
+    ``gh api repos/tensor4all/tenferro-rs/commits/<SHA>/check-runs --paginate --slurp``
+    and requires, per required check name, ``head_sha == commit``,
+    ``status == "completed"``, and ``conclusion == "success"``. A required
+    check that is missing, ran on another commit, is still running, or did not
+    conclude successfully raises :class:`ReleaseError`. ``--slurp`` wraps each
+    page (an object carrying ``check_runs``) into one outer array so a
+    single ``json.loads`` sees the whole result.
+    """
+    output = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{owner}/{repository}/commits/{commit}/check-runs",
+            "--paginate",
+            "--slurp",
+        ],
+        cwd=ROOT,
+    ).stdout
+    try:
+        payload = json.loads(output)
+    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseError(
+            "gh check-runs returned invalid JSON for " f"{owner}/{repository}@{commit}"
+        ) from error
+    pages = (
+        payload.get("check_runs")
+        if isinstance(payload, dict) and "check_runs" in payload
+        else payload
+    )
+    # With more check runs than one page, `gh api --paginate --slurp` yields a
+    # list of page objects, each carrying its own `check_runs` array. Every
+    # page must be well-formed; malformed pages fail closed instead of being
+    # silently skipped.
+    if (
+        isinstance(pages, list)
+        and pages
+        and isinstance(pages[0], dict)
+        and "check_runs" in pages[0]
+    ):
+        flattened: list[object] = []
+        for page in pages:
+            if not isinstance(page, dict):
+                raise ReleaseError(
+                    "gh check-runs page is not an object for "
+                    f"{owner}/{repository}@{commit}"
+                )
+            runs = page.get("check_runs")
+            if not isinstance(runs, list):
+                raise ReleaseError(
+                    "gh check-runs page is missing a check_runs list for "
+                    f"{owner}/{repository}@{commit}"
+                )
+            flattened.extend(runs)
+        pages = flattened
+    if not isinstance(pages, list):
+        raise ReleaseError(
+            "gh check-runs response is missing a check_runs list for "
+            f"{owner}/{repository}@{commit}"
+        )
+    by_name: dict[str, dict] = {}
+    for run in pages:
+        if not isinstance(run, dict):
+            continue
+        name = run.get("name")
+        if isinstance(name, str):
+            by_name[name] = run
+    missing = sorted(required_checks - by_name.keys())
+    if missing:
+        raise ReleaseError(
+            f"required CI checks missing for {owner}/{repository}@{commit}: {missing}"
+        )
+    for name in sorted(required_checks):
+        run = by_name[name]
+        if run.get("head_sha") != commit:
+            raise ReleaseError(
+                f"required check {name!r} ran on a different commit for "
+                f"{owner}/{repository}@{commit}"
+            )
+        if run.get("status") != "completed":
+            raise ReleaseError(
+                f"required check {name!r} is not completed for "
+                f"{owner}/{repository}@{commit}"
+            )
+        if run.get("conclusion") != "success":
+            raise ReleaseError(
+                f"required check {name!r} did not succeed for "
+                f"{owner}/{repository}@{commit}"
+            )
+
+
 def cargo_metadata(*, runner: Callable = run, root: Path = ROOT) -> dict:
     try:
         metadata = json.loads(
@@ -930,24 +1033,6 @@ def publish_release(
     validate_new_package_approvals(package_exists, version_exists, approvals)
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
-    bootstrap_args_by_crate: dict[str, list[str]] = {}
-    if "tenferro-runtime" in packages and "tenferro-cpu" in packages:
-        cpu_path = (root / package_root(packages["tenferro-cpu"], root=root)).resolve()
-        bootstrap_args_by_crate["tenferro-runtime"] = [
-            "--no-verify",
-            "--config",
-            f"patch.crates-io.tenferro-cpu.path={json.dumps(str(cpu_path), ensure_ascii=False)}",
-        ]
-    if "tenferro-xla" in packages and "tenferro-einsum" in packages:
-        einsum_path = (
-            root / package_root(packages["tenferro-einsum"], root=root)
-        ).resolve()
-        bootstrap_args_by_crate["tenferro-xla"] = [
-            "--no-verify",
-            "--config",
-            f"patch.crates-io.tenferro-einsum.path={json.dumps(str(einsum_path), ensure_ascii=False)}",
-        ]
-
     positions = {crate: index for index, crate in enumerate(order)}
     prerequisites_by_crate: dict[str, list[str]] = {}
     for crate in order:
@@ -1011,7 +1096,6 @@ def publish_release(
         package_dir = package_root(package, root=root)
         expected_files = package_files_loader(crate, runner=runner, root=root)
         expected_files_by_crate[crate] = expected_files
-        bootstrap_args = bootstrap_args_by_crate.get(crate, [])
         local_inspection = build_and_inspect_archive(
             metadata,
             crate,
@@ -1020,7 +1104,7 @@ def publish_release(
             package_dir,
             source_reader,
             expected_files,
-            ["cargo", "package", "-p", crate, "--locked", *bootstrap_args],
+            ["cargo", "package", "-p", crate, "--locked"],
             runner=runner,
             root=root,
             archive_inspector=archive_inspector,
@@ -1061,7 +1145,6 @@ def publish_release(
                 "--locked",
                 "--registry",
                 "crates-io",
-                *bootstrap_args,
             ],
             expected_contents=local_inspection.contents,
             runner=runner,
@@ -1077,7 +1160,6 @@ def publish_release(
                 "--locked",
                 "--registry",
                 "crates-io",
-                *bootstrap_args,
             ],
             cwd=root,
             capture=False,
@@ -1102,6 +1184,152 @@ def publish_release(
         print("preflight passed; no packages published (rerun with --execute)")
 
 
+HANDOFF_TEMPLATE = r'''#!/usr/bin/env bash
+# Generated by scripts/release-publish.py --generate-script for tenferro-rs @VERSION@.
+# Run this script from the clean, detached release worktree at tag v@VERSION@.
+# Regenerate instead of editing: manual edits void the checksum pin below and
+# the helper re-validates every invariant before each publication.
+set -euo pipefail
+
+VERSION='@VERSION@'
+APPROVALS=(@APPROVALS@)
+HELPER='@HELPER@'
+PYTHON="${PYTHON:-python3}"
+
+EXPECTED_SHA256='@DIGESTS@'
+
+# 1. Integrity pin: the release helper and canonical workflow must be
+#    byte-identical to the files present when this script was generated.
+#    Any change aborts before anything else runs.
+"$PYTHON" - "$EXPECTED_SHA256" <<'PYEOF'
+import hashlib
+import json
+import sys
+
+expected = json.loads(sys.argv[1])
+for path, want in expected.items():
+    try:
+        data = open(path, "rb").read()
+    except OSError as error:
+        print(f"publish-handoff: cannot read {path}: {error}", file=sys.stderr)
+        sys.exit(1)
+    if hashlib.sha256(data).hexdigest() != want:
+        print(
+            f"publish-handoff: checksum mismatch for {path}; "
+            "regenerate the handoff script with --generate-script",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+PYEOF
+
+# 2. The script must not be accessible to group or other users.
+if [ $(( 0$(stat -c '%a' "$0") & 077 )) -ne 0 ]; then
+    echo "publish-handoff: $0 must be owner-only (mode 0700); refusing to run" >&2
+    exit 1
+fi
+
+# 3. Publication requires a human at a terminal.
+if ! test -t 0; then
+    echo "publish-handoff: stdin is not a terminal; refusing to run" >&2
+    exit 1
+fi
+
+# 4. The release worktree must be clean and detached. The helper re-verifies
+#    the exact pushed remote tag and main lineage authoritatively.
+if [ -n "$(git status --porcelain)" ]; then
+    echo "publish-handoff: release worktree must be clean, including untracked files" >&2
+    exit 1
+fi
+if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+    echo "publish-handoff: release worktree must be detached at the tag" >&2
+    exit 1
+fi
+
+# 5. Fail-closed preflight (no --execute). Aborts on any invariant violation.
+"$PYTHON" "$HELPER" "$VERSION" "${APPROVALS[@]}"
+
+# 6. One exact lowercase confirmation immediately before publication.
+if ! read -r -p "Type exactly 'y' to publish tenferro-rs $VERSION to crates.io: " ANSWER; then
+    echo "publish-handoff: aborted (no confirmation read)" >&2
+    exit 1
+fi
+if [ "$ANSWER" != "y" ]; then
+    echo "publish-handoff: aborted; expected exactly 'y'" >&2
+    exit 1
+fi
+
+# 7. Execute publication with exactly the approvals passed at generation. The
+#    helper re-validates provenance, registry state, and approvals before each
+#    cargo publish, so this cannot bypass the gates.
+"$PYTHON" "$HELPER" "$VERSION" "${APPROVALS[@]}" --execute
+'''
+
+
+def generate_handoff_script(
+    version: str,
+    approvals: set[str],
+    output: Path,
+    *,
+    root: Path = ROOT,
+    runner: Callable = run,
+) -> None:
+    """Write a guarded human publication script for one release.
+
+    The generated script re-runs the fail-closed preflight and requires one
+    exact lowercase ``y`` at a TTY before invoking the helper with
+    ``--execute``. It pins SHA-256 checksums of the helper and canonical
+    workflow computed here with :mod:`hashlib`, so no external ``sha256sum``
+    binary is needed and a later helper change cannot silently alter
+    publication behavior.
+    """
+    if EXACT_VERSION.fullmatch(version) is None:
+        raise ReleaseError(f"release version must be exact, found {version!r}")
+    try:
+        output.resolve().relative_to(root.resolve())
+    except ValueError:
+        pass
+    else:
+        raise ReleaseError(
+            "handoff script must be written outside the release worktree "
+            "(the helper aborts on untracked files)"
+        )
+
+    pinned = (
+        (root / "scripts/release-publish.py", "release helper"),
+        (
+            root / "ai/contribution-workflows/release-publish.md",
+            "canonical release workflow",
+        ),
+    )
+    digests: dict[str, str] = {}
+    for path, label in pinned:
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise ReleaseError(f"could not read {label} {path}: {error}") from error
+        digests[path.relative_to(root).as_posix()] = hashlib.sha256(data).hexdigest()
+
+    approvals_line = " ".join(
+        f"--approve-new-package {shlex.quote(name)}"
+        for name in sorted(approvals)
+    )
+    script = (
+        HANDOFF_TEMPLATE.replace("@VERSION@", version)
+        .replace("@APPROVALS@", approvals_line)
+        .replace("@HELPER@", "scripts/release-publish.py")
+        .replace("@DIGESTS@", json.dumps(digests))
+    )
+    try:
+        output.write_text(script, encoding="utf-8")
+        output.chmod(0o700)
+    except OSError as error:
+        raise ReleaseError(f"could not write handoff script {output}: {error}") from error
+    try:
+        runner(["bash", "-n", str(output)], cwd=root)
+    except ReleaseError as error:
+        raise ReleaseError(f"generated handoff script failed bash -n: {error}") from error
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("version", help="exact release version without the v prefix")
@@ -1118,6 +1346,13 @@ def main(argv: list[str] | None = None) -> int:
         help="perform irreversible cargo publish commands after all preflights",
     )
     parser.add_argument(
+        "--generate-script",
+        type=Path,
+        metavar="PATH",
+        help="write a guarded human publication handoff script to PATH "
+        "(must be outside the release worktree) and exit without publishing",
+    )
+    parser.add_argument(
         "--release-root",
         type=Path,
         default=ROOT,
@@ -1127,6 +1362,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.generate_script is not None:
+            generate_handoff_script(
+                args.version,
+                set(args.approve_new_package),
+                args.generate_script,
+                root=args.release_root.resolve(),
+            )
+            print(f"generated handoff script: {args.generate_script.resolve()}")
+            return 0
         publish_release(
             args.version,
             set(args.approve_new_package),
