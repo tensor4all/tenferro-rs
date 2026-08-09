@@ -25,6 +25,16 @@ Keep the interaction incremental:
    checklist.
 3. Phase 2: tag the merged commit and push the tag.
 4. At Phase 3, stop after validation; a human maintainer runs Phase 3
-   publication from the tag.
+   publication from the tag. The maintainer can generate a guarded handoff
+   script with
+   `python3 scripts/release-publish.py X.Y.Z --generate-script PATH`
+   that re-runs the fail-closed preflight and requires one exact lowercase
+   `y` at a TTY before invoking the helper with `--execute`; agents never run
+   publication and never type that confirmation. Phase 3 validation is
+   change-aware (`scripts/release-validation-policy.py`): helper-only or
+   publication-metadata-only diffs run focused lanes, and a rerun is skipped
+   only when the exact-SHA CI check passes
+   (`verify_release_ci` in `scripts/release-publish.py`); Rust source or
+   ambiguous diffs run the full validation.
 5. After human publication, Phase 4 verifies crates.io versions and
    `.cargo_vcs_info.json` provenance, then cleans up.

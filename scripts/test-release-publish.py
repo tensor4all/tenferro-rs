@@ -8,10 +8,13 @@ import importlib.util
 import io
 import json
 import re
+import shlex
+import stat
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -78,6 +81,423 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
         expected = (self.ROOT / self.SKILL_PATHS[0]).read_bytes()
         for relative in self.SKILL_PATHS[1:]:
             self.assertEqual(expected, (self.ROOT / relative).read_bytes())
+
+    def test_generated_handoff_script_is_documented(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
+        for phrase in (
+            "generate-script",
+            "inside the release worktree",
+            "one exact lowercase `y` at a TTY",
+            "pins SHA-256 checksums",
+            "mismatch aborts before anything runs",
+        ):
+            self.assertIn(phrase, normalized)
+        for relative in (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md"):
+            adapter = (self.ROOT / relative).read_text()
+            normalized_adapter = " ".join(adapter.split())
+            self.assertIn("generate-script", adapter)
+            self.assertIn("X.Y.Z --generate-script", normalized_adapter)
+            self.assertIn("one exact lowercase `y` at a TTY", normalized_adapter)
+            self.assertIn(
+                "stop after validation; a human maintainer runs Phase 3 publication "
+                "from the tag.",
+                normalized_adapter,
+            )
+
+
+    def test_change_aware_validation_and_exact_sha_are_documented(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
+        for phrase in (
+            "release-validation-policy.py",
+            "helper-or-workflow-only",
+            "publication-metadata-only",
+            "semantic manifest",
+            "check-runs --paginate",
+            "head_sha == <SHA>",
+            "verify_release_ci(commit, required_checks)",
+        ):
+            self.assertIn(phrase, normalized)
+        for relative in (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md"):
+            adapter = (self.ROOT / relative).read_text()
+            self.assertIn("release-validation-policy.py", adapter)
+            self.assertIn("verify_release_ci", adapter)
+
+
+class HandoffScriptTests(unittest.TestCase):
+    VERSION = "0.3.0"
+    APPROVALS = {"tenferro-internal-cpu-kernels"}
+    STUB = (
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "with open(os.environ['STUB_LOG'], 'a') as f:\n"
+        "    f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+    )
+
+    def make_worktree(self, directory: Path) -> Path:
+        """Create a clean detached fake release worktree with a stub helper."""
+        root = directory / "release-worktree"
+        (root / "scripts").mkdir(parents=True)
+        (root / "ai/contribution-workflows").mkdir(parents=True)
+        (root / "Cargo.toml").write_text("fake\n", encoding="utf-8")
+        (root / "ai/contribution-workflows/release-publish.md").write_text(
+            "fake workflow\n", encoding="utf-8"
+        )
+        (root / "scripts/release-publish.py").write_text(self.STUB, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "test"], cwd=root, check=True
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=root, check=True)
+        subprocess.run(["git", "checkout", "-q", "--detach", "HEAD"], cwd=root, check=True)
+        return root
+
+    @staticmethod
+    def generate(root: Path, output: Path) -> None:
+        RELEASE.generate_handoff_script(
+            HandoffScriptTests.VERSION,
+            HandoffScriptTests.APPROVALS,
+            output,
+            root=root,
+        )
+
+    @staticmethod
+    def run_handoff(
+        worktree: Path,
+        script_path: Path,
+        stdin: bytes,
+        *,
+        tty: bool,
+    ) -> tuple[int, str]:
+        transcript = worktree.parent / "typescript"
+        env = {
+            "STUB_LOG": str(worktree.parent / "stub.log"),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+        }
+        if tty:
+            command = [
+                "script",
+                "-qec",
+                f"cd {shlex.quote(str(worktree))} && bash {shlex.quote(str(script_path))}",
+                str(transcript),
+            ]
+            completed = subprocess.run(
+                command,
+                input=stdin,
+                capture_output=True,
+                text=False,
+                timeout=120,
+                env=env,
+            )
+            output = (
+                transcript.read_text(encoding="utf-8", errors="replace")
+                if transcript.exists()
+                else ""
+            )
+        else:
+            completed = subprocess.run(
+                ["bash", str(script_path)],
+                input=stdin,
+                capture_output=True,
+                text=False,
+                timeout=120,
+                cwd=worktree,
+                env=env,
+            )
+            output = completed.stderr.decode("utf-8", "replace")
+        return completed.returncode, output
+
+    @staticmethod
+    def log_lines(worktree: Path) -> list[str]:
+        log = worktree.parent / "stub.log"
+        if not log.exists():
+            return []
+        return log.read_text(encoding="utf-8").splitlines()
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory(prefix="tenferro-handoff-")
+        self.worktree = self.make_worktree(Path(self._directory.name))
+        self.output = Path(self._directory.name) / "publish.sh"
+        self.generate(self.worktree, self.output)
+
+    def tearDown(self) -> None:
+        self._directory.cleanup()
+
+    def test_generated_script_is_owner_only_and_parses(self) -> None:
+        mode = stat.S_IMODE(self.output.stat().st_mode)
+        self.assertEqual(mode, 0o700)
+        self.assertEqual(
+            subprocess.run(["bash", "-n", str(self.output)]).returncode, 0
+        )
+
+    def test_exact_y_runs_preflight_then_execute_with_approvals(self) -> None:
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            self.log_lines(self.worktree),
+            [
+                f"{self.VERSION} --approve-new-package "
+                "tenferro-internal-cpu-kernels",
+                f"{self.VERSION} --approve-new-package "
+                "tenferro-internal-cpu-kernels --execute",
+            ],
+        )
+
+    def test_non_y_answers_abort_before_any_execute(self) -> None:
+        for stdin in (b"n\n", b"Y\n", b"yes\n", b""):
+            with self.subTest(stdin=stdin):
+                log = self.worktree.parent / "stub.log"
+                transcript = self.worktree.parent / "typescript"
+                log.unlink(missing_ok=True)
+                transcript.unlink(missing_ok=True)
+                returncode, _output = self.run_handoff(
+                    self.worktree, self.output, stdin, tty=True
+                )
+                self.assertEqual(returncode, 1)
+                lines = self.log_lines(self.worktree)
+                self.assertEqual(len(lines), 1)
+                self.assertNotIn("--execute", lines[0])
+
+    def test_non_tty_stdin_aborts_before_any_helper_invocation(self) -> None:
+        returncode, stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=False
+        )
+        self.assertEqual(returncode, 1)
+        self.assertIn("not a terminal", stderr)
+        self.assertEqual(self.log_lines(self.worktree), [])
+
+    def test_multiple_approvals_are_forwarded_verbatim(self) -> None:
+        approvals = {"tenferro-internal-cpu-kernels", "t4a-tblis-src"}
+        output = Path(self._directory.name) / "multi.sh"
+        RELEASE.generate_handoff_script(self.VERSION, approvals, output, root=self.worktree)
+        returncode, _output = self.run_handoff(self.worktree, output, b"y\n", tty=True)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            self.log_lines(self.worktree),
+            [
+                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                "--approve-new-package tenferro-internal-cpu-kernels",
+                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                "--approve-new-package tenferro-internal-cpu-kernels --execute",
+            ],
+        )
+
+    def test_checksum_mismatch_aborts_before_any_helper_invocation(self) -> None:
+        mutations = (
+            ("scripts/release-publish.py", "print('tampered')\n"),
+            ("ai/contribution-workflows/release-publish.md", "\n# tampered\n"),
+        )
+        for relative, suffix in mutations:
+            with self.subTest(relative=relative):
+                log = self.worktree.parent / "stub.log"
+                transcript = self.worktree.parent / "typescript"
+                log.unlink(missing_ok=True)
+                transcript.unlink(missing_ok=True)
+                target = self.worktree / relative
+                original = target.read_text(encoding="utf-8")
+                target.write_text(original + suffix, encoding="utf-8")
+                returncode, output = self.run_handoff(
+                    self.worktree, self.output, b"y\n", tty=True
+                )
+                self.assertEqual(returncode, 1)
+                self.assertIn("checksum mismatch", output)
+                self.assertEqual(self.log_lines(self.worktree), [])
+                target.write_text(original, encoding="utf-8")
+
+    def test_dirty_or_attached_worktree_aborts_before_any_helper_invocation(
+        self,
+    ) -> None:
+        (self.worktree / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 1)
+        self.assertEqual(self.log_lines(self.worktree), [])
+        (self.worktree / "untracked.txt").unlink()
+
+        subprocess.run(
+            ["git", "checkout", "-q", "master"], cwd=self.worktree, check=True
+        )
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 1)
+        self.assertEqual(self.log_lines(self.worktree), [])
+
+    def test_generator_rejects_output_inside_worktree_and_bad_versions(self) -> None:
+        with self.assertRaisesRegex(
+            RELEASE.ReleaseError, "outside the release worktree"
+        ):
+            RELEASE.generate_handoff_script(
+                self.VERSION, self.APPROVALS, self.worktree / "publish.sh", root=self.worktree
+            )
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "version must be exact"):
+            RELEASE.generate_handoff_script(
+                "0.3", self.APPROVALS, self.output, root=self.worktree
+            )
+
+    def test_cli_generates_handoff_script(self) -> None:
+        output = Path(self._directory.name) / "cli-publish.sh"
+        self.assertEqual(
+            RELEASE.main(
+                [
+                    self.VERSION,
+                    "--approve-new-package",
+                    "tenferro-internal-cpu-kernels",
+                    "--generate-script",
+                    str(output),
+                ]
+            ),
+            0,
+        )
+        self.assertTrue(output.exists())
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
+
+
+class VerifyReleaseCiTests(unittest.TestCase):
+    COMMIT = "a" * 40
+
+    def completed_run(self, name: str, **overrides: object) -> dict:
+        run: dict[str, object] = {
+            "name": name,
+            "head_sha": self.COMMIT,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        run.update(overrides)
+        return run
+
+    def runner_for(self, runs: list[dict], *, invalid_json: bool = False) -> Callable:
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            body = "not json" if invalid_json else json.dumps({"check_runs": runs})
+            return subprocess.CompletedProcess(command, 0, body, "")
+
+        return runner
+
+    def test_accepts_all_required_checks_completed_successfully(self) -> None:
+        runs = [
+            self.completed_run("workspace-tests"),
+            self.completed_run("docs"),
+            self.completed_run("other-job"),
+        ]
+        RELEASE.verify_release_ci(
+            self.COMMIT, {"workspace-tests", "docs"}, runner=self.runner_for(runs)
+        )
+
+    def test_missing_required_check_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "missing"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests", "docs"}, runner=self.runner_for([])
+            )
+
+    def test_wrong_commit_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", head_sha="b" * 40)]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "different commit"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_incomplete_status_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", status="in_progress")]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "not completed"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_unsuccessful_conclusion_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", conclusion="failure")]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "did not succeed"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_invalid_gh_output_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "invalid JSON"):
+            RELEASE.verify_release_ci(
+                self.COMMIT,
+                {"workspace-tests"},
+                runner=self.runner_for([], invalid_json=True),
+            )
+
+    def test_multiple_paginated_pages_are_flattened(self) -> None:
+        runs = [
+            self.completed_run("workspace-tests"),
+            self.completed_run("docs"),
+        ]
+        payload = json.dumps(
+            [
+                {"check_runs": [runs[0]]},
+                {"check_runs": [runs[1]]},
+            ]
+        )
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, payload, "")
+
+        RELEASE.verify_release_ci(
+            self.COMMIT, {"workspace-tests", "docs"}, runner=runner
+        )
+
+    def test_slurped_single_page_is_accepted(self) -> None:
+        # `gh api --paginate --slurp` always wraps pages in an outer array,
+        # even when there is only one page.
+        payload = json.dumps(
+            [{"check_runs": [self.completed_run("workspace-tests")]}]
+        )
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, payload, "")
+
+        RELEASE.verify_release_ci(self.COMMIT, {"workspace-tests"}, runner=runner)
+
+    def test_malformed_slurped_page_fails_closed(self) -> None:
+        payloads = (
+            json.dumps([{"check_runs": [self.completed_run("workspace-tests")]}, "junk"]),
+            json.dumps([{"check_runs": [self.completed_run("workspace-tests")]}, {"total_count": 1}]),
+            json.dumps([{"check_runs": "not-a-list"}]),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                def runner(
+                    command: list[str], **_kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    return subprocess.CompletedProcess(command, 0, payload, "")
+
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.verify_release_ci(
+                        self.COMMIT, {"workspace-tests"}, runner=runner
+                    )
+
+    def test_canonical_query_names_repository_and_paginates(self) -> None:
+        commands: list[list[str]] = []
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "{}", "")
+
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "missing"):
+            RELEASE.verify_release_ci(self.COMMIT, {"workspace-tests"}, runner=runner)
+        self.assertEqual(
+            commands,
+            [
+                [
+                    "gh",
+                    "api",
+                    f"repos/tensor4all/tenferro-rs/commits/{self.COMMIT}/check-runs",
+                    "--paginate",
+                    "--slurp",
+                ]
+            ],
+        )
 
 
 class GitDependencyTests(unittest.TestCase):
@@ -605,7 +1025,7 @@ class OrchestrationTests(unittest.TestCase):
             ],
         )
 
-    def assert_runtime_bootstrap_commands(
+    def assert_runtime_commands(
         self, runtime_exists: bool, cpu_exists: bool = False
     ) -> None:
         cargo_commands: list[list[str]] = []
@@ -664,15 +1084,10 @@ class OrchestrationTests(unittest.TestCase):
                 delay=0,
             )
 
-        patch = (
-            "patch.crates-io.tenferro-cpu.path="
-            + json.dumps(str((root / "crates/tenferro-cpu").resolve()))
-        )
-        bootstrap = ["--no-verify", "--config", patch]
         self.assertEqual(
             cargo_commands,
             [
-                ["cargo", "package", "-p", "tenferro-runtime", "--locked", *bootstrap],
+                ["cargo", "package", "-p", "tenferro-runtime", "--locked"],
                 *(
                     []
                     if runtime_exists
@@ -686,7 +1101,6 @@ class OrchestrationTests(unittest.TestCase):
                             "--locked",
                             "--registry",
                             "crates-io",
-                            *bootstrap,
                         ],
                         [
                             "cargo",
@@ -696,7 +1110,6 @@ class OrchestrationTests(unittest.TestCase):
                             "--locked",
                             "--registry",
                             "crates-io",
-                            *bootstrap,
                         ],
                     ]
                 ),
@@ -728,17 +1141,20 @@ class OrchestrationTests(unittest.TestCase):
                 ),
             ],
         )
+        for command in cargo_commands:
+            self.assertNotIn("--no-verify", command)
+            self.assertNotIn("--config", command)
 
-    def test_runtime_bootstrap_patches_tag_cpu_while_both_are_missing(self) -> None:
-        self.assert_runtime_bootstrap_commands(runtime_exists=False)
+    def test_runtime_publishes_without_patch_while_both_are_missing(self) -> None:
+        self.assert_runtime_commands(runtime_exists=False)
 
-    def test_runtime_bootstrap_patches_tag_cpu_on_restart_after_runtime_publish(self) -> None:
-        self.assert_runtime_bootstrap_commands(runtime_exists=True)
+    def test_runtime_publishes_without_patch_on_restart_after_runtime_publish(self) -> None:
+        self.assert_runtime_commands(runtime_exists=True)
 
-    def test_runtime_bootstrap_is_stable_after_runtime_and_cpu_publish(self) -> None:
-        self.assert_runtime_bootstrap_commands(runtime_exists=True, cpu_exists=True)
+    def test_runtime_commands_stable_after_runtime_and_cpu_publish(self) -> None:
+        self.assert_runtime_commands(runtime_exists=True, cpu_exists=True)
 
-    def assert_xla_bootstrap_commands(
+    def assert_xla_commands(
         self, xla_exists: bool, einsum_exists: bool = False
     ) -> None:
         cargo_commands: list[list[str]] = []
@@ -800,16 +1216,11 @@ class OrchestrationTests(unittest.TestCase):
                 delay=0,
             )
 
-        patch = (
-            "patch.crates-io.tenferro-einsum.path="
-            + json.dumps(str((root / "crates/tenferro-einsum").resolve()))
-        )
-        bootstrap = ["--no-verify", "--config", patch]
         xla_commands = [command for command in cargo_commands if "tenferro-xla" in command]
         self.assertEqual(
             xla_commands,
             [
-                ["cargo", "package", "-p", "tenferro-xla", "--locked", *bootstrap],
+                ["cargo", "package", "-p", "tenferro-xla", "--locked"],
                 *(
                     []
                     if xla_exists
@@ -823,7 +1234,6 @@ class OrchestrationTests(unittest.TestCase):
                             "--locked",
                             "--registry",
                             "crates-io",
-                            *bootstrap,
                         ],
                         [
                             "cargo",
@@ -833,7 +1243,6 @@ class OrchestrationTests(unittest.TestCase):
                             "--locked",
                             "--registry",
                             "crates-io",
-                            *bootstrap,
                         ],
                     ]
                 ),
@@ -842,18 +1251,17 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(any("tenferro-cpu" in command for command in cargo_commands))
         self.assertTrue(any("tenferro-einsum" in command for command in cargo_commands))
         for command in cargo_commands:
-            if "tenferro-xla" not in command:
-                self.assertNotIn("--no-verify", command)
-                self.assertNotIn(patch, command)
+            self.assertNotIn("--no-verify", command)
+            self.assertNotIn("--config", command)
 
-    def test_xla_bootstrap_patches_tag_einsum_while_both_are_missing(self) -> None:
-        self.assert_xla_bootstrap_commands(xla_exists=False)
+    def test_xla_publishes_without_patch_while_both_are_missing(self) -> None:
+        self.assert_xla_commands(xla_exists=False)
 
-    def test_xla_bootstrap_patches_tag_einsum_on_restart_after_xla_publish(self) -> None:
-        self.assert_xla_bootstrap_commands(xla_exists=True)
+    def test_xla_publishes_without_patch_on_restart_after_xla_publish(self) -> None:
+        self.assert_xla_commands(xla_exists=True)
 
-    def test_xla_bootstrap_is_stable_after_xla_and_einsum_publish(self) -> None:
-        self.assert_xla_bootstrap_commands(xla_exists=True, einsum_exists=True)
+    def test_xla_commands_stable_after_xla_and_einsum_publish(self) -> None:
+        self.assert_xla_commands(xla_exists=True, einsum_exists=True)
 
     def test_rejects_differing_dry_run_staging_archives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
