@@ -146,24 +146,25 @@ Agents must stop after validation and must never execute a publication.
      --execute
    ```
 
-   Before each `cargo publish`, the helper runs `cargo package`, inspects the
-   generated `.crate` file list and normalized metadata (name, version,
-   description, license, repository, homepage, documentation, README,
-   `rust-version`, keywords, categories, and `include`/`exclude`), verifies
+   Before each `cargo publish`, the helper waits for every prerequisite registry
+   archive, then runs `cargo package` and inspects that exact local `.crate` file.
+   It checks the file list and normalized metadata (name, version, description,
+   license, repository, homepage, documentation, README, `rust-version`,
+   keywords, categories, and `include`/`exclude`), verifies
    `.cargo_vcs_info.json` equals the clean tagged commit, and compares every
    source-derived regular archive file byte-for-byte with the tagged package
-   tree and requires the file list to equal `cargo package --list` for that tag.
-   Cargo's normalized `Cargo.toml`, generated `Cargo.lock`, and VCS file are
-   validated as generated files; `Cargo.toml.orig` must equal the tagged
-   source manifest. Unmapped, changed, or required missing files abort. The
-   helper then runs `cargo publish --dry-run` and inspects that generated archive
-   again. It packages, dry-runs, and publishes one crate at a time, waiting for
-   every prerequisite archive to be visible with matching tag provenance before
-   packaging its dependents. Do not pre-package the whole workspace: lower-layer
-   registry versions must exist before dependent packages can resolve.
+   tree. The file list must equal `cargo package --list` for that tag.
+   `Cargo.toml.orig` must equal the tagged source manifest. The helper retains
+   every regular file's exact bytes, including Cargo's normalized `Cargo.toml`,
+   generated `Cargo.lock`, and VCS file, and requires the dry-run and downloaded
+   registry archives to match them exactly. Unmapped, changed, or required
+   missing files abort. It packages, dry-runs, and publishes one crate at a time.
+   Do not pre-package the whole workspace: lower-layer registry versions must
+   exist before dependent packages can resolve.
 5. The helper is restart-safe and fail-closed: it skips an already-published
-   target version only after downloading its registry archive and verifying its
-   provenance against the tag. Any missing approval, metadata/provenance
+   target version only after recreating the exact local archive from the clean
+   tag, then downloading its registry archive and matching every regular file's
+   bytes as well as tagged-source provenance. Any missing approval, metadata/provenance
    mismatch, network ambiguity, command failure, or required manifest change
    aborts publication. Fix manifest problems on `main` through Phase 1 and
    restart at Phase 2 with the next patch version.

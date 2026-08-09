@@ -121,3 +121,19 @@ registry, archive, source-tree, clock, checkout, metadata, and order hooks cover
 restart, propagation, failure, and irreversible-command ordering without
 network access or publication. These tests and the publish-layout tests run in
 the normal `ci-config` profile.
+
+### Final-review round 2 corrections
+
+Every registry comparison now starts from a newly generated and inspected local
+archive from the clean tag. The helper retains the complete regular-file byte
+map and requires both dry-run and crates.io archives to match it exactly, closing
+the gap for normalized dependency changes, `Cargo.lock`, and semantically valid
+but byte-different VCS metadata. Resume follows the same DAG sequence: attest
+prerequisite registry archives, create the local exact-tag archive, then compare
+the downloaded target before skip.
+
+Tar member prefix, traversal, and duplicate validation now runs before directory
+entries are skipped. Network response truncation and HTTP protocol/read errors
+are converted to bounded, actionable release failures. Focused regressions cover
+generated-file mutations, malicious traversal directories, HTTP failures, exact
+resume comparison, and prerequisite-before-dependent packaging.

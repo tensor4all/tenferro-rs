@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import io
 import json
@@ -135,6 +136,7 @@ include = ["src/**", "README.md"]
         commit: str = COMMIT,
         dirty: bool = False,
         changes: dict[str, bytes | None] | None = None,
+        extra_members: tuple[tarfile.TarInfo, ...] = (),
     ) -> bytes:
         prefix = "tenferro-fixture-0.4.0/"
         files: dict[str, bytes] = {
@@ -158,6 +160,8 @@ include = ["src/**", "README.md"]
                 info = tarfile.TarInfo(prefix + name)
                 info.size = len(data)
                 archive.addfile(info, io.BytesIO(data))
+            for info in extra_members:
+                archive.addfile(info)
         return output.getvalue()
 
     @staticmethod
@@ -168,7 +172,11 @@ include = ["src/**", "README.md"]
             "README.md": b"fixture\n",
         }.get(path)
 
-    def inspect(self, archive: bytes) -> RELEASE.ArchiveInspection:
+    def inspect(
+        self,
+        archive: bytes,
+        expected_contents: dict[str, bytes] | None = None,
+    ) -> RELEASE.ArchiveInspection:
         return RELEASE.inspect_crate_archive(
             archive,
             "tenferro-fixture",
@@ -184,12 +192,59 @@ include = ["src/**", "README.md"]
                 "README.md",
                 "src/lib.rs",
             },
+            expected_contents,
         )
 
     def test_attests_metadata_generated_files_and_tagged_source_bytes(self) -> None:
         inspection = self.inspect(self.archive())
         self.assertEqual(inspection.metadata["rust-version"], "1.96")
         self.assertIn("tenferro-fixture-0.4.0/README.md", inspection.files)
+        self.assertEqual(inspection.contents["Cargo.lock"], b"# generated\n")
+
+    def test_registry_archive_must_match_local_generated_files_exactly(self) -> None:
+        local = self.inspect(self.archive())
+        mutations = (
+            {
+                "Cargo.toml": self.NORMALIZED_MANIFEST
+                + b'\n[dependencies.injected]\nversion = "9"\n'
+            },
+            {"Cargo.lock": b"not valid = [toml"},
+            {"Cargo.lock": b"# different but valid\nversion = 4\n"},
+            {
+                ".cargo_vcs_info.json": json.dumps(
+                    {"git": {"sha1": self.COMMIT, "dirty": False}, "extra": True}
+                ).encode()
+            },
+        )
+        for changes in mutations:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(
+                    RELEASE.ReleaseError, "differ.*exact local tagged archive"
+                ):
+                    self.inspect(
+                        self.archive(changes=changes),
+                        expected_contents=local.contents,
+                    )
+
+    def test_rejects_directory_traversal_before_skipping_directory(self) -> None:
+        malicious = tarfile.TarInfo("tenferro-fixture-0.4.0/../escape")
+        malicious.type = tarfile.DIRTYPE
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "invalid crate archive member path"):
+            self.inspect(self.archive(extra_members=(malicious,)))
+
+    def test_validates_directory_prefix_and_duplicates(self) -> None:
+        outside = tarfile.TarInfo("outside")
+        outside.type = tarfile.DIRTYPE
+        duplicate = tarfile.TarInfo("tenferro-fixture-0.4.0/src")
+        duplicate.type = tarfile.DIRTYPE
+        cases = (
+            ((outside,), "outside expected prefix"),
+            ((duplicate, duplicate), "duplicate crate archive member path"),
+        )
+        for members, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(RELEASE.ReleaseError, message):
+                    self.inspect(self.archive(extra_members=members))
 
     def test_rejects_dirty_wrong_commit_tampered_unmapped_and_missing_source(self) -> None:
         cases = (
@@ -230,6 +285,15 @@ class RegistryAndApprovalTests(unittest.TestCase):
         self.assertFalse(client.package_exists("new-package"))
         self.assertEqual(len(calls), 2)
 
+    def test_default_transport_converts_incomplete_response_reads(self) -> None:
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.read.side_effect = http.client.IncompleteRead(b"partial", 10)
+        with mock.patch.object(RELEASE.urllib.request, "urlopen", return_value=response):
+            with self.assertRaisesRegex(RELEASE.ReleaseError, "crates.io request failed"):
+                RELEASE.crates_io_transport("https://example.invalid/archive")
+
     def test_new_package_approval_supports_exact_published_resume_only(self) -> None:
         packages = {"new": False, "resumed": True, "stale": True}
         versions = {"new": False, "resumed": True, "stale": False}
@@ -240,11 +304,18 @@ class RegistryAndApprovalTests(unittest.TestCase):
             RELEASE.validate_new_package_approvals(packages, versions, {"new", "stale"})
 
     def test_transport_failures_are_actionable(self) -> None:
-        def transport(_url: str) -> tuple[int, bytes]:
-            raise TimeoutError("offline")
+        failures = (
+            TimeoutError("offline"),
+            http.client.IncompleteRead(b"partial", 10),
+            http.client.HTTPException("broken response"),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                def transport(_url: str) -> tuple[int, bytes]:
+                    raise failure
 
-        with self.assertRaisesRegex(RELEASE.ReleaseError, "crates.io request failed"):
-            RELEASE.CratesIoClient(transport).package_exists("fixture")
+                with self.assertRaisesRegex(RELEASE.ReleaseError, "crates.io request failed"):
+                    RELEASE.CratesIoClient(transport).package_exists("fixture")
 
 
 class CommandAndCheckoutTests(unittest.TestCase):
@@ -385,9 +456,14 @@ class OrchestrationTests(unittest.TestCase):
                     client.package_versions["crate-a"] = True
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *_args: object) -> RELEASE.ArchiveInspection:
+            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
                 events.append(f"inspect:{data.decode()}")
-                return RELEASE.ArchiveInspection({}, ())
+                expected_contents = args[-1]
+                if expected_contents is not None:
+                    self.assertEqual(expected_contents, {"Cargo.toml": b"generated"})
+                return RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                )
 
             RELEASE.publish_release(
                 self.VERSION,
@@ -426,21 +502,40 @@ class OrchestrationTests(unittest.TestCase):
             root = Path(directory)
             self.workspace(root)
             metadata = self.metadata(root, ["new-crate"])
+            archive = root / "target/package/new-crate-0.4.0.crate"
+
+            def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["cargo", "package"]:
+                    events.append("package")
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(b"exact-tag")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+                expected_contents = args[-1]
+                events.append(f"inspect:{data.decode()}")
+                if data == b"new-crate":
+                    self.assertEqual(
+                        expected_contents, {"Cargo.toml": b"exact-tag-generated"}
+                    )
+                else:
+                    self.assertIsNone(expected_contents)
+                return RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"exact-tag-generated"}
+                )
+
             RELEASE.publish_release(
                 self.VERSION,
                 {"new-crate"},
-                True,
+                False,
                 root=root,
-                runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+                runner=runner,
                 client=FakeClient({"new-crate": True}, events),
                 checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
                 metadata_loader=lambda **_kwargs: metadata,
                 order_loader=lambda _text: ["new-crate"],
                 package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
-                archive_inspector=lambda data, *_args: events.append(
-                    f"inspect:{data.decode()}"
-                )
-                or RELEASE.ArchiveInspection({}, ()),
+                archive_inspector=inspect,
                 source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
                 attempts=1,
                 delay=0,
@@ -449,10 +544,63 @@ class OrchestrationTests(unittest.TestCase):
             events,
             [
                 "exists:new-crate",
+                "package",
+                "inspect:exact-tag",
                 "download:new-crate",
                 "inspect:new-crate",
             ],
         )
+
+    def test_resume_packages_only_after_prerequisite_archive_is_attested(self) -> None:
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.workspace(root)
+            metadata = self.metadata(root, ["crate-a", "crate-b"])
+            metadata["packages"][1]["dependencies"] = [
+                {"name": "crate-a", "kind": "normal"}
+            ]
+
+            def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    events.append(f"package:{crate}")
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(f"local:{crate}".encode())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+                crate = args[0]
+                expected_contents = args[-1]
+                events.append(f"inspect:{data.decode()}")
+                contents = {"Cargo.toml": f"generated:{crate}".encode()}
+                if data.startswith(b"crate-"):
+                    self.assertEqual(expected_contents, contents)
+                return RELEASE.ArchiveInspection({}, (), contents)
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                False,
+                root=root,
+                runner=runner,
+                client=FakeClient({"crate-a": True, "crate-b": True}, events),
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: ["crate-a", "crate-b"],
+                package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
+                archive_inspector=inspect,
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        prerequisite_attestations = [
+            index for index, event in enumerate(events) if event == "inspect:crate-a"
+        ]
+        self.assertEqual(len(prerequisite_attestations), 2)
+        self.assertLess(prerequisite_attestations[-1], events.index("package:crate-b"))
 
     def test_propagation_retries_then_succeeds(self) -> None:
         events: list[str] = []
@@ -475,12 +623,18 @@ class OrchestrationTests(unittest.TestCase):
             "crates/crate-a",
             lambda _path: None,
             {"Cargo.toml"},
-            archive_inspector=lambda *_args: RELEASE.ArchiveInspection({}, ()),
+            {"Cargo.toml": b"generated"},
+            archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                {}, (), {"Cargo.toml": b"generated"}
+            ),
             attempts=3,
             delay=0,
             sleeper=lambda _delay: events.append("sleep"),
         )
-        self.assertEqual(inspection, RELEASE.ArchiveInspection({}, ()))
+        self.assertEqual(
+            inspection,
+            RELEASE.ArchiveInspection({}, (), {"Cargo.toml": b"generated"}),
+        )
         self.assertEqual(events.count("sleep"), 2)
         self.assertEqual(events[-1], "download:crate-a")
 
@@ -496,7 +650,10 @@ class OrchestrationTests(unittest.TestCase):
                 "crates/crate-a",
                 lambda _path: None,
                 {"Cargo.toml"},
-                archive_inspector=lambda *_args: RELEASE.ArchiveInspection({}, ()),
+                {"Cargo.toml": b"generated"},
+                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                ),
                 attempts=3,
                 delay=0,
                 sleeper=lambda _delay: events.append("sleep"),

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import io
 import json
 import re
@@ -45,6 +46,7 @@ class GitDependency(NamedTuple):
 class ArchiveInspection(NamedTuple):
     metadata: dict
     files: tuple[str, ...]
+    contents: dict[str, bytes]
 
 
 def run(
@@ -228,11 +230,11 @@ def crates_io_transport(url: str) -> tuple[int, bytes]:
     except urllib.error.HTTPError as error:
         try:
             return error.code, error.read()
-        except OSError as read_error:
+        except (OSError, EOFError, http.client.HTTPException) as read_error:
             raise ReleaseError(
                 f"crates.io error response could not be read for {url}: {read_error}"
             ) from read_error
-    except (OSError, TimeoutError) as error:
+    except (OSError, TimeoutError, EOFError, http.client.HTTPException) as error:
         raise ReleaseError(f"crates.io request failed for {url}: {error}") from error
 
 
@@ -251,7 +253,7 @@ class CratesIoClient:
             result = self.transport(url)
         except ReleaseError:
             raise
-        except (OSError, TimeoutError) as error:
+        except (OSError, TimeoutError, EOFError, http.client.HTTPException) as error:
             raise ReleaseError(f"crates.io request failed for {url}: {error}") from error
         if (
             not isinstance(result, tuple)
@@ -342,34 +344,44 @@ def inspect_crate_archive(
     package_root: str,
     source_reader: TaggedSourceReader,
     expected_files: set[str],
+    expected_contents: Mapping[str, bytes] | None = None,
 ) -> ArchiveInspection:
     prefix = f"{expected_name}-{expected_version}/"
     try:
         with tarfile.open(fileobj=io.BytesIO(archive_data), mode="r:gz") as archive:
             contents: dict[str, bytes] = {}
             full_names: list[str] = []
+            member_paths: set[str] = set()
+            archive_root = prefix.removesuffix("/")
             for member in archive.getmembers():
+                if member.name == archive_root and member.isdir():
+                    relative = ""
+                elif member.name.startswith(prefix):
+                    relative = member.name[len(prefix) :]
+                else:
+                    raise ReleaseError(
+                        f"crate archive member is outside expected prefix {prefix!r}: "
+                        f"{member.name!r}"
+                    )
+                parts = relative.split("/") if relative else []
+                path = PurePosixPath(relative)
+                if (
+                    (not relative and not member.isdir())
+                    or path.is_absolute()
+                    or any(part in {"", ".", ".."} for part in parts)
+                ):
+                    raise ReleaseError(f"invalid crate archive member path: {member.name!r}")
+                canonical = path.as_posix() if relative else ""
+                if canonical in member_paths:
+                    raise ReleaseError(f"duplicate crate archive member path: {member.name!r}")
+                member_paths.add(canonical)
                 if member.isdir():
                     continue
                 if not member.isfile():
                     raise ReleaseError(
                         f"crate archive has unsupported non-regular member {member.name!r}"
                     )
-                if not member.name.startswith(prefix):
-                    raise ReleaseError(
-                        f"crate archive member is outside expected prefix {prefix!r}: "
-                        f"{member.name!r}"
-                    )
-                relative = member.name[len(prefix) :]
-                path = PurePosixPath(relative)
-                if (
-                    not relative
-                    or path.is_absolute()
-                    or ".." in path.parts
-                    or relative in contents
-                ):
-                    raise ReleaseError(f"invalid crate archive member path: {member.name!r}")
-                contents[relative] = _read_archive_member(archive, member)
+                contents[canonical] = _read_archive_member(archive, member)
                 full_names.append(member.name)
 
             actual_files = set(contents)
@@ -384,6 +396,21 @@ def inspect_crate_archive(
             missing = sorted(required - actual_files)
             if missing:
                 raise ReleaseError(f"crate archive is missing required files: {missing}")
+            if expected_contents is not None:
+                differing = sorted(
+                    relative
+                    for relative in actual_files
+                    if expected_contents.get(relative) != contents[relative]
+                )
+                if set(expected_contents) != actual_files:
+                    raise ReleaseError(
+                        "crate archive file set differs from exact local tagged archive"
+                    )
+                if differing:
+                    raise ReleaseError(
+                        "crate archive members differ from exact local tagged archive: "
+                        f"{differing}"
+                    )
             manifest = tomllib.loads(contents["Cargo.toml"].decode("utf-8"))
             vcs = json.loads(contents[".cargo_vcs_info.json"].decode("utf-8"))
     except ReleaseError:
@@ -490,7 +517,7 @@ def inspect_crate_archive(
             raise ReleaseError(
                 f"crate archive member {relative!r} differs from tagged source {source_path!r}"
             )
-    return ArchiveInspection(package, tuple(sorted(full_names)))
+    return ArchiveInspection(package, tuple(sorted(full_names)), contents)
 
 
 def print_inspection(crate: str, inspection: ArchiveInspection) -> None:
@@ -670,6 +697,7 @@ def inspect_registry_archive(
     package_dir: str,
     source_reader: TaggedSourceReader,
     expected_files: set[str],
+    expected_contents: Mapping[str, bytes],
     *,
     archive_inspector: Callable = inspect_crate_archive,
 ) -> ArchiveInspection:
@@ -681,6 +709,7 @@ def inspect_registry_archive(
         package_dir,
         source_reader,
         expected_files,
+        expected_contents,
     )
 
 
@@ -692,6 +721,7 @@ def await_registry_archive(
     package_dir: str,
     source_reader: TaggedSourceReader,
     expected_files: set[str],
+    expected_contents: Mapping[str, bytes],
     *,
     archive_inspector: Callable = inspect_crate_archive,
     attempts: int = 40,
@@ -712,6 +742,7 @@ def await_registry_archive(
                     package_dir,
                     source_reader,
                     expected_files,
+                    expected_contents,
                     archive_inspector=archive_inspector,
                 )
             except ReleaseError as error:
@@ -742,6 +773,7 @@ def build_and_inspect_archive(
     expected_files: set[str],
     command: list[str],
     *,
+    expected_contents: Mapping[str, bytes] | None = None,
     runner: Callable = run,
     root: Path = ROOT,
     archive_inspector: Callable = inspect_crate_archive,
@@ -766,6 +798,7 @@ def build_and_inspect_archive(
         package_dir,
         source_reader,
         expected_files,
+        expected_contents,
     )
     print_inspection(crate, inspection)
     return inspection
@@ -856,8 +889,8 @@ def publish_release(
     validate_new_package_approvals(package_exists, version_exists, approvals)
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
-    already_published: set[str] = set()
-    expected_files_by_crate: dict[str, set[str]] = {}
+    positions = {crate: index for index, crate in enumerate(order)}
+    prerequisites_by_crate: dict[str, list[str]] = {}
     for crate in order:
         package = packages[crate]
         package_version = package.get("version")
@@ -865,31 +898,6 @@ def publish_release(
             raise ReleaseError(
                 f"{crate} version {package_version!r} does not match {version}"
             )
-        if version_exists[crate]:
-            expected_files = package_files_loader(crate, runner=runner, root=root)
-            expected_files_by_crate[crate] = expected_files
-            inspection = inspect_registry_archive(
-                registry,
-                crate,
-                version,
-                commit,
-                package_root(package, root=root),
-                source_reader,
-                expected_files,
-                archive_inspector=archive_inspector,
-            )
-            print_inspection(crate, inspection)
-            already_published.add(crate)
-            print(f"{crate} {version}: already published from this tag; skip")
-
-    if not execute:
-        print("preflight passed; no packages published (rerun with --execute)")
-        return
-
-    for crate in order:
-        if crate in already_published:
-            continue
-        package = packages[crate]
         dependencies = package.get("dependencies")
         if not isinstance(dependencies, list) or any(
             not isinstance(dependency, dict) for dependency in dependencies
@@ -900,9 +908,31 @@ def publish_release(
             for dependency in dependencies
             if dependency.get("kind") != "dev"
             and isinstance(dependency.get("name"), str)
-            and dependency["name"] in order
+            and dependency["name"] in positions
         )
-        for prerequisite in prerequisites:
+        misplaced = [
+            prerequisite
+            for prerequisite in prerequisites
+            if positions[prerequisite] >= positions[crate]
+        ]
+        if misplaced:
+            raise ReleaseError(
+                f"publication order places {crate} before prerequisites {misplaced}"
+            )
+        prerequisites_by_crate[crate] = prerequisites
+
+    expected_files_by_crate: dict[str, set[str]] = {}
+    expected_contents_by_crate: dict[str, dict[str, bytes]] = {}
+    for crate in order:
+        if not execute and not version_exists[crate]:
+            continue
+        package = packages[crate]
+        for prerequisite in prerequisites_by_crate[crate]:
+            if prerequisite not in expected_contents_by_crate:
+                raise ReleaseError(
+                    f"cannot attest {crate}: prerequisite {prerequisite} {version} "
+                    "has no exact local tagged archive"
+                )
             await_registry_archive(
                 registry,
                 prerequisite,
@@ -911,6 +941,7 @@ def publish_release(
                 package_root(packages[prerequisite], root=root),
                 source_reader,
                 expected_files_by_crate[prerequisite],
+                expected_contents_by_crate[prerequisite],
                 archive_inspector=archive_inspector,
                 attempts=attempts,
                 delay=delay,
@@ -920,7 +951,7 @@ def publish_release(
         package_dir = package_root(package, root=root)
         expected_files = package_files_loader(crate, runner=runner, root=root)
         expected_files_by_crate[crate] = expected_files
-        build_and_inspect_archive(
+        local_inspection = build_and_inspect_archive(
             metadata,
             crate,
             version,
@@ -933,6 +964,24 @@ def publish_release(
             root=root,
             archive_inspector=archive_inspector,
         )
+        expected_contents_by_crate[crate] = local_inspection.contents
+
+        if version_exists[crate]:
+            inspection = inspect_registry_archive(
+                registry,
+                crate,
+                version,
+                commit,
+                package_dir,
+                source_reader,
+                expected_files,
+                local_inspection.contents,
+                archive_inspector=archive_inspector,
+            )
+            print_inspection(crate, inspection)
+            print(f"{crate} {version}: already published from this tag; skip")
+            continue
+
         build_and_inspect_archive(
             metadata,
             crate,
@@ -951,6 +1000,7 @@ def publish_release(
                 "--registry",
                 "crates-io",
             ],
+            expected_contents=local_inspection.contents,
             runner=runner,
             root=root,
             archive_inspector=archive_inspector,
@@ -976,12 +1026,16 @@ def publish_release(
             package_dir,
             source_reader,
             expected_files,
+            local_inspection.contents,
             archive_inspector=archive_inspector,
             attempts=attempts,
             delay=delay,
             sleeper=sleeper,
         )
         print_inspection(crate, inspection)
+
+    if not execute:
+        print("preflight passed; no packages published (rerun with --execute)")
 
 
 def main(argv: list[str] | None = None) -> int:
