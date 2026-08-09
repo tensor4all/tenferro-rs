@@ -132,8 +132,11 @@ Agents must stop after validation and must never execute a publication.
      --approve-new-package tenferro-internal-cpu-kernels
    ```
 
-   Never infer this approval from a general release request. The helper also
-   rejects an approval argument for a package that crates.io reports is not new.
+   Never infer this approval from a general release request. On restart, keep
+   the exact command unchanged: the helper accepts that approval after the
+   package exists only when crates.io also has the target version, whose archive
+   must still pass all checks before it is skipped. It rejects the approval as
+   stale when the package exists but the target version does not.
 4. After the preflight passes, the human operator repeats the same exact command
    with `--execute`:
 
@@ -147,10 +150,15 @@ Agents must stop after validation and must never execute a publication.
    generated `.crate` file list and normalized metadata (name, version,
    description, license, repository, homepage, documentation, README,
    `rust-version`, keywords, categories, and `include`/`exclude`), verifies
-   `.cargo_vcs_info.json` equals the clean tagged commit, runs
-   `cargo publish --dry-run`, and inspects that generated archive again. It
-   packages, dry-runs, and publishes one crate at a time, waiting for every
-   prerequisite archive to be visible with matching tag provenance before
+   `.cargo_vcs_info.json` equals the clean tagged commit, and compares every
+   source-derived regular archive file byte-for-byte with the tagged package
+   tree and requires the file list to equal `cargo package --list` for that tag.
+   Cargo's normalized `Cargo.toml`, generated `Cargo.lock`, and VCS file are
+   validated as generated files; `Cargo.toml.orig` must equal the tagged
+   source manifest. Unmapped, changed, or required missing files abort. The
+   helper then runs `cargo publish --dry-run` and inspects that generated archive
+   again. It packages, dry-runs, and publishes one crate at a time, waiting for
+   every prerequisite archive to be visible with matching tag provenance before
    packaging its dependents. Do not pre-package the whole workspace: lower-layer
    registry versions must exist before dependent packages can resolve.
 5. The helper is restart-safe and fail-closed: it skips an already-published

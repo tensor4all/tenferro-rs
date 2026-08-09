@@ -101,3 +101,23 @@ same registry-archive provenance check. Focused tests use injected transports
 and in-memory archives, so unit tests perform no network access. Live validation
 also confirmed all current strided, CubeCL, Cubek, and computegraph pin
 manifests and declared registry versions.
+
+### Final-review round 1 corrections
+
+Restart approval now distinguishes package existence from exact target-version
+existence. The documented approval remains valid after the newly approved crate
+has published, but only when its target version exists and its downloaded
+archive passes full verification; an existing package without that version is a
+stale approval and aborts.
+
+Archive provenance no longer trusts the VCS marker alone. Every source-derived
+regular archive member is mapped to the tagged package tree and compared
+byte-for-byte, and the archive list must equal Cargo's tagged package selection.
+Normalized `Cargo.toml`, generated `Cargo.lock`, and
+`.cargo_vcs_info.json` have explicit generated-file handling, while
+`Cargo.toml.orig` must match the tagged source manifest. This intentionally does
+not require source files omitted by Cargo's packaging rules. Injected command,
+registry, archive, source-tree, clock, checkout, metadata, and order hooks cover
+restart, propagation, failure, and irreversible-command ordering without
+network access or publication. These tests and the publish-layout tests run in
+the normal `ci-config` profile.
