@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
+import runpy
 import tomllib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +22,33 @@ CONSOLIDATED_CRATES = (
 
 
 class BuildArtifactContracts(unittest.TestCase):
+    def test_repository_cargo_config_disables_dev_debug_info_by_default(self) -> None:
+        config = tomllib.loads((ROOT / ".cargo" / "config.toml").read_text())
+        self.assertEqual(
+            config["env"]["CARGO_PROFILE_DEV_DEBUG"],
+            {"value": "0", "force": False},
+        )
+
+    def test_guide_cargo_environment_defaults_dev_debug_info_to_zero(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            script = runpy.run_path(
+                str(ROOT / "scripts" / "check-guide-dependency-snippets.py")
+            )
+            env = script["cargo_environment"](Path("/tmp/target"))
+
+        self.assertEqual(env["CARGO_PROFILE_DEV_DEBUG"], "0")
+
+    def test_guide_cargo_environment_preserves_dev_debug_info_override(self) -> None:
+        with patch.dict(
+            os.environ, {"CARGO_PROFILE_DEV_DEBUG": "2"}, clear=True
+        ):
+            script = runpy.run_path(
+                str(ROOT / "scripts" / "check-guide-dependency-snippets.py")
+            )
+            env = script["cargo_environment"](Path("/tmp/target"))
+
+        self.assertEqual(env["CARGO_PROFILE_DEV_DEBUG"], "2")
+
     def test_multi_file_integration_suites_link_once_per_crate(self) -> None:
         for crate in CONSOLIDATED_CRATES:
             crate_root = ROOT / "crates" / crate
@@ -77,7 +107,7 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        revision = "9da9b9f63e688eaf1bf4a78b718a01ac858b1f9f"
+        revision = "b29e7601ba090aa5eafc65b9bde5d9450282e0d8"
         for name in (
             "strided-view",
             "strided-traits",

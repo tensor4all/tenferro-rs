@@ -17,6 +17,13 @@ apple-shared = [
     "tenferro-fft/autodiff",
 ]
 doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/webgpu", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
+cuda = [
+    "dep:tenferro-fft",
+    "dep:tenferro-gpu",
+    "dep:tenferro-tensor",
+    "tenferro-fft/cuda",
+    "tenferro-gpu/cuda",
+]
 
 [dependencies]
 num-complex.workspace = true
@@ -107,6 +114,11 @@ required-features = ["apple-shared"]
 name = "apple_shared_cholesky"
 path = "src/bin/apple_shared_cholesky.rs"
 required-features = ["apple-shared"]
+
+[[bin]]
+name = "cuda_fft"
+path = "src/bin/cuda_fft.rs"
+required-features = ["cuda"]
 
 [[test]]
 name = "tutorial_binaries"

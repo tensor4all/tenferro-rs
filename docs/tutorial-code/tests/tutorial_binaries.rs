@@ -1,15 +1,34 @@
 use std::process::Command;
 
+const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
+
 fn run_tutorial(name: &str, path: &str) {
     let output = Command::new(path)
         .output()
         .unwrap_or_else(|err| panic!("failed to run tutorial binary {name}: {err}"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if let Some(skip) = stdout
+        .lines()
+        .chain(stderr.lines())
+        .find(|line| line.starts_with(TUTORIAL_SKIP_MARKER))
+    {
+        assert_eq!(
+            name, "cuda_fft",
+            "unexpected tutorial skip marker from {name}: {skip}"
+        );
+        assert!(
+            output.status.success(),
+            "tutorial binary {name} reported a skip but failed\nstatus: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
+        eprintln!("tutorial binary {name} skipped: {skip}");
+        return;
+    }
     assert!(
         output.status.success(),
-        "tutorial binary {name} failed\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        "tutorial binary {name} failed\nstatus: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
     );
 }
 
@@ -80,4 +99,6 @@ fn tutorial_binaries_run_successfully() {
             env!("CARGO_BIN_EXE_apple_shared_cholesky"),
         );
     }
+    #[cfg(feature = "cuda")]
+    run_tutorial("cuda_fft", env!("CARGO_BIN_EXE_cuda_fft"));
 }

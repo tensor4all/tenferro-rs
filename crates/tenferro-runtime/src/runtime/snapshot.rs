@@ -478,6 +478,29 @@ impl RuntimeConfigSnapshot {
         self.extensions.has_family(family_id)
     }
 
+    /// Return whether this snapshot contains an extension engine for one exact
+    /// family/engine pair.
+    ///
+    /// This narrow, doc-hidden query is the cross-crate eager-extension
+    /// contract used by `tenferro-ad` to validate an owner-selected module
+    /// without exposing module internals or widening [`ExtensionModule`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{EngineId, Runtime};
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let snapshot = runtime.snapshot()?;
+    /// let engine = EngineId::new("example.engine")?;
+    /// assert!(!snapshot.has_extension_engine("example.family.v1", &engine));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn has_extension_engine(&self, family_id: &'static str, engine_id: &EngineId) -> bool {
+        self.extensions.has_engine(family_id, engine_id)
+    }
+
     /// Return an immutable view of a registered engine slot.
     pub fn engine(&self, id: &EngineId) -> Option<EngineSnapshotView<'_>> {
         self.engine_indices
@@ -1565,6 +1588,196 @@ impl RuntimeReconfiguration<'_> {
         Ok(self)
     }
 
+    /// Ensure an extension module owns the selected family and engine
+    /// registration, installing it when absent.
+    ///
+    /// If the candidate already contains the incoming module ID with the exact
+    /// `(family_id, engine_id)` registration, this owner-scoped operation is a
+    /// no-op even when the incoming module is a fresh `Arc`. Otherwise it
+    /// validates the incoming module before [`Runtime::reconfigure`] can
+    /// publish it. A failed validation therefore leaves the previously
+    /// published module and snapshot untouched.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use tenferro_runtime::{
+    ///     EngineId, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ///     ExtensionModuleRegistrar, Runtime,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct ExampleModule {
+    ///     id: ExtensionModuleId,
+    /// }
+    ///
+    /// impl ExtensionModule for ExampleModule {
+    ///     fn module_id(&self) -> &ExtensionModuleId {
+    ///         &self.id
+    ///     }
+    ///
+    ///     fn configure(
+    ///         &self,
+    ///         _registrar: &mut ExtensionModuleRegistrar<'_>,
+    ///     ) -> Result<(), ExtensionModuleError> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let engine = EngineId::new("example.engine.v1")?;
+    /// let error = runtime
+    ///     .reconfigure(|edit| {
+    ///         edit.ensure_extension_module_for_engine(
+    ///             Arc::new(ExampleModule {
+    ///                 id: ExtensionModuleId::new("example.module.v1")?,
+    ///             }),
+    ///             "example.family.v1",
+    ///             &engine,
+    ///         )?;
+    ///         Ok(())
+    ///     })
+    ///     .unwrap_err();
+    /// let source = std::error::Error::source(&error).unwrap();
+    /// assert!(source.to_string().contains("example.module.v1"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::MissingExtensionEngine`] when the
+    /// configured module does not register `family_id` for `engine_id`, or
+    /// [`RuntimeConfigError::ExtensionModule`] when module configuration fails.
+    #[doc(hidden)]
+    pub fn ensure_extension_module_for_engine(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+        family_id: &'static str,
+        engine_id: &EngineId,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let module_id = value.module_id().clone();
+        if let Some(existing) = self.candidate.modules.get(&module_id) {
+            if existing
+                .engines
+                .contains_key(&(family_id, engine_id.clone()))
+            {
+                return Ok(self);
+            }
+        }
+
+        let record = configure_module(Arc::clone(&value))
+            .map_err(|source| RuntimeConfigError::ExtensionModule { source })?;
+        if !record.engines.contains_key(&(family_id, engine_id.clone())) {
+            return Err(RuntimeConfigError::MissingExtensionEngine {
+                module_id,
+                family_id,
+                engine_id: engine_id.clone(),
+            });
+        }
+        self.candidate.modules.insert(module_id, record);
+        *self.changed = true;
+        Ok(self)
+    }
+
+    /// Replace one extension module only when it owns the selected family and
+    /// engine registration.
+    ///
+    /// This owner-scoped operation validates the configured candidate before
+    /// [`Runtime::reconfigure`] can publish it. A failed validation therefore
+    /// leaves the previously published module and snapshot untouched.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use tenferro_runtime::{
+    ///     EngineId, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ///     ExtensionModuleRegistrar, Runtime,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct ExampleModule {
+    ///     id: ExtensionModuleId,
+    /// }
+    ///
+    /// impl ExtensionModule for ExampleModule {
+    ///     fn module_id(&self) -> &ExtensionModuleId {
+    ///         &self.id
+    ///     }
+    ///
+    ///     fn configure(
+    ///         &self,
+    ///         _registrar: &mut ExtensionModuleRegistrar<'_>,
+    ///     ) -> Result<(), ExtensionModuleError> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let engine = EngineId::new("example.engine.v1")?;
+    /// let error = runtime
+    ///     .reconfigure(|edit| {
+    ///         edit.replace_extension_module_for_engine(
+    ///             Arc::new(ExampleModule {
+    ///                 id: ExtensionModuleId::new("example.module.v1")?,
+    ///             }),
+    ///             "example.family.v1",
+    ///             &engine,
+    ///         )?;
+    ///         Ok(())
+    ///     })
+    ///     .unwrap_err();
+    /// let source = std::error::Error::source(&error).unwrap();
+    /// assert!(source.to_string().contains("example.module.v1"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::MissingExtensionEngine`] when the
+    /// configured module does not register `family_id` for `engine_id`, or
+    /// [`RuntimeConfigError::ExtensionModule`] when module configuration fails.
+    #[doc(hidden)]
+    pub fn replace_extension_module_for_engine(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+        family_id: &'static str,
+        engine_id: &EngineId,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let module_id = value.module_id().clone();
+        if let Some(existing) = self.candidate.modules.get(&module_id) {
+            if existing.module_identical(&value) {
+                if existing
+                    .engines
+                    .contains_key(&(family_id, engine_id.clone()))
+                {
+                    return Ok(self);
+                }
+                return Err(RuntimeConfigError::MissingExtensionEngine {
+                    module_id,
+                    family_id,
+                    engine_id: engine_id.clone(),
+                });
+            }
+        }
+
+        let record = configure_module(Arc::clone(&value))
+            .map_err(|source| RuntimeConfigError::ExtensionModule { source })?;
+        if !record.engines.contains_key(&(family_id, engine_id.clone())) {
+            return Err(RuntimeConfigError::MissingExtensionEngine {
+                module_id,
+                family_id,
+                engine_id: engine_id.clone(),
+            });
+        }
+        self.candidate.modules.insert(module_id, record);
+        *self.changed = true;
+        Ok(self)
+    }
+
     /// Remove an extension module if present.
     ///
     /// # Errors
@@ -1664,7 +1877,41 @@ impl<'a> EngineSnapshotView<'a> {
         self.slot.default_storage_class()
     }
 
-    pub(super) fn accepts_input_signature(
+    /// Return whether this engine's registered ingress accepts one physical
+    /// input signature across its advertised storage classes.
+    ///
+    /// This narrow, doc-hidden query is used by eager extension owners before
+    /// invoking a module factory. It includes placement, backend family, and
+    /// allocation-domain admission rather than checking only tensor shape or
+    /// dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{InputSignature, Runtime, Tensor, TensorRead};
+    ///
+    /// let backend = tenferro_cpu::CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// let runtime = builder.build()?;
+    /// let engine_id = tenferro_cpu::runtime_engine_id()?;
+    /// let snapshot = runtime.snapshot()?;
+    /// let engine = snapshot.engine(&engine_id).unwrap();
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let reads = [TensorRead::from_tensor(&tensor)];
+    /// let signature = InputSignature::from_reads(&reads)?;
+    /// assert!(engine.accepts_input_signature(&signature.entries()[0]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn accepts_input_signature(&self, input: &super::InputSignatureEntry) -> bool {
+        self.slot
+            .storage_classes()
+            .iter()
+            .any(|storage_class| self.accepts_input_signature_for_storage(input, storage_class))
+    }
+
+    pub(super) fn accepts_input_signature_for_storage(
         &self,
         input: &super::InputSignatureEntry,
         storage_class: &StorageClass,

@@ -136,12 +136,12 @@ fn eager_engine_registration_for_backend(
         #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
-        EagerBackend::Cuda(backend) => {
-            let engine_id = EngineId::new("tenferro-ad.cuda.default.v1")?;
-            Ok(EagerBackendRegistration::Install(Box::new(
-                tenferro_gpu::cuda::cuda_runtime_engine_registration(backend, engine_id)?,
-            )))
-        }
+        EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install(Box::new(
+            tenferro_gpu::cuda::cuda_runtime_engine_registration(
+                backend,
+                cuda_runtime_engine_id()?,
+            )?,
+        ))),
         #[cfg(feature = "webgpu")]
         EagerBackend::WebGpu(backend) => Ok(EagerBackendRegistration::Install(Box::new(
             tenferro_gpu::webgpu::webgpu_runtime_engine_registration(backend)?,
@@ -151,6 +151,11 @@ fn eager_engine_registration_for_backend(
 
 pub(crate) fn cpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
     tenferro_cpu::runtime_engine_id()
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn cuda_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
+    EngineId::new("tenferro-ad.cuda.default.v1").map_err(RuntimeConfigError::from)
 }
 
 pub(crate) fn cpu_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {

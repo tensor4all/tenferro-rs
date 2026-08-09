@@ -11,6 +11,8 @@ use tenferro_fft::{
     FftBackend, FftExecutionCache, FftExecutor, FftNorm, FftOperation, FftPlanSpec, TensorFftExt,
     FFT_EXTENSION_FAMILY_ID,
 };
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
@@ -288,6 +290,12 @@ impl FftBackend for RecordingFftSession {
 
 fn assert_fft_capability<B: FftBackend>() {}
 fn assert_tensor_backend<B: TensorBackend>() {}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_session_is_fft_capable() {
+    assert_fft_capability::<CudaExecSession<'static>>();
+}
 
 fn with_cpu_session<R>(
     backend: &mut CpuBackend,

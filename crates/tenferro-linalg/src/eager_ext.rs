@@ -721,10 +721,12 @@ impl EagerTensorLinalgExt for EagerTensor {
 fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let op = Arc::new(LinalgExtensionOp::new(op));
     let execute_op = Arc::clone(&op);
-    let module = eager_cpu_extension_module()?;
-    apply_eager_with_extension_session(op, inputs, module, move |_op, input_reads, ctx| {
-        execute_linalg_extension_reads(&execute_op, input_reads, ctx)
-    })
+    apply_eager_with_extension_session(
+        op,
+        inputs,
+        eager_cpu_extension_module()?,
+        move |_op, input_reads, ctx| execute_linalg_extension_reads(&execute_op, input_reads, ctx),
+    )
 }
 
 fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {

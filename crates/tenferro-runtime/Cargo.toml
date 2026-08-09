@@ -31,9 +31,9 @@ blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.2.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.3.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.3.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.3.0", default-features = false }
 computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true
@@ -43,7 +43,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.3.0", default-features = false }
 
 [[bench]]
 name = "elementwise_fusion"

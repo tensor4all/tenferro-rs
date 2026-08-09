@@ -1,8 +1,15 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager_with_extension_session;
+use tenferro_ad::extension::{
+    apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
+};
 use tenferro_ad::EagerTensor;
+use tenferro_cpu::CpuBackend;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::CudaBackend;
+#[cfg(feature = "webgpu")]
+use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{ErrorPhase, ExtensionModule};
 use tenferro_tensor::DType;
 
@@ -171,12 +178,15 @@ fn apply_eager_fft(
 
     let op = Arc::new(op);
     let execute_op = Arc::clone(&op);
-    let module = eager_cpu_extension_module()?;
-    let mut outputs =
-        apply_eager_with_extension_session(op, &[input], module, move |_op, input_reads, ctx| {
+    let mut outputs = apply_eager_with_targeted_extension_session(
+        op,
+        &[input],
+        eager_extension_module,
+        move |_op, input_reads, ctx| {
             execute_fft_extension_reads_session(&execute_op, input_reads, ctx)
-        })?
-        .into_iter();
+        },
+    )?
+    .into_iter();
     match (outputs.next(), outputs.next()) {
         (Some(output), None) => Ok(output),
         _ => Err(Error::Internal(
@@ -185,17 +195,24 @@ fn apply_eager_fft(
     }
 }
 
-fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
-    static MODULE: OnceLock<Arc<dyn ExtensionModule>> = OnceLock::new();
-    if let Some(module) = MODULE.get() {
-        return Ok(Arc::clone(module));
+fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>> {
+    let EagerExtensionTarget {
+        engine_id,
+        backend_kind,
+    } = target;
+    match backend_kind {
+        EagerExtensionBackendKind::Cpu => {
+            extension_module::<CpuBackend>(engine_id).map_err(eager_runtime_config_error)
+        }
+        #[cfg(feature = "cuda")]
+        EagerExtensionBackendKind::Cuda => {
+            extension_module::<CudaBackend>(engine_id).map_err(eager_runtime_config_error)
+        }
+        #[cfg(feature = "webgpu")]
+        EagerExtensionBackendKind::WebGpu => {
+            extension_module::<WebGpuBackend>(engine_id).map_err(eager_runtime_config_error)
+        }
     }
-
-    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
-    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id)
-        .map_err(eager_runtime_config_error)?;
-    let _ = MODULE.set(Arc::clone(&module));
-    Ok(MODULE.get().cloned().unwrap_or(module))
 }
 
 fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {
