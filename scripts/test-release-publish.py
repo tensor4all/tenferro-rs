@@ -7,6 +7,7 @@ import http.client
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -610,7 +611,7 @@ class OrchestrationTests(unittest.TestCase):
 
             with mock.patch.object(Path, "read_bytes", read_bytes):
                 with self.assertRaisesRegex(
-                    RELEASE.ReleaseError, str(failing_archive)
+                    RELEASE.ReleaseError, re.escape(str(failing_archive))
                 ):
                     RELEASE.build_and_inspect_archive(
                         metadata,
