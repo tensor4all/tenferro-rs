@@ -59,9 +59,9 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
-    /// resident, or [`crate::Error::Validation`] when its layout cannot be
-    /// bound.
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this session's runtime/device, or [`crate::Error::Validation`] when
+    /// its layout cannot be bound.
     pub fn tensor_binding<T>(
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
@@ -70,6 +70,7 @@ impl<'s> Session<'s> {
     where
         T: CubeElement + TensorScalar + Clone,
     {
+        super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, op)?;
         super::interop::typed_tensor_binding(tensor, op)
     }
 
@@ -77,9 +78,9 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
-    /// resident, or [`crate::Error::Validation`] when its layout cannot be
-    /// bound.
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this session's runtime/device, or [`crate::Error::Validation`] when
+    /// its layout cannot be bound.
     pub fn array_arg<T>(
         &self,
         tensor: &TypedTensor<T, impl TensorRank>,
@@ -88,6 +89,7 @@ impl<'s> Session<'s> {
     where
         T: CubeElement + TensorScalar + Clone,
     {
+        super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, op)?;
         super::interop::typed_tensor_array_arg(tensor, op)
     }
 

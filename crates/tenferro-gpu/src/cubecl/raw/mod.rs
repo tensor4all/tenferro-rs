@@ -248,22 +248,27 @@ impl<'s> Session<'s> {
         StreamRef {
             raw: self.stream,
             _scope: PhantomData,
+            _not_send_sync: PhantomData,
         }
     }
 
     /// Build a checked read-only device reference for a GPU-backed tensor.
     ///
+    /// The returned reference is tied to both this session borrow and the
+    /// tensor borrow, so the span cannot outlive the tensor's allocation.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident on
     /// this session's runtime/device.
-    pub fn tensor<T>(
-        &self,
-        tensor: &TypedTensor<T, impl TensorRank>,
-    ) -> crate::Result<TensorRef<'s, T>>
+    pub fn tensor<'a, T>(
+        &'a self,
+        tensor: &'a TypedTensor<T, impl TensorRank>,
+    ) -> crate::Result<TensorRef<'a, T>>
     where
         T: 'static,
     {
+        super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, "raw.tensor")?;
         let prepared = super::dispatch::cubecl_buffer(tensor, "raw.tensor")?;
         let byte_len = prepared.byte_len;
         let resource = self
@@ -278,25 +283,29 @@ impl<'s> Session<'s> {
             byte_len,
             _scope: PhantomData,
             _dtype: PhantomData,
+            _not_send_sync: PhantomData,
         })
     }
 
     /// Build a checked mutable device reference for a GPU-backed tensor.
     ///
     /// Requires an exclusive borrow of the tensor, so aliasing mutable device
-    /// access cannot be produced from a shared `&TypedTensor<T>`.
+    /// access cannot be produced from a shared `&TypedTensor<T>`. The returned
+    /// reference is tied to both this session borrow and the tensor borrow, so
+    /// the span cannot outlive the tensor's allocation.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident on
     /// this session's runtime/device.
-    pub fn tensor_mut<T>(
-        &self,
-        tensor: &mut TypedTensor<T, impl TensorRank>,
-    ) -> crate::Result<TensorMut<'s, T>>
+    pub fn tensor_mut<'a, T>(
+        &'a self,
+        tensor: &'a mut TypedTensor<T, impl TensorRank>,
+    ) -> crate::Result<TensorMut<'a, T>>
     where
         T: 'static,
     {
+        super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, "raw.tensor_mut")?;
         let prepared = super::dispatch::cubecl_buffer(tensor, "raw.tensor_mut")?;
         let byte_len = prepared.byte_len;
         let resource = self
@@ -304,13 +313,16 @@ impl<'s> Session<'s> {
             .client()
             .get_resource(prepared.handle().clone())
             .map_err(|err| crate::Error::backend_source("raw.tensor_mut", err))?;
-        let base =
-            super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor_mut")?;
+        let base = super::interop::cuda_device_ptr_from_addr(
+            resource.resource().ptr,
+            "raw.tensor_mut",
+        )?;
         Ok(TensorMut {
             base,
             byte_len,
             _scope: PhantomData,
             _dtype: PhantomData,
+            _not_send_sync: PhantomData,
         })
     }
 
@@ -366,6 +378,7 @@ impl<'s> Session<'s> {
         Ok(DeviceBytes {
             inner,
             _scope: PhantomData,
+            _not_send_sync: PhantomData,
         })
     }
 
@@ -374,6 +387,7 @@ impl<'s> Session<'s> {
         Ok(DeviceBytes {
             inner,
             _scope: PhantomData,
+            _not_send_sync: PhantomData,
         })
     }
 
@@ -417,6 +431,7 @@ impl<'s> Session<'s> {
         Ok(DeviceBytes {
             inner,
             _scope: PhantomData,
+            _not_send_sync: PhantomData,
         })
     }
 
@@ -609,6 +624,7 @@ impl<'s> Session<'s> {
 pub struct StreamRef<'s> {
     raw: u64,
     _scope: PhantomData<&'s ()>,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl<'s> StreamRef<'s> {
@@ -636,6 +652,7 @@ pub struct TensorRef<'s, T> {
     byte_len: usize,
     _scope: PhantomData<&'s ()>,
     _dtype: PhantomData<T>,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl<'s, T> TensorRef<'s, T> {
@@ -673,6 +690,7 @@ pub struct TensorMut<'s, T> {
     byte_len: usize,
     _scope: PhantomData<&'s ()>,
     _dtype: PhantomData<T>,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl<'s, T> TensorMut<'s, T> {
@@ -778,6 +796,7 @@ impl<'a> KernelArg<'a> {
 pub struct DeviceBytes<'s> {
     inner: super::interop::DeviceByteBuffer,
     _scope: PhantomData<&'s ()>,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl<'s> DeviceBytes<'s> {

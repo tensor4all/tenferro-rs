@@ -152,6 +152,32 @@ fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
                     "retention must keep the allocation alive across the drop"
                 );
                 assert!(!retained.is_empty());
+                // Prove liveness, not just pointer identity: copy the retained
+                // allocation into a freshly allocated probe and read it back
+                // after the owning tensor is gone. If the guard had let the
+                // allocation be reclaimed, the readback would not reproduce
+                // the original payload.
+                let probe = raw.alloc_output::<f32>(&[4])?;
+                let probe_ref = raw.tensor(&probe)?;
+                // SAFETY: `dst` is the freshly allocated, uniquely owned probe
+                // span; `src` is the retained allocation still pinned by the
+                // guard. The copy is stream-ordered, and `synchronize` below
+                // completes it before the host readback.
+                unsafe {
+                    raw.copy_bytes(
+                        probe_ref.raw_ptr(),
+                        retained_ptr,
+                        4 * std::mem::size_of::<f32>(),
+                        "test.raw_retain_tensor",
+                    )?;
+                }
+                raw.synchronize()?;
+                let back = download_tensor(&rt, &Tensor::F32(probe)).unwrap();
+                assert_eq!(
+                    back.as_slice::<f32>().unwrap(),
+                    &[1.0f32, 2.0, 3.0, 4.0],
+                    "retained allocation must still hold the original payload"
+                );
                 Ok(())
             })
             .unwrap();
