@@ -447,6 +447,17 @@ class CommandAndCheckoutTests(unittest.TestCase):
         with self.assertRaisesRegex(RELEASE.ReleaseError, "invalid JSON"):
             RELEASE.cargo_metadata(runner=runner)
 
+    def test_cli_selects_release_root_and_defaults_to_script_root(self) -> None:
+        with mock.patch.object(RELEASE, "publish_release") as publish:
+            self.assertEqual(RELEASE.main(["0.4.0"]), 0)
+            self.assertEqual(publish.call_args.kwargs["root"], RELEASE.ROOT)
+
+            selected = Path("tag-checkout")
+            self.assertEqual(
+                RELEASE.main(["0.4.0", "--release-root", str(selected)]), 0
+            )
+            self.assertEqual(publish.call_args.kwargs["root"], selected.resolve())
+
 
 class FakeClient:
     def __init__(self, package_versions: dict[str, bool], events: list[str]) -> None:
@@ -553,6 +564,116 @@ class OrchestrationTests(unittest.TestCase):
                 "exists:crate-a",
                 "download:crate-a",
                 "inspect:crate-a",
+            ],
+        )
+
+    def test_runtime_bootstrap_patches_tag_cpu_only_while_both_are_missing(self) -> None:
+        cargo_commands: list[list[str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'tag "checkout\\special'
+            root.mkdir()
+            self.workspace(root)
+            metadata = self.metadata(root, ["tenferro-runtime", "tenferro-cpu"])
+            metadata["packages"][0]["dependencies"] = [
+                {"name": "tenferro-cpu", "kind": "dev"}
+            ]
+            metadata["packages"][1]["dependencies"] = [
+                {"name": "tenferro-runtime", "kind": "normal"}
+            ]
+            client = FakeClient(
+                {"tenferro-runtime": False, "tenferro-cpu": False}, []
+            )
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] == "cargo":
+                    cargo_commands.append(command)
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                elif command[:3] == ["cargo", "publish", "--dry-run"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    staged = archive.parent / "tmp-crate" / archive.name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(crate.encode())
+                elif command[:2] == ["cargo", "publish"]:
+                    crate = command[command.index("-p") + 1]
+                    client.package_versions[crate] = True
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                True,
+                root=root,
+                runner=runner,
+                client=client,
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: ["tenferro-runtime", "tenferro-cpu"],
+                package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
+                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                ),
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        patch = (
+            "patch.crates-io.tenferro-cpu.path="
+            + json.dumps(str((root / "crates/tenferro-cpu").resolve()))
+        )
+        bootstrap = ["--no-verify", "--config", patch]
+        self.assertEqual(
+            cargo_commands,
+            [
+                ["cargo", "package", "-p", "tenferro-runtime", "--locked", *bootstrap],
+                [
+                    "cargo",
+                    "publish",
+                    "--dry-run",
+                    "-p",
+                    "tenferro-runtime",
+                    "--locked",
+                    "--registry",
+                    "crates-io",
+                    *bootstrap,
+                ],
+                [
+                    "cargo",
+                    "publish",
+                    "-p",
+                    "tenferro-runtime",
+                    "--locked",
+                    "--registry",
+                    "crates-io",
+                    *bootstrap,
+                ],
+                ["cargo", "package", "-p", "tenferro-cpu", "--locked"],
+                [
+                    "cargo",
+                    "publish",
+                    "--dry-run",
+                    "-p",
+                    "tenferro-cpu",
+                    "--locked",
+                    "--registry",
+                    "crates-io",
+                ],
+                [
+                    "cargo",
+                    "publish",
+                    "-p",
+                    "tenferro-cpu",
+                    "--locked",
+                    "--registry",
+                    "crates-io",
+                ],
             ],
         )
 

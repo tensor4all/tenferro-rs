@@ -203,3 +203,36 @@ read-error attribution. A real Cargo 1.97 run on `tenferro-core-ops` confirmed
 that `cargo package`, `tmp-crate`, and `tmp-registry` archives were byte-identical
 and that the repaired helper completed package-to-dry-run attestation without
 uploading. The focused release-helper suite passed with 30 tests.
+
+## 2026-08-09 v0.3 runtime/CPU cycle recovery
+
+The v0.3.0 human run published and verified the first six crates through
+`tenferro-internal-ops`, then stopped before uploading `tenferro-runtime`.
+The immutable tag is commit `9505d5bfd60c890212f0ec44aa9cf07fef185f63`.
+Runtime has a versioned path dev-dependency on `tenferro-cpu 0.3.0`, while CPU
+has a normal dependency on runtime 0.3.0, so Cargo's ordinary package ordering
+cannot bootstrap either absent registry version.
+
+Clean-tag experiments established the narrow recovery: runtime package,
+publish dry-run, and publish use `--no-verify` plus
+`--config 'patch.crates-io.tenferro-cpu.path="ABS_TAG_PATH/crates/tenferro-cpu"'`
+only while both runtime and CPU 0.3.0 are registry-absent. The path comes from
+the selected release checkout's Cargo metadata and is encoded as an inline TOML
+string. The helper still inspects and compares the package, `tmp-crate`, and
+`tmp-registry` archives; the experiment found all three byte-identical. Once
+runtime is registry-visible with matching provenance, the existing prerequisite
+wait permits CPU to package and publish normally, without the patch.
+
+`--release-root PATH` lets the corrected helper on `origin/main` operate on the
+clean detached immutable tag checkout. `verify_release_checkout(root=...)`
+remains authoritative for cleanliness, exact remote tag identity, and
+reachability from `origin/main`. The new-package approval gate and human-only
+`--execute` boundary are unchanged.
+
+`--no-verify` is deliberately limited to runtime's three bootstrap commands: it
+skips Cargo's package verification build because that build hits the cyclic
+lockfile collision. It does not weaken archive, tagged-source, normalized
+manifest, registry-byte, or provenance comparisons. The source tree was already
+covered by the release's workspace, PR, and main checks. Residual risk remains
+that crates.io may reject the real upload despite the successful dry-run; only
+the human operator may cross that server-acceptance boundary.

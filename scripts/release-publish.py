@@ -921,6 +921,17 @@ def publish_release(
     validate_new_package_approvals(package_exists, version_exists, approvals)
     source_reader = source_reader_factory(commit, runner=runner, root=root)
 
+    runtime_bootstrap_args: list[str] = []
+    if not version_exists.get("tenferro-runtime", True) and not version_exists.get(
+        "tenferro-cpu", True
+    ):
+        cpu_path = (root / package_root(packages["tenferro-cpu"], root=root)).resolve()
+        runtime_bootstrap_args = [
+            "--no-verify",
+            "--config",
+            f"patch.crates-io.tenferro-cpu.path={json.dumps(str(cpu_path), ensure_ascii=False)}",
+        ]
+
     positions = {crate: index for index, crate in enumerate(order)}
     prerequisites_by_crate: dict[str, list[str]] = {}
     for crate in order:
@@ -983,6 +994,7 @@ def publish_release(
         package_dir = package_root(package, root=root)
         expected_files = package_files_loader(crate, runner=runner, root=root)
         expected_files_by_crate[crate] = expected_files
+        bootstrap_args = runtime_bootstrap_args if crate == "tenferro-runtime" else []
         local_inspection = build_and_inspect_archive(
             metadata,
             crate,
@@ -991,7 +1003,7 @@ def publish_release(
             package_dir,
             source_reader,
             expected_files,
-            ["cargo", "package", "-p", crate, "--locked"],
+            ["cargo", "package", "-p", crate, "--locked", *bootstrap_args],
             runner=runner,
             root=root,
             archive_inspector=archive_inspector,
@@ -1031,6 +1043,7 @@ def publish_release(
                 "--locked",
                 "--registry",
                 "crates-io",
+                *bootstrap_args,
             ],
             expected_contents=local_inspection.contents,
             runner=runner,
@@ -1046,6 +1059,7 @@ def publish_release(
                 "--locked",
                 "--registry",
                 "crates-io",
+                *bootstrap_args,
             ],
             cwd=root,
             capture=False,
@@ -1085,6 +1099,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="perform irreversible cargo publish commands after all preflights",
     )
+    parser.add_argument(
+        "--release-root",
+        type=Path,
+        default=ROOT,
+        metavar="PATH",
+        help="clean detached release tag checkout (default: helper repository root)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1092,6 +1113,7 @@ def main(argv: list[str] | None = None) -> int:
             args.version,
             set(args.approve_new_package),
             args.execute,
+            root=args.release_root.resolve(),
         )
         return 0
     except ReleaseError as error:
