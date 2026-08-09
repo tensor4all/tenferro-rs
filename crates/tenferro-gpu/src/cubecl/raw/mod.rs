@@ -346,6 +346,81 @@ impl<'s> Session<'s> {
         })
     }
 
+    /// Copy bytes from one device span to another on the session stream.
+    ///
+    /// Both spans must be produced by this session (via [`Session::tensor`],
+    /// [`Session::tensor_mut`], or [`Session::alloc_bytes`]) and must not
+    /// overlap; the copy is stream-ordered with other enqueued work. This is
+    /// the raw equivalent of a same-device `memcpyDeviceToDeviceAsync`.
+    ///
+    /// # Safety
+    ///
+    /// `dst` and `src` must be aligned device spans of at least `nbytes`
+    /// bytes, backed by allocations that outlive the (unsynchronized) copy;
+    /// `dst` must be uniquely owned for writing and `src` must not alias it.
+    pub unsafe fn copy_bytes(
+        &self,
+        dst: *mut std::ffi::c_void,
+        src: *const std::ffi::c_void,
+        nbytes: usize,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        if nbytes == 0 {
+            return Ok(());
+        }
+        let stream = self.stream as *mut cudarc::runtime::sys::CUstream_st;
+        cudarc::runtime::result::memcpy_dtod_async(dst, src, nbytes, stream)
+            .map_err(|err| crate::Error::backend_source(op, err))
+    }
+
+    /// Upload host bytes into a CubeCL-owned workspace returned as
+    /// [`DeviceBytes`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot upload or
+    /// inspect the workspace resource, or [`crate::Error::Validation`] when
+    /// the pointer address cannot be represented as `usize`.
+    pub fn upload_bytes(
+        &self,
+        bytes: &[u8],
+        op: &'static str,
+    ) -> crate::Result<DeviceBytes<'s>> {
+        let inner = super::interop::upload_device_bytes(&self.runtime, bytes, op)?;
+        Ok(DeviceBytes {
+            inner,
+            _scope: PhantomData,
+        })
+    }
+
+    /// Read a resident tensor's bytes back to host memory.
+    ///
+    /// Synchronizes the session stream, then returns the tensor data as a
+    /// host-resident typed tensor (same shape). This is the only host barrier
+    /// introduced by the raw-session path; call it only where a value must be
+    /// inspected or returned to the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this session's runtime/device, or [`crate::Error::BackendSource`]
+    /// when synchronization or readback fails.
+    pub fn download_tensor<T>(
+        &self,
+        tensor: &TypedTensor<T, impl TensorRank>,
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<T>>
+    where
+        T: cubecl::prelude::CubeElement
+            + tenferro_tensor::TensorScalar
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        super::interop::download_typed_tensor(&self.runtime, tensor, op)
+    }
+
     /// Load a CUDA module from PTX source text.
     ///
     /// The PTX is compiled for the current device's architecture by the
