@@ -253,9 +253,15 @@ pub fn apply_eager_with_extension_session(
 /// Apply an eager extension through the owner-selected engine and backend kind.
 ///
 /// This narrow sibling-crate bridge is used by FFT, whose module factory must
-/// follow the eager runtime's exact backend selection. It validates ingress
-/// before factory invocation and transactionally validates the resulting module
-/// for the exact operation family/engine pair before entering the session.
+/// follow the eager runtime's exact backend selection. Input, target, and
+/// ingress validation always run before `module_factory`; errors returned by
+/// the factory are propagated unchanged. The returned module is then passed to
+/// the owner-scoped ensure operation. When the runtime already has the factory
+/// module's ID registered for this exact family/engine pair, that existing
+/// validated registration is reused without configuring or inspecting the fresh
+/// module, so a same-ID invalid `Ok` module is a no-op. When the registration is
+/// absent, the returned module is configured and its exact family/engine
+/// registration is validated transactionally before entering the session.
 ///
 /// # Errors
 ///
@@ -269,14 +275,14 @@ pub fn apply_eager_with_extension_session(
 /// engine is missing through
 /// [`tenferro_runtime::RuntimeConfigError::MissingEngine`], an input has no
 /// ingress through [`tenferro_runtime::PrepareError::NoInputIngress`], or the
-/// factory module does not register the operation family for the selected
-/// engine. A module mismatch retains
-/// [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`], while a
-/// module configuration failure retains
-/// [`tenferro_runtime::RuntimeConfigError::ExtensionModule`]; both are wrapped
-/// through [`tenferro_runtime::RuntimeReconfigureError`] in the source chain.
-/// Errors returned by `module_factory` are propagated unchanged. Errors
-/// returned by `execute` are propagated as
+/// cold/missing-registration ensure path rejects the module. That path retains
+/// [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`] for a
+/// missing family/engine registration and
+/// [`tenferro_runtime::RuntimeConfigError::ExtensionModule`] for a module
+/// configuration failure; both are wrapped through
+/// [`tenferro_runtime::RuntimeReconfigureError`] in the source chain. Errors
+/// returned by `module_factory` are propagated unchanged. Errors returned by
+/// `execute` are propagated as
 /// [`tenferro_runtime::Error::TensorRuntime`]. Returns
 /// [`tenferro_runtime::Error::Internal`] if execution produces the wrong number
 /// of outputs; session, cache, and output registration failures retain their

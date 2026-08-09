@@ -289,6 +289,31 @@ fn eager_extension_targeted_install_is_idempotent_for_fresh_modules() {
 }
 
 #[test]
+fn eager_extension_warm_same_id_invalid_module_is_ignored() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap();
+    let before = ctx.runtime().snapshot().unwrap();
+
+    let outputs = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
+        Ok(BridgeModule::without_engine())
+    })
+    .unwrap();
+
+    let after = ctx.runtime().snapshot().unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(after.epoch(), before.epoch());
+    assert!(Arc::ptr_eq(&before, &after));
+    assert!(after.has_extension_engine(
+        BridgeProbe::one().family_id(),
+        &tenferro_cpu::runtime_engine_id().unwrap()
+    ));
+}
+
+#[test]
 fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let target = EagerExtensionTarget {
@@ -496,6 +521,40 @@ fn eager_extension_factory_errors_are_returned_without_entering_backend_session(
         source,
         RuntimeConfigError::MissingEngine { engine_id } if engine_id == &missing_engine
     ));
+}
+
+#[test]
+fn eager_extension_warm_factory_errors_are_propagated_unchanged() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
+        Ok(BridgeModule::for_engine(target.engine_id))
+    })
+    .unwrap();
+    let before = ctx.runtime().epoch().unwrap();
+    let missing_engine = EngineId::new("tenferro-tests.warm-factory-missing-engine").unwrap();
+
+    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
+        Err(Error::runtime_state_source(
+            "test-warm-extension-factory",
+            ErrorPhase::Execution,
+            RuntimeConfigError::MissingEngine {
+                engine_id: missing_engine.clone(),
+            },
+        ))
+    })
+    .unwrap_err();
+
+    let Error::RuntimeStateSource { op, phase, source } = error else {
+        panic!("warm factory error should retain its exact runtime error kind");
+    };
+    assert_eq!(op, "test-warm-extension-factory");
+    assert_eq!(phase, ErrorPhase::Execution);
+    assert!(matches!(
+        source.downcast_ref::<RuntimeConfigError>(),
+        Some(RuntimeConfigError::MissingEngine { engine_id }) if engine_id == &missing_engine
+    ));
+    assert_eq!(ctx.runtime().epoch().unwrap(), before);
 }
 
 #[cfg(feature = "cuda")]

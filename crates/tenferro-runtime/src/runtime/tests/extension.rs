@@ -502,6 +502,109 @@ fn ensure_same_module_id_and_target_registration_is_noop_for_fresh_module_arc(
 }
 
 #[test]
+fn ensure_same_module_id_missing_target_replaces_with_valid_module_and_advances_epoch(
+) -> Result<(), Box<dyn StdError>> {
+    let existing = fixed(
+        "ensure-missing-existing",
+        "tenferro.family.ensure-missing-existing",
+        "ensure-missing-existing",
+    );
+    let requested = fixed(
+        "ensure-missing-requested",
+        "tenferro.family.ensure-missing-requested",
+        "ensure-missing-requested",
+    );
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.ensure-missing",
+        ModuleAction::Register(existing.clone()),
+    ))?;
+    let before = runtime.snapshot()?;
+
+    let returned = runtime.reconfigure(|edit| {
+        edit.ensure_extension_module_for_engine(
+            module(
+                "tenferro.module.ensure-missing",
+                ModuleAction::Register(requested.clone()),
+            ),
+            requested.family,
+            &requested.engine,
+        )?;
+        Ok(())
+    })?;
+
+    let after = runtime.snapshot()?;
+    assert!(returned > before.epoch());
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert_eq!(after.epoch(), returned);
+    assert_eq!(after.extension_module_count(), 1);
+    assert!(after.has_extension_engine(requested.family, &requested.engine));
+    assert!(!after.has_extension_engine(existing.family, &existing.engine));
+
+    Ok(())
+}
+
+#[test]
+fn ensure_same_module_id_missing_target_rejects_invalid_module_transactionally(
+) -> Result<(), Box<dyn StdError>> {
+    let existing = fixed(
+        "ensure-invalid-existing",
+        "tenferro.family.ensure-invalid-existing",
+        "ensure-invalid-existing",
+    );
+    let requested = fixed(
+        "ensure-invalid-requested",
+        "tenferro.family.ensure-invalid-requested",
+        "ensure-invalid-requested",
+    );
+    let invalid = fixed(
+        "ensure-invalid-incoming",
+        "tenferro.family.ensure-invalid-incoming",
+        "ensure-invalid-incoming",
+    );
+    let runtime = build_runtime_with_module(module(
+        "tenferro.module.ensure-invalid",
+        ModuleAction::Register(existing.clone()),
+    ))?;
+    let before = runtime.snapshot()?;
+    let before_epoch = before.epoch();
+
+    let error = runtime
+        .reconfigure(|edit| {
+            edit.ensure_extension_module_for_engine(
+                module(
+                    "tenferro.module.ensure-invalid",
+                    ModuleAction::Register(invalid),
+                ),
+                requested.family,
+                &requested.engine,
+            )?;
+            Ok(())
+        })
+        .expect_err("incoming module without the requested registration must fail");
+
+    assert!(matches!(
+        error,
+        RuntimeReconfigureError::Edit {
+            source: RuntimeConfigError::MissingExtensionEngine {
+                module_id: installed_module_id,
+                family_id,
+                engine_id,
+            },
+        } if installed_module_id == module_id("tenferro.module.ensure-invalid")
+            && family_id == requested.family
+            && engine_id == requested.engine
+    ));
+    let after = runtime.snapshot()?;
+    assert_eq!(after.epoch(), before_epoch);
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(after.extension_module_count(), 1);
+    assert!(after.has_extension_engine(existing.family, &existing.engine));
+    assert!(!after.has_extension_engine(requested.family, &requested.engine));
+
+    Ok(())
+}
+
+#[test]
 fn install_unequal_same_id_is_conflicting_module_and_publishes_nothing(
 ) -> Result<(), Box<dyn StdError>> {
     let first = fixed("conflict-a", "tenferro.family.conflict-a", "conflict-a");
