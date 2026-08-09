@@ -21,6 +21,15 @@ use crate::kernel::scale;
 /// Hardware-gated: `cuda_devices` returns an error when no CUDA device is
 /// reachable, so this is safe to call from a hardware-gated test.
 ///
+/// # Examples
+///
+/// Hardware-gated end-to-end run; without a CUDA device this returns an
+/// error, which the example ignores.
+///
+/// ```
+/// let _ = cubecl_kernel_sample::run_scale_check();
+/// ```
+///
 /// # Errors
 ///
 /// Returns a runtime-state error when no CUDA device is reachable, the CUDA
