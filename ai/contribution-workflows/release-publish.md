@@ -73,7 +73,7 @@ Violating any of these aborts the release.
 
 1. `git worktree add <fresh-path> vX.Y.Z`; confirm the tree is clean and
    `python3 scripts/check-publish-layout.py` passes unchanged.
-2. Publish publishable crates in dependency order. As of 2026-07 the order
+2. Publish publishable crates in dependency order. As of 2026-08 the order
    is:
 
    ```text
@@ -82,10 +82,10 @@ Violating any of these aborts the release.
    tenferro-tensor-core
    tenferro-tensor
    tenferro-internal-cpu-kernels
-   tenferro-cpu
-   tenferro-gpu
    tenferro-internal-ops
    tenferro-runtime
+   tenferro-cpu
+   tenferro-gpu
    tenferro-xla
    tenferro-ad
    tenferro-einsum

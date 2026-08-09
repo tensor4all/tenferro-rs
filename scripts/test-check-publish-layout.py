@@ -36,6 +36,68 @@ VALID_EXPLICIT_FEATURES = VALID_ALL_FEATURES.replace(
 )
 
 
+class ReleaseOrderTests(unittest.TestCase):
+    def metadata(self) -> dict:
+        root = CHECKER.ROOT
+        return {
+            "packages": [
+                {
+                    "name": "tenferro-core-ops",
+                    "manifest_path": str(root / "crates/tenferro-core-ops/Cargo.toml"),
+                    "publish": None,
+                    "dependencies": [
+                        {"name": "tenferro-runtime", "kind": "dev"},
+                    ],
+                },
+                {
+                    "name": "tenferro-runtime",
+                    "manifest_path": str(root / "crates/tenferro-runtime/Cargo.toml"),
+                    "publish": None,
+                    "dependencies": [
+                        {"name": "tenferro-core-ops", "kind": None},
+                        {"name": "tenferro-hidden", "kind": None},
+                    ],
+                },
+                {
+                    "name": "tenferro-hidden",
+                    "manifest_path": str(root / "crates/tenferro-hidden/Cargo.toml"),
+                    "publish": [],
+                    "dependencies": [],
+                },
+            ]
+        }
+
+    def release_text(self, order: list[str]) -> str:
+        crates = "\n".join(order)
+        return f"## Phase 3 — Publish From The Tag\n\n```text\n{crates}\n```\n"
+
+    def test_accepts_topological_order_excluding_dev_and_nonpublishable(
+        self,
+    ) -> None:
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            self.metadata(),
+            self.release_text(["tenferro-core-ops", "tenferro-runtime"]),
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_rejects_dependency_after_dependent(self) -> None:
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            self.metadata(),
+            self.release_text(["tenferro-runtime", "tenferro-core-ops"]),
+            errors,
+        )
+        self.assertEqual(
+            errors,
+            [
+                "release publish order must place dependency "
+                "'tenferro-core-ops' before 'tenferro-runtime'"
+            ],
+        )
+
+
 class PublishMetadataTests(unittest.TestCase):
     def check(self, manifest: str) -> list[str]:
         errors: list[str] = []

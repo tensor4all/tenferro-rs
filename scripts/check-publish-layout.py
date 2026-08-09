@@ -104,6 +104,46 @@ def publishable_crates(metadata: dict) -> set[str]:
     }
 
 
+def check_release_order(
+    metadata: dict, release_text: str, errors: list[str]
+) -> None:
+    phase = markdown_section(release_text, "Phase 3 — Publish From The Tag")
+    fenced = phase.split("```text", 1)
+    if len(fenced) != 2 or "```" not in fenced[1]:
+        errors.append("release workflow must contain a Phase 3 text publish-order block")
+        return
+    order = [
+        line.strip()
+        for line in fenced[1].split("```", 1)[0].splitlines()
+        if line.strip()
+    ]
+    expected = publishable_crates(metadata)
+    if len(order) != len(set(order)):
+        errors.append("release publish order must not contain duplicate crates")
+    missing = sorted(expected - set(order))
+    unexpected = sorted(set(order) - expected)
+    if missing:
+        errors.append(f"release publish order is missing crates: {missing}")
+    if unexpected:
+        errors.append(f"release publish order has unexpected crates: {unexpected}")
+    if missing or unexpected or len(order) != len(set(order)):
+        return
+
+    positions = {crate: index for index, crate in enumerate(order)}
+    for package in metadata["packages"]:
+        crate = package["name"]
+        if crate not in expected:
+            continue
+        for dependency in package["dependencies"]:
+            dependency_name = dependency["name"]
+            if dependency["kind"] != "dev" and dependency_name in expected:
+                if positions[dependency_name] > positions[crate]:
+                    errors.append(
+                        f"release publish order must place dependency "
+                        f"{dependency_name!r} before {crate!r}"
+                    )
+
+
 def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -> None:
     packages = {package["name"]: package for package in metadata["packages"]}
 
@@ -349,7 +389,11 @@ def main() -> int:
     errors: list[str] = []
     root_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     metadata = cargo_metadata()
+    release_text = (ROOT / "ai/contribution-workflows/release-publish.md").read_text(
+        encoding="utf-8"
+    )
     check_workspace_members(metadata, root_text, errors)
+    check_release_order(metadata, release_text, errors)
     check_workspace_metadata(root_text, errors)
     check_workspace_dependencies(root_text, errors)
     check_package_metadata(root_text, errors)
