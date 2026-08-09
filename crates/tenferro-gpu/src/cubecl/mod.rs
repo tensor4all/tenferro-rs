@@ -114,6 +114,7 @@ pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
 mod permutation;
+pub(crate) mod raw;
 mod runtime;
 mod runtime_adapter;
 

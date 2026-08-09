@@ -48,6 +48,13 @@ pub mod cuda {
         GpuExtensionCapability,
     };
 
+    /// Type-safe raw CUDA extension session (issue #1597).
+    pub mod raw {
+        pub use super::super::cubecl::raw::{
+            CudaResourceGuard, DeviceBytes, Session, StreamRef, TensorMut, TensorRef,
+        };
+    }
+
     /// Provider-specific CUDA interop scoped to an active execution session.
     #[doc(hidden)]
     pub mod interop {

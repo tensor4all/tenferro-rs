@@ -45,6 +45,61 @@ pub fn gpu_available() -> bool {
     .unwrap_or(false)
 }
 
+/// RAII guard that restores the thread's previous CUDA device and current
+/// context when dropped.
+///
+/// Used by the `with_raw` enter/exit protocol: the guard is created after the
+/// calling thread's device/context are saved and the tenferro primary context
+/// is activated. Drop restores the saved state on normal return, `Err`, and
+/// unwind.
+pub(crate) struct RawContextRestore {
+    saved_device: Result<i32, cudarc::runtime::result::RuntimeError>,
+    saved_context: Result<Option<CUcontext>, cudarc::driver::result::DriverError>,
+    op: &'static str,
+}
+
+impl RawContextRestore {
+    /// Save the current device/context, then activate `device`/`context`.
+    pub(crate) fn enter(op: &'static str, device: i32, context: CUcontext) -> crate::Result<Self> {
+        let saved_device = cudarc::runtime::result::device::get();
+        let saved_context = cudarc::driver::result::ctx::get_current();
+        cudarc::runtime::result::device::set(device)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        unsafe { cudarc::driver::result::ctx::set_current(context) }
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        Ok(Self {
+            saved_device,
+            saved_context,
+            op,
+        })
+    }
+
+    fn restore(&self) {
+        if let Ok(device) = self.saved_device {
+            if let Err(err) = cudarc::runtime::result::device::set(device) {
+                eprintln!(
+                    "tenferro-gpu: failed to restore CUDA device during {}: {err:?}",
+                    self.op
+                );
+            }
+        }
+        if let Ok(Some(context)) = self.saved_context {
+            if let Err(err) = unsafe { cudarc::driver::result::ctx::set_current(context) } {
+                eprintln!(
+                    "tenferro-gpu: failed to restore CUDA context during {}: {err:?}",
+                    self.op
+                );
+            }
+        }
+    }
+}
+
+impl Drop for RawContextRestore {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
 /// Opaque identity of one exact CUDA runtime instance.
 ///
 /// Cloning the identity preserves the underlying executable runtime witness;
@@ -288,6 +343,20 @@ impl CudaRuntime {
 
     pub(crate) fn device_ordinal(&self) -> usize {
         self.inner.device_ordinal
+    }
+
+    pub(crate) fn primary_context(&self) -> CUcontext {
+        self.inner.primary_context.context()
+    }
+
+    /// Flush pending CubeCL work on the current stream.
+    ///
+    /// Used by the raw-session enter protocol so raw library calls observe
+    /// previously enqueued CubeCL work.
+    pub(crate) fn flush_cubecl(&self, op: &'static str) -> crate::Result<()> {
+        self.client()
+            .flush()
+            .map_err(|err| crate::Error::backend_source(op, err))
     }
 
     /// Return the opaque identity of this exact executable runtime instance.

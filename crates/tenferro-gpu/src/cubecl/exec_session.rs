@@ -14,7 +14,10 @@ use tenferro_tensor::{
 use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
 use super::identity::GpuExtensionCapability;
-use super::{CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
+use super::runtime::RawContextRestore;
+use super::{
+    raw, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity,
+};
 
 /// Marker for the concrete erased CUDA execution-session target.
 #[doc(hidden)]
@@ -111,6 +114,60 @@ impl CudaExecSession<'_> {
     /// capability/identity surface only.
     pub fn synchronize(&mut self) -> crate::Result<()> {
         self.backend.runtime().synchronize()
+    }
+
+    /// Borrow the type-safe raw CUDA extension session for one operation.
+    ///
+    /// The enter/exit protocol is fully contained in this call: a definite
+    /// CubeCL stream is captured on the current thread, pending CubeCL work is
+    /// flushed, the calling thread's previous device/context is saved, the
+    /// tenferro primary context is activated, the callback runs, and the
+    /// previous device/context is restored on return, `Err`, or unwind. The
+    /// success path does not synchronize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose or
+    /// flush the stream, or when the CUDA context cannot be entered or
+    /// restored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible.
+    /// fn check(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    ///     session.with_raw("test.raw", |raw| {
+    ///         let _ = raw.stream();
+    ///         Ok(SessionOutcome::Done)
+    ///     })?;
+    ///     Ok(())
+    /// }
+    /// enum SessionOutcome { Done }
+    /// let _ = check;
+    /// ```
+    pub fn with_raw<R>(
+        &mut self,
+        op: &'static str,
+        f: impl for<'s> FnOnce(&mut raw::Session<'s>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        let runtime = self.backend.runtime().clone();
+        let cache = self.backend.cuda_extension_cache();
+        // 1. Capture the definite CubeCL stream on this thread.
+        let stream = runtime.raw_cuda_stream()?;
+        // 2. Flush pending CubeCL work so raw library calls observe it.
+        runtime.flush_cubecl(op)?;
+        // 3-4. Save previous context, activate the tenferro primary context.
+        let device_ordinal = i32::try_from(runtime.device_ordinal())
+            .map_err(|source| crate::Error::backend_source(op, source))?;
+        let _guard = RawContextRestore::enter(op, device_ordinal, runtime.primary_context())?;
+        // 5. Build the unique raw session and run the callback.
+        // SAFETY: `_guard` keeps the primary context current for the whole
+        // `Session<'s>` borrow; `stream` is the captured CubeCL stream bound to
+        // the current thread.
+        let mut session = unsafe { raw::Session::new(runtime, cache, stream) };
+        f(&mut session)
     }
 
     #[doc(hidden)]

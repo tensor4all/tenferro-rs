@@ -355,9 +355,9 @@ impl DiscoveryDriver for CudaDriverApi {
                 })
             },
         )?;
-        Ok(u64::try_from(bytes).map_err(|_| {
+        u64::try_from(bytes).map_err(|_| {
             boxed_discovery_error(CudaDriverDiscoveryError::InvalidDeviceCount { count: i32::MAX })
-        })?)
+        })
     }
 }
 
