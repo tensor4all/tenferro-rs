@@ -401,10 +401,13 @@ impl CudaRuntime {
     /// Run `f` with the tenferro primary context current on this thread.
     ///
     /// Saves the calling thread's current CUDA device/context, activates the
-    /// tenferro primary context for the duration of `f`, and restores the
-    /// saved state on every exit path (normal return, `Err`, and unwind). This
-    /// is the scoped context authority used by vendor-library lifecycle paths
-    /// (plan creation/retirement) that run outside a raw-session callback.
+    /// tenferro primary context for the duration of `f`, and attempts to
+    /// restore the saved state on every exit path (normal return, `Err`, and
+    /// unwind). Restoration is best-effort: a failure to restore the
+    /// caller's previous device/context is logged to stderr rather than
+    /// returned. This is the scoped context authority used by vendor-library
+    /// lifecycle paths (plan creation/retirement) that run outside a
+    /// raw-session callback.
     ///
     /// # Errors
     ///

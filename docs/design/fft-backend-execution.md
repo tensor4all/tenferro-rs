@@ -118,7 +118,8 @@ Opaque cuFFT internal allocations and library-owned state are excluded.
 
 The cuFFT adapter creates plans under `CudaRuntime::with_current_context`, a
 scoped guard that activates the tenferro primary context and restores the
-caller's previous device/context on every exit path. Execution enters the
+caller's previous device/context on exit (best-effort; failures are logged).
+Execution enters the
 credentialed raw session (`with_raw`): the plan stream is bound to the captured
 CubeCL stream, a fresh work area is allocated, the input/output allocation
 handles are retained, the vendor call is enqueued, and the bound stream is

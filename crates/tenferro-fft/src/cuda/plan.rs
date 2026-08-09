@@ -37,8 +37,9 @@ pub(crate) const CUFFT_CACHE_NAMESPACE: &str = "cufft-plans";
 
 /// A cleanup context used by the plan-construction and retirement guards.
 pub(crate) trait CufftCleanup {
-    /// Run `f` with the retained runtime's context current, restoring the
-    /// caller's previous device/context on every exit path.
+    /// Run `f` with the retained runtime's context current; restoration of
+    /// the caller's previous device/context on exit is best-effort (failures
+    /// are logged to stderr, not returned).
     fn with_context<R2>(
         &self,
         op: &'static str,
@@ -83,11 +84,11 @@ impl CleanupFailures {
 ///
 /// The plan is released only after the retained runtime is made current and
 /// its stream synchronization succeeds. The whole retirement (synchronize +
-/// destroy) runs under a context-restoring guard, so the caller's previous
-/// device/context is preserved on every exit path. If any step fails, the
-/// opaque plan, library witness, and runtime witness are intentionally
-/// leaked: destroying or dropping any of them could race work whose
-/// completion was not proven.
+/// destroy) runs under a context-restoring guard; restoration of the caller's
+/// previous device/context is best-effort (failures are logged to stderr, not
+/// returned). If any step fails, the opaque plan, library witness, and runtime
+/// witness are intentionally leaked: destroying or dropping any of them could
+/// race work whose completion was not proven.
 pub(crate) fn retire_handle<R>(
     runtime: &R,
     library: &Arc<CufftLibrary>,

@@ -331,7 +331,8 @@ kernels, `tensor_binding`/`array_arg` operands) or the `with_raw` sub-session
 (raw CUDA library calls). `tenferro-fft` uses the same boundary: cuFFT plan
 creation and retirement run under the runtime's scoped context guard
 (`CudaRuntime::with_current_context`), which restores the caller's previous
-device/context on every exit path, and cuFFT execution enters `with_raw` for
+device/context on exit (best-effort; failures are logged to stderr), and
+cuFFT execution enters `with_raw` for
 stream binding, workspace allocation, validated tensor spans, and the
 retention guards that pin input/output allocations on a failed synchronization
 barrier (issue #967 invariant). The provider owns each allocation and exposes
