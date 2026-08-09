@@ -202,4 +202,4 @@ TDD regressions model Cargo's staged paths, reject differing copies, and verify
 read-error attribution. A real Cargo 1.97 run on `tenferro-core-ops` confirmed
 that `cargo package`, `tmp-crate`, and `tmp-registry` archives were byte-identical
 and that the repaired helper completed package-to-dry-run attestation without
-uploading. The focused release-helper suite passed with 29 tests.
+uploading. The focused release-helper suite passed with 30 tests.
