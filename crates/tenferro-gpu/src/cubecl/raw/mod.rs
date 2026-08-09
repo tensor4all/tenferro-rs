@@ -313,10 +313,8 @@ impl<'s> Session<'s> {
             .client()
             .get_resource(prepared.handle().clone())
             .map_err(|err| crate::Error::backend_source("raw.tensor_mut", err))?;
-        let base = super::interop::cuda_device_ptr_from_addr(
-            resource.resource().ptr,
-            "raw.tensor_mut",
-        )?;
+        let base =
+            super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor_mut")?;
         Ok(TensorMut {
             base,
             byte_len,

@@ -81,9 +81,8 @@ impl RawContextRestore {
                     let _ = unsafe { cudarc::driver::result::ctx::set_current(previous) };
                 }
                 Ok(None) => {
-                    let _ = unsafe {
-                        cudarc::driver::result::ctx::set_current(std::ptr::null_mut())
-                    };
+                    let _ =
+                        unsafe { cudarc::driver::result::ctx::set_current(std::ptr::null_mut()) };
                 }
                 Err(_) => {}
             }
@@ -120,9 +119,9 @@ impl RawContextRestore {
             // The thread had no current context before the guard; restore that
             // state instead of leaving the tenferro primary context current.
             Ok(None) => {
-                if let Err(err) = unsafe {
-                    cudarc::driver::result::ctx::set_current(std::ptr::null_mut())
-                } {
+                if let Err(err) =
+                    unsafe { cudarc::driver::result::ctx::set_current(std::ptr::null_mut()) }
+                {
                     let _ = writeln!(
                         stderr,
                         "tenferro-gpu: failed to clear CUDA context during {}: {err:?}",

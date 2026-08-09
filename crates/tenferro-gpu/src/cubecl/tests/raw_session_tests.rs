@@ -141,8 +141,7 @@ fn raw_retain_tensor_pins_the_allocation_across_a_drop() {
                     // copying the pointer value is read-only and the retained
                     // guard keeps the allocation alive past the drop below.
                     let saved_ptr = unsafe { reference.raw_ptr() };
-                    let retained =
-                        raw.retain_tensor(gpu_typed, "test.raw_retain_tensor")?;
+                    let retained = raw.retain_tensor(gpu_typed, "test.raw_retain_tensor")?;
                     (saved_ptr, retained)
                     // `gpu` (and its owning handle refcount) is dropped here.
                 };
