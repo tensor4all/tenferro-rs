@@ -81,3 +81,23 @@ current workspace symbols; tensor-core verification passed. No dependency,
 README, service, facade, feature-default, or MSRV-matrix change was made.
 Residual: publish deep crates only after matching dependencies are available on
 crates.io; package verification should then be rerun.
+
+## 2026-08-09 v0.4 final-review hardening
+
+Added `scripts/release-publish.py` as the fail-closed human operator path for
+Phase 3. It verifies the clean detached checkout against the pushed remote tag
+and `origin/main`, structurally validates every workspace git pin against both
+its revision manifest and exact crates.io version, and requires exact approval
+for each package that is new to crates.io. In particular, v0.4 publication
+cannot proceed without an approval assertion naming
+`tenferro-internal-cpu-kernels` exactly.
+
+Publication now proceeds one DAG node at a time. Each node is packaged and its
+actual archive files, normalized metadata, README, and tagged-commit provenance
+are checked before and after `cargo publish --dry-run`; dependent packaging
+starts only after prerequisite registry archives are visible with matching
+provenance. A restarted run skips an existing target version only after the
+same registry-archive provenance check. Focused tests use injected transports
+and in-memory archives, so unit tests perform no network access. Live validation
+also confirmed all current strided, CubeCL, Cubek, and computegraph pin
+manifests and declared registry versions.

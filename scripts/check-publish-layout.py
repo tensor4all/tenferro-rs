@@ -125,7 +125,7 @@ def phase3_publication_order(
         elif fence:
             marker = fence.group(1)
             active_marker = (marker[0], len(marker))
-        elif line == heading:
+        elif re.fullmatch(rf" {{0,3}}{re.escape(heading)}", line):
             headings.append(index)
 
     if len(headings) != 1:
@@ -137,7 +137,7 @@ def phase3_publication_order(
     for line in lines[headings[0] + 1 :]:
         fence = re.match(r"^(`{3,}|~{3,})(.*)$", line.strip())
         if active_fence is None:
-            if re.match(r"^#{1,6}(?:[ \t]+|$)", line):
+            if re.match(r"^ {0,3}#{1,6}(?:[ \t]+|$)", line):
                 break
             if fence:
                 marker, info = fence.groups()
@@ -251,15 +251,24 @@ def check_workspace_metadata(root_text: str, errors: list[str]) -> None:
 
 
 def check_workspace_dependencies(root_text: str, errors: list[str]) -> None:
-    for line_no, line in enumerate(root_text.splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    try:
+        manifest = tomllib.loads(root_text)
+    except tomllib.TOMLDecodeError as error:
+        errors.append(f"Cargo.toml has invalid TOML: {error}")
+        return
+    dependencies = manifest.get("workspace", {}).get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        errors.append("Cargo.toml [workspace.dependencies] must be a table")
+        return
+    for name, dependency in dependencies.items():
+        if not isinstance(dependency, dict) or "git" not in dependency:
             continue
-        if "git =" in stripped and "version =" not in stripped:
-            errors.append(
-                f"Cargo.toml:{line_no}: git dependency must include a version "
-                "requirement for crates.io packaging"
-            )
+        for key in ("version", "rev"):
+            if not isinstance(dependency.get(key), str) or not dependency[key]:
+                errors.append(
+                    f"Cargo.toml workspace git dependency {name!r} must include "
+                    f"a {key} for crates.io packaging"
+                )
 
 
 def workspace_version(root_text: str) -> str:

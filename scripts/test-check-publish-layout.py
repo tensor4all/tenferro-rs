@@ -166,11 +166,37 @@ class ReleaseOrderTests(unittest.TestCase):
                     ["release workflow must contain exactly one exact Phase 3 heading"],
                 )
 
+    def test_accepts_phase_heading_indented_by_up_to_three_spaces(self) -> None:
+        for indent in range(4):
+            with self.subTest(indent=indent):
+                errors: list[str] = []
+                release_text = self.release_text(
+                    ["tenferro-core-ops", "tenferro-runtime"]
+                ).replace(
+                    "## Phase 3 — Publish From The Tag",
+                    f"{' ' * indent}## Phase 3 — Publish From The Tag",
+                )
+                CHECKER.check_release_order(self.metadata(), release_text, errors)
+                self.assertEqual(errors, [])
+
     def test_stops_phase_at_the_next_heading(self) -> None:
+        for indent in range(4):
+            with self.subTest(indent=indent):
+                errors: list[str] = []
+                release_text = self.release_text(
+                    ["tenferro-core-ops", "tenferro-runtime"]
+                ) + f"\n{' ' * indent}### Other Section\n\n```text\nunrelated\n```\n"
+                CHECKER.check_release_order(self.metadata(), release_text, errors)
+                self.assertEqual(errors, [])
+
+    def test_ignores_indented_heading_like_content_inside_fence(self) -> None:
         errors: list[str] = []
         release_text = self.release_text(
             ["tenferro-core-ops", "tenferro-runtime"]
-        ) + "\n### Other Section\n\n```text\nunrelated\n```\n"
+        ).replace(
+            "```text",
+            "```bash\n   ### Not a heading\n```\n\n```text",
+        )
         CHECKER.check_release_order(self.metadata(), release_text, errors)
         self.assertEqual(errors, [])
 
@@ -211,6 +237,40 @@ tenferro-runtime
                         "complete text fence"
                     ],
                 )
+
+
+class WorkspaceDependencyTests(unittest.TestCase):
+    def test_structurally_accepts_commented_multiline_git_dependency(self) -> None:
+        manifest = """\
+[workspace.dependencies]
+local = { path = "local" }
+
+# Registry fallback used by cargo publish.
+[workspace.dependencies.strided]
+git = "https://example.invalid/strided.git"
+rev = "0123456789abcdef0123456789abcdef01234567"
+version = "0.4.0" # exact registry version
+"""
+        errors: list[str] = []
+        CHECKER.check_workspace_dependencies(manifest, errors)
+        self.assertEqual(errors, [])
+
+    def test_structurally_rejects_missing_version_or_rev(self) -> None:
+        for missing in ("version", "rev"):
+            with self.subTest(missing=missing):
+                fields = {
+                    "version": 'version = "0.4.0"',
+                    "rev": 'rev = "0123456789abcdef0123456789abcdef01234567"',
+                }
+                fields.pop(missing)
+                manifest = """\
+[workspace.dependencies.strided]
+git = "https://example.invalid/strided.git"
+%s
+""" % "\n".join(fields.values())
+                errors: list[str] = []
+                CHECKER.check_workspace_dependencies(manifest, errors)
+                self.assertTrue(any(missing in error for error in errors))
 
 
 class PublishMetadataTests(unittest.TestCase):
