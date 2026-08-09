@@ -145,8 +145,9 @@ independent SemVer target. That allowed a dependency release to be mistaken for
 a reason to align tenferro with an independently versioned repository.
 
 Phase 0 now derives one proposal from the latest matching published stable
-baseline and its provenance tag, then classifies merged evidence since that tag
-as breaking, feature, or fix-only. The explicit pre-1.0 and 1.0+ table makes the
+baseline and its provenance tag, then classifies changes actually merged since
+that tag as breaking, feature, or fix-only. Accepted issues count only when they
+link to merged implementation. The explicit pre-1.0 and 1.0+ table makes the
 result reviewable. A conflicting supplied target requires explicit confirmation
 and a recorded reason before edits. Approved never-published packages are
 excluded from baseline agreement, while unpublished newer tags are treated as
@@ -160,6 +161,21 @@ strided-rs 0.4.0. The response treated that request as sufficient instead of
 deriving and proposing tenferro 0.3.0 from the published 0.2.0 baseline. The
 new documentation contract test was then observed failing before the workflow
 and adapters were updated.
+
+Four fresh GREEN pressure scenarios passed against the updated guidance: a
+0.2.0 feature proposed 0.3.0 and stopped on a requested 0.4.0 conflict; a
+0.2.3 fix proposed 0.2.4; a 1.4.2 breaking change proposed 2.0.0; and an
+explicitly reasoned 0.4.0 override proceeded with a recording requirement.
+
+The initial `ci-config` run passed all Python/config suites but stopped because
+`actionlint` was unavailable. The controller's subsequent run and the fix-round
+run with pinned actionlint 1.7.7 completed the full profile successfully.
+
+A quality-review correction aligned every adapter with the canonical human-only
+boundary: agents stop after validation, and a human maintainer alone runs Phase
+3 publication. Contract tests now assert the exact SemVer rows, ordering of
+provenance before the proposal, the conflict halt, the human-only boundary, and
+byte equality of the three skill adapters.
 
 Validation commands:
 

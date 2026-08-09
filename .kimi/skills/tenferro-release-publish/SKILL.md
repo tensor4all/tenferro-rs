@@ -24,8 +24,7 @@ Keep the interaction incremental:
    cross-crate `version = "..."` requirement) and the full pre-push
    checklist.
 3. Phase 2: tag the merged commit and push the tag.
-4. Phase 3: publish crates in dependency order from a worktree of the tag,
-   waiting for the registry index between crates. Confirm with the user
-   immediately before the first `cargo publish`.
-5. Phase 4: verify crates.io versions and `.cargo_vcs_info.json`
-   provenance, then clean up.
+4. At Phase 3, stop after validation; a human maintainer runs Phase 3
+   publication from the tag.
+5. After human publication, Phase 4 verifies crates.io versions and
+   `.cargo_vcs_info.json` provenance, then cleans up.

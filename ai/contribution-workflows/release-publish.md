@@ -36,9 +36,11 @@ Complete this phase before changing manifests or making any other release edit.
    baseline agreement. If the published versions or their provenance do not
    agree, stop and resolve the mismatch. A newer tag that was not published is
    an anomaly, not a baseline; stop and resolve it before continuing.
-2. Inspect merged PRs, accepted issues, and release evidence since the matching
-   provenance tag. Classify the highest-impact change as `breaking`, `feature`,
-   or `fix-only`.
+2. Inspect changes actually merged since the matching provenance tag, using
+   merged PRs and release evidence. Classify the highest-impact merged change as
+   `breaking`, `feature`, or `fix-only`. Accepted issues may explain a
+   classification only when linked to merged implementation; unimplemented
+   accepted issues do not affect the release classification.
 3. Apply this SemVer table to the latest published stable version:
 
    | Baseline | `breaking` | `feature` | `fix-only` |

@@ -25,32 +25,49 @@ SPEC.loader.exec_module(RELEASE)
 
 class ReleaseDocumentationContractTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[1]
+    SKILL_PATHS = (
+        ".agents/skills/tenferro-release-publish/SKILL.md",
+        ".claude/skills/tenferro-release-publish/SKILL.md",
+        ".kimi/skills/tenferro-release-publish/SKILL.md",
+    )
 
     def test_canonical_workflow_requires_semver_proposal_before_edits(self) -> None:
         text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
         for phrase in (
             "latest published stable version",
-            "breaking",
-            "feature",
-            "fix-only",
             "before changing manifests",
             "independently versioned",
-            "explicit confirmation",
+            "stop for explicit confirmation and a reason",
+            "unimplemented accepted issues do not affect",
+            "Agents must stop after validation and must never execute a publication.",
         ):
-            self.assertIn(phrase, text)
-
-    def test_release_adapters_reference_the_proposal_gate(self) -> None:
-        paths = (
-            ".agents/skills/tenferro-release-publish/SKILL.md",
-            ".claude/skills/tenferro-release-publish/SKILL.md",
-            ".kimi/skills/tenferro-release-publish/SKILL.md",
-            ".opencode/commands/tenferro-release-publish.md",
+            self.assertIn(phrase, normalized)
+        self.assertIn(
+            "| `0.Y.Z` | `0.(Y+1).0` | `0.(Y+1).0` | `0.Y.(Z+1)` |", text
         )
+        self.assertIn(
+            "| `X.Y.Z`, `X >= 1` | `(X+1).0.0` | `X.(Y+1).0` | `X.Y.(Z+1)` |",
+            text,
+        )
+        self.assertLess(
+            normalized.index("provenance tag"), normalized.index("one proposed")
+        )
+
+    def test_release_adapters_reference_the_proposal_gate_and_human_boundary(self) -> None:
+        paths = (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md")
         for relative in paths:
             text = (self.ROOT / relative).read_text()
             self.assertIn("ai/contribution-workflows/release-publish.md", text)
             self.assertIn("before editing", text)
             self.assertIn("SemVer proposal", text)
+            self.assertIn("stop after validation", text)
+            self.assertIn("human maintainer runs Phase 3", text)
+
+    def test_release_skill_adapters_are_byte_identical(self) -> None:
+        expected = (self.ROOT / self.SKILL_PATHS[0]).read_bytes()
+        for relative in self.SKILL_PATHS[1:]:
+            self.assertEqual(expected, (self.ROOT / relative).read_bytes())
 
 
 class GitDependencyTests(unittest.TestCase):
