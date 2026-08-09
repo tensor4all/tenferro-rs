@@ -12,7 +12,10 @@ use cudarc::driver::sys::{CUcontext, CUdevice, CUresult};
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use tenferro_tensor::AllocationDomainId;
 
-use super::device::{cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId};
+use super::device::{
+    cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
+};
+use super::identity::GpuExtensionCapability;
 
 /// Returns `true` if a CUDA device can initialize a CubeCL runtime.
 ///
@@ -90,6 +93,7 @@ struct CudaRuntimeState {
     client: ComputeClient<CubeclCudaRuntime>,
     device_id: CudaDeviceId,
     device_ordinal: usize,
+    device_info: CudaDeviceInfo,
     primary_context: CudaPrimaryContext,
     identity: CudaRuntimeIdentity,
     allocation_domain: AllocationDomainId,
@@ -197,11 +201,18 @@ impl CudaRuntime {
             .map_err(|source| cuda_initialization_error(device_id, "set_device", source))?;
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
+        let discovered = cuda_devices()?;
+        let device_info = discovered
+            .iter()
+            .find(|info| info.id() == device_id)
+            .cloned()
+            .ok_or_else(|| unavailable_device_error(device_id, discovered))?;
         Ok(Self {
             inner: Arc::new(CudaRuntimeState {
                 client,
                 device_id,
                 device_ordinal,
+                device_info,
                 primary_context,
                 identity: CudaRuntimeIdentity::fresh(),
                 allocation_domain: AllocationDomainId::fresh(),
@@ -224,6 +235,55 @@ impl CudaRuntime {
     /// ```
     pub fn device_id(&self) -> CudaDeviceId {
         self.inner.device_id
+    }
+
+    /// Return immutable metadata for the runtime's device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaRuntime;
+    ///
+    /// let _info: fn(&CudaRuntime) -> &tenferro_gpu::cuda::CudaDeviceInfo =
+    ///     CudaRuntime::device_info;
+    /// ```
+    pub fn device_info(&self) -> &CudaDeviceInfo {
+        &self.inner.device_info
+    }
+
+    /// Return the allocation ownership domain of this runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaRuntime;
+    ///
+    /// let _domain: fn(&CudaRuntime) -> tenferro_tensor::AllocationDomainId =
+    ///     CudaRuntime::allocation_domain;
+    /// ```
+    pub fn allocation_domain(&self) -> AllocationDomainId {
+        self.inner.allocation_domain
+    }
+
+    /// Report whether this CUDA session supports a GPU extension capability.
+    ///
+    /// The CUDA provider supports the full extension vocabulary: external
+    /// CubeCL kernels, native module loading, runtime compilation (NVRTC), raw
+    /// stream borrowing, and same-device copy. `PeerCopy` is reported as a
+    /// directional query; availability is hardware-dependent and is checked
+    /// per source/destination pair rather than here.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::GpuExtensionCapability;
+    /// use tenferro_gpu::cuda::CudaRuntime;
+    ///
+    /// let _supports: fn(&CudaRuntime, GpuExtensionCapability) -> bool =
+    ///     CudaRuntime::supports_extension;
+    /// ```
+    pub fn supports_extension(&self, capability: GpuExtensionCapability) -> bool {
+        capabilities_for_device(capability)
     }
 
     pub(crate) fn device_ordinal(&self) -> usize {
@@ -314,6 +374,16 @@ impl CudaRuntimeState {
 
 fn is_invalid_device_lookup(source: DriverError) -> bool {
     source.0 == CUresult::CUDA_ERROR_INVALID_DEVICE
+}
+
+/// CUDA provider support for the shared GPU extension vocabulary.
+///
+/// See [`GpuExtensionCapability`](super::identity::GpuExtensionCapability) for
+/// the vocabulary. `PeerCopy` is hardware/topology dependent and is therefore
+/// reported false at the provider level; the directional query in the explicit
+/// multi-GPU copy API decides availability per source/destination pair.
+pub(crate) fn capabilities_for_device(capability: GpuExtensionCapability) -> bool {
+    !matches!(capability, GpuExtensionCapability::PeerCopy)
 }
 
 fn cuda_initialization_error<E>(

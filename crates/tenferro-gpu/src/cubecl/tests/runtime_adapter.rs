@@ -15,9 +15,20 @@ use tenferro_tensor::{
 
 use super::*;
 use crate::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceError,
-    CudaDeviceId, CudaDeviceInfo, CudaRuntime,
+    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
+    CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
+    CudaRuntime,
 };
+
+fn test_info(id: CudaDeviceId, name: &str) -> CudaDeviceInfo {
+    CudaDeviceInfo::new(
+        id,
+        name,
+        CudaDeviceUuid::from_bytes([id.ordinal() as u8; 16]),
+        CudaComputeCapability { major: 9, minor: 0 },
+        40 * 1024 * 1024 * 1024,
+    )
+}
 
 #[test]
 fn cuda_public_constructors_and_registration_require_typed_selection() {
@@ -61,8 +72,8 @@ fn caller_selected_devices_and_engine_ids_flow_through_prepared_registration_ide
 fn unavailable_selection_preserves_requested_id_and_discovered_records() {
     let requested = CudaDeviceId::from_ordinal(9);
     let discovered = vec![
-        CudaDeviceInfo::new(CudaDeviceId::from_ordinal(2), "NVIDIA A100"),
-        CudaDeviceInfo::new(CudaDeviceId::from_ordinal(7), "NVIDIA H100"),
+        test_info(CudaDeviceId::from_ordinal(2), "NVIDIA A100"),
+        test_info(CudaDeviceId::from_ordinal(7), "NVIDIA H100"),
     ];
 
     let error = super::super::device::unavailable_device_error(requested, discovered.clone());

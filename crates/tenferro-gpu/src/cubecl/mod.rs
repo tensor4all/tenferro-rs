@@ -109,6 +109,7 @@ mod exec_session;
 mod ffi;
 mod fusion;
 mod gemm;
+mod identity;
 pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
@@ -133,6 +134,7 @@ pub use capability::cuda_capabilities;
 pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 #[doc(hidden)]
 pub use exec_session::{with_cuda_exec_session, CudaExecSession};
+pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability};
 pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};

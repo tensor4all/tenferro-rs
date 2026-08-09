@@ -43,8 +43,9 @@ pub mod cuda {
     pub use super::cubecl::{
         cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
         cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
-        with_cuda_exec_session, CudaBackend, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
-        CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
+        with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId,
+        CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
+        GpuExtensionCapability,
     };
 
     /// Provider-specific CUDA interop scoped to an active execution session.

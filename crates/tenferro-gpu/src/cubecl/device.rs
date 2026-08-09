@@ -2,6 +2,8 @@ use std::fmt;
 
 use tenferro_tensor::BoxError;
 
+use super::identity::{CudaComputeCapability, CudaDeviceUuid};
+
 #[derive(Debug, thiserror::Error)]
 enum CudaDriverDiscoveryError {
     #[error("CUDA driver call {function} failed: {source}")]
@@ -95,14 +97,26 @@ impl fmt::Debug for CudaDeviceId {
 pub struct CudaDeviceInfo {
     id: CudaDeviceId,
     name: String,
+    uuid: CudaDeviceUuid,
+    compute_capability: CudaComputeCapability,
+    total_memory_bytes: u64,
 }
 
 impl CudaDeviceInfo {
     /// Construct device metadata for a CUDA device.
-    pub(crate) fn new(id: CudaDeviceId, name: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        id: CudaDeviceId,
+        name: impl Into<String>,
+        uuid: CudaDeviceUuid,
+        compute_capability: CudaComputeCapability,
+        total_memory_bytes: u64,
+    ) -> Self {
         Self {
             id,
             name: name.into(),
+            uuid,
+            compute_capability,
+            total_memory_bytes,
         }
     }
 
@@ -131,6 +145,49 @@ impl CudaDeviceInfo {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Return the stable physical/MIG identity of this device.
+    ///
+    /// The UUID is a durable comparison identity independent of the
+    /// process-visible ordinal. It is used for diagnostics, topology, and
+    /// explicit cross-runtime/cross-device placement decisions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    ///
+    /// let _uuid = CudaDeviceInfo::uuid;
+    /// ```
+    pub fn uuid(&self) -> CudaDeviceUuid {
+        self.uuid
+    }
+
+    /// Return the compute capability of this device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    ///
+    /// let _cc = CudaDeviceInfo::compute_capability;
+    /// ```
+    pub fn compute_capability(&self) -> CudaComputeCapability {
+        self.compute_capability
+    }
+
+    /// Return the total device memory in bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaDeviceInfo;
+    ///
+    /// let _mem = CudaDeviceInfo::total_memory_bytes;
+    /// ```
+    pub fn total_memory_bytes(&self) -> u64 {
+        self.total_memory_bytes
+    }
 }
 
 trait DiscoveryDriver {
@@ -139,6 +196,12 @@ trait DiscoveryDriver {
     fn device_count(&self) -> Result<u32, BoxError>;
 
     fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError>;
+
+    fn device_uuid(&self, device: CudaDeviceId) -> Result<CudaDeviceUuid, BoxError>;
+
+    fn compute_capability(&self, device: CudaDeviceId) -> Result<CudaComputeCapability, BoxError>;
+
+    fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError>;
 }
 
 fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
@@ -164,7 +227,33 @@ fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, C
                 operation: "get_device_name",
                 source,
             })?;
-        devices.push(CudaDeviceInfo::new(id, name));
+        let uuid = driver
+            .device_uuid(id)
+            .map_err(|source| CudaDeviceError::Discovery {
+                operation: "get_device_uuid",
+                source,
+            })?;
+        let compute_capability =
+            driver
+                .compute_capability(id)
+                .map_err(|source| CudaDeviceError::Discovery {
+                    operation: "get_compute_capability",
+                    source,
+                })?;
+        let total_memory_bytes =
+            driver
+                .total_memory_bytes(id)
+                .map_err(|source| CudaDeviceError::Discovery {
+                    operation: "get_total_memory",
+                    source,
+                })?;
+        devices.push(CudaDeviceInfo::new(
+            id,
+            name,
+            uuid,
+            compute_capability,
+            total_memory_bytes,
+        ));
     }
     Ok(devices)
 }
@@ -192,16 +281,7 @@ impl DiscoveryDriver for CudaDriverApi {
     }
 
     fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError> {
-        let ordinal = i32::try_from(device.ordinal()).map_err(|_| {
-            boxed_discovery_error(CudaDriverDiscoveryError::DeviceOrdinalOutOfRange { device })
-        })?;
-
-        let cuda_device = cudarc::driver::result::device::get(ordinal).map_err(|source| {
-            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
-                function: "cuDeviceGet",
-                source,
-            })
-        })?;
+        let cuda_device = self.cuda_device(device)?;
         let name = cudarc::driver::result::device::get_name(cuda_device).map_err(|source| {
             boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
                 function: "cuDeviceGetName",
@@ -209,6 +289,89 @@ impl DiscoveryDriver for CudaDriverApi {
             })
         })?;
         Ok(name)
+    }
+
+    fn device_uuid(&self, device: CudaDeviceId) -> Result<CudaDeviceUuid, BoxError> {
+        let cuda_device = self.cuda_device(device)?;
+        let uuid = cudarc::driver::result::device::get_uuid(cuda_device).map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGetUuid",
+                source,
+            })
+        })?;
+        let mut bytes = [0u8; 16];
+        #[allow(clippy::needless_range_loop)]
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = uuid.bytes[index] as u8;
+        }
+        Ok(CudaDeviceUuid::from_bytes(bytes))
+    }
+
+    fn compute_capability(&self, device: CudaDeviceId) -> Result<CudaComputeCapability, BoxError> {
+        let cuda_device = self.cuda_device(device)?;
+        use cudarc::driver::sys::CUdevice_attribute_enum as Attr;
+        let (major_name, minor_name) = unsafe {
+            (
+                cudarc::driver::result::device::get_attribute(
+                    cuda_device,
+                    Attr::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                ),
+                cudarc::driver::result::device::get_attribute(
+                    cuda_device,
+                    Attr::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                ),
+            )
+        };
+        let major = major_name.map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGetAttribute(CC_MAJOR)",
+                source,
+            })
+        })?;
+        let minor = minor_name.map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGetAttribute(CC_MINOR)",
+                source,
+            })
+        })?;
+        Ok(CudaComputeCapability {
+            major: u32::try_from(major).map_err(|_| {
+                boxed_discovery_error(CudaDriverDiscoveryError::InvalidDeviceCount { count: major })
+            })?,
+            minor: u32::try_from(minor).map_err(|_| {
+                boxed_discovery_error(CudaDriverDiscoveryError::InvalidDeviceCount { count: minor })
+            })?,
+        })
+    }
+
+    fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError> {
+        let cuda_device = self.cuda_device(device)?;
+        // SAFETY: `cuda_device` was returned by `cuDeviceGet` for this session.
+        let bytes = unsafe { cudarc::driver::result::device::total_mem(cuda_device) }.map_err(
+            |source| {
+                boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                    function: "cuDeviceTotalMem",
+                    source,
+                })
+            },
+        )?;
+        Ok(u64::try_from(bytes).map_err(|_| {
+            boxed_discovery_error(CudaDriverDiscoveryError::InvalidDeviceCount { count: i32::MAX })
+        })?)
+    }
+}
+
+impl CudaDriverApi {
+    fn cuda_device(&self, device: CudaDeviceId) -> Result<cudarc::driver::sys::CUdevice, BoxError> {
+        let ordinal = i32::try_from(device.ordinal()).map_err(|_| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DeviceOrdinalOutOfRange { device })
+        })?;
+        cudarc::driver::result::device::get(ordinal).map_err(|source| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
+                function: "cuDeviceGet",
+                source,
+            })
+        })
     }
 }
 
@@ -394,10 +557,25 @@ mod tests {
 
     use tenferro_tensor::BoxError;
 
+    use super::super::identity::{CudaComputeCapability, CudaDeviceUuid};
     use super::{
         discover_with, unavailable_device_error, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
         DiscoveryDriver,
     };
+
+    fn test_uuid(ordinal: u32) -> CudaDeviceUuid {
+        CudaDeviceUuid::from_bytes([ordinal as u8; 16])
+    }
+
+    fn test_info(id: CudaDeviceId, name: &str) -> CudaDeviceInfo {
+        CudaDeviceInfo::new(
+            id,
+            name,
+            test_uuid(id.ordinal()),
+            CudaComputeCapability { major: 9, minor: 0 },
+            40 * 1024 * 1024 * 1024,
+        )
+    }
 
     #[derive(Copy, Clone)]
     enum FakeDriverScenario {
@@ -471,6 +649,38 @@ mod tests {
             }
             Ok(self.names[device.ordinal() as usize].clone())
         }
+
+        fn device_uuid(&self, device: CudaDeviceId) -> Result<CudaDeviceUuid, BoxError> {
+            self.calls.borrow_mut().push("device_uuid");
+            if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
+            {
+                return Err(Box::new(std::io::Error::other("fake device uuid failure")));
+            }
+            Ok(test_uuid(device.ordinal()))
+        }
+
+        fn compute_capability(
+            &self,
+            device: CudaDeviceId,
+        ) -> Result<CudaComputeCapability, BoxError> {
+            self.calls.borrow_mut().push("compute_capability");
+            if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
+            {
+                return Err(Box::new(std::io::Error::other(
+                    "fake compute capability failure",
+                )));
+            }
+            Ok(CudaComputeCapability { major: 9, minor: 0 })
+        }
+
+        fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError> {
+            self.calls.borrow_mut().push("total_memory_bytes");
+            if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
+            {
+                return Err(Box::new(std::io::Error::other("fake total memory failure")));
+            }
+            Ok(40 * 1024 * 1024 * 1024)
+        }
     }
 
     fn assert_cuda_device_id_traits<T>()
@@ -496,12 +706,16 @@ mod tests {
     }
 
     #[test]
-    fn cuda_device_info_exposes_id_and_name() {
+    fn cuda_device_info_exposes_id_and_metadata() {
         let id = CudaDeviceId::from_ordinal(2);
-        let info = CudaDeviceInfo::new(id, "NVIDIA H100");
+        let info = test_info(id, "NVIDIA H100");
 
         assert_eq!(info.id(), id);
         assert_eq!(info.name(), "NVIDIA H100");
+        assert_eq!(info.uuid(), test_uuid(2));
+        assert_eq!(info.compute_capability().major, 9);
+        assert_eq!(info.compute_capability().minor, 0);
+        assert_eq!(info.total_memory_bytes(), 40 * 1024 * 1024 * 1024);
         assert_eq!(info, info.clone());
     }
 
@@ -509,8 +723,8 @@ mod tests {
     fn unavailable_device_selection_preserves_requested_id_and_discovered_records() {
         let requested = CudaDeviceId::from_ordinal(2);
         let discovered = vec![
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+            test_info(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+            test_info(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
         ];
 
         let error = unavailable_device_error(requested, discovered.clone());
@@ -535,8 +749,8 @@ mod tests {
     fn discovery_preserves_ordinal_order_and_is_deterministic() {
         let driver = FakeDriver::success(vec!["NVIDIA A100".into(), "NVIDIA H100".into()]);
         let expected = vec![
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA A100"),
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA H100"),
+            test_info(CudaDeviceId::from_ordinal(0), "NVIDIA A100"),
+            test_info(CudaDeviceId::from_ordinal(1), "NVIDIA H100"),
         ];
 
         let first = discover_with(&driver).unwrap();
@@ -617,7 +831,15 @@ mod tests {
         );
         assert_eq!(
             driver.calls(),
-            vec!["initialize", "device_count", "device_name", "device_name"]
+            vec![
+                "initialize",
+                "device_count",
+                "device_name",
+                "device_uuid",
+                "compute_capability",
+                "total_memory_bytes",
+                "device_name",
+            ]
         );
     }
 
@@ -653,8 +875,8 @@ mod tests {
     fn cuda_device_error_unavailable_preserves_fields_without_source() {
         let requested = CudaDeviceId::from_ordinal(2);
         let discovered = vec![
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
-            CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+            test_info(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+            test_info(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
         ]
         .into_boxed_slice();
         let error = CudaDeviceError::Unavailable {
@@ -669,22 +891,24 @@ mod tests {
                 discovered: actual_discovered,
             } if *actual_requested == requested
                 && actual_discovered.as_ref() == [
-                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
-                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+                    test_info(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+                    test_info(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
                 ]
         ));
-        assert_eq!(
-            error.to_string(),
-            "requested CUDA device CudaDeviceId(2) is unavailable; discovered devices: [CudaDeviceInfo { id: CudaDeviceId(0), name: \"NVIDIA H100\" }, CudaDeviceInfo { id: CudaDeviceId(1), name: \"NVIDIA A100\" }]"
-        );
+        assert!(error.to_string().contains(
+            "requested CUDA device CudaDeviceId(2) is unavailable; discovered devices: ["
+        ));
+        assert!(error.to_string().contains(
+            "CudaDeviceInfo { id: CudaDeviceId(0), name: \"NVIDIA H100\", uuid: CudaDeviceUuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), compute_capability: CudaComputeCapability { major: 9, minor: 0 }, total_memory_bytes: 42949672960 }"
+        ));
         assert_eq!(error.operation(), None);
         assert_eq!(error.requested(), Some(requested));
         assert_eq!(
             error.discovered(),
             Some(
                 [
-                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
-                    CudaDeviceInfo::new(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
+                    test_info(CudaDeviceId::from_ordinal(0), "NVIDIA H100"),
+                    test_info(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
                 ]
                 .as_slice()
             )

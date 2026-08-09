@@ -13,14 +13,25 @@ use tenferro_tensor::{
 };
 use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
-use super::{CudaBackend, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
+use super::identity::GpuExtensionCapability;
+use super::{CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
 
 /// Marker for the concrete erased CUDA execution-session target.
 #[doc(hidden)]
 pub(super) struct CudaExecSessionMarker;
 
 /// Borrowed CUDA execution capability.
-#[doc(hidden)]
+///
+/// This is the single public execution-authority boundary for CUDA kernel
+/// extensions (issue #1597). External operation crates obtain it through
+/// [`with_cuda_exec_session`] and then borrow backend/device-scoped extension
+/// sessions via [`CudaExecSession::with_cubecl`] and
+/// [`CudaExecSession::with_raw`].
+///
+/// The session is not constructible by users and is `!Send + !Sync`: it
+/// carries thread-local execution capability. Success of an enrolled operation
+/// means the work was enqueued; only [`CudaExecSession::synchronize`] is a
+/// host barrier.
 #[derive(Debug)]
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,
@@ -28,15 +39,78 @@ pub struct CudaExecSession<'a> {
 
 impl CudaExecSession<'_> {
     /// Borrow the provider runtime without exposing the backend.
-    #[doc(hidden)]
     pub fn runtime(&self) -> &CudaRuntime {
         self.backend.runtime()
     }
 
     /// Return the identity of the borrowed provider runtime.
-    #[doc(hidden)]
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
         self.backend.runtime_identity()
+    }
+
+    /// Report whether this session supports a GPU extension capability.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{CudaExecSession, GpuExtensionCapability};
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>, capability: GpuExtensionCapability) -> bool {
+    ///     session.supports(capability)
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn supports(&self, capability: GpuExtensionCapability) -> bool {
+        self.backend.runtime().supports_extension(capability)
+    }
+
+    /// Borrow immutable metadata for the session's device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>) {
+    ///     let _ = session.device_info();
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn device_info(&self) -> &CudaDeviceInfo {
+        self.backend.runtime().device_info()
+    }
+
+    /// Return the allocation ownership domain of this session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>) -> tenferro_tensor::AllocationDomainId {
+    ///     session.allocation_domain()
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn allocation_domain(&self) -> tenferro_tensor::AllocationDomainId {
+        self.backend.runtime().allocation_domain()
+    }
+
+    /// Block the host until work enqueued on the session's stream completes.
+    ///
+    /// This is the only host barrier on the success path; ordinary successful
+    /// session operations only enqueue. `with_cubecl` and `with_raw` (the
+    /// extension sub-sessions) are added by the follow-up extension-session
+    /// work; this task establishes the public boundary and the
+    /// capability/identity surface only.
+    pub fn synchronize(&mut self) -> crate::Result<()> {
+        self.backend.runtime().synchronize()
     }
 
     #[doc(hidden)]
@@ -89,9 +163,25 @@ impl CudaExecSession<'_> {
 
 /// Visit a CUDA execution session through the erased backend-session surface.
 ///
-/// This is intentionally a scoped leaf-capability bridge: the callback cannot
-/// return a borrow of the reconstructed session.
-#[doc(hidden)]
+/// This is the public entry point that borrows CUDA execution authority for
+/// the duration of the callback (issue #1597). The callback cannot return a
+/// borrow of the reconstructed session, so the authority cannot escape the
+/// scope.
+///
+/// Returns `None` when `session` is not a CUDA execution session.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::{with_cuda_exec_session, CudaExecSession};
+///
+/// // Call-check only: the visitor borrows CUDA execution authority for the
+/// // duration of the callback.
+/// fn check(session: &mut dyn tenferro_tensor::backend::BackendSession) {
+///     let _ = with_cuda_exec_session(session, |_session| 0usize);
+/// }
+/// let _ = check;
+/// ```
 pub fn with_cuda_exec_session<B, R>(
     session: &mut B,
     f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R,
