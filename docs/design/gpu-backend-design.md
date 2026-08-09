@@ -286,6 +286,12 @@ algorithms.
 
 ## Operation-Crate Interop Boundary
 
+See [gpu-extension-api.md](./gpu-extension-api.md) for the public kernel
+extension contract (issue #1597): `CudaExecSession` as the single
+execution-authority boundary, `cuda::raw` / `cuda::cubecl` / `webgpu::cubecl`
+sessions, identity layering, capability/error contracts, multi-GPU copy
+semantics, and the CubeCL package policy.
+
 `crates/tenferro-gpu/src/cubecl/dispatch.rs` is private backend glue. It owns
 shape/buffer validation before unsafe CubeCL launch arguments are constructed.
 Sibling operation crates must not import it directly.
