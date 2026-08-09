@@ -349,6 +349,55 @@ diff-scoped review bot.
   runners directly on PR updates when an earlier review, lint, docs, or CPU test
   gate can reject the PR first.
 
+## Publication Order And Publish-Safety
+
+Maintainer and release-workflow protocol; intentionally not routed to the
+review bot. The normative cross-repository publication rules live in the
+shared `tensor4all-agent-rules` (`rules/common/repository.md`); this section
+records only the tenferro-specific constraints that must hold in this
+repository.
+
+- A publishable workspace crate must not have a versioned normal, build, or
+  dev dependency on a publishable crate that appears later in the canonical
+  publication order (the Phase 3 list in
+  `ai/contribution-workflows/release-publish.md`). Cargo resolves versioned
+  dependencies during `cargo package` even with `--no-verify`, so a forward
+  reference fails before any publication point of no return.
+- Cross-layer tests may use path-only (unversioned) dev-dependencies on
+  publishable crates: dev-dependencies are stripped from published manifests
+  and never registry-resolve for consumers, so an unversioned path dev-edge is
+  safe even when it points forward in the order (`tenferro-xla` ->
+  `tenferro-einsum`) or closes a cycle (`tenferro-runtime` ->
+  `tenferro-cpu`). A declared dev version must still match the workspace
+  version.
+- The complete dependency graph among publishable crates, including dev and
+  build edges, must not contain a publication cycle over versioned edges
+  (versioned edges are the only ones that registry-resolve at package time).
+- Published crates must remain packageable from their manifests without
+  temporary local `[patch.crates-io]` bootstrap configuration.
+- Release validation is change-aware: a helper-or-workflow-only diff runs the
+  focused `ci-config` lane; a publication-metadata-only diff runs metadata,
+  publish-layout, and archive/dry-run checks; a semantic manifest diff runs
+  affected tests plus the applicable CI tier; Rust source or ambiguous diffs
+  run full validation. `scripts/release-validation-policy.py` classifies the
+  lane from old/new manifest content. Before skipping a rerun on the strength
+  of previously passed CI, verify every required check run for the exact
+  release commit via
+  `gh api repos/tensor4all/tenferro-rs/commits/<SHA>/check-runs --paginate --slurp`
+  and require `head_sha == <SHA>`, `status == "completed"`, and
+  `conclusion == "success"` per required check; anything else fails closed and
+  reruns the applicable tier.
+- Publication is human-only: agents generate a guarded handoff script with
+  `scripts/release-publish.py --generate-script PATH` and never type the
+  publication confirmation. The generated script re-runs the fail-closed
+  preflight, requires one exact lowercase `y` at a TTY, and invokes the helper
+  with `--execute` only after verifying SHA-256 pins of the helper and the
+  canonical workflow; it is written outside the release worktree (mode 0700,
+  `bash -n` clean, restart-safe).
+- `scripts/check-publish-layout.py` enforces the canonical order, forward
+  dependency, and publication-cycle rules; a manifest or release change that
+  would violate them fails the check before tagging.
+
 ## Standard Extension Boundary
 
 - Standard operation families (`tenferro-einsum`, `tenferro-linalg`,

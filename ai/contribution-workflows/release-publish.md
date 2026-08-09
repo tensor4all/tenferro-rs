@@ -91,6 +91,10 @@ Complete this phase before changing manifests or making any other release edit.
 1. `git fetch origin main` and identify the merged bump commit.
 2. `git tag vX.Y.Z <merged-commit> && git push origin vX.Y.Z`.
 3. Recommended: `gh release create vX.Y.Z --generate-notes`.
+4. Record the tag commit SHA (`git rev-parse vX.Y.Z`) and the required CI job
+   names (the workspace gate jobs that must pass before publication, e.g.
+   `workspace-faer`, `workspace-blas`, `extensions`, `docs`, `coverage`,
+   `ci-config`). Phase 3 reuses CI results only for exactly this SHA.
 
 ## Phase 3 — Publish From The Tag
 
@@ -160,8 +164,53 @@ Agents must stop after validation and must never execute a publication.
    package exists only when crates.io also has the target version, whose archive
    must still pass all checks before it is skipped. It rejects the approval as
    stale when the package exists but the target version does not.
+
+   **Generated handoff script (recommended):** instead of typing the two
+   commands below by hand, generate a guarded handoff script that re-runs the
+   same preflight and requires one exact lowercase `y` at a TTY before it
+   invokes the helper with `--execute`:
+
+   ```bash
+   python3 scripts/release-publish.py X.Y.Z \
+     --approve-new-package tenferro-internal-cpu-kernels \
+     --generate-script "$TMPDIR/publish-X.Y.Z.sh"
+   ```
+
+   The generator refuses a path inside the release worktree (the helper aborts
+   on untracked files). The generated script pins SHA-256 checksums of the
+   helper and this workflow, aborts unless stdin is a TTY and the worktree is
+   clean and detached, and carries exactly the `--approve-new-package` values
+   passed at generation. Run it from the release worktree root:
+
+   ```bash
+   cd <fresh-path> && bash "$TMPDIR/publish-X.Y.Z.sh"
+   ```
+
+   Regenerate the script after any helper or workflow change; a checksum
+   mismatch aborts before anything runs.
+
+   **Change-aware revalidation and exact-SHA CI reuse:** classify what
+   actually changed since the previous release with
+   `python3 scripts/release-validation-policy.py --base <prev-tag> --head <this-tag>`
+   (or repeated `--change PATH OLD NEW` triples for explicit old/new content).
+   A helper-or-workflow-only diff needs only the focused `ci-config` lane; a
+   publication-metadata-only diff needs metadata, publish-layout, and
+   archive/dry-run checks; a semantic manifest diff needs affected tests plus
+   the applicable CI tier; Rust source or ambiguous diffs need the full normal
+   validation. Before skipping a rerun on the strength of CI already passed,
+   verify every required check run for the exact tag commit with the canonical
+   query
+   `gh api repos/tensor4all/tenferro-rs/commits/<SHA>/check-runs --paginate --slurp`
+   and require, per required check name, `head_sha == <SHA>`,
+   `status == "completed"`, and `conclusion == "success"`. Any required check
+   that is missing, ran on another commit, is not completed, or did not
+   succeed fails closed: rerun the applicable tier. The release helper encodes
+   this procedure as `verify_release_ci(commit, required_checks)`; the
+   maintainer executes it — it is not part of the helper's automatic preflight
+   (the helper never blocks on CI state by itself).
 4. After the preflight passes, the human operator repeats the same exact command
-   with `--execute`:
+   with `--execute` (or runs the generated handoff script, which does the same
+   after the single exact `y`):
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z \
@@ -179,15 +228,20 @@ Agents must stop after validation and must never execute a publication.
    tree. The file list must equal `cargo package --list` for that tag.
    `Cargo.toml.orig` must equal the tagged source manifest. The helper retains
    every regular file's exact bytes, including Cargo's normalized `Cargo.toml`,
-   generated `Cargo.lock`, and VCS file, and requires the dry-run and downloaded
-   registry archives to match them exactly. Unmapped, changed, or required
-   missing files abort. It packages, dry-runs, and publishes one crate at a time.
+   generated `Cargo.lock`, and VCS file. Dry-run and immediate post-upload
+   registry archives must match every member exactly. For target versions and
+   prerequisites already registry-visible when the helper starts, only
+   `Cargo.lock` bytes may differ from the fresh local package; the identical file
+   set (including `Cargo.lock`) and every other comparison remain required.
+   Unmapped, changed, or required missing files abort. It packages, dry-runs,
+   and publishes one crate at a time.
    Do not pre-package the whole workspace: lower-layer registry versions must
    exist before dependent packages can resolve.
 5. The helper is restart-safe and fail-closed: it skips an already-published
-   target version only after recreating the exact local archive from the clean
-   tag, then downloading its registry archive and matching every regular file's
-   bytes as well as tagged-source provenance. Any missing approval, metadata/provenance
+   target version only after recreating the local archive from the clean tag,
+   then downloading its registry archive and matching every regular file's bytes
+   except the generated `Cargo.lock` restart exception above, as well as
+   tagged-source provenance. Any missing approval, metadata/provenance
    mismatch, network ambiguity, command failure, or required manifest change
    aborts publication. Fix manifest problems on `main` through Phase 1 and
    restart at Phase 2 with the next patch version.

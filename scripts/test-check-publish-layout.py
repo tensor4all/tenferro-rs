@@ -37,36 +37,29 @@ VALID_EXPLICIT_FEATURES = VALID_ALL_FEATURES.replace(
 
 
 class ReleaseOrderTests(unittest.TestCase):
-    def metadata(self) -> dict:
+    def metadata(self, *, dependencies: dict[str, list[dict]] | None = None) -> dict:
+        """Acyclic baseline fixture; callers override dependencies per test."""
+
         root = CHECKER.ROOT
-        packages = [
-            {
-                "id": "core-id",
-                "name": "tenferro-core-ops",
-                "manifest_path": str(root / "crates/tenferro-core-ops/Cargo.toml"),
-                "publish": None,
-                "dependencies": [
-                    {"name": "tenferro-runtime", "kind": "dev"},
-                ],
-            },
-            {
-                "id": "runtime-id",
-                "name": "tenferro-runtime",
-                "manifest_path": str(root / "crates/tenferro-runtime/Cargo.toml"),
-                "publish": None,
-                "dependencies": [
-                    {"name": "tenferro-core-ops", "kind": None},
-                    {"name": "tenferro-hidden", "kind": None},
-                ],
-            },
-            {
-                "id": "hidden-id",
-                "name": "tenferro-hidden",
-                "manifest_path": str(root / "crates/tenferro-hidden/Cargo.toml"),
-                "publish": [],
-                "dependencies": [],
-            },
-        ]
+        dependencies = dependencies or {
+            "tenferro-core-ops": [],
+            "tenferro-runtime": [
+                {"name": "tenferro-core-ops", "kind": None, "req": "^0.3.0"},
+                {"name": "tenferro-hidden", "kind": None, "req": "^0.3.0"},
+            ],
+            "tenferro-hidden": [],
+        }
+        packages = []
+        for name, crate_dependencies in dependencies.items():
+            packages.append(
+                {
+                    "id": f"{name}-id",
+                    "name": name,
+                    "manifest_path": str(root / "crates" / name / "Cargo.toml"),
+                    "publish": [] if name == "tenferro-hidden" else None,
+                    "dependencies": crate_dependencies,
+                }
+            )
         return {
             "packages": packages,
             "workspace_members": [package["id"] for package in packages],
@@ -76,12 +69,140 @@ class ReleaseOrderTests(unittest.TestCase):
         crates = "\n".join(order)
         return f"## Phase 3 — Publish From The Tag\n\n```text\n{crates}\n```\n"
 
-    def test_accepts_topological_order_excluding_dev_and_nonpublishable(
+    def dep(
+        self, name: str, *, kind: str = "dev", versioned: bool = True
+    ) -> dict:
+        entry: dict = {"name": name, "kind": kind}
+        if versioned:
+            entry["req"] = "^0.3.0"
+        return entry
+
+    def test_accepts_topological_order_ignoring_nonpublishable_and_backward_edges(
         self,
     ) -> None:
         errors: list[str] = []
         CHECKER.check_release_order(
             self.metadata(),
+            self.release_text(["tenferro-core-ops", "tenferro-runtime"]),
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_rejects_forward_dev_dependency_on_later_publishable_crate(
+        self,
+    ) -> None:
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-xla": [self.dep("tenferro-einsum")],
+                "tenferro-einsum": [],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
+            self.release_text(["tenferro-xla", "tenferro-einsum"]),
+            errors,
+        )
+        self.assertEqual(
+            errors,
+            [
+                "release publish order must place dependency "
+                "'tenferro-einsum' before 'tenferro-xla'"
+            ],
+        )
+
+    def test_accepts_unversioned_forward_dev_dependency(self) -> None:
+        # A path-only (unversioned) forward dev-dependency is safe: dev
+        # dependencies are stripped from the published manifest and never
+        # resolve against crates.io during `cargo package`.
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-xla": [self.dep("tenferro-einsum", versioned=False)],
+                "tenferro-einsum": [],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
+            self.release_text(["tenferro-xla", "tenferro-einsum"]),
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_accepts_backward_dev_dependency_on_earlier_publishable_crate(
+        self,
+    ) -> None:
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-xla": [self.dep("tenferro-einsum")],
+                "tenferro-einsum": [],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
+            self.release_text(["tenferro-einsum", "tenferro-xla"]),
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_rejects_normal_dev_publication_cycle(self) -> None:
+        # tenferro-cpu -> tenferro-runtime (normal) joined with
+        # tenferro-runtime -> tenferro-cpu (dev) forms a publish cycle.
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-cpu": [
+                    {"name": "tenferro-runtime", "kind": None, "req": "^0.3.0"}
+                ],
+                "tenferro-runtime": [self.dep("tenferro-cpu")],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
+            self.release_text(["tenferro-runtime", "tenferro-cpu"]),
+            errors,
+        )
+        cycle_errors = [
+            error for error in errors if error.startswith("publication cycle")
+        ]
+        self.assertEqual(len(cycle_errors), 1)
+        self.assertIn("tenferro-cpu", cycle_errors[0])
+        self.assertIn("tenferro-runtime", cycle_errors[0])
+
+    def test_accepts_unversioned_dev_edge_that_would_otherwise_cycle(
+        self,
+    ) -> None:
+        # tenferro-runtime -> (dev, path-only) tenferro-cpu joined with
+        # tenferro-cpu -> (normal, versioned) tenferro-runtime is safe: the
+        # unversioned dev edge needs no registry resolution at package time.
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-cpu": [
+                    {"name": "tenferro-runtime", "kind": None, "req": "^0.3.0"}
+                ],
+                "tenferro-runtime": [self.dep("tenferro-cpu", versioned=False)],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
+            self.release_text(["tenferro-runtime", "tenferro-cpu"]),
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_accepts_dev_dependency_on_nonpublishable_crate(self) -> None:
+        metadata = self.metadata(
+            dependencies={
+                "tenferro-runtime": [{"name": "tenferro-hidden", "kind": "dev"}],
+                "tenferro-core-ops": [],
+                "tenferro-hidden": [],
+            }
+        )
+        errors: list[str] = []
+        CHECKER.check_release_order(
+            metadata,
             self.release_text(["tenferro-core-ops", "tenferro-runtime"]),
             errors,
         )
@@ -104,8 +225,18 @@ class ReleaseOrderTests(unittest.TestCase):
 
     def test_checks_optional_and_build_dependencies(self) -> None:
         cases = (
-            {"name": "tenferro-core-ops", "kind": None, "optional": True},
-            {"name": "tenferro-core-ops", "kind": "build", "optional": False},
+            {
+                "name": "tenferro-core-ops",
+                "kind": None,
+                "optional": True,
+                "req": "^0.3.0",
+            },
+            {
+                "name": "tenferro-core-ops",
+                "kind": "build",
+                "optional": False,
+                "req": "^0.3.0",
+            },
         )
         for dependency in cases:
             with self.subTest(dependency=dependency):

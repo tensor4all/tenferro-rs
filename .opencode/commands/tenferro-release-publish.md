@@ -16,5 +16,12 @@ re-tag instead); git-pinned workspace dependencies must pin revs whose
 declared versions exist on crates.io.
 
 Proceed through the version-bump PR and tag, then stop after validation; a
-human maintainer runs Phase 3 publication from the tag. After human publication,
-perform the canonical post-publish verification.
+human maintainer runs Phase 3 publication from the tag. The maintainer can
+generate a guarded handoff script with
+`python3 scripts/release-publish.py X.Y.Z --generate-script PATH` that re-runs the
+preflight and requires one exact lowercase `y` at a TTY before `--execute`;
+agents never run publication and never type that confirmation. Phase 3
+validation is change-aware (`scripts/release-validation-policy.py`); a rerun
+is skipped only when the exact-SHA CI check passes
+(`verify_release_ci` in `scripts/release-publish.py`). After human
+publication, perform the canonical post-publish verification.

@@ -203,3 +203,75 @@ read-error attribution. A real Cargo 1.97 run on `tenferro-core-ops` confirmed
 that `cargo package`, `tmp-crate`, and `tmp-registry` archives were byte-identical
 and that the repaired helper completed package-to-dry-run attestation without
 uploading. The focused release-helper suite passed with 30 tests.
+
+## 2026-08-09 v0.3 runtime/CPU cycle recovery
+
+The v0.3.0 human run published and verified the first six crates through
+`tenferro-internal-ops`, then stopped before uploading `tenferro-runtime`.
+The immutable tag is commit `9505d5bfd60c890212f0ec44aa9cf07fef185f63`.
+Runtime has a versioned path dev-dependency on `tenferro-cpu 0.3.0`, while CPU
+has a normal dependency on runtime 0.3.0, so Cargo's ordinary package ordering
+cannot bootstrap either absent registry version.
+
+Clean-tag experiments established the narrow recovery: runtime package,
+publish dry-run, and publish use `--no-verify` plus
+`--config 'patch.crates-io.tenferro-cpu.path="ABS_TAG_PATH/crates/tenferro-cpu"'`.
+The path comes from the selected immutable release checkout's Cargo metadata
+and is encoded as an inline TOML string. These command inputs remain identical
+after CPU becomes registry-visible: changing dependency resolution otherwise
+regenerates `Cargo.lock` differently and prevents an already-published runtime
+archive from passing restart attestation. The helper still inspects and compares
+the package, `tmp-crate`, and `tmp-registry` archives; the experiment found all
+three byte-identical. The existing prerequisite wait permits CPU to package and
+publish normally, without the patch.
+
+`--release-root PATH` lets the corrected helper on `origin/main` operate on the
+clean detached immutable tag checkout. `verify_release_checkout(root=...)`
+remains authoritative for cleanliness, exact remote tag identity, and
+reachability from `origin/main`. The new-package approval gate and human-only
+`--execute` boundary are unchanged.
+
+`--no-verify` is deliberately limited to runtime's three bootstrap commands: it
+skips Cargo's package verification build because that build hits the cyclic
+lockfile collision. It does not weaken archive, tagged-source, normalized
+manifest, registry-byte, or provenance comparisons. The source tree was already
+covered by the release's workspace, PR, and main checks. Residual risk remains
+that crates.io may reject the real upload despite the successful dry-run; only
+the human operator may cross that server-acceptance boundary.
+
+## 2026-08-10 v0.3 XLA/einsum forward dev-dependency recovery
+
+After runtime, CPU, and GPU 0.3.0 became registry-visible, packaging
+`tenferro-xla` exposed the remaining forward versioned dev-dependency:
+`tenferro-einsum 0.3.0` is not yet published and follows XLA in the publication
+order. Only XLA's package, publish dry-run, and publish commands use
+`--no-verify` plus an inline crates.io patch to the absolute einsum package path
+in the immutable release checkout. The bootstrap remains active after einsum
+becomes registry-visible so Cargo receives deterministic inputs and regenerates
+the same `Cargo.lock` for already-published restart attestation. CPU, einsum,
+and all other crate commands remain unchanged; publication order, human
+execution approval, and archive/provenance comparisons are unchanged.
+
+Focused tests cover initial and already-published restart states both before and
+after bootstrap dependencies become registry-visible, and assert that each
+patch remains confined to its target crate commands. The helper suite, Python
+byte-compilation, and `git diff --check` passed. No publication command was run.
+
+## 2026-08-10 registry restart Cargo.lock drift
+
+Restart preflight against the published GPU archive showed that Cargo can
+regenerate a package `Cargo.lock` with a newer registry dependency version even
+when the immutable tagged source and every other archive member are unchanged.
+Because `Cargo.lock` is Cargo-generated package state rather than tagged source,
+already-published target versions and prerequisites that were registry-visible
+when the helper started may differ from the fresh local package in that member's
+bytes only.
+
+The exception remains narrow: both archives must contain the identical file set,
+including `Cargo.lock`; normalized and original manifests, VCS provenance, and
+every other member remain byte-identical and retain existing metadata and tagged
+source validation. Publish dry-runs and immediate post-upload registry checks
+remain exact for all members, including `Cargo.lock`, because those archives are
+created within the same helper run. Focused tests cover accepted restart lock
+drift, rejected non-lock and missing-lock changes, the strict dry-run boundary,
+and the existing-prerequisite path. No publication command was run.

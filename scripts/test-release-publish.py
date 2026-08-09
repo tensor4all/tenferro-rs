@@ -8,10 +8,13 @@ import importlib.util
 import io
 import json
 import re
+import shlex
+import stat
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -78,6 +81,423 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
         expected = (self.ROOT / self.SKILL_PATHS[0]).read_bytes()
         for relative in self.SKILL_PATHS[1:]:
             self.assertEqual(expected, (self.ROOT / relative).read_bytes())
+
+    def test_generated_handoff_script_is_documented(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
+        for phrase in (
+            "generate-script",
+            "inside the release worktree",
+            "one exact lowercase `y` at a TTY",
+            "pins SHA-256 checksums",
+            "mismatch aborts before anything runs",
+        ):
+            self.assertIn(phrase, normalized)
+        for relative in (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md"):
+            adapter = (self.ROOT / relative).read_text()
+            normalized_adapter = " ".join(adapter.split())
+            self.assertIn("generate-script", adapter)
+            self.assertIn("X.Y.Z --generate-script", normalized_adapter)
+            self.assertIn("one exact lowercase `y` at a TTY", normalized_adapter)
+            self.assertIn(
+                "stop after validation; a human maintainer runs Phase 3 publication "
+                "from the tag.",
+                normalized_adapter,
+            )
+
+
+    def test_change_aware_validation_and_exact_sha_are_documented(self) -> None:
+        text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
+        normalized = " ".join(text.split())
+        for phrase in (
+            "release-validation-policy.py",
+            "helper-or-workflow-only",
+            "publication-metadata-only",
+            "semantic manifest",
+            "check-runs --paginate",
+            "head_sha == <SHA>",
+            "verify_release_ci(commit, required_checks)",
+        ):
+            self.assertIn(phrase, normalized)
+        for relative in (*self.SKILL_PATHS, ".opencode/commands/tenferro-release-publish.md"):
+            adapter = (self.ROOT / relative).read_text()
+            self.assertIn("release-validation-policy.py", adapter)
+            self.assertIn("verify_release_ci", adapter)
+
+
+class HandoffScriptTests(unittest.TestCase):
+    VERSION = "0.3.0"
+    APPROVALS = {"tenferro-internal-cpu-kernels"}
+    STUB = (
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "with open(os.environ['STUB_LOG'], 'a') as f:\n"
+        "    f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+    )
+
+    def make_worktree(self, directory: Path) -> Path:
+        """Create a clean detached fake release worktree with a stub helper."""
+        root = directory / "release-worktree"
+        (root / "scripts").mkdir(parents=True)
+        (root / "ai/contribution-workflows").mkdir(parents=True)
+        (root / "Cargo.toml").write_text("fake\n", encoding="utf-8")
+        (root / "ai/contribution-workflows/release-publish.md").write_text(
+            "fake workflow\n", encoding="utf-8"
+        )
+        (root / "scripts/release-publish.py").write_text(self.STUB, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "test"], cwd=root, check=True
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=root, check=True)
+        subprocess.run(["git", "checkout", "-q", "--detach", "HEAD"], cwd=root, check=True)
+        return root
+
+    @staticmethod
+    def generate(root: Path, output: Path) -> None:
+        RELEASE.generate_handoff_script(
+            HandoffScriptTests.VERSION,
+            HandoffScriptTests.APPROVALS,
+            output,
+            root=root,
+        )
+
+    @staticmethod
+    def run_handoff(
+        worktree: Path,
+        script_path: Path,
+        stdin: bytes,
+        *,
+        tty: bool,
+    ) -> tuple[int, str]:
+        transcript = worktree.parent / "typescript"
+        env = {
+            "STUB_LOG": str(worktree.parent / "stub.log"),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+        }
+        if tty:
+            command = [
+                "script",
+                "-qec",
+                f"cd {shlex.quote(str(worktree))} && bash {shlex.quote(str(script_path))}",
+                str(transcript),
+            ]
+            completed = subprocess.run(
+                command,
+                input=stdin,
+                capture_output=True,
+                text=False,
+                timeout=120,
+                env=env,
+            )
+            output = (
+                transcript.read_text(encoding="utf-8", errors="replace")
+                if transcript.exists()
+                else ""
+            )
+        else:
+            completed = subprocess.run(
+                ["bash", str(script_path)],
+                input=stdin,
+                capture_output=True,
+                text=False,
+                timeout=120,
+                cwd=worktree,
+                env=env,
+            )
+            output = completed.stderr.decode("utf-8", "replace")
+        return completed.returncode, output
+
+    @staticmethod
+    def log_lines(worktree: Path) -> list[str]:
+        log = worktree.parent / "stub.log"
+        if not log.exists():
+            return []
+        return log.read_text(encoding="utf-8").splitlines()
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory(prefix="tenferro-handoff-")
+        self.worktree = self.make_worktree(Path(self._directory.name))
+        self.output = Path(self._directory.name) / "publish.sh"
+        self.generate(self.worktree, self.output)
+
+    def tearDown(self) -> None:
+        self._directory.cleanup()
+
+    def test_generated_script_is_owner_only_and_parses(self) -> None:
+        mode = stat.S_IMODE(self.output.stat().st_mode)
+        self.assertEqual(mode, 0o700)
+        self.assertEqual(
+            subprocess.run(["bash", "-n", str(self.output)]).returncode, 0
+        )
+
+    def test_exact_y_runs_preflight_then_execute_with_approvals(self) -> None:
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            self.log_lines(self.worktree),
+            [
+                f"{self.VERSION} --approve-new-package "
+                "tenferro-internal-cpu-kernels",
+                f"{self.VERSION} --approve-new-package "
+                "tenferro-internal-cpu-kernels --execute",
+            ],
+        )
+
+    def test_non_y_answers_abort_before_any_execute(self) -> None:
+        for stdin in (b"n\n", b"Y\n", b"yes\n", b""):
+            with self.subTest(stdin=stdin):
+                log = self.worktree.parent / "stub.log"
+                transcript = self.worktree.parent / "typescript"
+                log.unlink(missing_ok=True)
+                transcript.unlink(missing_ok=True)
+                returncode, _output = self.run_handoff(
+                    self.worktree, self.output, stdin, tty=True
+                )
+                self.assertEqual(returncode, 1)
+                lines = self.log_lines(self.worktree)
+                self.assertEqual(len(lines), 1)
+                self.assertNotIn("--execute", lines[0])
+
+    def test_non_tty_stdin_aborts_before_any_helper_invocation(self) -> None:
+        returncode, stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=False
+        )
+        self.assertEqual(returncode, 1)
+        self.assertIn("not a terminal", stderr)
+        self.assertEqual(self.log_lines(self.worktree), [])
+
+    def test_multiple_approvals_are_forwarded_verbatim(self) -> None:
+        approvals = {"tenferro-internal-cpu-kernels", "t4a-tblis-src"}
+        output = Path(self._directory.name) / "multi.sh"
+        RELEASE.generate_handoff_script(self.VERSION, approvals, output, root=self.worktree)
+        returncode, _output = self.run_handoff(self.worktree, output, b"y\n", tty=True)
+        self.assertEqual(returncode, 0)
+        self.assertEqual(
+            self.log_lines(self.worktree),
+            [
+                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                "--approve-new-package tenferro-internal-cpu-kernels",
+                f"{self.VERSION} --approve-new-package t4a-tblis-src "
+                "--approve-new-package tenferro-internal-cpu-kernels --execute",
+            ],
+        )
+
+    def test_checksum_mismatch_aborts_before_any_helper_invocation(self) -> None:
+        mutations = (
+            ("scripts/release-publish.py", "print('tampered')\n"),
+            ("ai/contribution-workflows/release-publish.md", "\n# tampered\n"),
+        )
+        for relative, suffix in mutations:
+            with self.subTest(relative=relative):
+                log = self.worktree.parent / "stub.log"
+                transcript = self.worktree.parent / "typescript"
+                log.unlink(missing_ok=True)
+                transcript.unlink(missing_ok=True)
+                target = self.worktree / relative
+                original = target.read_text(encoding="utf-8")
+                target.write_text(original + suffix, encoding="utf-8")
+                returncode, output = self.run_handoff(
+                    self.worktree, self.output, b"y\n", tty=True
+                )
+                self.assertEqual(returncode, 1)
+                self.assertIn("checksum mismatch", output)
+                self.assertEqual(self.log_lines(self.worktree), [])
+                target.write_text(original, encoding="utf-8")
+
+    def test_dirty_or_attached_worktree_aborts_before_any_helper_invocation(
+        self,
+    ) -> None:
+        (self.worktree / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 1)
+        self.assertEqual(self.log_lines(self.worktree), [])
+        (self.worktree / "untracked.txt").unlink()
+
+        subprocess.run(
+            ["git", "checkout", "-q", "master"], cwd=self.worktree, check=True
+        )
+        returncode, _stderr = self.run_handoff(
+            self.worktree, self.output, b"y\n", tty=True
+        )
+        self.assertEqual(returncode, 1)
+        self.assertEqual(self.log_lines(self.worktree), [])
+
+    def test_generator_rejects_output_inside_worktree_and_bad_versions(self) -> None:
+        with self.assertRaisesRegex(
+            RELEASE.ReleaseError, "outside the release worktree"
+        ):
+            RELEASE.generate_handoff_script(
+                self.VERSION, self.APPROVALS, self.worktree / "publish.sh", root=self.worktree
+            )
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "version must be exact"):
+            RELEASE.generate_handoff_script(
+                "0.3", self.APPROVALS, self.output, root=self.worktree
+            )
+
+    def test_cli_generates_handoff_script(self) -> None:
+        output = Path(self._directory.name) / "cli-publish.sh"
+        self.assertEqual(
+            RELEASE.main(
+                [
+                    self.VERSION,
+                    "--approve-new-package",
+                    "tenferro-internal-cpu-kernels",
+                    "--generate-script",
+                    str(output),
+                ]
+            ),
+            0,
+        )
+        self.assertTrue(output.exists())
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o700)
+
+
+class VerifyReleaseCiTests(unittest.TestCase):
+    COMMIT = "a" * 40
+
+    def completed_run(self, name: str, **overrides: object) -> dict:
+        run: dict[str, object] = {
+            "name": name,
+            "head_sha": self.COMMIT,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        run.update(overrides)
+        return run
+
+    def runner_for(self, runs: list[dict], *, invalid_json: bool = False) -> Callable:
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            body = "not json" if invalid_json else json.dumps({"check_runs": runs})
+            return subprocess.CompletedProcess(command, 0, body, "")
+
+        return runner
+
+    def test_accepts_all_required_checks_completed_successfully(self) -> None:
+        runs = [
+            self.completed_run("workspace-tests"),
+            self.completed_run("docs"),
+            self.completed_run("other-job"),
+        ]
+        RELEASE.verify_release_ci(
+            self.COMMIT, {"workspace-tests", "docs"}, runner=self.runner_for(runs)
+        )
+
+    def test_missing_required_check_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "missing"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests", "docs"}, runner=self.runner_for([])
+            )
+
+    def test_wrong_commit_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", head_sha="b" * 40)]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "different commit"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_incomplete_status_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", status="in_progress")]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "not completed"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_unsuccessful_conclusion_fails_closed(self) -> None:
+        runs = [self.completed_run("workspace-tests", conclusion="failure")]
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "did not succeed"):
+            RELEASE.verify_release_ci(
+                self.COMMIT, {"workspace-tests"}, runner=self.runner_for(runs)
+            )
+
+    def test_invalid_gh_output_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "invalid JSON"):
+            RELEASE.verify_release_ci(
+                self.COMMIT,
+                {"workspace-tests"},
+                runner=self.runner_for([], invalid_json=True),
+            )
+
+    def test_multiple_paginated_pages_are_flattened(self) -> None:
+        runs = [
+            self.completed_run("workspace-tests"),
+            self.completed_run("docs"),
+        ]
+        payload = json.dumps(
+            [
+                {"check_runs": [runs[0]]},
+                {"check_runs": [runs[1]]},
+            ]
+        )
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, payload, "")
+
+        RELEASE.verify_release_ci(
+            self.COMMIT, {"workspace-tests", "docs"}, runner=runner
+        )
+
+    def test_slurped_single_page_is_accepted(self) -> None:
+        # `gh api --paginate --slurp` always wraps pages in an outer array,
+        # even when there is only one page.
+        payload = json.dumps(
+            [{"check_runs": [self.completed_run("workspace-tests")]}]
+        )
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, payload, "")
+
+        RELEASE.verify_release_ci(self.COMMIT, {"workspace-tests"}, runner=runner)
+
+    def test_malformed_slurped_page_fails_closed(self) -> None:
+        payloads = (
+            json.dumps([{"check_runs": [self.completed_run("workspace-tests")]}, "junk"]),
+            json.dumps([{"check_runs": [self.completed_run("workspace-tests")]}, {"total_count": 1}]),
+            json.dumps([{"check_runs": "not-a-list"}]),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                def runner(
+                    command: list[str], **_kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    return subprocess.CompletedProcess(command, 0, payload, "")
+
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.verify_release_ci(
+                        self.COMMIT, {"workspace-tests"}, runner=runner
+                    )
+
+    def test_canonical_query_names_repository_and_paginates(self) -> None:
+        commands: list[list[str]] = []
+
+        def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "{}", "")
+
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "missing"):
+            RELEASE.verify_release_ci(self.COMMIT, {"workspace-tests"}, runner=runner)
+        self.assertEqual(
+            commands,
+            [
+                [
+                    "gh",
+                    "api",
+                    f"repos/tensor4all/tenferro-rs/commits/{self.COMMIT}/check-runs",
+                    "--paginate",
+                    "--slurp",
+                ]
+            ],
+        )
 
 
 class GitDependencyTests(unittest.TestCase):
@@ -258,7 +678,43 @@ include = ["src/**", "README.md"]
         self.assertIn("tenferro-fixture-0.4.0/README.md", inspection.files)
         self.assertEqual(inspection.contents["Cargo.lock"], b"# generated\n")
 
-    def test_registry_archive_must_match_local_generated_files_exactly(self) -> None:
+    def test_registry_restart_allows_only_cargo_lock_byte_drift(self) -> None:
+        local = self.inspect(self.archive())
+        inspection = RELEASE.inspect_crate_archive(
+            self.archive(changes={"Cargo.lock": b"# registry resolution\nversion = 4\n"}),
+            "tenferro-fixture",
+            "0.4.0",
+            self.COMMIT,
+            "crates/tenferro-fixture",
+            self.reader,
+            set(local.contents),
+            local.contents,
+            allow_registry_lock_drift=True,
+        )
+        self.assertNotEqual(
+            inspection.contents["Cargo.lock"], local.contents["Cargo.lock"]
+        )
+
+        for changes in (
+            {"src/lib.rs": b"tampered\n"},
+            {"Cargo.toml": self.NORMALIZED_MANIFEST + b"\n# changed\n"},
+            {"Cargo.lock": None},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(RELEASE.ReleaseError):
+                    RELEASE.inspect_crate_archive(
+                        self.archive(changes=changes),
+                        "tenferro-fixture",
+                        "0.4.0",
+                        self.COMMIT,
+                        "crates/tenferro-fixture",
+                        self.reader,
+                        set(local.contents),
+                        local.contents,
+                        allow_registry_lock_drift=True,
+                    )
+
+    def test_dry_run_exact_comparison_rejects_cargo_lock_drift(self) -> None:
         local = self.inspect(self.archive())
         mutations = (
             {
@@ -447,6 +903,17 @@ class CommandAndCheckoutTests(unittest.TestCase):
         with self.assertRaisesRegex(RELEASE.ReleaseError, "invalid JSON"):
             RELEASE.cargo_metadata(runner=runner)
 
+    def test_cli_selects_release_root_and_defaults_to_script_root(self) -> None:
+        with mock.patch.object(RELEASE, "publish_release") as publish:
+            self.assertEqual(RELEASE.main(["0.4.0"]), 0)
+            self.assertEqual(publish.call_args.kwargs["root"], RELEASE.ROOT)
+
+            selected = Path("tag-checkout")
+            self.assertEqual(
+                RELEASE.main(["0.4.0", "--release-root", str(selected)]), 0
+            )
+            self.assertEqual(publish.call_args.kwargs["root"], selected.resolve())
+
 
 class FakeClient:
     def __init__(self, package_versions: dict[str, bool], events: list[str]) -> None:
@@ -516,7 +983,9 @@ class OrchestrationTests(unittest.TestCase):
                     client.package_versions["crate-a"] = True
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 events.append(f"inspect:{data.decode()}")
                 expected_contents = args[-1]
                 if expected_contents is not None:
@@ -555,6 +1024,244 @@ class OrchestrationTests(unittest.TestCase):
                 "inspect:crate-a",
             ],
         )
+
+    def assert_runtime_commands(
+        self, runtime_exists: bool, cpu_exists: bool = False
+    ) -> None:
+        cargo_commands: list[list[str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'tag "checkout\\special'
+            root.mkdir()
+            self.workspace(root)
+            metadata = self.metadata(root, ["tenferro-runtime", "tenferro-cpu"])
+            metadata["packages"][0]["dependencies"] = [
+                {"name": "tenferro-cpu", "kind": "dev"}
+            ]
+            metadata["packages"][1]["dependencies"] = [
+                {"name": "tenferro-runtime", "kind": "normal"}
+            ]
+            client = FakeClient(
+                {"tenferro-runtime": runtime_exists, "tenferro-cpu": cpu_exists}, []
+            )
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] == "cargo":
+                    cargo_commands.append(command)
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                elif command[:3] == ["cargo", "publish", "--dry-run"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    staged = archive.parent / "tmp-crate" / archive.name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(crate.encode())
+                elif command[:2] == ["cargo", "publish"]:
+                    crate = command[command.index("-p") + 1]
+                    client.package_versions[crate] = True
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                True,
+                root=root,
+                runner=runner,
+                client=client,
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: ["tenferro-runtime", "tenferro-cpu"],
+                package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                ),
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        self.assertEqual(
+            cargo_commands,
+            [
+                ["cargo", "package", "-p", "tenferro-runtime", "--locked"],
+                *(
+                    []
+                    if runtime_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-runtime",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-runtime",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                    ]
+                ),
+                ["cargo", "package", "-p", "tenferro-cpu", "--locked"],
+                *(
+                    []
+                    if cpu_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-cpu",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-cpu",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                    ]
+                ),
+            ],
+        )
+        for command in cargo_commands:
+            self.assertNotIn("--no-verify", command)
+            self.assertNotIn("--config", command)
+
+    def test_runtime_publishes_without_patch_while_both_are_missing(self) -> None:
+        self.assert_runtime_commands(runtime_exists=False)
+
+    def test_runtime_publishes_without_patch_on_restart_after_runtime_publish(self) -> None:
+        self.assert_runtime_commands(runtime_exists=True)
+
+    def test_runtime_commands_stable_after_runtime_and_cpu_publish(self) -> None:
+        self.assert_runtime_commands(runtime_exists=True, cpu_exists=True)
+
+    def assert_xla_commands(
+        self, xla_exists: bool, einsum_exists: bool = False
+    ) -> None:
+        cargo_commands: list[list[str]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'tag "checkout\\special'
+            root.mkdir()
+            self.workspace(root)
+            crates = ["tenferro-xla", "tenferro-einsum", "tenferro-cpu"]
+            metadata = self.metadata(root, crates)
+            metadata["packages"][0]["dependencies"] = [
+                {"name": "tenferro-einsum", "kind": "dev"}
+            ]
+            client = FakeClient(
+                {
+                    "tenferro-xla": xla_exists,
+                    "tenferro-einsum": einsum_exists,
+                    "tenferro-cpu": True,
+                },
+                [],
+            )
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] == "cargo":
+                    cargo_commands.append(command)
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                elif command[:3] == ["cargo", "publish", "--dry-run"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    staged = archive.parent / "tmp-crate" / archive.name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(crate.encode())
+                elif command[:2] == ["cargo", "publish"]:
+                    crate = command[command.index("-p") + 1]
+                    client.package_versions[crate] = True
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                True,
+                root=root,
+                runner=runner,
+                client=client,
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: crates,
+                package_files_loader=lambda *_args, **_kwargs: {"Cargo.toml"},
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated"}
+                ),
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        xla_commands = [command for command in cargo_commands if "tenferro-xla" in command]
+        self.assertEqual(
+            xla_commands,
+            [
+                ["cargo", "package", "-p", "tenferro-xla", "--locked"],
+                *(
+                    []
+                    if xla_exists
+                    else [
+                        [
+                            "cargo",
+                            "publish",
+                            "--dry-run",
+                            "-p",
+                            "tenferro-xla",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                        [
+                            "cargo",
+                            "publish",
+                            "-p",
+                            "tenferro-xla",
+                            "--locked",
+                            "--registry",
+                            "crates-io",
+                        ],
+                    ]
+                ),
+            ],
+        )
+        self.assertTrue(any("tenferro-cpu" in command for command in cargo_commands))
+        self.assertTrue(any("tenferro-einsum" in command for command in cargo_commands))
+        for command in cargo_commands:
+            self.assertNotIn("--no-verify", command)
+            self.assertNotIn("--config", command)
+
+    def test_xla_publishes_without_patch_while_both_are_missing(self) -> None:
+        self.assert_xla_commands(xla_exists=False)
+
+    def test_xla_publishes_without_patch_on_restart_after_xla_publish(self) -> None:
+        self.assert_xla_commands(xla_exists=True)
+
+    def test_xla_commands_stable_after_xla_and_einsum_publish(self) -> None:
+        self.assert_xla_commands(xla_exists=True, einsum_exists=True)
 
     def test_rejects_differing_dry_run_staging_archives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -624,8 +1331,8 @@ class OrchestrationTests(unittest.TestCase):
                         ["cargo", "publish", "--dry-run"],
                         runner=runner,
                         root=root,
-                        archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
-                            {}, (), {}
+                        archive_inspector=lambda *_args, **_kwargs: (
+                            RELEASE.ArchiveInspection({}, (), {})
                         ),
                     )
 
@@ -684,7 +1391,9 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(b"exact-tag")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 expected_contents = args[-1]
                 events.append(f"inspect:{data.decode()}")
                 if data == b"new-crate":
@@ -724,6 +1433,68 @@ class OrchestrationTests(unittest.TestCase):
             ],
         )
 
+    def test_restart_allows_lock_drift_for_existing_prerequisite_attestation(self) -> None:
+        lock_drift_settings: list[tuple[str, bool]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.workspace(root)
+            metadata = self.metadata(root, ["crate-a", "crate-b"])
+            metadata["packages"][1]["dependencies"] = [
+                {"name": "crate-a", "kind": "normal"}
+            ]
+
+            def runner(
+                command: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["cargo", "package"]:
+                    crate = command[command.index("-p") + 1]
+                    archive = root / f"target/package/{crate}-0.4.0.crate"
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    archive.write_bytes(crate.encode())
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            def inspect(
+                _data: bytes,
+                crate: str,
+                *_args: object,
+                allow_registry_lock_drift: bool = False,
+            ) -> RELEASE.ArchiveInspection:
+                lock_drift_settings.append((crate, allow_registry_lock_drift))
+                return RELEASE.ArchiveInspection(
+                    {}, (), {"Cargo.toml": b"generated", "Cargo.lock": b"local"}
+                )
+
+            RELEASE.publish_release(
+                self.VERSION,
+                set(),
+                False,
+                root=root,
+                runner=runner,
+                client=FakeClient({"crate-a": True, "crate-b": True}, []),
+                checkout_verifier=lambda *_args, **_kwargs: self.COMMIT,
+                metadata_loader=lambda **_kwargs: metadata,
+                order_loader=lambda _text: ["crate-a", "crate-b"],
+                package_files_loader=lambda *_args, **_kwargs: {
+                    "Cargo.toml",
+                    "Cargo.lock",
+                },
+                archive_inspector=inspect,
+                source_reader_factory=lambda *_args, **_kwargs: lambda _path: None,
+                attempts=1,
+                delay=0,
+            )
+
+        self.assertEqual(
+            lock_drift_settings,
+            [
+                ("crate-a", False),
+                ("crate-a", True),
+                ("crate-a", True),
+                ("crate-b", False),
+                ("crate-b", True),
+            ],
+        )
+
     def test_resume_packages_only_after_prerequisite_archive_is_attested(self) -> None:
         events: list[str] = []
         with tempfile.TemporaryDirectory() as directory:
@@ -743,7 +1514,9 @@ class OrchestrationTests(unittest.TestCase):
                     archive.write_bytes(f"local:{crate}".encode())
                 return subprocess.CompletedProcess(command, 0, "", "")
 
-            def inspect(data: bytes, *args: object) -> RELEASE.ArchiveInspection:
+            def inspect(
+                data: bytes, *args: object, **_kwargs: object
+            ) -> RELEASE.ArchiveInspection:
                 crate = args[0]
                 expected_contents = args[-1]
                 events.append(f"inspect:{data.decode()}")
@@ -797,7 +1570,7 @@ class OrchestrationTests(unittest.TestCase):
             lambda _path: None,
             {"Cargo.toml"},
             {"Cargo.toml": b"generated"},
-            archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+            archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                 {}, (), {"Cargo.toml": b"generated"}
             ),
             attempts=3,
@@ -824,7 +1597,7 @@ class OrchestrationTests(unittest.TestCase):
                 lambda _path: None,
                 {"Cargo.toml"},
                 {"Cargo.toml": b"generated"},
-                archive_inspector=lambda *_args: RELEASE.ArchiveInspection(
+                archive_inspector=lambda *_args, **_kwargs: RELEASE.ArchiveInspection(
                     {}, (), {"Cargo.toml": b"generated"}
                 ),
                 attempts=3,
