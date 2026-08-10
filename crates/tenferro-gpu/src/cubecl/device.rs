@@ -157,7 +157,11 @@ impl CudaDeviceInfo {
     /// ```
     /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let devices = cuda_devices().unwrap_or_default();
+    /// // `cudarc` panics when the CUDA driver library is absent, so the call
+    /// // is guarded (the same pattern `gpu_available` uses).
+    /// let devices = std::panic::catch_unwind(cuda_devices)
+    ///     .unwrap_or_else(|_| Ok(Vec::new()))
+    ///     .unwrap_or_default();
     /// let uuids: Vec<_> = devices.iter().map(|info| info.uuid()).collect();
     /// let _ = uuids;
     /// ```
@@ -172,7 +176,11 @@ impl CudaDeviceInfo {
     /// ```
     /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let devices = cuda_devices().unwrap_or_default();
+    /// // `cudarc` panics when the CUDA driver library is absent, so the call
+    /// // is guarded (the same pattern `gpu_available` uses).
+    /// let devices = std::panic::catch_unwind(cuda_devices)
+    ///     .unwrap_or_else(|_| Ok(Vec::new()))
+    ///     .unwrap_or_default();
     /// let capabilities: Vec<_> = devices
     ///     .iter()
     ///     .map(|info| info.compute_capability())
@@ -190,7 +198,11 @@ impl CudaDeviceInfo {
     /// ```
     /// use tenferro_gpu::cuda::cuda_devices;
     ///
-    /// let devices = cuda_devices().unwrap_or_default();
+    /// // `cudarc` panics when the CUDA driver library is absent, so the call
+    /// // is guarded (the same pattern `gpu_available` uses).
+    /// let devices = std::panic::catch_unwind(cuda_devices)
+    ///     .unwrap_or_else(|_| Ok(Vec::new()))
+    ///     .unwrap_or_default();
     /// let memory: Vec<u64> = devices
     ///     .iter()
     ///     .map(|info| info.total_memory_bytes())
