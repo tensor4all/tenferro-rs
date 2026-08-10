@@ -29,6 +29,7 @@
 
 - [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): WARNING — tenferro's dialect requires the explicit arrow and rejects `...` ellipsis; read before porting an equation.
 - [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
+- [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer or BLAS/LAPACK directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and provider thread control.
 - [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.
 - [Parallelism and Caching](https://tensor4all.org/tenferro-rs/guides/parallelism-and-caching.html): WARNING — backend/runtime instances own thread pools and caches; per-call construction throws them away.
 - [Memory Order](https://tensor4all.org/tenferro-rs/guides/memory-order.html): WARNING — buffers are column-major; row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major (wrong values), never rejected.
