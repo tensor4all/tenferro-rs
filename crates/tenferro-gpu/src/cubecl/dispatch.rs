@@ -282,17 +282,6 @@ pub(crate) fn prepared_tensor_access<T: TensorScalar + 'static>(
 }
 
 /// Prepare an owned typed tensor for an exclusive provider-native write.
-///
-/// This narrow helper keeps operation-crate interop from reaching directly
-/// into the tensor preparation trait while preserving the mutable-borrow
-/// authority required by `prepare_device_write`.
-pub(crate) fn prepared_tensor_write_access<T: TensorScalar + 'static>(
-    tensor: &mut TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<CubeclPreparedAccess> {
-    downcast_prepared(tensor.prepare_device_write(op)?, op)
-}
-
 pub(crate) fn prepared_view_access<T: TensorScalar + 'static>(
     view: &TypedTensorView<'_, T, impl TensorRank>,
     op: &'static str,

@@ -109,12 +109,15 @@ mod exec_session;
 mod ffi;
 mod fusion;
 mod gemm;
+mod identity;
 pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
 mod permutation;
+pub(crate) mod raw;
 mod runtime;
 mod runtime_adapter;
+pub(crate) mod session_cubecl;
 
 use dispatch::{
     alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
@@ -133,6 +136,7 @@ pub use capability::cuda_capabilities;
 pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 #[doc(hidden)]
 pub use exec_session::{with_cuda_exec_session, CudaExecSession};
+pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability};
 pub use memory::{download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
 pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
@@ -436,7 +440,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// assert!(cache.is_empty()?);
@@ -465,7 +469,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// assert!(CudaExtensionCache::new().is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -553,7 +557,7 @@ impl CudaExtensionCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::interop::CudaExtensionCache;
+    /// use tenferro_gpu::cuda::CudaExtensionCache;
     ///
     /// let cache = CudaExtensionCache::new();
     /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();

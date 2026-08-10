@@ -43,12 +43,13 @@ caller-visible operation before or after FFT execution.
 An earlier design intent allowed cached cuFFT calls to remain asynchronous
 between cache-eviction events. An independent safety review superseded that
 intent for #967: scoped CubeCL raw pointers do not carry a completion witness,
-so a vendor call must not outlive the pointer callback that borrowed its
-allocation. The current baseline synchronizes the bound CUDA stream inside the
-innermost output-pointer callback, after vendor enqueue and before input,
-output, or stream scopes return. Future asynchronous execution requires a
-separately accepted event-backed external-use ownership design; that work is
-outside #967.
+so a vendor call must not outlive the raw session that borrowed its
+allocations. The current baseline therefore enters the credentialed raw
+session (`with_raw`) and synchronizes the bound CUDA stream inside that
+session, after vendor enqueue and before the session (and its tensor spans,
+work area, and retention guards) return. Future asynchronous execution
+requires a separately accepted event-backed external-use ownership design;
+that work is outside #967.
 
 `tenferro-gpu` owns the CUDA provider, including `CudaBackend` and
 `CudaRuntime`. The CUDA FFT adapter is owned by `tenferro-fft` and uses the
@@ -101,41 +102,43 @@ returns before cuFFT loading, descriptor construction, cache lookup, or plan
 creation. This preserves empty CPU semantics without requiring a vendor
 library.
 
-CUDA plans and workspaces use the existing `FftExecutionCache` rather than a
-backend-global cache. Repeated concrete calls use the caller-owned
-`FftExecutor` cache; eager and traced calls use the owning runtime's extension
-cache. The CUDA namespace is `cufft-plans`. Its exact structural key contains
-the CUDA runtime identity, device ordinal, transform dtype/kind, operation
-direction, `n`, batch, `istride`, `idist`, `ostride`, and `odist`; embed extents
-are derived from the kind and `n`. Each entry retains that exact key and checks
-full equality before reuse, so a cache-discriminator hash collision cannot
-reuse a plan for a different request. Logical retained bytes include the
-workspace allocation and directly owned key, plan, runtime, workspace, and
-library-handle metadata; opaque cuFFT internal allocations and library-owned
-state are excluded.
+CUDA plans use the existing `FftExecutionCache` rather than a backend-global
+cache. Repeated concrete calls use the caller-owned `FftExecutor` cache;
+eager and traced calls use the owning runtime's extension cache. The CUDA
+namespace is `cufft-plans`. Its exact structural key contains the CUDA runtime
+identity, device ordinal, transform dtype/kind, operation direction, `n`,
+batch, `istride`, `idist`, `ostride`, and `odist`; embed extents are derived
+from the kind and `n`. Each entry retains that exact key and checks full
+equality before reuse, so a cache-discriminator hash collision cannot reuse a
+plan for a different request. The cuFFT work area is **not** cached: it is a
+session-scoped CubeCL allocation created fresh inside each raw execution
+session, so logical retained bytes charge only the entry's host-side metadata
+(key, plan handle, runtime and library witnesses, workspace-size requirement).
+Opaque cuFFT internal allocations and library-owned state are excluded.
 
-The cuFFT adapter binds each plan to the current CubeCL stream and
-synchronizes that stream inside the innermost output-pointer callback, after
-vendor enqueue and before that callback returns. Successful pointer use
-therefore completes before the input-pointer and scoped stream callbacks
-return. Read and exclusive-write leases retain the prepared CubeCL handles
-and exact CUDA runtime through that barrier; if synchronization fails, both
-leases are intentionally retained so vendor work cannot race allocation
-reclamation. The
-current `CudaRuntime` exposes one serialized CubeCL current
+The cuFFT adapter creates plans under `CudaRuntime::with_current_context`, a
+scoped guard that activates the tenferro primary context and restores the
+caller's previous device/context on exit (best-effort; failures are logged).
+Execution enters the
+credentialed raw session (`with_raw`): the plan stream is bound to the captured
+CubeCL stream, a fresh work area is allocated, the input/output allocation
+handles are retained, the vendor call is enqueued, and the bound stream is
+synchronized before the session returns. If synchronization fails, the work
+area and the input/output retention guards are intentionally forgotten so
+allocation reclamation cannot race in-flight vendor writes (issue #967
+invariant). The current `CudaRuntime` exposes one serialized CubeCL current
 stream, and the mutable CUDA FFT session serializes plan rebinding and
 execution on that stream. The stream is therefore omitted from the cache key,
 but `cufftSetStream` is called immediately before each execution. Subsequent
 CUDA normalization, Hermitian completion, and axis restoration remain
 stream-managed, and an explicit download synchronizes the final output. If
 selectable concurrent streams are added, stream identity must become part of
-the key and workspace ownership before plan reuse is allowed. When an entry is
-evicted or a cache is cleared, retirement still makes the retained CUDA context
-current and synchronizes its current stream before calling `cufftDestroy` and
-dropping the CubeCL workspace. Cleanup failures are reported without
-panicking. If context selection, synchronization, or destruction fails, the
-complete plan/workspace/library/runtime witness bundle is intentionally leaked
-rather than dropped while queued work may still be active.
+the key before plan reuse is allowed. When an entry is evicted or a cache is
+cleared, retirement runs the synchronize + `cufftDestroy` sequence under the
+same context-restoring guard. Cleanup failures are reported without panicking.
+If context selection, synchronization, or destruction fails, the complete
+plan/library/runtime witness bundle is intentionally leaked rather than
+dropped while queued work may still be active.
 
 ## Apple shared execution
 

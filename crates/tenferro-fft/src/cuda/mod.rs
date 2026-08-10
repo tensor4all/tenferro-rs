@@ -8,10 +8,7 @@ pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
 
-use tenferro_gpu::cuda::interop::{
-    alloc_output, alloc_zero_output, scale_tensor_write, with_typed_device_ptr,
-};
-use tenferro_gpu::cuda::{CudaExecSession, CudaRuntime};
+use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_tensor::{DType, SliceConfig, Tensor, TensorIndexing, TensorStructural, TensorWrite};
 
 use crate::backend::FftExecutionCache;
@@ -54,7 +51,7 @@ impl FftBackend for CudaExecSession<'_> {
         spec: &FftPlanSpec,
         mut cache: FftExecutionCache<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        validate_cuda_input(self.runtime(), input, spec)?;
+        validate_cuda_input(self, input, spec)?;
 
         let (transform, direction, output_dtype) =
             transform_mapping(spec.operation(), input.dtype())?;
@@ -73,7 +70,7 @@ impl FftBackend for CudaExecSession<'_> {
             let canonical_output_shape = canonical_output_shape(&canonical, spec.operation())
                 .map_err(|source| CudaFftError::interop("cuda_fft_output_shape", source))?;
             let mut canonical_output =
-                allocate_cuda_output(self.runtime(), output_dtype, &canonical_output_shape)
+                allocate_cuda_output(self, output_dtype, &canonical_output_shape)
                     .map_err(|source| CudaFftError::interop("cuda_fft_output_allocate", source))?;
 
             let descriptor = CufftPlanDescriptor::new(
@@ -106,13 +103,13 @@ impl FftBackend for CudaExecSession<'_> {
                 let store = cache.store_mut();
                 if let Some(entry) = store.get_mut::<CufftPlanEntry>(&cache_key) {
                     if entry.matches_key(&key) {
-                        entry.execute(canonical_input, &mut canonical_output)?;
+                        entry.execute(self, canonical_input, &mut canonical_output)?;
                         cached = true;
                     }
                 }
                 if !cached {
-                    let mut entry = CufftPlanEntry::create(self.runtime(), key, descriptor)?;
-                    entry.execute(canonical_input, &mut canonical_output)?;
+                    let mut entry = CufftPlanEntry::create(self, key, descriptor)?;
+                    entry.execute(self, canonical_input, &mut canonical_output)?;
                     let retained_bytes = entry.retained_bytes();
                     store.put(cache_key, entry, retained_bytes);
                 }
@@ -124,11 +121,10 @@ impl FftBackend for CudaExecSession<'_> {
             );
             let factor = fft_scale(spec.norm(), inverse, canonical.n);
             if factor != 1.0 {
-                scale_tensor_write(
-                    self.runtime(),
-                    TensorWrite::from_tensor(&mut canonical_output),
-                    factor,
-                )
+                self.with_cubecl(OP, |cubecl| {
+                    cubecl
+                        .scale_tensor_write(TensorWrite::from_tensor(&mut canonical_output), factor)
+                })
                 .map_err(|source| CudaFftError::interop("cuda_fft_scale", source))?;
             }
 
@@ -157,13 +153,13 @@ impl FftBackend for CudaExecSession<'_> {
 
         match executed {
             Some(output) => Ok(output),
-            None => allocate_cuda_output(self.runtime(), output_dtype, &canonical.output_shape),
+            None => allocate_cuda_output(self, output_dtype, &canonical.output_shape),
         }
     }
 }
 
 fn validate_cuda_input(
-    runtime: &CudaRuntime,
+    session: &CudaExecSession<'_>,
     input: &Tensor,
     spec: &FftPlanSpec,
 ) -> tenferro_tensor::Result<()> {
@@ -194,9 +190,10 @@ fn validate_cuda_input(
     }
 
     // Placement is checked before layout, dtype dispatch, zero-batch returns,
-    // allocation, or any vendor-library/cache work. This rejects host and
-    // foreign-runtime buffers without an implicit transfer.
-    ensure_cuda_tensor_resident(runtime, input)?;
+    // allocation, or any vendor-library/cache work. This rejects host,
+    // foreign-backend, and foreign-runtime/device tensors without an implicit
+    // transfer, using the exact session runtime as the residency witness.
+    ensure_cuda_tensor_resident(session, input)?;
     if !input.is_col_major_contiguous()? {
         return Err(tenferro_tensor::Error::unsupported(
             op,
@@ -207,19 +204,10 @@ fn validate_cuda_input(
 }
 
 fn ensure_cuda_tensor_resident(
-    runtime: &CudaRuntime,
+    session: &CudaExecSession<'_>,
     input: &Tensor,
 ) -> tenferro_tensor::Result<()> {
-    let result = match input {
-        Tensor::F32(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::F64(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::I32(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::I64(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::Bool(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::C32(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-        Tensor::C64(input) => with_typed_device_ptr(runtime, input, OP, |_| {}),
-    };
-    result.map_err(|source| {
+    session.ensure_gpu_resident(input, OP).map_err(|source| {
         tenferro_tensor::Error::runtime_state_source(OP, CudaFftPlacementError { source })
     })
 }
@@ -488,15 +476,27 @@ fn canonical_output_shape(
 }
 
 fn allocate_cuda_output(
-    runtime: &CudaRuntime,
+    session: &mut CudaExecSession<'_>,
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
     match dtype {
-        DType::F32 => alloc_output::<f32>(runtime, shape).map(Tensor::F32),
-        DType::F64 => alloc_output::<f64>(runtime, shape).map(Tensor::F64),
-        DType::C32 => alloc_output::<num_complex::Complex32>(runtime, shape).map(Tensor::C32),
-        DType::C64 => alloc_output::<num_complex::Complex64>(runtime, shape).map(Tensor::C64),
+        DType::F32 => session
+            .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f32>(shape))
+            .map(Tensor::F32),
+        DType::F64 => session
+            .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f64>(shape))
+            .map(Tensor::F64),
+        DType::C32 => session
+            .with_cubecl(OP, |cubecl| {
+                cubecl.alloc_output::<num_complex::Complex32>(shape)
+            })
+            .map(Tensor::C32),
+        DType::C64 => session
+            .with_cubecl(OP, |cubecl| {
+                cubecl.alloc_output::<num_complex::Complex64>(shape)
+            })
+            .map(Tensor::C64),
         _ => Err(crate::tensor_unsupported_dtype(
             OP,
             dtype,
@@ -511,17 +511,25 @@ fn allocate_cuda_zero_output(
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
     match dtype {
-        DType::F32 => alloc_zero_output::<f32>(session.runtime(), shape).map(Tensor::F32),
-        DType::F64 => alloc_zero_output::<f64>(session.runtime(), shape).map(Tensor::F64),
+        DType::F32 => session
+            .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
+            .map(Tensor::F32),
+        DType::F64 => session
+            .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
+            .map(Tensor::F64),
         // CubeCL's generic complex fill-zero kernel is not accepted by all
         // CUDA toolkits. Fill a same-device real tensor with the shared kernel
         // and use the existing device conversion path for complex padding.
         DType::C32 => {
-            let real = alloc_zero_output::<f32>(session.runtime(), shape).map(Tensor::F32)?;
+            let real = session
+                .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
+                .map(Tensor::F32)?;
             session.cast(&real, DType::C32)
         }
         DType::C64 => {
-            let real = alloc_zero_output::<f64>(session.runtime(), shape).map(Tensor::F64)?;
+            let real = session
+                .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
+                .map(Tensor::F64)?;
             session.cast(&real, DType::C64)
         }
         _ => Err(crate::tensor_unsupported_dtype(

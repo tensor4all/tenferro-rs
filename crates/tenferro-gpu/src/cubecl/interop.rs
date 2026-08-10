@@ -1,9 +1,11 @@
-//! Owner-scoped CubeCL integration helpers for standard operation crates.
+//! Owner-scoped CubeCL integration helpers internal to this crate.
 //!
-//! This module is intentionally narrow: it exposes the launch, allocation, and
-//! pointer bridges needed by operation-family crates that provide CUDA kernels
-//! against tenferro's CubeCL runtime, without exposing the backend's raw buffer
-//! representation on `CudaRuntime` or `CubeclBuffer` themselves.
+//! This module is intentionally narrow: it provides the launch, allocation,
+//! and device-address helpers used by this crate's raw/session and kernel
+//! surfaces, without exposing the backend's raw buffer representation on
+//! `CudaRuntime` or `CubeclBuffer` themselves. It is `pub(crate)` and is not
+//! re-exported publicly; operation-family crates consume the credentialed
+//! `cuda::raw`/`cuda::cubecl` sessions instead (issue #1597).
 
 use std::ffi::c_void;
 use std::fmt;
@@ -57,136 +59,6 @@ impl DeviceByteBuffer {
     }
 }
 
-/// Prepared external-use allocation retained with its exact CUDA runtime.
-///
-/// The pointer remains owner-scoped: it is exposed only during
-/// `with_device_ptr`, while the prepared handle and runtime stay alive until
-/// the lease is dropped. A failed vendor-stream barrier must retain the whole
-/// lease rather than reclaiming an allocation that may still be in use.
-#[derive(Debug)]
-struct CudaExternalUseCore {
-    // Keep the prepared allocation handle before the runtime so it is released
-    // while the retained CUDA context is still alive.
-    handle: cubecl_runtime::server::Handle,
-    runtime: CudaRuntime,
-}
-
-impl CudaExternalUseCore {
-    fn new(handle: cubecl_runtime::server::Handle, runtime: &CudaRuntime) -> Self {
-        Self {
-            handle,
-            runtime: runtime.clone(),
-        }
-    }
-
-    fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
-        let resource = self
-            .runtime
-            .client()
-            .get_resource(self.handle.clone())
-            .map_err(|err| crate::Error::backend_source("cuda_external_use_lease", err))?;
-        let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, "cuda_external_use_lease")?;
-        callback(ptr);
-        Ok(())
-    }
-}
-
-/// Read-only external CUDA use lease.
-///
-/// This hidden sibling-crate extension contract is consumed by
-/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. Read
-/// leases require a shared tensor borrow and prepare a provider-native read.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct CudaExternalUseReadLease {
-    core: CudaExternalUseCore,
-}
-
-impl CudaExternalUseReadLease {
-    /// Prepare and retain a read-only CubeCL-backed tensor for external use.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
-    /// belongs to a different CUDA runtime, or its provider handle cannot be
-    /// prepared.
-    pub fn new<T, R>(
-        runtime: &CudaRuntime,
-        tensor: &TypedTensor<T, R>,
-        op: &'static str,
-    ) -> crate::Result<Self>
-    where
-        T: TensorScalar + 'static,
-        R: TensorRank,
-    {
-        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
-        let handle = dispatch::prepared_tensor_access(tensor, op)?.into_handle();
-        Ok(Self {
-            core: CudaExternalUseCore::new(handle, runtime),
-        })
-    }
-
-    /// Borrow the retained device pointer for one scoped external call.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::BackendSource`] when the retained resource
-    /// cannot be inspected, or a typed validation error when its address does
-    /// not fit the host `usize` range.
-    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
-        self.core.with_device_ptr(callback)
-    }
-}
-
-/// Exclusive-write external CUDA use lease.
-///
-/// This hidden sibling-crate extension contract is consumed by
-/// `tenferro-fft`'s cuFFT adapter; it is not general tensor-user API. A write
-/// lease requires an exclusive mutable tensor borrow and prepares a
-/// provider-native write, so vendor output cannot be obtained from a read-only
-/// handle.
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct CudaExternalUseWriteLease {
-    core: CudaExternalUseCore,
-}
-
-impl CudaExternalUseWriteLease {
-    /// Prepare and retain an exclusively writable CubeCL-backed tensor.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
-    /// belongs to a different CUDA runtime, or its provider handle cannot be
-    /// prepared.
-    pub fn new<T, R>(
-        runtime: &CudaRuntime,
-        tensor: &mut TypedTensor<T, R>,
-        op: &'static str,
-    ) -> crate::Result<Self>
-    where
-        T: TensorScalar + 'static,
-        R: TensorRank,
-    {
-        dispatch::ensure_resident_on_runtime(runtime, tensor, op)?;
-        let handle = dispatch::prepared_tensor_write_access(tensor, op)?.into_handle();
-        Ok(Self {
-            core: CudaExternalUseCore::new(handle, runtime),
-        })
-    }
-
-    /// Borrow the retained device pointer for one scoped external call.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::BackendSource`] when the retained resource
-    /// cannot be inspected, or a typed validation error when its address does
-    /// not fit the host `usize` range.
-    pub fn with_device_ptr(&self, callback: impl FnOnce(*mut c_void)) -> crate::Result<()> {
-        self.core.with_device_ptr(callback)
-    }
-}
-
 pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::Result<*mut c_void> {
     let addr = usize::try_from(addr).map_err(|_| {
         crate::Error::invalid_argument(
@@ -196,60 +68,6 @@ pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::R
         )
     })?;
     Ok(std::ptr::with_exposed_provenance_mut::<c_void>(addr))
-}
-
-/// Run a closure with the CubeCL compute client.
-///
-/// This is for operation-family kernel launches that cannot be implemented
-/// inside `tenferro-gpu` without creating a dependency cycle.
-pub fn with_cubecl_client<R>(
-    rt: &CudaRuntime,
-    launch: impl FnOnce(&ComputeClient<CubeclCudaRuntime>) -> R,
-) -> R {
-    launch(rt.client())
-}
-
-/// Flush the CubeCL client after an unchecked kernel launch.
-/// # Errors
-///
-/// Returns [`crate::Error::BackendSource`] when CubeCL cannot flush the client.
-pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
-    rt.client()
-        .flush()
-        .map_err(|err| crate::Error::backend_source(op, err))
-}
-
-/// Borrow the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
-///
-/// The stream is passed only to `f`; callers must not retain the raw handle
-/// after the callback returns.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::cuda::CudaRuntime;
-/// use tenferro_gpu::cuda::interop::with_raw_cuda_stream;
-///
-/// # fn example(rt: &CudaRuntime) -> tenferro_tensor::Result<()> {
-/// with_raw_cuda_stream(rt, "example", |_stream| {})?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Errors
-///
-/// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
-/// stream, or [`crate::Error::RuntimeState`] when its server is unavailable.
-pub fn with_raw_cuda_stream(
-    rt: &CudaRuntime,
-    op: &'static str,
-    f: impl FnOnce(u64),
-) -> crate::Result<()> {
-    let stream = rt
-        .raw_cuda_stream()
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    f(stream);
-    Ok(())
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
@@ -316,19 +134,6 @@ where
     Ok(output)
 }
 
-/// Validate that a tensor is backed by a CubeCL buffer.
-/// # Errors
-///
-/// Returns [`crate::Error::RuntimeState`] when the tensor is host-backed,
-/// belongs to another GPU runtime, or has the wrong backend buffer family.
-pub fn ensure_typed_tensor_resident<T: 'static>(
-    tensor: &TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-) -> crate::Result<()> {
-    dispatch::cubecl_buffer(tensor, op)?;
-    Ok(())
-}
-
 /// Build a CubeCL tensor binding for operation-family kernels.
 /// # Errors
 ///
@@ -357,45 +162,15 @@ pub fn typed_tensor_array_arg<T: CubeElement + TensorScalar + Clone>(
 ///
 /// The pointer is passed only to `f`, while the residency-checked tensor and
 /// runtime remain borrowed by this call. Callers must not retain the pointer
-/// after `f` returns.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_gpu::cuda::interop::with_typed_device_ptr;
-/// use tenferro_gpu::cuda::CudaRuntime;
-/// use tenferro_tensor::TypedTensor;
-///
-/// # fn example(rt: &CudaRuntime, tensor: &TypedTensor<f32>) -> tenferro_tensor::Result<()> {
-/// with_typed_device_ptr(rt, tensor, "example", |_ptr| {})?;
-/// # Ok(())
-/// # }
-/// ```
+/// after `f` returns. This internal module is not part of the public API; the
+/// pointer-escape contract is enforced by source-contract tests.
+#[cfg_attr(not(test), allow(dead_code))] // used by unit tests; kept for the scoped-accessor contract.
 ///
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
 /// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
 /// [`crate::Error::Validation`] when the pointer address overflows `usize`.
-pub fn with_typed_device_ptr<T: TensorScalar + 'static>(
-    rt: &CudaRuntime,
-    tensor: &TypedTensor<T, impl TensorRank>,
-    op: &'static str,
-    f: impl FnOnce(*mut c_void),
-) -> crate::Result<()> {
-    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
-    let resource = rt
-        .client()
-        .get_resource(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    // The residency check above ties this raw FFI pointer to the caller's
-    // runtime/device for the duration of the callback.
-    let ptr = cuda_device_ptr_from_addr(resource.resource().ptr, op)?;
-    f(ptr);
-    Ok(())
-}
-
 /// Upload host data into a dense GPU tensor on the runtime's device.
 /// # Errors
 ///
@@ -486,6 +261,36 @@ pub fn upload_device_bytes(
     device_bytes_from_handle(rt, handle, op)
 }
 
+/// Retain a clone of a resident tensor's CubeCL allocation handle.
+///
+/// The returned [`DeviceByteBuffer`] holds a reference-counted clone of the
+/// tensor's allocation handle, so the device memory stays alive until the
+/// guard is dropped (or intentionally forgotten). Vendor libraries that
+/// enqueue asynchronous work against the tensor's address can use this to
+/// prevent allocation reclamation racing an in-flight kernel after a failed
+/// synchronization barrier.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when `tensor` is host-backed,
+/// belongs to a non-CubeCL backend family, belongs to a different CUDA
+/// runtime domain, or is not resident on `rt`'s device, or
+/// [`crate::Error::BackendSource`] when CubeCL cannot inspect the retained
+/// resource.
+pub(crate) fn retain_tensor_bytes<T: 'static>(
+    rt: &CudaRuntime,
+    tensor: &TypedTensor<T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<DeviceByteBuffer> {
+    // The public raw seam must uphold the resident-tensor contract itself:
+    // validate exact-runtime residency (allocation domain + device placement)
+    // before cloning the handle, so a foreign-runtime or host tensor can never
+    // be retained by a session that does not own it.
+    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
+    let buffer = dispatch::cubecl_buffer(tensor, op)?;
+    device_bytes_from_handle(rt, buffer.handle().clone(), op)
+}
+
 fn device_bytes_from_handle(
     rt: &CudaRuntime,
     handle: cubecl_runtime::server::Handle,
@@ -508,32 +313,6 @@ const SCALE_OP: &str = "scale_tensor_write";
 /// The output retains its existing placement and allocation owner. Only
 /// compact, zero-offset writable targets are accepted because the shared
 /// structural kernels operate on a one-dimensional contiguous array.
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use tenferro_gpu::cuda::{
-///     cuda_devices, download_tensor, gpu_available, upload_tensor, CudaRuntime,
-/// };
-/// use tenferro_gpu::cuda::interop::scale_tensor_write;
-/// use tenferro_tensor::{Tensor, TensorWrite};
-///
-/// if !gpu_available() {
-///     return Ok(());
-/// }
-/// let Some(device) = cuda_devices()?.into_iter().next() else {
-///     return Ok(());
-/// };
-/// let runtime = CudaRuntime::new(device.id())?;
-/// let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0])?;
-/// let mut output = upload_tensor(&runtime, &host)?;
-/// scale_tensor_write(&runtime, TensorWrite::from_tensor(&mut output), 0.25)?;
-/// let scaled = download_tensor(&runtime, &output)?;
-/// assert_eq!(scaled.as_slice::<f32>()?, &[0.25, 0.5]);
-/// # Ok(())
-/// # }
-/// ```
 ///
 /// # Errors
 ///

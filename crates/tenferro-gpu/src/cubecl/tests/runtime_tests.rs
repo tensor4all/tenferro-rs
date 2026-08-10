@@ -2,10 +2,12 @@
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
-use crate::cubecl::interop::with_typed_device_ptr;
 use crate::cubecl::memory::{download_tensor, upload_tensor};
-use crate::cubecl::{gpu_available, CudaBackend, CudaDeviceId, CudaRuntime};
+use crate::cubecl::{
+    gpu_available, with_cuda_exec_session, CudaBackend, CudaDeviceId, CudaRuntime,
+};
 use crate::{Error, Tensor};
+use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::TensorElementwise;
 
 #[cube(launch_unchecked)]
@@ -155,17 +157,27 @@ gpu_test!(test_upload_download_c64, {
 });
 
 gpu_test!(test_pointer_bridge, {
-    let rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
-    let gpu = upload_tensor(&rt, &host).unwrap();
+    let gpu = upload_tensor(backend.runtime(), &host).unwrap();
     let Tensor::F64(gpu) = &gpu else {
         unreachable!("f64 upload should preserve dtype");
     };
-    let mut ptr = std::ptr::null_mut();
-    with_typed_device_ptr(&rt, gpu, "test_pointer_bridge", |value| ptr = value).unwrap();
-
-    assert!(!ptr.is_null(), "Device pointer should be non-null");
+    backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, |exec| {
+                // SAFETY: the raw tensor ref validates exact runtime residency
+                // and keeps the GPU buffer borrowed for the callback.
+                exec.with_raw("test_pointer_bridge", |raw| unsafe {
+                    let ptr = raw.tensor(gpu)?.raw_ptr();
+                    assert!(!ptr.is_null(), "Device pointer should be non-null");
+                    Ok(())
+                })
+            })
+            .expect("CUDA backend session should be available")
+        })
+        .expect("raw session should run");
 });
 
 gpu_test!(test_backend_add_matches_cpu_reference, {
@@ -285,23 +297,32 @@ gpu_test!(test_full_round_trip_all_dtypes, {
 });
 
 gpu_test!(test_pointer_and_stream_bridge, {
-    let rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let gpu = upload_tensor(&rt, &t).unwrap();
+    let gpu = upload_tensor(backend.runtime(), &t).unwrap();
 
     let Tensor::F64(gpu_typed) = &gpu else {
         unreachable!("f64 upload should preserve dtype");
     };
-    let mut ptr = std::ptr::null_mut();
-    with_typed_device_ptr(&rt, gpu_typed, "test_pointer_and_stream_bridge", |value| {
-        ptr = value
-    })
-    .unwrap();
-    assert!(!ptr.is_null());
+    backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, |exec| {
+                // SAFETY: the raw tensor ref validates exact runtime residency
+                // and keeps the GPU buffer borrowed for the callback.
+                exec.with_raw("test_pointer_and_stream_bridge", |raw| {
+                    let stream = unsafe { raw.stream().raw_handle() };
+                    assert!(stream != 0);
+                    // SAFETY: the pointer is checked for non-null before the
+                    // session-scoped borrow ends.
+                    let ptr = unsafe { raw.tensor(gpu_typed)?.raw_ptr() };
+                    assert!(!ptr.is_null(), "Device pointer should be non-null");
+                    Ok(())
+                })
+            })
+            .expect("CUDA backend session should be available")
+        })
+        .expect("raw session should run");
 
-    let stream = rt.raw_cuda_stream().unwrap();
-    assert!(stream != 0);
-
-    let back = download_tensor(&rt, &gpu).unwrap();
+    let back = download_tensor(backend.runtime(), &gpu).unwrap();
     assert_eq!(back.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 });

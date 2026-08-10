@@ -1,8 +1,8 @@
-error[E0599]: no method named `backend_mut` found for mutable reference `&'a mut tenferro_gpu::cuda::CudaExecSession<'a>` in the current scope
+error[E0599]: no method named `backend_mut` found for mutable reference `&'a mut CudaExecSession<'a>` in the current scope
  --> tests/ui/cuda_session_owner_projection.rs:4:13
   |
 4 |     session.backend_mut()
-  |             ^^^^^^^^^^^ method not found in `&'a mut tenferro_gpu::cuda::CudaExecSession<'a>`
+  |             ^^^^^^^^^^^ method not found in `&'a mut CudaExecSession<'a>`
 
 error[E0308]: mismatched types
  --> tests/ui/cuda_session_owner_projection.rs:8:5
@@ -13,4 +13,4 @@ error[E0308]: mismatched types
   |     ^^^^^^^^^^^^^ expected `&mut CudaBackend`, found `&mut CudaExecSession<'_>`
   |
   = note: expected mutable reference `&'a mut CudaBackend`
-             found mutable reference `&mut tenferro_gpu::cuda::CudaExecSession<'a>`
+             found mutable reference `&mut CudaExecSession<'a>`

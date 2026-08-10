@@ -67,7 +67,8 @@ crates/tenferro-gpu/src/cubecl/
     runtime.rs             CubeCL/CUDA runtime initialization and synchronization
     memory.rs              upload_tensor, download_tensor, device pointer bridge
     dispatch.rs            private shared launch helpers and dtype dispatch
-    interop.rs             owner-scoped launch/allocation bridge for operation crates
+    interop.rs             internal (pub(crate)) raw-session helpers: typed upload/download,
+                           allocation, retention guards, and on-device scale
     fusion/                fused elementwise classification and code generation
     gemm.rs                cuTENSOR/cuBLAS-backed contraction support
     permutation.rs         cuTENSOR-backed structural permutation support
@@ -186,8 +187,10 @@ the call as a no-op.
 
 cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
 CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`
-loads it and owns its opaque plans, workspaces, and `cufft-plans` cache entries;
-`tenferro-gpu` must not load or cache cuFFT handles. The CUDA provider first
+loads it and owns its opaque plans and `cufft-plans` cache entries;
+`tenferro-gpu` must not load or cache cuFFT handles. The cuFFT work area is a
+session-scoped CubeCL allocation created fresh inside each raw execution
+session, so it is not owned by the cached plan entry. The CUDA provider first
 uses default soname/path candidates and allows explicit override with these
 variables:
 
@@ -203,15 +206,13 @@ The cuFFT loader tries non-empty override entries first, then
 12/cuFFT 11 and CUDA 11/cuFFT 10. The initially intended asynchronous
 between-eviction cuFFT execution is superseded for #967 by an independent
 scoped-pointer safety review: CubeCL raw pointers have no completion witness.
-The current baseline therefore synchronizes the bound stream inside the
-innermost output-pointer callback, after enqueue and before that callback
-returns. Future asynchronous execution needs a separately accepted
-event-backed external-use ownership design and is outside #967. Successful
-pointer use therefore completes before
-the input-pointer and raw-stream callbacks return; later CubeCL postprocessing
-stays stream-managed and explicit download synchronizes the final output. A
-synchronization failure retains the prepared allocation leases and exact CUDA
-runtime rather than reclaiming memory while vendor work might remain.
+Execution therefore enters the credentialed raw session (`with_raw`), binds the
+captured stream and a fresh work area, retains the input/output allocation
+handles, enqueues the vendor call, and synchronizes the bound stream before the
+session returns. A synchronization failure intentionally forgets the work area
+and the input/output retention guards so reclamation cannot race vendor writes
+(issue #967 invariant); later CubeCL postprocessing stays stream-managed and
+explicit download synchronizes the final output.
 
 Local GPU test runs should also set:
 
@@ -236,9 +237,11 @@ does not provide an integer or bool permutation compute descriptor.
 store type-indexed CUDA handles or plans through
 `CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
 and resource owner. The `cufft-plans` cache is an intentional exception to
-that generic provider cache: `tenferro-fft` stores cuFFT plans and workspaces in
-its existing caller- or runtime-owned `FftExecutionCache`, not in a hidden
-`CudaBackend` cache.
+that generic provider cache: `tenferro-fft` stores cuFFT plans in its existing
+caller- or runtime-owned `FftExecutionCache`, not in a hidden `CudaBackend`
+cache. The cuFFT work area is **not** cached: it is a session-scoped CubeCL
+allocation created fresh inside each raw execution session, so the cached plan
+entry charges only its host-side metadata toward the cache byte limit.
 
 The CUDA extension cache has bounded defaults for type entries and logical
 retained bytes. Applications can configure it with
@@ -311,37 +314,45 @@ algorithms.
 
 ## Operation-Crate Interop Boundary
 
+See [gpu-extension-api.md](./gpu-extension-api.md) for the public kernel
+extension contract (issue #1597): `CudaExecSession` as the single
+execution-authority boundary, `cuda::raw` / `cuda::cubecl` / `webgpu::cubecl`
+sessions, identity layering, capability/error contracts, multi-GPU copy
+semantics, and the CubeCL package policy.
+
 `crates/tenferro-gpu/src/cubecl/dispatch.rs` is private backend glue. It owns
 shape/buffer validation before unsafe CubeCL launch arguments are constructed.
 Sibling operation crates must not import it directly.
 
 Operation crates that need to launch their own CubeCL kernels, such as
-`tenferro-linalg`, use the owner-scoped `tenferro_gpu::cuda::interop` module
-instead. `tenferro-fft` uses the same boundary for cuFFT workspace allocation,
-current-stream access, typed device-pointer access, and the on-device scaling
-helper. The provider owns each allocation and exposes raw streams and pointers
-only through scoped callbacks. The split `CudaExternalUseReadLease` and
-`CudaExternalUseWriteLease` contracts additionally retain prepared CubeCL
-buffer handles and the exact `CudaRuntime` while cuFFT may use the buffers; the
-write lease requires an exclusive mutable tensor preparation. A successful
-stream barrier drops both leases, while a failed barrier intentionally retains
-them. cuFFT loading, opaque plans, and plan-cache entries remain owned by
-`tenferro-fft`.
+`tenferro-linalg`, enter the public `CudaExecSession` obtained from
+`with_backend_session` and use the `with_cubecl` sub-session (typed CubeCL
+kernels, `tensor_binding`/`array_arg` operands) or the `with_raw` sub-session
+(raw CUDA library calls). `tenferro-fft` uses the same boundary: cuFFT plan
+creation and retirement run under the runtime's scoped context guard
+(`CudaRuntime::with_current_context`), which restores the caller's previous
+device/context on exit (best-effort; failures are logged to stderr), and
+cuFFT execution enters `with_raw` for
+stream binding, workspace allocation, validated tensor spans, and the
+retention guards that pin input/output allocations on a failed synchronization
+barrier (issue #967 invariant). The provider owns each allocation and exposes
+raw streams and pointers only through scoped, session-lifetime-bound
+capabilities; the deleted hidden `cuda::interop` bridge and
+`CudaExternalUse{Read,Write}Lease` leases no longer exist. cuFFT loading,
+opaque plans, and plan-cache entries remain owned by `tenferro-fft`.
 
-That module intentionally exposes only the bridges that cannot live in
-`tenferro-gpu` without creating an operation-crate dependency cycle:
-
-- one-dimensional launch configuration helpers,
-- checked `TensorBinding` / `ArrayArg` construction,
-- typed output allocation, typed upload/download, and typed device-pointer
-  extraction,
-- byte workspaces kept alive for CUDA library calls,
-- scoped access to the CubeCL client for operation-owned kernel launches.
-
-`CudaRuntime::client`, `CudaRuntime::raw_cuda_stream`, `CubeclBuffer`
+Extension operation crates interact with CUDA exclusively through the public
+session surface (`tenferro_gpu::cuda::CudaExecSession` with its `with_cubecl`
+and `with_raw` sub-sessions), plus the scoped
+`CudaRuntime::with_current_context` guard for vendor-library lifecycle work.
+The public `raw` and `cubecl` sub-modules expose the typed, session-scoped
+capabilities: validated tensor spans, byte workspaces, retained allocation
+guards, stream/module/function handles, and CubeCL bindings. `CudaRuntime::client`,
+`CudaRuntime::raw_cuda_stream`, `CubeclBuffer`
 fields, and raw `CubeclBuffer` constructors are not public API. Public tensor
-users should use `CudaBackend`, `upload_tensor`, `download_tensor`,
-`device_ptr`, and `CudaRuntime::synchronize`.
+users should use `CudaBackend`, `upload_tensor`, `download_tensor`, and
+`CudaRuntime::synchronize`; device pointers are exposed only through the
+session-scoped `raw::Session` spans.
 
 ## Kernel Metadata Contract
 

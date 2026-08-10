@@ -43,15 +43,29 @@ pub mod cuda {
     pub use super::cubecl::{
         cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
         cuda_runtime_hardware_class, download_tensor, gpu_available, upload_tensor,
-        with_cuda_exec_session, CudaBackend, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
-        CudaExecSession, CudaRuntime, CudaRuntimeIdentity,
+        with_cuda_exec_session, CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId,
+        CudaDeviceInfo, CudaDeviceUuid, CudaExecSession, CudaExtensionCache,
+        CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity, GpuExtensionCapability,
     };
 
-    /// Provider-specific CUDA interop scoped to an active execution session.
-    #[doc(hidden)]
-    pub mod interop {
-        pub use super::super::cubecl::interop::*;
-        pub use super::super::cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
+    /// Public tenferro-wide CubeCL session (issue #1597).
+    ///
+    /// Exposes a narrow prelude of the CubeCL types needed to write and launch
+    /// `#[cube]` kernels against tenferro's GPU runtime. This module does not
+    /// re-export the whole of `cubecl`; downstream crates declare the framework
+    /// `t4a-cubecl` package explicitly.
+    pub mod cubecl {
+        pub use super::super::cubecl::session_cubecl::Session;
+        // Narrow prelude: only the types needed to describe a CubeCL launch.
+        pub use ::cubecl::prelude::{ArrayArg, CubeCount, CubeDim, TensorBinding};
+    }
+
+    /// Type-safe raw CUDA extension session (issue #1597).
+    pub mod raw {
+        pub use super::super::cubecl::raw::{
+            CudaResourceGuard, DeviceBytes, Function, KernelArg, LaunchConfig, Module,
+            NvrtcOptions, Session, StreamRef, TensorMut, TensorRef,
+        };
     }
 }
 

@@ -11,8 +11,10 @@ use std::fs;
 use std::path::Path;
 
 use tenferro_gpu::{
-    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+    cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaBackend,
+    cuda::CudaDeviceId,
 };
+use tenferro_tensor::backend::BackendSessionHost as _;
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead, TensorStructural};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -47,7 +49,7 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
         return;
     }
 
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let Tensor::F32(tensor) = &input else {
@@ -63,9 +65,16 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     );
     drop(prepared);
 
-    let binding =
-        tenferro_gpu::cuda::interop::typed_tensor_binding(tensor, "storage_provider_cuda")
-            .expect("the CUDA binding must consume the provider-prepared state");
+    let binding = backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, |sess| {
+                sess.with_cubecl("storage_provider_cuda", |cubecl| {
+                    cubecl.tensor_binding(tensor, "storage_provider_cuda")
+                })
+            })
+            .expect("CUDA session")
+        })
+        .expect("the CUDA binding must consume the provider-prepared state");
     drop(binding);
 }
 
@@ -100,9 +109,12 @@ fn cuda_provider_does_not_expose_safe_unscoped_raw_access() {
         !lib.contains("pub fn handle(") && !lib.contains("pub fn device_ptr("),
         "CUDA provider handles and pointers must not be safe unscoped accessors"
     );
+    // The hidden cuda::interop bridge no longer exposes a callback boundary;
+    // device pointers are now reachable only through the public raw session's
+    // `unsafe fn raw_ptr` on a session-lifetime-scoped TensorRef/TensorMut.
     assert!(
-        interop.contains("pub fn with_typed_device_ptr")
+        !interop.contains("pub fn with_typed_device_ptr")
             && !interop.contains("pub fn typed_device_ptr("),
-        "raw CUDA access must stay inside an explicit callback boundary"
+        "CUDA interop must not expose a typed device-pointer function"
     );
 }

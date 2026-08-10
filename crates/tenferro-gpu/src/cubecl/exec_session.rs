@@ -1,5 +1,7 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use std::any::TypeId;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, ElementwiseFusionPlan, GroupedGemmConfig, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
@@ -13,30 +15,292 @@ use tenferro_tensor::{
 };
 use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
-use super::{CudaBackend, CudaExtensionCache, CudaRuntime, CudaRuntimeIdentity};
+use super::identity::GpuExtensionCapability;
+use super::runtime::RawContextRestore;
+use super::{
+    raw, session_cubecl, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime,
+    CudaRuntimeIdentity,
+};
+
+/// Best-effort exit flush for a `with_cubecl` session.
+///
+/// Flushes once eagerly (returned to the caller as an error if it fails) and
+/// once more on `Drop` so a panic/unwind path still drains pending CubeCL
+/// work.
+struct CubeclExitFlush<'a> {
+    op: &'static str,
+    client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    flushed: bool,
+}
+
+impl<'a> CubeclExitFlush<'a> {
+    fn new(
+        op: &'static str,
+        client: &'a cubecl::client::ComputeClient<cubecl_cuda::CudaRuntime>,
+    ) -> Self {
+        Self {
+            op,
+            client,
+            flushed: false,
+        }
+    }
+
+    /// Flush now and return the typed result.
+    fn flush_now(&mut self) -> crate::Result<()> {
+        self.client
+            .flush()
+            .map_err(|err| crate::Error::backend_source(self.op, err))?;
+        self.flushed = true;
+        Ok(())
+    }
+}
+
+impl Drop for CubeclExitFlush<'_> {
+    fn drop(&mut self) {
+        if !self.flushed {
+            let _ = self.client.flush();
+        }
+    }
+}
 
 /// Marker for the concrete erased CUDA execution-session target.
 #[doc(hidden)]
 pub(super) struct CudaExecSessionMarker;
 
 /// Borrowed CUDA execution capability.
-#[doc(hidden)]
+///
+/// This is the single public execution-authority boundary for CUDA kernel
+/// extensions (issue #1597). External operation crates obtain it through
+/// [`with_cuda_exec_session`] and then borrow backend/device-scoped extension
+/// sessions via [`CudaExecSession::with_cubecl`] and
+/// [`CudaExecSession::with_raw`].
+///
+/// The session is not constructible by users and is `!Send + !Sync`: it
+/// carries thread-local execution capability. Success of an enrolled operation
+/// means the work was enqueued; only [`CudaExecSession::synchronize`] is a
+/// host barrier.
 #[derive(Debug)]
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl CudaExecSession<'_> {
     /// Borrow the provider runtime without exposing the backend.
-    #[doc(hidden)]
     pub fn runtime(&self) -> &CudaRuntime {
         self.backend.runtime()
     }
 
     /// Return the identity of the borrowed provider runtime.
-    #[doc(hidden)]
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
         self.backend.runtime_identity()
+    }
+
+    /// Report whether this session supports a GPU extension capability.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::{CudaExecSession, GpuExtensionCapability};
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>, capability: GpuExtensionCapability) -> bool {
+    ///     session.supports(capability)
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn supports(&self, capability: GpuExtensionCapability) -> bool {
+        self.backend.runtime().supports_extension(capability)
+    }
+
+    /// Borrow immutable metadata for the session's device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>) {
+    ///     let _ = session.device_info();
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn device_info(&self) -> &CudaDeviceInfo {
+        self.backend.runtime().device_info()
+    }
+
+    /// Return the allocation ownership domain of this session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible, so
+    /// // the example asserts the method is callable from an external crate.
+    /// fn check(session: &CudaExecSession<'_>) -> tenferro_tensor::AllocationDomainId {
+    ///     session.allocation_domain()
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn allocation_domain(&self) -> tenferro_tensor::AllocationDomainId {
+        self.backend.runtime().allocation_domain()
+    }
+
+    /// Validate that a dense GPU tensor is resident on this exact session:
+    /// CubeCL-backed, same allocation domain, and placed on this runtime's
+    /// CUDA device. Rejects host tensors, foreign-backend buffers, and
+    /// foreign-runtime/device tensors without an implicit transfer.
+    ///
+    /// This is the credentialed public-seam residency guard for extension
+    /// crates that receive a session but must validate inputs before entering
+    /// a `with_raw`/`with_cubecl` sub-session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
+    /// on this exact session runtime/device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible.
+    /// fn check(session: &CudaExecSession<'_>, tensor: &tenferro_tensor::Tensor) -> tenferro_tensor::Result<()> {
+    ///     session.ensure_gpu_resident(tensor, "test.ensure_gpu_resident")
+    /// }
+    /// let _ = check;
+    /// ```
+    pub fn ensure_gpu_resident(&self, input: &Tensor, op: &'static str) -> crate::Result<()> {
+        match input {
+            Tensor::F32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::F64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::I32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::I64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::Bool(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::C32(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+            Tensor::C64(t) => super::dispatch::ensure_resident_on_runtime(self.runtime(), t, op),
+        }
+    }
+
+    /// Block the host until work enqueued on the session's stream completes.
+    ///
+    /// This is the only host barrier on the success path; ordinary successful
+    /// session operations only enqueue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CUDA stream
+    /// synchronization fails.
+    pub fn synchronize(&mut self) -> crate::Result<()> {
+        self.backend.runtime().synchronize()
+    }
+
+    /// Borrow the type-safe raw CUDA extension session for one operation.
+    ///
+    /// The enter/exit protocol is fully contained in this call: a definite
+    /// CubeCL stream is captured on the current thread, pending CubeCL work is
+    /// flushed, the calling thread's previous device/context is saved, the
+    /// tenferro primary context is activated, the callback runs, and the
+    /// previous device/context is best-effort restored on return, `Err`, or
+    /// unwind (restoration failures are logged to stderr). The success path
+    /// does not synchronize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose or
+    /// flush the stream, or when the CUDA context cannot be entered. Context
+    /// restoration on exit is best-effort: a failure to restore the caller's
+    /// previous device/context is logged to stderr rather than propagated, so
+    /// a callback result is never replaced by a restore error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// // Method-call check only: `CudaExecSession` is not user-constructible.
+    /// fn check(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    ///     session.with_raw("test.raw", |raw| {
+    ///         let _ = raw.stream();
+    ///         Ok(SessionOutcome::Done)
+    ///     })?;
+    ///     Ok(())
+    /// }
+    /// enum SessionOutcome { Done }
+    /// let _ = check;
+    /// ```
+    pub fn with_raw<R>(
+        &mut self,
+        op: &'static str,
+        f: impl for<'s> FnOnce(&mut raw::Session<'s>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        let runtime = self.backend.runtime().clone();
+        let cache = self.backend.cuda_extension_cache();
+        // 1. Capture the definite CubeCL stream on this thread.
+        let stream = runtime.raw_cuda_stream()?;
+        // 2. Flush pending CubeCL work so raw library calls observe it.
+        runtime.flush_cubecl(op)?;
+        // 3-4. Save previous context, activate the tenferro primary context.
+        let device_ordinal = i32::try_from(runtime.device_ordinal())
+            .map_err(|source| crate::Error::backend_source(op, source))?;
+        let _guard = RawContextRestore::enter(op, device_ordinal, runtime.primary_context())?;
+        // 5. Build the unique raw session and run the callback.
+        // SAFETY: `_guard` keeps the primary context current for the whole
+        // `Session<'s>` borrow; `stream` is the captured CubeCL stream bound to
+        // the current thread.
+        let mut session = unsafe { raw::Session::new(runtime, cache, stream) };
+        f(&mut session)
+    }
+
+    /// Borrow the public tenferro-wide CubeCL session for one operation.
+    ///
+    /// The session exposes the exact tenferro CubeCL client bound to this
+    /// runtime. Pending CubeCL work is flushed before entering and again on
+    /// exit (including `Err` and unwind) so a later raw-session or host read
+    /// observes the enqueued work. The success path does not synchronize.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaExecSession;
+    ///
+    /// fn check(session: &mut CudaExecSession<'_>) {
+    ///     let _ = session.with_cubecl("test.cubecl", |_cubecl| Ok(()));
+    /// }
+    /// let _ = check;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's error, or [`crate::Error::BackendSource`] when
+    /// pending CubeCL work cannot be flushed on entry or exit.
+    pub fn with_cubecl<R>(
+        &mut self,
+        op: &'static str,
+        f: impl for<'s> FnOnce(&session_cubecl::Session<'s>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        let runtime = self.backend.runtime().clone();
+        runtime.flush_cubecl(op)?;
+        let session = unsafe { session_cubecl::Session::new(runtime) };
+        // Best-effort exit flush on every path via Drop.
+        let mut _flush_guard = CubeclExitFlush::new(op, session.client());
+        let result = f(&session);
+        let flush_result = _flush_guard.flush_now();
+        match result {
+            Ok(value) => {
+                flush_result?;
+                Ok(value)
+            }
+            Err(err) => {
+                let _ = flush_result;
+                Err(err)
+            }
+        }
     }
 
     #[doc(hidden)]
@@ -89,9 +353,25 @@ impl CudaExecSession<'_> {
 
 /// Visit a CUDA execution session through the erased backend-session surface.
 ///
-/// This is intentionally a scoped leaf-capability bridge: the callback cannot
-/// return a borrow of the reconstructed session.
-#[doc(hidden)]
+/// This is the public entry point that borrows CUDA execution authority for
+/// the duration of the callback (issue #1597). The callback cannot return a
+/// borrow of the reconstructed session, so the authority cannot escape the
+/// scope.
+///
+/// Returns `None` when `session` is not a CUDA execution session.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::{with_cuda_exec_session, CudaExecSession};
+///
+/// // Call-check only: the visitor borrows CUDA execution authority for the
+/// // duration of the callback.
+/// fn check(session: &mut dyn tenferro_tensor::backend::BackendSession) {
+///     let _ = with_cuda_exec_session(session, |_session| 0usize);
+/// }
+/// let _ = check;
+/// ```
 pub fn with_cuda_exec_session<B, R>(
     session: &mut B,
     f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R,
@@ -324,7 +604,10 @@ impl BackendSessionHost for CudaBackend {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        let mut session = CudaExecSession { backend: self };
+        let mut session = CudaExecSession {
+            backend: self,
+            _not_send_sync: PhantomData,
+        };
         f(&mut session)
     }
 }

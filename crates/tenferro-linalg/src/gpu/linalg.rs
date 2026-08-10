@@ -4,7 +4,6 @@ use std::os::raw::c_char;
 
 use cubecl::prelude::{ComplexCore, CubeElement, CubePrimitive};
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
-use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -13,21 +12,16 @@ use super::ffi::cusolver::{
     CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
 use super::kernels as cubecl_linalg;
-use tenferro_gpu::cuda::interop::{
-    alloc_device_bytes, alloc_output, cube_count_for_len, cube_dim_1d, download_typed_tensor,
-    ensure_typed_tensor_resident, flush_cubecl_client, typed_tensor_array_arg,
-    typed_tensor_binding, upload_device_bytes, with_cubecl_client, with_raw_cuda_stream,
-    with_typed_device_ptr as interop_with_typed_device_ptr, CudaExtensionCacheGuard,
-    DeviceByteBuffer,
-};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
 // reduce_min/reduce_max) then downloads scalar summaries — no bulk host
 // roundtrip.
-use tenferro_gpu::{cuda::download_tensor, cuda::CudaExecSession, cuda::CudaRuntime};
+use tenferro_gpu::{
+    cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaExecSession,
+};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, Tensor, TensorElementwise, TensorRead, TensorReduction, TensorScalar,
-    TensorStructural, TypedTensor, ValidationError,
+    DType, Error, StorageBuffer, Tensor, TensorElementwise, TensorRead, TensorReduction,
+    TensorScalar, TensorStructural, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -41,7 +35,7 @@ trait LinalgScalar:
     const NEEDS_RWORK: bool;
 
     fn copy_matrix_adjoint(
-        rt: &CudaRuntime,
+        backend: &mut CudaExecSession<'_>,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -55,12 +49,12 @@ impl LinalgScalar for f32 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_matrix_adjoint(
-        rt: &CudaRuntime,
+        backend: &mut CudaExecSession<'_>,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_matrix_adjoint_real(rt, v, vt_shape, op)
+        copy_matrix_adjoint_real(backend, v, vt_shape, op)
     }
 }
 
@@ -71,12 +65,12 @@ impl LinalgScalar for f64 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_matrix_adjoint(
-        rt: &CudaRuntime,
+        backend: &mut CudaExecSession<'_>,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_matrix_adjoint_real(rt, v, vt_shape, op)
+        copy_matrix_adjoint_real(backend, v, vt_shape, op)
     }
 }
 
@@ -87,12 +81,12 @@ impl LinalgScalar for Complex32 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_matrix_adjoint(
-        rt: &CudaRuntime,
+        backend: &mut CudaExecSession<'_>,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_matrix_adjoint_complex(rt, v, vt_shape, op)
+        copy_matrix_adjoint_complex(backend, v, vt_shape, op)
     }
 }
 
@@ -103,12 +97,12 @@ impl LinalgScalar for Complex64 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_matrix_adjoint(
-        rt: &CudaRuntime,
+        backend: &mut CudaExecSession<'_>,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>> {
-        copy_matrix_adjoint_complex(rt, v, vt_shape, op)
+        copy_matrix_adjoint_complex(backend, v, vt_shape, op)
     }
 }
 
@@ -154,35 +148,27 @@ fn ensure_cubecl_resident_tensor(op: &'static str, input: &Tensor) -> Result<()>
     }
 }
 
+/// Validate that a tensor is CubeCL-resident using only public tensor
+/// metadata (no runtime or launch), so the guard lives entirely on the
+/// credentialed public seam.
 fn ensure_cubecl_resident_typed<T: 'static>(
     op: &'static str,
     input: &TypedTensor<T>,
 ) -> Result<()> {
-    ensure_typed_tensor_resident(input, op)
-}
-
-fn linalg_handles<'a>(
-    backend: &'a CudaExecSession<'_>,
-) -> Result<CudaExtensionCacheGuard<'a, CudaLinalgHandles>> {
-    backend
-        .cuda_extension_cache()
-        .get_or_try_init(CudaLinalgHandles::load)
-}
-
-struct Workspace {
-    _owner: DeviceByteBuffer,
-    ptr: *mut c_void,
-}
-
-impl Workspace {
-    fn none() -> Self {
-        Self::from_device(DeviceByteBuffer::none())
-    }
-
-    fn from_device(owner: DeviceByteBuffer) -> Self {
-        let mut ptr = std::ptr::null_mut();
-        owner.with_ptr(|device_ptr| ptr = device_ptr);
-        Self { _owner: owner, ptr }
+    match input.buffer() {
+        StorageBuffer::Host(_) => Err(Error::runtime_state(
+            op,
+            "expected CubeCL GPU tensor, got host tensor. \
+                      Use upload_tensor() to transfer to GPU before calling GPU ops.",
+        )),
+        StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl" => Ok(()),
+        StorageBuffer::Backend(buffer) => Err(Error::runtime_state(
+            op,
+            format!(
+                "expected CubeCL GPU tensor, got backend buffer family `{}`",
+                buffer.backend_family()
+            ),
+        )),
     }
 }
 
@@ -411,12 +397,11 @@ pub(super) fn eig(_backend: &mut CudaExecSession<'_>, _input: &Tensor) -> Result
 pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -> Result<Tensor> {
     const OP: &str = "solve";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, b)?;
     ensure_supported_linalg_pair(OP, a, b)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
+        return zero_like_linalg_device_tensor(backend, b, OP);
     }
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -456,7 +441,6 @@ pub(super) fn lu_solve_prepared(
 ) -> Result<Tensor> {
     const OP: &str = "lu_solve_prepared";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_tensor(OP, a)?;
     ensure_cubecl_resident_tensor(OP, packed_lu)?;
     ensure_cubecl_resident_tensor(OP, pivots)?;
@@ -467,7 +451,7 @@ pub(super) fn lu_solve_prepared(
         return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
     }
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
+        return zero_like_linalg_device_tensor(backend, b, OP);
     }
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -513,7 +497,7 @@ pub(super) fn lu_solve_prepared(
 }
 
 fn cholesky_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T>>
 where
@@ -521,69 +505,123 @@ where
 {
     const OP: &str = "cholesky";
 
-    backend.runtime().set_current_cuda_context(OP)?;
-    ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), input.shape())?);
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty output: `raw.tensor` checks the tensor is resident on this
+            // runtime/device.
+            raw.tensor(input)?;
+            raw.alloc_output(input.shape())
+        })?);
     }
 
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
+    // All CUDA work for this operation happens inside a single raw session:
+    // the tenferro primary context is current, library handles are acquired
+    // once per runtime, and the captured stream orders every enqueued call.
+    let work = backend.with_raw(OP, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuSOLVER handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(OP, &input.shape()[2..])?;
-    let first_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let lda = as_i32(n, OP, "lda")?;
-    let n_i32 = as_i32(n, OP, "n")?;
-    let lwork = handles.cusolver().potrf_buffer_size(
-        T::DATA_TYPE,
-        CublasFillMode::Lower,
-        n_i32,
-        first_ptr,
-        lda,
-        OP,
-    )?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-    let matrix_stride = checked_mul_usize(OP, "cholesky matrix stride", n, n)?;
+        // Clone `input` into a fresh work matrix on the session stream.
+        let mut work = raw.alloc_output::<T>(input.shape())?;
+        {
+            let src = raw.tensor(input)?;
+            let dst = raw.tensor_mut(&mut work)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
+        }
 
-    for batch in 0..batch_total {
-        let a_offset =
-            checked_batch_offset(OP, "cholesky matrix batch offset", batch, matrix_stride)?;
-        // SAFETY: `a_offset` and `batch` were checked against the matrix and
-        // info strides, and both base pointers come from live device tensors.
-        let (batch_a, batch_info) = unsafe {
-            (
-                batch_ptr::<T>(first_ptr, a_offset),
-                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-            )
-        };
-        // SAFETY: the batch pointers, workspace, dimensions, and stream-bound
-        // handle satisfy cuSOLVER potrf's in-place matrix and info contracts.
-        unsafe {
-            handles.cusolver().potrf(
+        let batch_total = batch_count(OP, &input.shape()[2..])?;
+        let lda = as_i32(n, OP, "lda")?;
+        let n_i32 = as_i32(n, OP, "n")?;
+        let lwork = {
+            let first_ref = raw.tensor(&work)?;
+            handles.cusolver().potrf_buffer_size(
                 T::DATA_TYPE,
                 CublasFillMode::Lower,
                 n_i32,
-                batch_a,
+                // SAFETY: `first_ref` is a validated device span on this
+                // runtime; cuSOLVER only queries the leading dimension here.
+                unsafe { first_ref.raw_ptr() },
                 lda,
-                workspace.ptr,
-                lwork,
-                batch_info,
                 OP,
-            )?;
+            )?
+        };
+        let workspace_nbytes = {
+            let lwork = usize::try_from(lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+        workspace.with_ptr(|ptr| workspace_ptr = ptr);
+
+        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+        let info_ref = raw.tensor_mut(&mut info)?;
+        // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let info_ptr = unsafe { info_ref.raw_ptr() };
+        let matrix_stride = checked_mul_usize(OP, "cholesky matrix stride", n, n)?;
+
+        let first_ref = raw.tensor_mut(&mut work)?;
+        // SAFETY: `first_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let first_ptr = unsafe { first_ref.raw_ptr() };
+        for batch in 0..batch_total {
+            let a_offset =
+                checked_batch_offset(OP, "cholesky matrix batch offset", batch, matrix_stride)?;
+            // SAFETY: `a_offset` and `batch` were checked against the matrix
+            // and info strides, and both base pointers come from live device
+            // tensors validated by this raw session.
+            let (batch_a, batch_info) = unsafe {
+                (
+                    batch_ptr::<T>(first_ptr, a_offset),
+                    batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                )
+            };
+            // SAFETY: the batch pointers, workspace, dimensions, and
+            // stream-bound handle satisfy cuSOLVER potrf's in-place matrix
+            // and info contracts.
+            unsafe {
+                handles.cusolver().potrf(
+                    T::DATA_TYPE,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    batch_a,
+                    lda,
+                    workspace_ptr,
+                    lwork as i32,
+                    batch_info,
+                    OP,
+                )?;
+            }
         }
-    }
-    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*potrf")?;
+
+        // Host barrier (only for reading the solver diagnostics).
+        let host_info = raw.download_tensor::<i32>(&info, OP)?;
+        for &value in host_info.host_data()? {
+            check_solver_info(OP, "cusolverDn*potrf", value)?;
+        }
+        Ok(work)
+    })?;
 
     backend.tril_typed(&work, 0)
 }
 
 fn triangular_solve_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -612,7 +650,7 @@ where
 }
 
 fn triangular_solve_typed_with_op<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -624,22 +662,10 @@ fn triangular_solve_typed_with_op<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    backend.runtime().set_current_cuda_context(op)?;
     ensure_cubecl_resident_typed(op, a)?;
     ensure_cubecl_resident_typed(op, b)?;
     let n = square_matrix_dim(op, a.shape())?;
     validate_triangular_rhs(op, a.shape(), b.shape(), left_side)?;
-    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return Ok(alloc_output(backend.runtime(), b.shape())?);
-    }
-
-    let out = clone_device_tensor(backend.runtime(), b, op)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), op)?;
-    handles.cublas().set_stream(stream, op)?;
-
-    let a_ptr = typed_device_ptr(backend.runtime(), a, op)?;
-    let out_ptr = typed_device_ptr(backend.runtime(), &out, op)?;
     let side = if left_side {
         CublasSideMode::Left
     } else {
@@ -666,82 +692,140 @@ where
     let alpha = T::one();
 
     let batch_total = batch_count(op, &b.shape()[2..])?;
-    if batch_total > 1 {
-        let mut a_pointers = Vec::with_capacity(batch_total);
-        let mut b_pointers = Vec::with_capacity(batch_total);
-        for batch in 0..batch_total {
-            let a_offset =
-                checked_batch_offset(op, "triangular matrix batch offset", batch, a_stride)?;
-            let b_offset =
-                checked_batch_offset(op, "triangular rhs batch offset", batch, out_stride)?;
-            // SAFETY: checked offsets keep both pointers inside the live
-            // triangular matrix and RHS device allocations for this batch.
-            let (batch_a, batch_b) = unsafe {
+    let zero_dim = has_zero_dim(a.shape()) || has_zero_dim(b.shape());
+
+    backend.with_raw(op, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuBLAS handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cublas().set_stream(stream, op)?;
+
+        // The fast path still validates residency before allocating the empty
+        // output: `raw.tensor` checks the tensors are resident on this
+        // runtime/device.
+        raw.tensor(a)?;
+        raw.tensor(b)?;
+        if zero_dim {
+            return Ok(raw.alloc_output::<T>(b.shape())?);
+        }
+
+        // Clone `b` into a fresh output tensor on the session stream.
+        let mut out = raw.alloc_output::<T>(b.shape())?;
+        {
+            let src = raw.tensor(b)?;
+            let dst = raw.tensor_mut(&mut out)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
+            };
+        }
+
+        let a_ref = raw.tensor(a)?;
+        let out_ref = raw.tensor_mut(&mut out)?;
+        // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let a_ptr = unsafe { a_ref.raw_ptr() };
+        // SAFETY: `out_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let out_ptr = unsafe { out_ref.raw_ptr() };
+
+        if batch_total > 1 {
+            let mut a_pointers = Vec::with_capacity(batch_total);
+            let mut b_pointers = Vec::with_capacity(batch_total);
+            for batch in 0..batch_total {
+                let a_offset =
+                    checked_batch_offset(op, "triangular matrix batch offset", batch, a_stride)?;
+                let b_offset =
+                    checked_batch_offset(op, "triangular rhs batch offset", batch, out_stride)?;
+                // SAFETY: checked offsets keep both pointers inside the live
+                // triangular matrix and RHS device allocations for this batch.
+                let (batch_a, batch_b) = unsafe {
+                    (
+                        batch_const_ptr::<T>(a_ptr.cast_const(), a_offset),
+                        batch_ptr::<T>(out_ptr, b_offset),
+                    )
+                };
+                a_pointers.push(batch_a as usize);
+                b_pointers.push(batch_b as usize);
+            }
+            // SAFETY: pointer arrays are built from validated device spans;
+            // reinterpreting them as bytes preserves the device-address layout.
+            let (a_bytes, b_bytes) = unsafe {
                 (
-                    batch_const_ptr::<T>(a_ptr.cast_const(), a_offset),
-                    batch_ptr::<T>(out_ptr, b_offset),
+                    std::slice::from_raw_parts(
+                        a_pointers.as_ptr().cast::<u8>(),
+                        std::mem::size_of_val(&a_pointers[..]),
+                    ),
+                    std::slice::from_raw_parts(
+                        b_pointers.as_ptr().cast::<u8>(),
+                        std::mem::size_of_val(&b_pointers[..]),
+                    ),
                 )
             };
-            a_pointers.push(batch_a as usize);
-            b_pointers.push(batch_b as usize);
+            let a_array = raw.upload_bytes(a_bytes, op)?;
+            let b_array = raw.upload_bytes(b_bytes, op)?;
+            let mut a_array_ptr = std::ptr::null_mut::<c_void>();
+            a_array.with_ptr(|ptr| a_array_ptr = ptr);
+            let mut b_array_ptr = std::ptr::null_mut::<c_void>();
+            b_array.with_ptr(|ptr| b_array_ptr = ptr);
+            // SAFETY: uploaded pointer arrays contain one valid matrix/RHS
+            // device pointer per batch, and scalar dimensions/leading
+            // dimensions are validated.
+            unsafe {
+                handles.cublas().trsm_batched(
+                    T::DATA_TYPE,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n_rhs,
+                    (&alpha as *const T).cast(),
+                    a_array_ptr.cast_const(),
+                    lda,
+                    b_array_ptr,
+                    ldb,
+                    as_i32(batch_total, op, "batch_count")?,
+                    op,
+                )?;
+            }
+        } else {
+            // SAFETY: zero offset points at the first element of the live
+            // matrix and RHS device allocations already validated for this
+            // single batch.
+            let (batch_a, batch_b) = unsafe {
+                (
+                    batch_const_ptr::<T>(a_ptr.cast_const(), 0),
+                    batch_ptr::<T>(out_ptr, 0),
+                )
+            };
+            // SAFETY: pointers, scalar dimensions, and leading dimensions
+            // satisfy cuBLAS trsm for the validated single-batch triangular
+            // solve.
+            unsafe {
+                handles.cublas().trsm(
+                    T::DATA_TYPE,
+                    side,
+                    uplo,
+                    trans,
+                    diag,
+                    m,
+                    n_rhs,
+                    (&alpha as *const T).cast(),
+                    batch_a.cast(),
+                    lda,
+                    batch_b,
+                    ldb,
+                    op,
+                )?;
+            }
         }
-        let a_array = upload_pointer_array(backend.runtime(), &a_pointers, op)?;
-        let b_array = upload_pointer_array(backend.runtime(), &b_pointers, op)?;
-        // SAFETY: uploaded pointer arrays contain one valid matrix/RHS device
-        // pointer per batch, and scalar dimensions/leading dimensions are validated.
-        unsafe {
-            handles.cublas().trsm_batched(
-                T::DATA_TYPE,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n_rhs,
-                (&alpha as *const T).cast(),
-                a_array.ptr.cast_const(),
-                lda,
-                b_array.ptr,
-                ldb,
-                as_i32(batch_total, op, "batch_count")?,
-                op,
-            )?;
-        }
-    } else {
-        // SAFETY: zero offset points at the first element of the live matrix
-        // and RHS device allocations already validated for this single batch.
-        let (batch_a, batch_b) = unsafe {
-            (
-                batch_const_ptr::<T>(a_ptr.cast_const(), 0),
-                batch_ptr::<T>(out_ptr, 0),
-            )
-        };
-        // SAFETY: pointers, scalar dimensions, and leading dimensions satisfy
-        // cuBLAS trsm for the validated single-batch triangular solve.
-        unsafe {
-            handles.cublas().trsm(
-                T::DATA_TYPE,
-                side,
-                uplo,
-                trans,
-                diag,
-                m,
-                n_rhs,
-                (&alpha as *const T).cast(),
-                batch_a.cast(),
-                lda,
-                batch_b,
-                ldb,
-                op,
-            )?;
-        }
-    }
-
-    Ok(out)
+        Ok(out)
+    })
 }
 
 fn lu_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<(
     TypedTensor<T>,
@@ -756,19 +840,13 @@ where
 
     let (packed_lu, pivots, parity) = lu_factor_typed(backend, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
-    let (p, l, u, _extracted_parity) = build_lu_outputs_device(
-        backend.runtime(),
-        &packed_lu,
-        &pivots,
-        m,
-        n,
-        &input.shape()[2..],
-    )?;
+    let (p, l, u, _extracted_parity) =
+        build_lu_outputs_device(backend, &packed_lu, &pivots, m, n, &input.shape()[2..])?;
     Ok((p, l, u, parity))
 }
 
 fn lu_factor_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
@@ -776,85 +854,134 @@ where
 {
     const OP: &str = "lu_factor";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
-        return zero_sized_lu_factor_outputs(backend.runtime(), input.shape());
+        return zero_sized_lu_factor_outputs(backend, input.shape());
     }
 
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
+    let mut pivot_shape = vec![k];
+    pivot_shape.extend_from_slice(&input.shape()[2..]);
     let batch_total = batch_count(OP, &input.shape()[2..])?;
-    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(m, OP, "lda")?;
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
-    let lwork = handles
-        .cusolver()
-        .getrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, a_ptr, lda, OP)?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let mut pivot_shape = vec![k];
-    pivot_shape.extend_from_slice(&input.shape()[2..]);
-    let pivots = alloc_output::<i32>(backend.runtime(), &pivot_shape)?;
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = checked_mul_usize(OP, "lu matrix stride", m, n)?;
 
-    for batch in 0..batch_total {
-        let a_offset = checked_batch_offset(OP, "lu matrix batch offset", batch, matrix_stride)?;
-        let pivot_offset = checked_batch_offset(OP, "lu pivot batch offset", batch, k)?;
-        // SAFETY: checked matrix, pivot, and info offsets stay inside their
-        // live device allocations for this batch.
-        let (batch_a, batch_pivots, batch_info) = unsafe {
-            (
-                batch_ptr::<T>(a_ptr, a_offset),
-                batch_ptr::<i32>(pivots_ptr, pivot_offset),
-                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-            )
-        };
-        // SAFETY: batch pointers, dimensions, workspace, and stream-bound
-        // handle satisfy cuSOLVER getrf's in-place LU and pivot contracts.
-        unsafe {
-            handles.cusolver().getrf(
+    let (work, pivots) = backend.with_raw(OP, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuSOLVER handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, OP)?;
+
+        // Clone `input` into a fresh work matrix on the session stream.
+        let mut work = raw.alloc_output::<T>(input.shape())?;
+        {
+            let src = raw.tensor(input)?;
+            let dst = raw.tensor_mut(&mut work)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
+        }
+
+        let lwork = {
+            let a_ref = raw.tensor(&work)?;
+            handles.cusolver().getrf_buffer_size(
                 T::DATA_TYPE,
                 m_i32,
                 n_i32,
-                batch_a,
+                // SAFETY: `a_ref` is a validated device span on this runtime;
+                // cuSOLVER only queries the leading dimension here.
+                unsafe { a_ref.raw_ptr() },
                 lda,
-                workspace.ptr,
-                batch_pivots.cast::<i32>(),
-                batch_info.cast::<i32>(),
                 OP,
-            )?;
-        }
-    }
+            )?
+        };
+        let workspace_nbytes = {
+            let lwork = usize::try_from(lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+        workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
-    let host_info = download_device_tensor(backend.runtime(), &info, OP)?;
-    for &info_value in host_info.host_data()? {
-        if info_value < 0 {
-            return Err(Error::invalid_argument(
-                OP,
-                "cusolver_argument",
-                format!(
-                    "cusolverDn*getrf reported invalid parameter {}",
-                    -info_value
-                ),
-            ));
-        }
-    }
+        let mut pivots = raw.alloc_output::<i32>(&pivot_shape)?;
+        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&mut work)?;
+        // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let a_ptr = unsafe { a_ref.raw_ptr() };
+        let pivots_ref = raw.tensor_mut(&mut pivots)?;
+        // SAFETY: `pivots_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let pivots_ptr = unsafe { pivots_ref.raw_ptr() };
+        let info_ref = raw.tensor_mut(&mut info)?;
+        // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let info_ptr = unsafe { info_ref.raw_ptr() };
 
-    let parity = build_lu_parity_device(backend.runtime(), &pivots, k, &input.shape()[2..])?;
+        for batch in 0..batch_total {
+            let a_offset =
+                checked_batch_offset(OP, "lu matrix batch offset", batch, matrix_stride)?;
+            let pivot_offset = checked_batch_offset(OP, "lu pivot batch offset", batch, k)?;
+            // SAFETY: checked matrix, pivot, and info offsets stay inside their
+            // live device allocations for this batch.
+            let (batch_a, batch_pivots, batch_info) = unsafe {
+                (
+                    batch_ptr::<T>(a_ptr, a_offset),
+                    batch_ptr::<i32>(pivots_ptr, pivot_offset),
+                    batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                )
+            };
+            // SAFETY: batch pointers, dimensions, workspace, and stream-bound
+            // handle satisfy cuSOLVER getrf's in-place LU and pivot contracts.
+            unsafe {
+                handles.cusolver().getrf(
+                    T::DATA_TYPE,
+                    m_i32,
+                    n_i32,
+                    batch_a,
+                    lda,
+                    workspace_ptr,
+                    batch_pivots.cast::<i32>(),
+                    batch_info.cast::<i32>(),
+                    OP,
+                )?;
+            }
+        }
+
+        // Host barrier (only for reading the solver diagnostics).
+        let host_info = raw.download_tensor::<i32>(&info, OP)?;
+        for &info_value in host_info.host_data()? {
+            if info_value < 0 {
+                return Err(Error::invalid_argument(
+                    OP,
+                    "cusolver_argument",
+                    format!(
+                        "cusolverDn*getrf reported invalid parameter {}",
+                        -info_value
+                    ),
+                ));
+            }
+        }
+        Ok((work, pivots))
+    })?;
+
+    let parity = build_lu_parity_device(backend, &pivots, k, &input.shape()[2..])?;
     Ok((work, pivots, parity))
 }
 
 fn lu_solve_prepared_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     packed_lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     b: &TypedTensor<T>,
@@ -866,18 +993,23 @@ where
 {
     const OP: &str = "lu_solve_prepared";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, packed_lu)?;
     ensure_cubecl_resident_typed(OP, pivots)?;
     ensure_cubecl_resident_typed(OP, b)?;
     validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), b.shape())?;
     if has_zero_dim(packed_lu.shape()) || has_zero_dim(b.shape()) {
-        return Ok(alloc_output(backend.runtime(), b.shape())?);
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty output: `raw.tensor` checks both tensors are resident.
+            raw.tensor(packed_lu)?;
+            raw.tensor(b)?;
+            raw.alloc_output::<T>(b.shape())
+        })?);
     }
 
     match (transpose_a, conjugate_a) {
         (false, false) => {
-            let pb = apply_lu_pivots_typed(backend.runtime(), b, pivots, false)?;
+            let pb = apply_lu_pivots_typed(backend, b, pivots, false)?;
             let z = triangular_solve_typed_with_op(
                 backend,
                 packed_lu,
@@ -911,7 +1043,7 @@ where
             let y = triangular_solve_typed_with_op(
                 backend, packed_lu, &z, true, true, trans, true, OP,
             )?;
-            apply_lu_pivots_typed(backend.runtime(), &y, pivots, true)
+            apply_lu_pivots_typed(backend, &y, pivots, true)
         }
         (false, true) => Err(Error::unsupported(
             OP,
@@ -921,7 +1053,7 @@ where
 }
 
 fn copy_matrix_adjoint_real<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -929,13 +1061,15 @@ fn copy_matrix_adjoint_real<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    let vt = alloc_output::<T>(rt, vt_shape)?;
-    launch_matrix_adjoint_real(rt, v, &vt, op)?;
-    Ok(vt)
+    backend.with_cubecl(op, |cubecl| {
+        let vt = cubecl.alloc_output::<T>(vt_shape)?;
+        launch_matrix_adjoint_real(cubecl, v, &vt, op)?;
+        Ok(vt)
+    })
 }
 
 fn copy_matrix_adjoint_complex<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -943,13 +1077,15 @@ fn copy_matrix_adjoint_complex<T>(
 where
     T: LinalgScalar + TensorScalar + ComplexCore,
 {
-    let vt = alloc_output::<T>(rt, vt_shape)?;
-    launch_matrix_adjoint_complex(rt, v, &vt, op)?;
-    Ok(vt)
+    backend.with_cubecl(op, |cubecl| {
+        let vt = cubecl.alloc_output::<T>(vt_shape)?;
+        launch_matrix_adjoint_complex(cubecl, v, &vt, op)?;
+        Ok(vt)
+    })
 }
 
 fn launch_matrix_adjoint_real<T>(
-    rt: &CudaRuntime,
+    cubecl: &CubeclSession<'_>,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
     op: &'static str,
@@ -960,26 +1096,26 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let vt_arg = typed_tensor_binding(vt, op)?;
-    let v_arg = typed_tensor_binding(v, op)?;
-    let launch_count = cube_count_for_len(vt.n_elements())?;
+    let vt_arg = cubecl.tensor_binding(vt, op)?;
+    let v_arg = cubecl.tensor_binding(v, op)?;
+    let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the matrix-adjoint copy kernel.
-    with_cubecl_client(rt, |client| unsafe {
+    unsafe {
         cubecl_linalg::matrix_adjoint_real::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
+            cubecl.client(),
             launch_count,
-            cube_dim_1d(),
+            cubecl.cube_dim_1d(),
             vt_arg.into_tensor_arg(),
             v_arg.into_tensor_arg(),
             vt.shape().len(),
         );
-    });
-    flush_cubecl_client(rt, op)
+    }
+    Ok(())
 }
 
 fn launch_matrix_adjoint_complex<T>(
-    rt: &CudaRuntime,
+    cubecl: &CubeclSession<'_>,
     v: &TypedTensor<T>,
     vt: &TypedTensor<T>,
     op: &'static str,
@@ -990,26 +1126,26 @@ where
     if vt.n_elements() == 0 {
         return Ok(());
     }
-    let vt_arg = typed_tensor_binding(vt, op)?;
-    let v_arg = typed_tensor_binding(v, op)?;
-    let launch_count = cube_count_for_len(vt.n_elements())?;
+    let vt_arg = cubecl.tensor_binding(vt, op)?;
+    let v_arg = cubecl.tensor_binding(v, op)?;
+    let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
     // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
     // covers exactly the output domain for the conjugating matrix-adjoint kernel.
-    with_cubecl_client(rt, |client| unsafe {
+    unsafe {
         cubecl_linalg::matrix_adjoint_complex::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
+            cubecl.client(),
             launch_count,
-            cube_dim_1d(),
+            cubecl.cube_dim_1d(),
             vt_arg.into_tensor_arg(),
             v_arg.into_tensor_arg(),
             vt.shape().len(),
         );
-    });
-    flush_cubecl_client(rt, op)
+    }
+    Ok(())
 }
 
 fn svd_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<(
     TypedTensor<T>,
@@ -1021,7 +1157,6 @@ where
 {
     const OP: &str = "svd";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
@@ -1033,59 +1168,118 @@ where
     let mut vt_shape = vec![k, n];
     vt_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok((
-            alloc_output(backend.runtime(), &u_shape)?,
-            alloc_output(backend.runtime(), &s_shape)?,
-            alloc_output(backend.runtime(), &vt_shape)?,
-        ));
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty outputs: `raw.tensor` checks the tensor is resident.
+            raw.tensor(input)?;
+            Ok((
+                raw.alloc_output::<T>(&u_shape)?,
+                raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?,
+                raw.alloc_output::<T>(&vt_shape)?,
+            ))
+        })?);
     }
-
-    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape)?;
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd input stride", m, n)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
         SvdDriver::Gesvdj => {
-            let work = clone_device_tensor(backend.runtime(), input, OP)?;
-            let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
-            let v = alloc_output::<T>(backend.runtime(), &v_shape)?;
-            {
-                let handles = linalg_handles(backend)?;
-                let stream = raw_stream(backend.runtime(), OP)?;
+            let (u, s, v) = backend.with_raw(OP, |raw| {
+                let handles = raw.resource(CudaLinalgHandles::load)?;
+                // SAFETY: the stream handle is valid only for this raw-session
+                // scope; it is used immediately to bind cuSOLVER and not retained.
+                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
                 handles.cusolver().set_stream(stream, OP)?;
 
-                let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-                let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
-                let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-                let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
+                // Clone `input` into a fresh work matrix on the session stream.
+                let mut work = raw.alloc_output::<T>(input.shape())?;
+                {
+                    let src = raw.tensor(input)?;
+                    let dst = raw.tensor_mut(&mut work)?;
+                    // SAFETY: both spans were validated resident on this runtime
+                    // and the copy is stream-ordered; `dst` is exclusively borrowed.
+                    unsafe {
+                        raw.copy_bytes(
+                            dst.raw_ptr(),
+                            src.raw_ptr() as *const _,
+                            src.byte_len(),
+                            OP,
+                        )?
+                    };
+                }
+
+                let mut u = raw.alloc_output::<T>(&u_shape)?;
+                let mut v = raw.alloc_output::<T>(&v_shape)?;
+                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+
                 let m_i32 = as_i32(m, OP, "m")?;
                 let n_i32 = as_i32(n, OP, "n")?;
                 let lda = as_i32(m, OP, "lda")?;
                 let ldu = as_i32(m, OP, "ldu")?;
                 let ldv = as_i32(n, OP, "ldv")?;
                 let params = handles.cusolver().create_gesvdj_info(OP)?;
-                let lwork = handles.cusolver().gesvdj_buffer_size(
-                    T::DATA_TYPE,
-                    CusolverEigMode::Vector,
-                    1,
-                    m_i32,
-                    n_i32,
-                    a_ptr.cast_const(),
-                    lda,
-                    s_ptr.cast_const(),
-                    u_ptr.cast_const(),
-                    ldu,
-                    v_ptr.cast_const(),
-                    ldv,
-                    &params,
-                    OP,
-                )?;
-                let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-                let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-                let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
+                let lwork = {
+                    let a_ref = raw.tensor(&work)?;
+                    let u_ref = raw.tensor(&u)?;
+                    let s_ref = raw.tensor(&s)?;
+                    let v_ref = raw.tensor(&v)?;
+                    handles.cusolver().gesvdj_buffer_size(
+                        T::DATA_TYPE,
+                        CusolverEigMode::Vector,
+                        1,
+                        m_i32,
+                        n_i32,
+                        // SAFETY: all spans are validated device allocations on
+                        // this runtime; only leading dimensions are queried here.
+                        unsafe { a_ref.raw_ptr().cast_const() },
+                        lda,
+                        // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { s_ref.raw_ptr().cast_const() },
+                        // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { u_ref.raw_ptr().cast_const() },
+                        ldu,
+                        // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { v_ref.raw_ptr().cast_const() },
+                        ldv,
+                        &params,
+                        OP,
+                    )?
+                };
+                let workspace_nbytes = {
+                    let lwork = usize::try_from(lwork).map_err(|_| {
+                        Error::invalid_argument(
+                            OP,
+                            "workspace_length",
+                            format!("must be non-negative, got {lwork}"),
+                        )
+                    })?;
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?
+                };
+                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+                workspace.with_ptr(|ptr| workspace_ptr = ptr);
+
+                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+                let a_ref = raw.tensor_mut(&mut work)?;
+                // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let a_ptr = unsafe { a_ref.raw_ptr() };
+                let u_ref = raw.tensor_mut(&mut u)?;
+                // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let u_ptr = unsafe { u_ref.raw_ptr() };
+                let s_ref = raw.tensor_mut(&mut s)?;
+                // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let s_ptr = unsafe { s_ref.raw_ptr() };
+                let v_ref = raw.tensor_mut(&mut v)?;
+                // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let v_ptr = unsafe { v_ref.raw_ptr() };
+                let info_ref = raw.tensor_mut(&mut info)?;
+                // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let info_ptr = unsafe { info_ref.raw_ptr() };
                 let u_stride = checked_mul_usize(OP, "svd u stride", m, k)?;
                 let v_stride = checked_mul_usize(OP, "svd v stride", n, k)?;
 
@@ -1127,7 +1321,7 @@ where
                             ldu,
                             batch_v,
                             ldv,
-                            workspace.ptr,
+                            workspace_ptr,
                             lwork,
                             batch_info,
                             &params,
@@ -1135,112 +1329,194 @@ where
                         )?;
                     }
                 }
-                check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvdj")?;
-            }
-            let vt = T::copy_matrix_adjoint(backend.runtime(), &v, &vt_shape, OP)?;
+
+                // Host barrier (only for reading the solver diagnostics).
+                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                for &value in host_info.host_data()? {
+                    check_solver_info(OP, "cusolverDn*gesvdj", value)?;
+                }
+                Ok((u, s, v))
+            })?;
+            let vt = T::copy_matrix_adjoint(backend, &v, &vt_shape, OP)?;
             Ok((u, s, vt))
         }
         SvdDriver::Gesvd => {
             let transpose_for_gesvd = m < n;
-            let (work, gesvd_m, gesvd_n) = if transpose_for_gesvd {
-                let mut work_shape = vec![n, m];
-                work_shape.extend_from_slice(batch_shape);
-                (
-                    T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?,
-                    n,
-                    m,
-                )
-            } else {
-                (clone_device_tensor(backend.runtime(), input, OP)?, m, n)
-            };
+            let (gesvd_m, gesvd_n) = if transpose_for_gesvd { (n, m) } else { (m, n) };
             let mut gesvd_u_shape = vec![gesvd_m, k];
             gesvd_u_shape.extend_from_slice(batch_shape);
             let mut gesvd_vt_shape = vec![k, gesvd_n];
             gesvd_vt_shape.extend_from_slice(batch_shape);
-            let gesvd_u = alloc_output::<T>(backend.runtime(), &gesvd_u_shape)?;
-            let gesvd_vt = alloc_output::<T>(backend.runtime(), &gesvd_vt_shape)?;
-            let handles = linalg_handles(backend)?;
-            let stream = raw_stream(backend.runtime(), OP)?;
-            handles.cusolver().set_stream(stream, OP)?;
 
-            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-            let u_ptr = typed_device_ptr(backend.runtime(), &gesvd_u, OP)?;
-            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-            let vt_ptr = typed_device_ptr(backend.runtime(), &gesvd_vt, OP)?;
-            let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
-            let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
-            let lda = gesvd_m_i32;
-            let ldu = gesvd_m_i32;
-            let ldvt = as_i32(k, OP, "ldvt")?;
-            let lwork =
-                handles
-                    .cusolver()
-                    .gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)?;
-            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-            let rwork = if T::NEEDS_RWORK {
-                alloc_workspace_elems::<<T as LinalgScalar>::Real>(
-                    backend.runtime(),
-                    as_i32(
+            // When `m < n` gesvd factors `adjoint(input)` (n×m); the CubeCL
+            // adjoint kernel is flushed before the raw session, so the SVD
+            // below observes it. The SVD results are adjointed again below.
+            let transposed_work = if transpose_for_gesvd {
+                let mut work_shape = vec![n, m];
+                work_shape.extend_from_slice(batch_shape);
+                Some(T::copy_matrix_adjoint(backend, input, &work_shape, OP)?)
+            } else {
+                None
+            };
+
+            let (gesvd_u, s, gesvd_vt) = backend.with_raw(OP, |raw| {
+                let handles = raw.resource(CudaLinalgHandles::load)?;
+                // SAFETY: the stream handle is valid only for this raw-session
+                // scope; it is used immediately to bind cuSOLVER and not retained.
+                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                handles.cusolver().set_stream(stream, OP)?;
+
+                // `work` is either the CubeCL-adjointed input (m < n) or a
+                // clone of `input` made on the session stream.
+                let mut work = match transposed_work {
+                    Some(work) => work,
+                    None => {
+                        let mut work = raw.alloc_output::<T>(input.shape())?;
+                        {
+                            let src = raw.tensor(input)?;
+                            let dst = raw.tensor_mut(&mut work)?;
+                            // SAFETY: both spans were validated resident on this
+                            // runtime and the copy is stream-ordered; `dst` is
+                            // exclusively borrowed.
+                            unsafe {
+                                raw.copy_bytes(
+                                    dst.raw_ptr(),
+                                    src.raw_ptr() as *const _,
+                                    src.byte_len(),
+                                    OP,
+                                )?
+                            };
+                        }
+                        work
+                    }
+                };
+                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+                let mut gesvd_u = raw.alloc_output::<T>(&gesvd_u_shape)?;
+                let mut gesvd_vt = raw.alloc_output::<T>(&gesvd_vt_shape)?;
+
+                let a_ref = raw.tensor_mut(&mut work)?;
+                // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let a_ptr = unsafe { a_ref.raw_ptr() };
+                let u_ref = raw.tensor_mut(&mut gesvd_u)?;
+                // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let u_ptr = unsafe { u_ref.raw_ptr() };
+                let s_ref = raw.tensor_mut(&mut s)?;
+                // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let s_ptr = unsafe { s_ref.raw_ptr() };
+                let vt_ref = raw.tensor_mut(&mut gesvd_vt)?;
+                // SAFETY: `vt_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let vt_ptr = unsafe { vt_ref.raw_ptr() };
+                let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
+                let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
+                let lda = gesvd_m_i32;
+                let ldu = gesvd_m_i32;
+                let ldvt = as_i32(k, OP, "ldvt")?;
+                let lwork = handles.cusolver().gesvd_buffer_size(
+                    T::DATA_TYPE,
+                    gesvd_m_i32,
+                    gesvd_n_i32,
+                    OP,
+                )?;
+                let workspace_nbytes = {
+                    let lwork = usize::try_from(lwork).map_err(|_| {
+                        Error::invalid_argument(
+                            OP,
+                            "workspace_length",
+                            format!("must be non-negative, got {lwork}"),
+                        )
+                    })?;
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?
+                };
+                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+                workspace.with_ptr(|ptr| workspace_ptr = ptr);
+                let mut rwork_ptr = std::ptr::null_mut::<c_void>();
+                if T::NEEDS_RWORK {
+                    let rwork_len = as_i32(
                         checked_mul_usize(OP, "svd rwork length", 5, k)?,
                         OP,
                         "rwork",
-                    )?,
-                    OP,
-                )?
-            } else {
-                Workspace::none()
-            };
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let u_stride = checked_mul_usize(OP, "svd gesvd u stride", gesvd_m, k)?;
-            let vt_stride = checked_mul_usize(OP, "svd gesvd vt stride", k, gesvd_n)?;
-            let job = b'S' as c_char;
-
-            for batch in 0..batch_total {
-                let a_offset = checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
-                let s_offset =
-                    checked_batch_offset(OP, "svd singular value batch offset", batch, s_stride)?;
-                let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
-                let vt_offset = checked_batch_offset(OP, "svd vt batch offset", batch, vt_stride)?;
-                // SAFETY: all offsets are checked against their per-batch
-                // strides and each base pointer belongs to a live device tensor.
-                let (batch_a, batch_s, batch_u, batch_vt, batch_info) = unsafe {
-                    (
-                        batch_ptr::<T>(a_ptr, a_offset),
-                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
-                        batch_ptr::<T>(u_ptr, u_offset),
-                        batch_ptr::<T>(vt_ptr, vt_offset),
-                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-                    )
-                };
-                // SAFETY: batch pointers, workspace/rwork, dimensions, and
-                // stream-bound handle satisfy cuSOLVER gesvd's thin SVD contract.
-                unsafe {
-                    handles.cusolver().gesvd(
-                        T::DATA_TYPE,
-                        job,
-                        job,
-                        gesvd_m_i32,
-                        gesvd_n_i32,
-                        batch_a,
-                        lda,
-                        batch_s,
-                        batch_u,
-                        ldu,
-                        batch_vt,
-                        ldvt,
-                        workspace.ptr,
-                        lwork,
-                        rwork.ptr,
-                        batch_info,
-                        OP,
                     )?;
+                    let rwork_nbytes = usize::try_from(rwork_len)
+                        .map_err(|_| {
+                            Error::invalid_argument(OP, "rwork_length", "must be non-negative")
+                        })?
+                        .checked_mul(std::mem::size_of::<<T as LinalgScalar>::Real>())
+                        .ok_or_else(|| {
+                            Error::invalid_argument(OP, "rwork_length", "byte size overflowed")
+                        })?;
+                    let rwork = raw.alloc_bytes(rwork_nbytes, OP)?;
+                    rwork.with_ptr(|ptr| rwork_ptr = ptr);
                 }
-            }
-            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
+                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+                let info_ref = raw.tensor_mut(&mut info)?;
+                // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let u_stride = checked_mul_usize(OP, "svd gesvd u stride", gesvd_m, k)?;
+                let vt_stride = checked_mul_usize(OP, "svd gesvd vt stride", k, gesvd_n)?;
+                let job = b'S' as c_char;
+
+                for batch in 0..batch_total {
+                    let a_offset =
+                        checked_batch_offset(OP, "svd input batch offset", batch, a_stride)?;
+                    let s_offset = checked_batch_offset(
+                        OP,
+                        "svd singular value batch offset",
+                        batch,
+                        s_stride,
+                    )?;
+                    let u_offset = checked_batch_offset(OP, "svd u batch offset", batch, u_stride)?;
+                    let vt_offset =
+                        checked_batch_offset(OP, "svd vt batch offset", batch, vt_stride)?;
+                    // SAFETY: all offsets are checked against their per-batch
+                    // strides and each base pointer belongs to a live device tensor.
+                    let (batch_a, batch_s, batch_u, batch_vt, batch_info) = unsafe {
+                        (
+                            batch_ptr::<T>(a_ptr, a_offset),
+                            batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
+                            batch_ptr::<T>(u_ptr, u_offset),
+                            batch_ptr::<T>(vt_ptr, vt_offset),
+                            batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                        )
+                    };
+                    // SAFETY: batch pointers, workspace/rwork, dimensions, and
+                    // stream-bound handle satisfy cuSOLVER gesvd's thin SVD contract.
+                    unsafe {
+                        handles.cusolver().gesvd(
+                            T::DATA_TYPE,
+                            job,
+                            job,
+                            gesvd_m_i32,
+                            gesvd_n_i32,
+                            batch_a,
+                            lda,
+                            batch_s,
+                            batch_u,
+                            ldu,
+                            batch_vt,
+                            ldvt,
+                            workspace_ptr,
+                            lwork,
+                            rwork_ptr,
+                            batch_info,
+                            OP,
+                        )?;
+                    }
+                }
+
+                // Host barrier (only for reading the solver diagnostics).
+                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                for &value in host_info.host_data()? {
+                    check_solver_info(OP, "cusolverDn*gesvd", value)?;
+                }
+                Ok((gesvd_u, s, gesvd_vt))
+            })?;
+
             if transpose_for_gesvd {
-                let u = T::copy_matrix_adjoint(backend.runtime(), &gesvd_vt, &u_shape, OP)?;
-                let vt = T::copy_matrix_adjoint(backend.runtime(), &gesvd_u, &vt_shape, OP)?;
+                let u = T::copy_matrix_adjoint(backend, &gesvd_vt, &u_shape, OP)?;
+                let vt = T::copy_matrix_adjoint(backend, &gesvd_u, &vt_shape, OP)?;
                 Ok((u, s, vt))
             } else {
                 Ok((gesvd_u, s, gesvd_vt))
@@ -1250,7 +1526,7 @@ where
 }
 
 fn svd_values_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
 where
@@ -1258,7 +1534,6 @@ where
 {
     const OP: &str = "svd_values";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
@@ -1266,201 +1541,332 @@ where
     let mut s_shape = vec![k];
     s_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), &s_shape)?);
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty output: `raw.tensor` checks the tensor is resident.
+            raw.tensor(input)?;
+            raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)
+        })?);
     }
-
-    let s = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &s_shape)?;
     let batch_total = batch_count(OP, batch_shape)?;
     let a_stride = checked_mul_usize(OP, "svd_values input stride", m, n)?;
     let s_stride = k;
 
     match select_svd_driver(m, n) {
         SvdDriver::Gesvdj => {
-            let work = clone_device_tensor(backend.runtime(), input, OP)?;
             let mut u_shape = vec![m, k];
             u_shape.extend_from_slice(batch_shape);
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
-            let u = alloc_output::<T>(backend.runtime(), &u_shape)?;
-            let v = alloc_output::<T>(backend.runtime(), &v_shape)?;
-            let handles = linalg_handles(backend)?;
-            let stream = raw_stream(backend.runtime(), OP)?;
-            handles.cusolver().set_stream(stream, OP)?;
+            let s = backend.with_raw(OP, |raw| {
+                let handles = raw.resource(CudaLinalgHandles::load)?;
+                // SAFETY: the stream handle is valid only for this raw-session
+                // scope; it is used immediately to bind cuSOLVER and not retained.
+                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                handles.cusolver().set_stream(stream, OP)?;
 
-            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-            let u_ptr = typed_device_ptr(backend.runtime(), &u, OP)?;
-            let v_ptr = typed_device_ptr(backend.runtime(), &v, OP)?;
-            let m_i32 = as_i32(m, OP, "m")?;
-            let n_i32 = as_i32(n, OP, "n")?;
-            let lda = as_i32(m, OP, "lda")?;
-            let params = handles.cusolver().create_gesvdj_info(OP)?;
-            let lwork = handles.cusolver().gesvdj_buffer_size(
-                T::DATA_TYPE,
-                CusolverEigMode::NoVector,
-                1,
-                m_i32,
-                n_i32,
-                a_ptr.cast_const(),
-                lda,
-                s_ptr.cast_const(),
-                u_ptr.cast_const(),
-                lda,
-                v_ptr.cast_const(),
-                n_i32,
-                &params,
-                OP,
-            )?;
-            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let u_stride = checked_mul_usize(OP, "svd_values u stride", m, k)?;
-            let v_stride = checked_mul_usize(OP, "svd_values v stride", n, k)?;
+                // Clone `input` into a fresh work matrix on the session stream.
+                let mut work = raw.alloc_output::<T>(input.shape())?;
+                {
+                    let src = raw.tensor(input)?;
+                    let dst = raw.tensor_mut(&mut work)?;
+                    // SAFETY: both spans were validated resident on this runtime
+                    // and the copy is stream-ordered; `dst` is exclusively borrowed.
+                    unsafe {
+                        raw.copy_bytes(
+                            dst.raw_ptr(),
+                            src.raw_ptr() as *const _,
+                            src.byte_len(),
+                            OP,
+                        )?
+                    };
+                }
 
-            for batch in 0..batch_total {
-                let a_offset =
-                    checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
-                let s_offset = checked_batch_offset(
-                    OP,
-                    "svd_values singular value batch offset",
-                    batch,
-                    s_stride,
-                )?;
-                let u_offset =
-                    checked_batch_offset(OP, "svd_values u batch offset", batch, u_stride)?;
-                let v_offset =
-                    checked_batch_offset(OP, "svd_values v batch offset", batch, v_stride)?;
-                // SAFETY: all offsets are checked against their per-batch
-                // strides and each base pointer belongs to a live device tensor.
-                let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
-                    (
-                        batch_ptr::<T>(a_ptr, a_offset),
-                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
-                        batch_ptr::<T>(u_ptr, u_offset),
-                        batch_ptr::<T>(v_ptr, v_offset),
-                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-                    )
-                };
-                // SAFETY: batch pointers, scratch U/V buffers, workspace, and
-                // params satisfy cuSOLVER gesvdj's no-vector SVD contract.
-                unsafe {
-                    handles.cusolver().gesvdj(
+                let mut u = raw.alloc_output::<T>(&u_shape)?;
+                let mut v = raw.alloc_output::<T>(&v_shape)?;
+                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+
+                let m_i32 = as_i32(m, OP, "m")?;
+                let n_i32 = as_i32(n, OP, "n")?;
+                let lda = as_i32(m, OP, "lda")?;
+                let params = handles.cusolver().create_gesvdj_info(OP)?;
+                let lwork = {
+                    let a_ref = raw.tensor(&work)?;
+                    let s_ref = raw.tensor(&s)?;
+                    let u_ref = raw.tensor(&u)?;
+                    let v_ref = raw.tensor(&v)?;
+                    handles.cusolver().gesvdj_buffer_size(
                         T::DATA_TYPE,
                         CusolverEigMode::NoVector,
                         1,
                         m_i32,
                         n_i32,
-                        batch_a,
+                        // SAFETY: all spans are validated device allocations on
+                        // this runtime; only leading dimensions are queried here.
+                        unsafe { a_ref.raw_ptr().cast_const() },
                         lda,
-                        batch_s,
-                        batch_u,
+                        // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { s_ref.raw_ptr().cast_const() },
+                        // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { u_ref.raw_ptr().cast_const() },
                         lda,
-                        batch_v,
+                        // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                        unsafe { v_ref.raw_ptr().cast_const() },
                         n_i32,
-                        workspace.ptr,
-                        lwork,
-                        batch_info,
                         &params,
                         OP,
+                    )?
+                };
+                let workspace_nbytes = {
+                    let lwork = usize::try_from(lwork).map_err(|_| {
+                        Error::invalid_argument(
+                            OP,
+                            "workspace_length",
+                            format!("must be non-negative, got {lwork}"),
+                        )
+                    })?;
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?
+                };
+                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+                workspace.with_ptr(|ptr| workspace_ptr = ptr);
+
+                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+                let a_ref = raw.tensor_mut(&mut work)?;
+                // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let a_ptr = unsafe { a_ref.raw_ptr() };
+                let s_ref = raw.tensor_mut(&mut s)?;
+                // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let s_ptr = unsafe { s_ref.raw_ptr() };
+                let u_ref = raw.tensor_mut(&mut u)?;
+                // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let u_ptr = unsafe { u_ref.raw_ptr() };
+                let v_ref = raw.tensor_mut(&mut v)?;
+                // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let v_ptr = unsafe { v_ref.raw_ptr() };
+                let info_ref = raw.tensor_mut(&mut info)?;
+                // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let u_stride = checked_mul_usize(OP, "svd_values u stride", m, k)?;
+                let v_stride = checked_mul_usize(OP, "svd_values v stride", n, k)?;
+
+                for batch in 0..batch_total {
+                    let a_offset =
+                        checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
+                    let s_offset = checked_batch_offset(
+                        OP,
+                        "svd_values singular value batch offset",
+                        batch,
+                        s_stride,
                     )?;
+                    let u_offset =
+                        checked_batch_offset(OP, "svd_values u batch offset", batch, u_stride)?;
+                    let v_offset =
+                        checked_batch_offset(OP, "svd_values v batch offset", batch, v_stride)?;
+                    // SAFETY: all offsets are checked against their per-batch
+                    // strides and each base pointer belongs to a live device tensor.
+                    let (batch_a, batch_s, batch_u, batch_v, batch_info) = unsafe {
+                        (
+                            batch_ptr::<T>(a_ptr, a_offset),
+                            batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
+                            batch_ptr::<T>(u_ptr, u_offset),
+                            batch_ptr::<T>(v_ptr, v_offset),
+                            batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                        )
+                    };
+                    // SAFETY: batch pointers, scratch U/V buffers, workspace, and
+                    // params satisfy cuSOLVER gesvdj's no-vector SVD contract.
+                    unsafe {
+                        handles.cusolver().gesvdj(
+                            T::DATA_TYPE,
+                            CusolverEigMode::NoVector,
+                            1,
+                            m_i32,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_s,
+                            batch_u,
+                            lda,
+                            batch_v,
+                            n_i32,
+                            workspace_ptr,
+                            lwork,
+                            batch_info,
+                            &params,
+                            OP,
+                        )?;
+                    }
                 }
-            }
-            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvdj")?;
+
+                // Host barrier (only for reading the solver diagnostics).
+                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                for &value in host_info.host_data()? {
+                    check_solver_info(OP, "cusolverDn*gesvdj", value)?;
+                }
+                Ok(s)
+            })?;
             Ok(s)
         }
         SvdDriver::Gesvd => {
-            let (work, gesvd_m, gesvd_n) = if m < n {
+            let (gesvd_m, gesvd_n) = if m < n { (n, m) } else { (m, n) };
+            // When `m < n` gesvd factors `adjoint(input)` (n×m); the CubeCL
+            // adjoint kernel is flushed before the raw session, so the SVD
+            // below observes it.
+            let transposed_work = if m < n {
                 let mut work_shape = vec![n, m];
                 work_shape.extend_from_slice(batch_shape);
-                (
-                    T::copy_matrix_adjoint(backend.runtime(), input, &work_shape, OP)?,
-                    n,
-                    m,
-                )
+                Some(T::copy_matrix_adjoint(backend, input, &work_shape, OP)?)
             } else {
-                (clone_device_tensor(backend.runtime(), input, OP)?, m, n)
+                None
             };
-            let handles = linalg_handles(backend)?;
-            let stream = raw_stream(backend.runtime(), OP)?;
-            handles.cusolver().set_stream(stream, OP)?;
 
-            let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-            let s_ptr = typed_device_ptr(backend.runtime(), &s, OP)?;
-            let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
-            let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
-            let lda = gesvd_m_i32;
-            let lwork =
-                handles
-                    .cusolver()
-                    .gesvd_buffer_size(T::DATA_TYPE, gesvd_m_i32, gesvd_n_i32, OP)?;
-            let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-            let rwork = if T::NEEDS_RWORK {
-                alloc_workspace_elems::<<T as LinalgScalar>::Real>(
-                    backend.runtime(),
-                    as_i32(
+            let s = backend.with_raw(OP, |raw| {
+                let handles = raw.resource(CudaLinalgHandles::load)?;
+                // SAFETY: the stream handle is valid only for this raw-session
+                // scope; it is used immediately to bind cuSOLVER and not retained.
+                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                handles.cusolver().set_stream(stream, OP)?;
+
+                // `work` is either the CubeCL-adjointed input (m < n) or a
+                // clone of `input` made on the session stream.
+                let mut work = match transposed_work {
+                    Some(work) => work,
+                    None => {
+                        let mut work = raw.alloc_output::<T>(input.shape())?;
+                        {
+                            let src = raw.tensor(input)?;
+                            let dst = raw.tensor_mut(&mut work)?;
+                            // SAFETY: both spans were validated resident on this
+                            // runtime and the copy is stream-ordered; `dst` is
+                            // exclusively borrowed.
+                            unsafe {
+                                raw.copy_bytes(
+                                    dst.raw_ptr(),
+                                    src.raw_ptr() as *const _,
+                                    src.byte_len(),
+                                    OP,
+                                )?
+                            };
+                        }
+                        work
+                    }
+                };
+                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+
+                let a_ref = raw.tensor_mut(&mut work)?;
+                // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let a_ptr = unsafe { a_ref.raw_ptr() };
+                let s_ref = raw.tensor_mut(&mut s)?;
+                // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let s_ptr = unsafe { s_ref.raw_ptr() };
+                let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
+                let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
+                let lda = gesvd_m_i32;
+                let lwork = handles.cusolver().gesvd_buffer_size(
+                    T::DATA_TYPE,
+                    gesvd_m_i32,
+                    gesvd_n_i32,
+                    OP,
+                )?;
+                let workspace_nbytes = {
+                    let lwork = usize::try_from(lwork).map_err(|_| {
+                        Error::invalid_argument(
+                            OP,
+                            "workspace_length",
+                            format!("must be non-negative, got {lwork}"),
+                        )
+                    })?;
+                    lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                        Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                    })?
+                };
+                let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+                let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+                workspace.with_ptr(|ptr| workspace_ptr = ptr);
+                let mut rwork_ptr = std::ptr::null_mut::<c_void>();
+                if T::NEEDS_RWORK {
+                    let rwork_len = as_i32(
                         checked_mul_usize(OP, "svd_values rwork length", 5, k)?,
                         OP,
                         "rwork",
-                    )?,
-                    OP,
-                )?
-            } else {
-                Workspace::none()
-            };
-            let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-            let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
-            let job = b'N' as c_char;
-
-            for batch in 0..batch_total {
-                let a_offset =
-                    checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
-                let s_offset = checked_batch_offset(
-                    OP,
-                    "svd_values singular value batch offset",
-                    batch,
-                    s_stride,
-                )?;
-                // SAFETY: checked offsets keep the input, singular-value, and
-                // info pointers inside live device allocations for this batch.
-                let (batch_a, batch_s, batch_info) = unsafe {
-                    (
-                        batch_ptr::<T>(a_ptr, a_offset),
-                        batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
-                        batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-                    )
-                };
-                // SAFETY: no-vector gesvd permits null U/VT pointers with
-                // unit leading dimensions; other pointers and workspace are validated.
-                unsafe {
-                    handles.cusolver().gesvd(
-                        T::DATA_TYPE,
-                        job,
-                        job,
-                        gesvd_m_i32,
-                        gesvd_n_i32,
-                        batch_a,
-                        lda,
-                        batch_s,
-                        std::ptr::null_mut(),
-                        1,
-                        std::ptr::null_mut(),
-                        1,
-                        workspace.ptr,
-                        lwork,
-                        rwork.ptr,
-                        batch_info,
-                        OP,
                     )?;
+                    let rwork_nbytes = usize::try_from(rwork_len)
+                        .map_err(|_| {
+                            Error::invalid_argument(OP, "rwork_length", "must be non-negative")
+                        })?
+                        .checked_mul(std::mem::size_of::<<T as LinalgScalar>::Real>())
+                        .ok_or_else(|| {
+                            Error::invalid_argument(OP, "rwork_length", "byte size overflowed")
+                        })?;
+                    let rwork = raw.alloc_bytes(rwork_nbytes, OP)?;
+                    rwork.with_ptr(|ptr| rwork_ptr = ptr);
                 }
-            }
-            check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*gesvd")?;
+                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+                let info_ref = raw.tensor_mut(&mut info)?;
+                // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let job = b'N' as c_char;
+
+                for batch in 0..batch_total {
+                    let a_offset =
+                        checked_batch_offset(OP, "svd_values input batch offset", batch, a_stride)?;
+                    let s_offset = checked_batch_offset(
+                        OP,
+                        "svd_values singular value batch offset",
+                        batch,
+                        s_stride,
+                    )?;
+                    // SAFETY: checked offsets keep the input, singular-value,
+                    // and info pointers inside live device allocations for this batch.
+                    let (batch_a, batch_s, batch_info) = unsafe {
+                        (
+                            batch_ptr::<T>(a_ptr, a_offset),
+                            batch_ptr::<<T as LinalgScalar>::Real>(s_ptr, s_offset),
+                            batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                        )
+                    };
+                    // SAFETY: no-vector gesvd permits null U/VT pointers with
+                    // unit leading dimensions; other pointers and workspace are validated.
+                    unsafe {
+                        handles.cusolver().gesvd(
+                            T::DATA_TYPE,
+                            job,
+                            job,
+                            gesvd_m_i32,
+                            gesvd_n_i32,
+                            batch_a,
+                            lda,
+                            batch_s,
+                            std::ptr::null_mut(),
+                            1,
+                            std::ptr::null_mut(),
+                            1,
+                            workspace_ptr,
+                            lwork,
+                            rwork_ptr,
+                            batch_info,
+                            OP,
+                        )?;
+                    }
+                }
+
+                // Host barrier (only for reading the solver diagnostics).
+                let host_info = raw.download_tensor::<i32>(&info, OP)?;
+                for &value in host_info.host_data()? {
+                    check_solver_info(OP, "cusolverDn*gesvd", value)?;
+                }
+                Ok(s)
+            })?;
             Ok(s)
         }
     }
 }
 
 fn qr_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
@@ -1468,7 +1874,6 @@ where
 {
     const OP: &str = "qr";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
@@ -1478,107 +1883,197 @@ where
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
-        return Ok((
-            alloc_output(backend.runtime(), &q_shape)?,
-            alloc_output(backend.runtime(), &r_shape)?,
-        ));
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty outputs: `raw.tensor` checks the tensor is resident.
+            raw.tensor(input)?;
+            Ok((
+                raw.alloc_output::<T>(&q_shape)?,
+                raw.alloc_output::<T>(&r_shape)?,
+            ))
+        })?);
     }
 
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let q = alloc_output::<T>(backend.runtime(), &q_shape)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
-    let work_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let q_ptr = typed_device_ptr(backend.runtime(), &q, OP)?;
     let m_i32 = as_i32(m, OP, "m")?;
     let n_i32 = as_i32(n, OP, "n")?;
     let k_i32 = as_i32(k, OP, "k")?;
     let lda = as_i32(m, OP, "lda")?;
-    let geqrf_lwork =
-        handles
-            .cusolver()
-            .geqrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, work_ptr, lda, OP)?;
-    let geqrf_workspace = alloc_workspace_elems::<T>(backend.runtime(), geqrf_lwork, OP)?;
-    let tau_bytes = checked_mul_usize(OP, "qr tau workspace bytes", k, std::mem::size_of::<T>())?;
-    let tau = alloc_workspace_bytes(backend.runtime(), tau_bytes, OP)?;
-    let orgqr_lwork = handles.cusolver().orgqr_buffer_size(
-        T::DATA_TYPE,
-        m_i32,
-        k_i32,
-        k_i32,
-        q_ptr.cast_const(),
-        lda,
-        tau.ptr.cast_const(),
-        OP,
-    )?;
-    let orgqr_workspace = alloc_workspace_elems::<T>(backend.runtime(), orgqr_lwork, OP)?;
     let batch_total = batch_count(OP, batch_shape)?;
-    let geqrf_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let orgqr_info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let geqrf_info_ptr = typed_device_ptr(backend.runtime(), &geqrf_info, OP)?;
-    let orgqr_info_ptr = typed_device_ptr(backend.runtime(), &orgqr_info, OP)?;
     let work_stride = checked_mul_usize(OP, "qr work stride", m, n)?;
     let q_stride = checked_mul_usize(OP, "qr q stride", m, k)?;
+    let tau_bytes = checked_mul_usize(OP, "qr tau workspace bytes", k, std::mem::size_of::<T>())?;
 
-    for batch in 0..batch_total {
-        let work_offset = checked_batch_offset(OP, "qr work batch offset", batch, work_stride)?;
-        let q_offset = checked_batch_offset(OP, "qr q batch offset", batch, q_stride)?;
-        // SAFETY: checked offsets keep work, Q, and info pointers inside
-        // their live device allocations for this batch.
-        let (batch_work, batch_q, batch_geqrf_info, batch_orgqr_info) = unsafe {
-            (
-                batch_ptr::<T>(work_ptr, work_offset),
-                batch_ptr::<T>(q_ptr, q_offset),
-                batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>(),
-                batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>(),
-            )
-        };
-        // SAFETY: batch pointers, tau/workspace buffers, dimensions, and
-        // stream-bound handle satisfy cuSOLVER geqrf's QR factorization contract.
-        unsafe {
-            handles.cusolver().geqrf(
+    let (q, work) = backend.with_raw(OP, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuSOLVER handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, OP)?;
+
+        // Clone `input` into a fresh work matrix on the session stream.
+        let mut work = raw.alloc_output::<T>(input.shape())?;
+        {
+            let src = raw.tensor(input)?;
+            let dst = raw.tensor_mut(&mut work)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
+        }
+        let mut q = raw.alloc_output::<T>(&q_shape)?;
+
+        let geqrf_lwork = {
+            let work_ref = raw.tensor(&work)?;
+            handles.cusolver().geqrf_buffer_size(
                 T::DATA_TYPE,
                 m_i32,
                 n_i32,
-                batch_work,
+                // SAFETY: `work_ref` is a validated device span on this
+                // runtime; cuSOLVER only queries the leading dimension here.
+                unsafe { work_ref.raw_ptr() },
                 lda,
-                tau.ptr,
-                geqrf_workspace.ptr,
-                geqrf_lwork,
-                batch_geqrf_info,
                 OP,
-            )?;
-        }
+            )?
+        };
+        let geqrf_workspace_nbytes = {
+            let lwork = usize::try_from(geqrf_lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {geqrf_lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let geqrf_workspace = raw.alloc_bytes(geqrf_workspace_nbytes, OP)?;
+        let mut geqrf_workspace_ptr = std::ptr::null_mut::<c_void>();
+        geqrf_workspace.with_ptr(|ptr| geqrf_workspace_ptr = ptr);
 
-        copy_device_to_device(
-            backend.runtime(),
-            batch_q,
-            batch_work.cast_const(),
-            q_stride * std::mem::size_of::<T>(),
-            OP,
-        )?;
-        // SAFETY: `batch_q` contains the copied reflectors, `tau` and
-        // workspace are live, and dimensions match the validated reduced-Q shape.
-        unsafe {
-            handles.cusolver().orgqr(
+        let tau = raw.alloc_bytes(tau_bytes, OP)?;
+        let mut tau_ptr = std::ptr::null_mut::<c_void>();
+        tau.with_ptr(|ptr| tau_ptr = ptr);
+
+        let orgqr_lwork = {
+            let q_ref = raw.tensor(&q)?;
+            handles.cusolver().orgqr_buffer_size(
                 T::DATA_TYPE,
                 m_i32,
                 k_i32,
                 k_i32,
-                batch_q,
+                // SAFETY: `q_ref` and `tau_ptr` are validated device spans on
+                // this runtime; only the leading dimensions are queried here.
+                unsafe { q_ref.raw_ptr().cast_const() },
                 lda,
-                tau.ptr.cast_const(),
-                orgqr_workspace.ptr,
-                orgqr_lwork,
-                batch_orgqr_info,
+                tau_ptr.cast_const(),
                 OP,
-            )?;
+            )?
+        };
+        let orgqr_workspace_nbytes = {
+            let lwork = usize::try_from(orgqr_lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {orgqr_lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let orgqr_workspace = raw.alloc_bytes(orgqr_workspace_nbytes, OP)?;
+        let mut orgqr_workspace_ptr = std::ptr::null_mut::<c_void>();
+        orgqr_workspace.with_ptr(|ptr| orgqr_workspace_ptr = ptr);
+
+        let mut geqrf_info = raw.alloc_output::<i32>(&[batch_total])?;
+        let mut orgqr_info = raw.alloc_output::<i32>(&[batch_total])?;
+        let work_ref = raw.tensor_mut(&mut work)?;
+        // SAFETY: `work_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let work_ptr = unsafe { work_ref.raw_ptr() };
+        let q_ref = raw.tensor_mut(&mut q)?;
+        // SAFETY: `q_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let q_ptr = unsafe { q_ref.raw_ptr() };
+        let geqrf_info_ref = raw.tensor_mut(&mut geqrf_info)?;
+        // SAFETY: `geqrf_info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let geqrf_info_ptr = unsafe { geqrf_info_ref.raw_ptr() };
+        let orgqr_info_ref = raw.tensor_mut(&mut orgqr_info)?;
+        // SAFETY: `orgqr_info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let orgqr_info_ptr = unsafe { orgqr_info_ref.raw_ptr() };
+
+        for batch in 0..batch_total {
+            let work_offset = checked_batch_offset(OP, "qr work batch offset", batch, work_stride)?;
+            let q_offset = checked_batch_offset(OP, "qr q batch offset", batch, q_stride)?;
+            // SAFETY: checked offsets keep work, Q, and info pointers inside
+            // their live device allocations for this batch.
+            let (batch_work, batch_q, batch_geqrf_info, batch_orgqr_info) = unsafe {
+                (
+                    batch_ptr::<T>(work_ptr, work_offset),
+                    batch_ptr::<T>(q_ptr, q_offset),
+                    batch_ptr::<i32>(geqrf_info_ptr, batch).cast::<i32>(),
+                    batch_ptr::<i32>(orgqr_info_ptr, batch).cast::<i32>(),
+                )
+            };
+            // SAFETY: batch pointers, tau/workspace buffers, dimensions, and
+            // stream-bound handle satisfy cuSOLVER geqrf's QR factorization contract.
+            unsafe {
+                handles.cusolver().geqrf(
+                    T::DATA_TYPE,
+                    m_i32,
+                    n_i32,
+                    batch_work,
+                    lda,
+                    tau_ptr,
+                    geqrf_workspace_ptr,
+                    geqrf_lwork,
+                    batch_geqrf_info,
+                    OP,
+                )?;
+            }
+
+            // Copy the reflectors from `work` into `q` on the session stream.
+            // SAFETY: `batch_q` and `batch_work` are validated device spans on
+            // this runtime, the copy is stream-ordered, and `batch_q` is written
+            // exclusively before orgqr reads it back.
+            unsafe {
+                raw.copy_bytes(
+                    batch_q,
+                    batch_work.cast_const(),
+                    q_stride * std::mem::size_of::<T>(),
+                    OP,
+                )?;
+            }
+            // SAFETY: `batch_q` contains the copied reflectors, `tau` and
+            // workspace are live, and dimensions match the validated reduced-Q shape.
+            unsafe {
+                handles.cusolver().orgqr(
+                    T::DATA_TYPE,
+                    m_i32,
+                    k_i32,
+                    k_i32,
+                    batch_q,
+                    lda,
+                    tau_ptr.cast_const(),
+                    orgqr_workspace_ptr,
+                    orgqr_lwork,
+                    batch_orgqr_info,
+                    OP,
+                )?;
+            }
         }
-    }
-    check_solver_info_tensor(backend.runtime(), &geqrf_info, OP, "cusolverDn*geqrf")?;
-    check_solver_info_tensor(backend.runtime(), &orgqr_info, OP, "cusolverDn*orgqr")?;
+
+        // Host barrier (only for reading the solver diagnostics).
+        let host_geqrf = raw.download_tensor::<i32>(&geqrf_info, OP)?;
+        for &value in host_geqrf.host_data()? {
+            check_solver_info(OP, "cusolverDn*geqrf", value)?;
+        }
+        let host_orgqr = raw.download_tensor::<i32>(&orgqr_info, OP)?;
+        for &value in host_orgqr.host_data()? {
+            check_solver_info(OP, "cusolverDn*orgqr", value)?;
+        }
+        Ok((q, work))
+    })?;
 
     let r_input = backend.slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
     let r = backend.triu_typed(&r_input, 0)?;
@@ -1586,7 +2081,7 @@ where
 }
 
 fn eigh_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<<T as LinalgScalar>::Real>, TypedTensor<T>)>
 where
@@ -1594,84 +2089,138 @@ where
 {
     const OP: &str = "eigh";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
     values_shape.extend_from_slice(batch_shape);
-    if has_zero_dim(input.shape()) {
-        return Ok((
-            alloc_output(backend.runtime(), &values_shape)?,
-            alloc_output(backend.runtime(), input.shape())?,
-        ));
-    }
-
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &values_shape)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
-    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let values_ptr = typed_device_ptr(backend.runtime(), &values, OP)?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(n, OP, "lda")?;
-    let lwork = handles.cusolver().syevd_buffer_size(
-        T::DATA_TYPE,
-        CusolverEigMode::Vector,
-        CublasFillMode::Lower,
-        n_i32,
-        a_ptr.cast_const(),
-        lda,
-        values_ptr.cast_const(),
-        OP,
-    )?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let batch_total = batch_count(OP, batch_shape)?;
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
     let values_stride = n;
+    if has_zero_dim(input.shape()) {
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty outputs: `raw.tensor` checks the tensor is resident.
+            raw.tensor(input)?;
+            Ok((
+                raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?,
+                raw.alloc_output::<T>(input.shape())?,
+            ))
+        })?);
+    }
 
-    for batch in 0..batch_total {
-        let a_offset = checked_batch_offset(OP, "eigh matrix batch offset", batch, matrix_stride)?;
-        let values_offset =
-            checked_batch_offset(OP, "eigh values batch offset", batch, values_stride)?;
-        // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
-        // inside live device allocations for this batch.
-        let (batch_a, batch_w, batch_info) = unsafe {
-            (
-                batch_ptr::<T>(a_ptr, a_offset),
-                batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
-                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-            )
-        };
-        // SAFETY: batch pointers, workspace, dimensions, and stream-bound
-        // handle satisfy cuSOLVER syevd's vector eigensolver contract.
-        unsafe {
-            handles.cusolver().syevd(
+    let (values, work) = backend.with_raw(OP, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuSOLVER handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, OP)?;
+
+        // Clone `input` into a fresh work matrix on the session stream.
+        let mut work = raw.alloc_output::<T>(input.shape())?;
+        {
+            let src = raw.tensor(input)?;
+            let dst = raw.tensor_mut(&mut work)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
+        }
+        let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
+
+        let lwork = {
+            let a_ref = raw.tensor(&work)?;
+            let values_ref = raw.tensor(&values)?;
+            handles.cusolver().syevd_buffer_size(
                 T::DATA_TYPE,
                 CusolverEigMode::Vector,
                 CublasFillMode::Lower,
                 n_i32,
-                batch_a,
+                // SAFETY: both spans are validated device allocations on this
+                // runtime; only the leading dimensions are queried here.
+                unsafe { a_ref.raw_ptr().cast_const() },
                 lda,
-                batch_w,
-                workspace.ptr,
-                lwork,
-                batch_info,
+                // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                unsafe { values_ref.raw_ptr().cast_const() },
                 OP,
-            )?;
+            )?
+        };
+        let workspace_nbytes = {
+            let lwork = usize::try_from(lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+        workspace.with_ptr(|ptr| workspace_ptr = ptr);
+
+        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&mut work)?;
+        // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let a_ptr = unsafe { a_ref.raw_ptr() };
+        let values_ref = raw.tensor_mut(&mut values)?;
+        // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let values_ptr = unsafe { values_ref.raw_ptr() };
+        let info_ref = raw.tensor_mut(&mut info)?;
+        // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let info_ptr = unsafe { info_ref.raw_ptr() };
+
+        for batch in 0..batch_total {
+            let a_offset =
+                checked_batch_offset(OP, "eigh matrix batch offset", batch, matrix_stride)?;
+            let values_offset =
+                checked_batch_offset(OP, "eigh values batch offset", batch, values_stride)?;
+            // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
+            // inside live device allocations for this batch.
+            let (batch_a, batch_w, batch_info) = unsafe {
+                (
+                    batch_ptr::<T>(a_ptr, a_offset),
+                    batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
+                    batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                )
+            };
+            // SAFETY: batch pointers, workspace, dimensions, and stream-bound
+            // handle satisfy cuSOLVER syevd's vector eigensolver contract.
+            unsafe {
+                handles.cusolver().syevd(
+                    T::DATA_TYPE,
+                    CusolverEigMode::Vector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    batch_a,
+                    lda,
+                    batch_w,
+                    workspace_ptr,
+                    lwork,
+                    batch_info,
+                    OP,
+                )?;
+            }
         }
-    }
-    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*syevd")?;
+
+        // Host barrier (only for reading the solver diagnostics).
+        let host_info = raw.download_tensor::<i32>(&info, OP)?;
+        for &value in host_info.host_data()? {
+            check_solver_info(OP, "cusolverDn*syevd", value)?;
+        }
+        Ok((values, work))
+    })?;
 
     Ok((values, work))
 }
 
 fn eigh_values_typed<T>(
-    backend: &CudaExecSession<'_>,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
 where
@@ -1679,82 +2228,135 @@ where
 {
     const OP: &str = "eigh_values";
 
-    backend.runtime().set_current_cuda_context(OP)?;
     ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
     values_shape.extend_from_slice(batch_shape);
-    if has_zero_dim(input.shape()) {
-        return Ok(alloc_output(backend.runtime(), &values_shape)?);
-    }
-
-    let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let values = alloc_output::<<T as LinalgScalar>::Real>(backend.runtime(), &values_shape)?;
-    let handles = linalg_handles(backend)?;
-    let stream = raw_stream(backend.runtime(), OP)?;
-    handles.cusolver().set_stream(stream, OP)?;
-
-    let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
-    let values_ptr = typed_device_ptr(backend.runtime(), &values, OP)?;
     let n_i32 = as_i32(n, OP, "n")?;
     let lda = as_i32(n, OP, "lda")?;
-    let lwork = handles.cusolver().syevd_buffer_size(
-        T::DATA_TYPE,
-        CusolverEigMode::NoVector,
-        CublasFillMode::Lower,
-        n_i32,
-        a_ptr.cast_const(),
-        lda,
-        values_ptr.cast_const(),
-        OP,
-    )?;
-    let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let batch_total = batch_count(OP, batch_shape)?;
-    let info = alloc_output::<i32>(backend.runtime(), &[batch_total])?;
-    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
     let values_stride = n;
+    if has_zero_dim(input.shape()) {
+        return Ok(backend.with_raw(OP, |raw| {
+            // The fast path still validates residency before allocating the
+            // empty output: `raw.tensor` checks the tensor is resident.
+            raw.tensor(input)?;
+            raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)
+        })?);
+    }
 
-    for batch in 0..batch_total {
-        let a_offset =
-            checked_batch_offset(OP, "eigh_values matrix batch offset", batch, matrix_stride)?;
-        let values_offset =
-            checked_batch_offset(OP, "eigh_values values batch offset", batch, values_stride)?;
-        // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
-        // inside live device allocations for this batch.
-        let (batch_a, batch_w, batch_info) = unsafe {
-            (
-                batch_ptr::<T>(a_ptr, a_offset),
-                batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
-                batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
-            )
-        };
-        // SAFETY: batch pointers, workspace, dimensions, and stream-bound
-        // handle satisfy cuSOLVER syevd's no-vector eigensolver contract.
-        unsafe {
-            handles.cusolver().syevd(
+    let values = backend.with_raw(OP, |raw| {
+        let handles = raw.resource(CudaLinalgHandles::load)?;
+        // SAFETY: the stream handle is valid only for this raw-session scope;
+        // it is used immediately to bind the cuSOLVER handle and not retained.
+        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        handles.cusolver().set_stream(stream, OP)?;
+
+        // Clone `input` into a fresh work matrix on the session stream.
+        let mut work = raw.alloc_output::<T>(input.shape())?;
+        {
+            let src = raw.tensor(input)?;
+            let dst = raw.tensor_mut(&mut work)?;
+            // SAFETY: both spans were validated resident on this runtime and
+            // the copy is stream-ordered; `dst` is exclusively borrowed.
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
+        }
+        let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
+
+        let lwork = {
+            let a_ref = raw.tensor(&work)?;
+            let values_ref = raw.tensor(&values)?;
+            handles.cusolver().syevd_buffer_size(
                 T::DATA_TYPE,
                 CusolverEigMode::NoVector,
                 CublasFillMode::Lower,
                 n_i32,
-                batch_a,
+                // SAFETY: both spans are validated device allocations on this
+                // runtime; only the leading dimensions are queried here.
+                unsafe { a_ref.raw_ptr().cast_const() },
                 lda,
-                batch_w,
-                workspace.ptr,
-                lwork,
-                batch_info,
+                // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+                unsafe { values_ref.raw_ptr().cast_const() },
                 OP,
-            )?;
+            )?
+        };
+        let workspace_nbytes = {
+            let lwork = usize::try_from(lwork).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "workspace_length",
+                    format!("must be non-negative, got {lwork}"),
+                )
+            })?;
+            lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+            })?
+        };
+        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let mut workspace_ptr = std::ptr::null_mut::<c_void>();
+        workspace.with_ptr(|ptr| workspace_ptr = ptr);
+
+        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&mut work)?;
+        // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let a_ptr = unsafe { a_ref.raw_ptr() };
+        let values_ref = raw.tensor_mut(&mut values)?;
+        // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let values_ptr = unsafe { values_ref.raw_ptr() };
+        let info_ref = raw.tensor_mut(&mut info)?;
+        // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
+        let info_ptr = unsafe { info_ref.raw_ptr() };
+
+        for batch in 0..batch_total {
+            let a_offset =
+                checked_batch_offset(OP, "eigh_values matrix batch offset", batch, matrix_stride)?;
+            let values_offset =
+                checked_batch_offset(OP, "eigh_values values batch offset", batch, values_stride)?;
+            // SAFETY: checked offsets keep matrix, eigenvalue, and info pointers
+            // inside live device allocations for this batch.
+            let (batch_a, batch_w, batch_info) = unsafe {
+                (
+                    batch_ptr::<T>(a_ptr, a_offset),
+                    batch_ptr::<<T as LinalgScalar>::Real>(values_ptr, values_offset),
+                    batch_ptr::<i32>(info_ptr, batch).cast::<i32>(),
+                )
+            };
+            // SAFETY: batch pointers, workspace, dimensions, and stream-bound
+            // handle satisfy cuSOLVER syevd's no-vector eigensolver contract.
+            unsafe {
+                handles.cusolver().syevd(
+                    T::DATA_TYPE,
+                    CusolverEigMode::NoVector,
+                    CublasFillMode::Lower,
+                    n_i32,
+                    batch_a,
+                    lda,
+                    batch_w,
+                    workspace_ptr,
+                    lwork,
+                    batch_info,
+                    OP,
+                )?;
+            }
         }
-    }
-    check_solver_info_tensor(backend.runtime(), &info, OP, "cusolverDn*syevd")?;
+
+        // Host barrier (only for reading the solver diagnostics).
+        let host_info = raw.download_tensor::<i32>(&info, OP)?;
+        for &value in host_info.host_data()? {
+            check_solver_info(OP, "cusolverDn*syevd", value)?;
+        }
+        Ok(values)
+    })?;
 
     Ok(values)
 }
 
 fn build_lu_outputs_device<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     m: usize,
@@ -1778,46 +2380,46 @@ where
     u_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
 
-    let p = alloc_output::<T>(rt, &p_shape)?;
-    let l = alloc_output::<T>(rt, &l_shape)?;
-    let u = alloc_output::<T>(rt, &u_shape)?;
-    let parity = alloc_output::<T>(rt, &parity_shape)?;
-    let launch_len = p
-        .n_elements()
-        .max(l.n_elements())
-        .max(u.n_elements())
-        .max(parity.n_elements());
-    let p_arg = typed_tensor_binding(&p, "lu")?;
-    let l_arg = typed_tensor_binding(&l, "lu")?;
-    let u_arg = typed_tensor_binding(&u, "lu")?;
-    let parity_arg = typed_tensor_binding(&parity, "lu")?;
-    let work_arg = typed_tensor_binding(lu, "lu")?;
-    let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
-    let launch_count = cube_count_for_len(launch_len)?;
-    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers the maximum P/L/U/parity output domain consumed by the kernel.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            p_arg.into_tensor_arg(),
-            l_arg.into_tensor_arg(),
-            u_arg.into_tensor_arg(),
-            parity_arg.into_tensor_arg(),
-            work_arg.into_tensor_arg(),
-            pivots_arg,
-            k,
-            lu.shape().len(),
-        );
-    });
-    flush_cubecl_client(rt, "lu")?;
-
-    Ok((p, l, u, parity))
+    backend.with_cubecl("lu", |cubecl| {
+        let p = cubecl.alloc_output::<T>(&p_shape)?;
+        let l = cubecl.alloc_output::<T>(&l_shape)?;
+        let u = cubecl.alloc_output::<T>(&u_shape)?;
+        let parity = cubecl.alloc_output::<T>(&parity_shape)?;
+        let launch_len = p
+            .n_elements()
+            .max(l.n_elements())
+            .max(u.n_elements())
+            .max(parity.n_elements());
+        let p_arg = cubecl.tensor_binding(&p, "lu")?;
+        let l_arg = cubecl.tensor_binding(&l, "lu")?;
+        let u_arg = cubecl.tensor_binding(&u, "lu")?;
+        let parity_arg = cubecl.tensor_binding(&parity, "lu")?;
+        let work_arg = cubecl.tensor_binding(lu, "lu")?;
+        let pivots_arg = cubecl.array_arg(pivots, "lu")?;
+        let launch_count = cubecl.cube_count_1d(launch_len)?;
+        // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+        // covers the maximum P/L/U/parity output domain consumed by the kernel.
+        unsafe {
+            cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                p_arg.into_tensor_arg(),
+                l_arg.into_tensor_arg(),
+                u_arg.into_tensor_arg(),
+                parity_arg.into_tensor_arg(),
+                work_arg.into_tensor_arg(),
+                pivots_arg,
+                k,
+                lu.shape().len(),
+            );
+        }
+        Ok((p, l, u, parity))
+    })
 }
 
 fn build_lu_parity_device<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     pivots: &TypedTensor<i32>,
     k: usize,
     batch_shape: &[usize],
@@ -1825,53 +2427,55 @@ fn build_lu_parity_device<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    let parity = alloc_output::<T>(rt, batch_shape)?;
-    let parity_arg = typed_tensor_binding(&parity, "lu_factor")?;
-    let pivots_arg = typed_tensor_array_arg(pivots, "lu_factor")?;
-    let launch_count = cube_count_for_len(parity.n_elements())?;
-    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers exactly the parity output domain.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_parity::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            parity_arg.into_tensor_arg(),
-            pivots_arg,
-            k,
-        );
-    });
-    flush_cubecl_client(rt, "lu_factor")?;
-    Ok(parity)
+    backend.with_cubecl("lu_factor", |cubecl| {
+        let parity = cubecl.alloc_output::<T>(batch_shape)?;
+        let parity_arg = cubecl.tensor_binding(&parity, "lu_factor")?;
+        let pivots_arg = cubecl.array_arg(pivots, "lu_factor")?;
+        let launch_count = cubecl.cube_count_1d(parity.n_elements())?;
+        // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
+        // covers exactly the parity output domain.
+        unsafe {
+            cubecl_linalg::lu_parity::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                parity_arg.into_tensor_arg(),
+                pivots_arg,
+                k,
+            );
+        }
+        Ok(parity)
+    })
 }
 
 fn fill_one_device_tensor<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     shape: &[usize],
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
     T: LinalgScalar + TensorScalar,
 {
-    let out = alloc_output::<T>(rt, shape)?;
-    let out_arg = typed_tensor_binding(&out, op)?;
-    let launch_count = cube_count_for_len(out.n_elements())?;
-    // SAFETY: `out_arg` describes a live CUDA output tensor, and
-    // `launch_count` covers every output element exactly once.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            out_arg.into_tensor_arg(),
-        );
-    });
-    flush_cubecl_client(rt, op)?;
-    Ok(out)
+    backend.with_cubecl(op, |cubecl| {
+        let out = cubecl.alloc_output::<T>(shape)?;
+        let out_arg = cubecl.tensor_binding(&out, op)?;
+        let launch_count = cubecl.cube_count_1d(out.n_elements())?;
+        // SAFETY: `out_arg` describes a live CUDA output tensor, and
+        // `launch_count` covers every output element exactly once.
+        unsafe {
+            cubecl_linalg::fill_one_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                out_arg.into_tensor_arg(),
+            );
+        }
+        Ok(out)
+    })
 }
 
 fn apply_lu_pivots_typed<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     inverse: bool,
@@ -1879,36 +2483,37 @@ fn apply_lu_pivots_typed<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    let out = alloc_output::<T>(rt, input.shape())?;
-    if out.n_elements() == 0 {
-        return Ok(out);
-    }
-    let k = pivots.shape()[0];
-    let out_arg = typed_tensor_binding(&out, "lu_solve_prepared")?;
-    let input_arg = typed_tensor_binding(input, "lu_solve_prepared")?;
-    let pivots_arg = typed_tensor_array_arg(pivots, "lu_solve_prepared")?;
-    let launch_count = cube_count_for_len(out.n_elements())?;
-    // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
-    // matches the validated LU shape, and `launch_count` covers the output domain.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            out_arg.into_tensor_arg(),
-            input_arg.into_tensor_arg(),
-            pivots_arg,
-            k,
-            input.shape().len(),
-            inverse,
-        );
-    });
-    flush_cubecl_client(rt, "lu_solve_prepared")?;
-    Ok(out)
+    backend.with_cubecl("lu_solve_prepared", |cubecl| {
+        let out = cubecl.alloc_output::<T>(input.shape())?;
+        if out.n_elements() == 0 {
+            return Ok(out);
+        }
+        let k = pivots.shape()[0];
+        let out_arg = cubecl.tensor_binding(&out, "lu_solve_prepared")?;
+        let input_arg = cubecl.tensor_binding(input, "lu_solve_prepared")?;
+        let pivots_arg = cubecl.array_arg(pivots, "lu_solve_prepared")?;
+        let launch_count = cubecl.cube_count_1d(out.n_elements())?;
+        // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
+        // matches the validated LU shape, and `launch_count` covers the output domain.
+        unsafe {
+            cubecl_linalg::lu_apply_pivots::launch_unchecked::<T, CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                out_arg.into_tensor_arg(),
+                input_arg.into_tensor_arg(),
+                pivots_arg,
+                k,
+                input.shape().len(),
+                inverse,
+            );
+        }
+        Ok(out)
+    })
 }
 
 fn zero_sized_lu_factor_outputs<T>(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
@@ -1921,122 +2526,12 @@ where
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
-    let parity = fill_one_device_tensor(rt, &parity_shape, "lu_factor")?;
-    Ok((
-        alloc_output(rt, shape)?,
-        alloc_output(rt, &pivot_shape)?,
-        parity,
-    ))
-}
-
-fn raw_stream(rt: &CudaRuntime, op: &'static str) -> Result<CudaStream> {
-    let mut stream = 0;
-    with_raw_cuda_stream(rt, op, |value| stream = value)?;
-    Ok(stream as usize as CudaStream)
-}
-
-fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
-    let stream = raw_stream(rt, op)? as cudaStream_t;
-    // SAFETY: `raw_stream` returns the live CUDA stream owned by this runtime's
-    // current context; synchronizing it does not outlive the runtime.
-    unsafe { cuda_result::stream::synchronize(stream) }
-        .map_err(|err| Error::backend_source(op, err))
-}
-
-fn alloc_workspace_bytes(rt: &CudaRuntime, nbytes: usize, op: &'static str) -> Result<Workspace> {
-    alloc_device_bytes(rt, nbytes, op).map(Workspace::from_device)
-}
-
-fn alloc_workspace_elems<T>(rt: &CudaRuntime, len: i32, op: &'static str) -> Result<Workspace>
-where
-    T: CubeElement + Clone,
-{
-    let len = usize::try_from(len).map_err(|_| {
-        Error::invalid_argument(
-            op,
-            "workspace_length",
-            format!("must be non-negative, got {len}"),
-        )
+    let parity = fill_one_device_tensor(backend, &parity_shape, "lu_factor")?;
+    let lu = backend.with_cubecl("lu_factor", |cubecl| cubecl.alloc_output::<T>(shape))?;
+    let pivots = backend.with_cubecl("lu_factor", |cubecl| {
+        cubecl.alloc_output::<i32>(&pivot_shape)
     })?;
-    let nbytes = len
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_else(|| Error::invalid_argument(op, "workspace_length", "byte size overflowed"))?;
-    alloc_workspace_bytes(rt, nbytes, op)
-}
-
-fn typed_device_ptr<T: TensorScalar + 'static>(
-    rt: &CudaRuntime,
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<*mut c_void> {
-    let mut ptr = std::ptr::null_mut();
-    interop_with_typed_device_ptr(rt, tensor, op, |value| ptr = value)?;
-    Ok(ptr)
-}
-
-fn clone_device_tensor<T>(
-    rt: &CudaRuntime,
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<TypedTensor<T>>
-where
-    T: CubeElement + TensorScalar + CubePrimitive + Copy + Clone,
-{
-    let out = alloc_output(rt, tensor.shape())?;
-    if out.n_elements() == 0 {
-        return Ok(out);
-    }
-    let src = typed_device_ptr(rt, tensor, op)?;
-    let dst = typed_device_ptr(rt, &out, op)?;
-    copy_device_to_device(
-        rt,
-        dst,
-        src.cast_const(),
-        out.n_elements() * std::mem::size_of::<T>(),
-        op,
-    )?;
-    Ok(out)
-}
-
-fn upload_pointer_array(
-    rt: &CudaRuntime,
-    pointers: &[usize],
-    op: &'static str,
-) -> Result<Workspace> {
-    let nbytes = std::mem::size_of_val(pointers);
-    // SAFETY: `pointers` is a live CPU slice of plain usize device-address
-    // values; this reinterprets only those initialized bytes for upload.
-    let bytes = unsafe { std::slice::from_raw_parts(pointers.as_ptr().cast::<u8>(), nbytes) };
-    upload_device_bytes(rt, bytes, op).map(Workspace::from_device)
-}
-
-fn download_device_tensor<T>(
-    rt: &CudaRuntime,
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<TypedTensor<T>>
-where
-    T: CubeElement + TensorScalar + Clone,
-{
-    sync_stream(rt, op)?;
-    download_typed_tensor(rt, tensor, op)
-}
-
-fn copy_device_to_device(
-    rt: &CudaRuntime,
-    dst: *mut c_void,
-    src: *const c_void,
-    nbytes: usize,
-    op: &'static str,
-) -> Result<()> {
-    if nbytes == 0 {
-        return Ok(());
-    }
-    let stream = raw_stream(rt, op)? as cudaStream_t;
-    // SAFETY: callers pass device pointers obtained from live tensors or
-    // workspaces, `nbytes` is checked before zero-size return, and the stream is current.
-    unsafe { cuda_result::memcpy_dtod_async(dst, src, nbytes, stream) }
-        .map_err(|err| Error::backend_source(op, err))
+    Ok((lu, pivots, parity))
 }
 
 fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> SliceConfig {
@@ -2135,19 +2630,6 @@ fn check_solver_info(op: &'static str, call: &'static str, info: i32) -> Result<
     ))
 }
 
-fn check_solver_info_tensor(
-    rt: &CudaRuntime,
-    info: &TypedTensor<i32>,
-    op: &'static str,
-    call: &'static str,
-) -> Result<()> {
-    let host_info = download_device_tensor(rt, info, op)?;
-    for &value in host_info.host_data()? {
-        check_solver_info(op, call, value)?;
-    }
-    Ok(())
-}
-
 fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
@@ -2216,15 +2698,27 @@ unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_voi
 }
 
 fn zero_like_linalg_device_tensor(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     input: &Tensor,
     op: &'static str,
 ) -> Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(alloc_output(rt, t.shape())?)),
-        Tensor::F64(t) => Ok(Tensor::F64(alloc_output(rt, t.shape())?)),
-        Tensor::C32(t) => Ok(Tensor::C32(alloc_output(rt, t.shape())?)),
-        Tensor::C64(t) => Ok(Tensor::C64(alloc_output(rt, t.shape())?)),
+        Tensor::F32(t) => {
+            Ok(Tensor::F32(backend.with_cubecl(op, |cubecl| {
+                cubecl.alloc_output::<f32>(t.shape())
+            })?))
+        }
+        Tensor::F64(t) => {
+            Ok(Tensor::F64(backend.with_cubecl(op, |cubecl| {
+                cubecl.alloc_output::<f64>(t.shape())
+            })?))
+        }
+        Tensor::C32(t) => Ok(Tensor::C32(backend.with_cubecl(op, |cubecl| {
+            cubecl.alloc_output::<num_complex::Complex32>(t.shape())
+        })?)),
+        Tensor::C64(t) => Ok(Tensor::C64(backend.with_cubecl(op, |cubecl| {
+            cubecl.alloc_output::<num_complex::Complex64>(t.shape())
+        })?)),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype(op, input))
         }
@@ -2286,8 +2780,8 @@ fn validate_nonsingular_gpu(backend: &mut CudaExecSession<'_>, u: &Tensor) -> Re
 fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Result<Tensor> {
     match diag {
         Tensor::F32(_) | Tensor::F64(_) => backend.abs(diag),
-        Tensor::C32(t) => complex32_magnitude(backend.runtime(), t).map(Tensor::F32),
-        Tensor::C64(t) => complex64_magnitude(backend.runtime(), t).map(Tensor::F64),
+        Tensor::C32(t) => complex32_magnitude(backend, t).map(Tensor::F32),
+        Tensor::C64(t) => complex64_magnitude(backend, t).map(Tensor::F64),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
             Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag))
         }
@@ -2295,55 +2789,57 @@ fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Resul
 }
 
 fn complex32_magnitude(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<Complex32>,
 ) -> Result<TypedTensor<f32>> {
-    let output = alloc_output::<f32>(rt, input.shape())?;
-    let input_arg = typed_tensor_array_arg(input, "validate_nonsingular_gpu")?;
-    let output_arg = typed_tensor_array_arg(&output, "validate_nonsingular_gpu")?;
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let launch_count = cube_count_for_len(output.n_elements())?;
-    // SAFETY: bindings describe live CUDA tensors, and `launch_count` covers
-    // exactly the complex32 magnitude output domain.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::complex32_magnitude::launch_unchecked::<CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            output_arg,
-            input_arg,
-        );
-    });
-    flush_cubecl_client(rt, "validate_nonsingular_gpu")?;
-    Ok(output)
+    backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
+        let output = cubecl.alloc_output::<f32>(input.shape())?;
+        let input_arg = cubecl.array_arg(input, "validate_nonsingular_gpu")?;
+        let output_arg = cubecl.array_arg(&output, "validate_nonsingular_gpu")?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings describe live CUDA tensors, and `launch_count`
+        // covers exactly the complex32 magnitude output domain.
+        unsafe {
+            cubecl_linalg::complex32_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    })
 }
 
 fn complex64_magnitude(
-    rt: &CudaRuntime,
+    backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<Complex64>,
 ) -> Result<TypedTensor<f64>> {
-    let output = alloc_output::<f64>(rt, input.shape())?;
-    let input_arg = typed_tensor_array_arg(input, "validate_nonsingular_gpu")?;
-    let output_arg = typed_tensor_array_arg(&output, "validate_nonsingular_gpu")?;
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let launch_count = cube_count_for_len(output.n_elements())?;
-    // SAFETY: bindings describe live CUDA tensors, and `launch_count` covers
-    // exactly the complex64 magnitude output domain.
-    with_cubecl_client(rt, |client| unsafe {
-        cubecl_linalg::complex64_magnitude::launch_unchecked::<CubeclCudaRuntime>(
-            client,
-            launch_count,
-            cube_dim_1d(),
-            output_arg,
-            input_arg,
-        );
-    });
-    flush_cubecl_client(rt, "validate_nonsingular_gpu")?;
-    Ok(output)
+    backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
+        let output = cubecl.alloc_output::<f64>(input.shape())?;
+        let input_arg = cubecl.array_arg(input, "validate_nonsingular_gpu")?;
+        let output_arg = cubecl.array_arg(&output, "validate_nonsingular_gpu")?;
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
+        // SAFETY: bindings describe live CUDA tensors, and `launch_count`
+        // covers exactly the complex64 magnitude output domain.
+        unsafe {
+            cubecl_linalg::complex64_magnitude::launch_unchecked::<CubeclCudaRuntime>(
+                cubecl.client(),
+                launch_count,
+                cubecl.cube_dim_1d(),
+                output_arg,
+                input_arg,
+            );
+        }
+        Ok(output)
+    })
 }
 
 fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64, f64)> {
