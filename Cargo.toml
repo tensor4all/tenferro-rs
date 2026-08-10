@@ -16,7 +16,6 @@ members = [
     "crates/tenferro-linalg",
     "crates/tenferro-fft",
     "docs/tutorial-code",
-    "samples/cubecl-kernel",
 ]
 exclude = ["third_party/t4a-tblis-src", "ext/sparse", "ext/tropical"]
 default-members = [
@@ -83,18 +82,6 @@ cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
-
-# Downstream-style fixture pin: `cubecl-kernel-sample` depends on the
-# published crates.io `t4a-cubecl = =0.10.0` package line, so this patch
-# redirects the sample's registry source to the same fork revision the
-# workspace deps above pin, keeping a single CubeCL runtime type across the
-# workspace. Not inherited by downstream crates.
-[patch.crates-io]
-t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
-t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
-t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
-t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
-t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
 
 [profile.dev]
 opt-level = 0

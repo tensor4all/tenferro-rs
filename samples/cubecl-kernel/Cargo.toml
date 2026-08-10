@@ -5,12 +5,33 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
 
+[workspace]
+resolver = "2"
+
 [dependencies]
 # Downstream-style package line: downstream extern kernel crates depend on the
-# published crates.io `t4a-cubecl = =0.10.0`, never a git rev. Within this
-# workspace the root `[patch.crates-io]` redirects to the fork so all crates
-# share one CubeCL runtime type.
+# published crates.io `t4a-cubecl = =0.10.0`, never a git rev. The
+# `[patch.crates-io]` below redirects this standalone workspace to the same
+# fork revision tenferro-gpu pins, so all crates share one CubeCL runtime type.
 cubecl = { package = "t4a-cubecl", version = "=0.10.0", features = ["cuda"] }
 cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.0" }
 tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda"] }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+
+# Standalone-workspace fork pin (WGPU exact-submission patch, not yet
+# upstream): redirects this sample's crates.io CubeCL line to the same fork
+# revision the tenferro workspace deps pin, keeping a single CubeCL runtime
+# type across the sample and tenferro-gpu.
+[patch.crates-io]
+t4a-cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
+t4a-cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
+t4a-cubecl-common = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
+t4a-cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
+t4a-cubecl-wgpu = { git = "https://github.com/tensor4all/cubecl.git", rev = "1c88bb6f1a47ffb11755e05048b7828a743f53e1" }
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"

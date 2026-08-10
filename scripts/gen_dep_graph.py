@@ -54,7 +54,6 @@ _MEMBER_CLASSES = {
     "crates/tenferro-linalg": "extension",
     "crates/tenferro-fft": "extension",
     "docs/tutorial-code": "tutorial",
-    "samples/cubecl-kernel": "tutorial",
 }
 
 _CLASS_ORDER = [

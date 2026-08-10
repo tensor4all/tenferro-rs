@@ -142,6 +142,7 @@ jobs:
             ext/sparse
             ext/tenferro-cpu-tblis
             samples/kdv-pinn
+            samples/cubecl-kernel
       - name: Run extension profile
         if: needs.changes.outputs.run_extensions == 'true'
         run: python3 scripts/ci/run_profile.py extensions
