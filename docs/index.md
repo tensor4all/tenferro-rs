@@ -17,6 +17,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 | Workflow | Start with |
 | --- | --- |
 | First setup and a checked CPU program | [Getting Started](getting-started/index.md) |
+| Coming from ndarray, nalgebra, or ndarray-linalg | [ndarray / nalgebra Mapping](getting-started/ndarray-nalgebra-mapping.md) |
 | Core terms and the three main choices | [Core Concepts](getting-started/core-concepts.md) |
 | Step-by-step runnable examples | [Tutorials](tutorials/index.md) |
 | Choosing between `TypedTensor`, `Tensor`, `EagerTensor`, and `TracedTensor` | [Choosing a Tensor API](guides/choosing-an-api.md) |

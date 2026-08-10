@@ -32,6 +32,22 @@ targets.
 
 ![tenferro-rs architecture overview](docs/assets/tenferro-architecture.svg)
 
+## Conventions you must know before writing code
+
+- **Column-major storage.** Dense buffers are column-major: the leftmost
+  dimension varies fastest. Row-major data passed to `from_vec_col_major` is
+  silently reinterpreted as column-major — permuted/wrong values, never
+  rejected.
+- **No facade crate.** `cargo add tenferro` fails by design; depend on the
+  crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
+- **Explicit backend.** Direct operations take an explicit backend argument;
+  construct the backend/runtime once and reuse it — per-call construction
+  discards the buffer pool.
+- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); `...`
+  ellipsis is unsupported.
+- **Result-returning operators.** Traced operators return `Result`; propagate
+  with `?`.
+
 ## Quickstart A: Direct Tensor Compute
 
 Add the runtime, CPU backend, and linear algebra extension crates:
@@ -276,10 +292,18 @@ The full guides, tutorials, API reference, architecture notes, and
 specifications live at <https://tensor4all.org/tenferro-rs/>. Start with
 [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/index.html);
 PyTorch/JAX users can also jump in through the
-[PyTorch and JAX mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html).
+[PyTorch and JAX mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html),
+and Rust users coming from ndarray, nalgebra, or ndarray-linalg through the
+[ndarray/nalgebra mapping](https://tensor4all.org/tenferro-rs/getting-started/ndarray-nalgebra-mapping.html).
 Agents and users writing downstream Rust should load the bundled
 [tenferro-compute skill](https://github.com/tensor4all/tenferro-rs/blob/main/.agents/skills/tenferro-compute/SKILL.md)
-for API-tier, crate, import, and pitfall guidance.
+for API-tier, crate, import, and pitfall guidance, or start from the
+[llms.txt index](docs/llms.txt) — the single machine-oriented router whose
+entries (including the skill's [API cheatsheet](https://tensor4all.org/tenferro-rs/skill-references/api-cheatsheet.md),
+[crate selection](https://tensor4all.org/tenferro-rs/skill-references/crate-selection.md),
+[performance idioms](https://tensor4all.org/tenferro-rs/skill-references/performance-idioms.md),
+and [pitfalls](https://tensor4all.org/tenferro-rs/skill-references/pitfalls.md)
+recipes) are one fetch away.
 
 Selected deep dives:
 

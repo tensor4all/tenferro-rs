@@ -19,6 +19,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
 LLMS_SITE_PREFIX = "/tenferro-rs/"
 LLMS_LINK_RE = re.compile(r"^\s*-\s+\[([^]]+)\]\(([^)]+)\):\s*(\S.*)$", re.MULTILINE)
 LLMS_SKILL_PATH = ".agents/skills/tenferro-compute/SKILL.md"
+LLMS_SKILL_REFERENCES_PREFIX = "skill-references/"
+LLMS_README_URL = "https://github.com/tensor4all/tenferro-rs/blob/main/README.md"
 
 
 class LinkCollector(HTMLParser):
@@ -101,6 +103,13 @@ def llms_source_path(root: pathlib.Path, url: str) -> pathlib.Path | None:
     parsed = urlsplit(url)
     if parsed.netloc == "tensor4all.org" and parsed.path.startswith(LLMS_SITE_PREFIX):
         relative = unquote(parsed.path[len(LLMS_SITE_PREFIX) :])
+        # Republished skill references are copied into the site build from the
+        # canonical skill; resolve them back to that single source of truth.
+        if relative.startswith(LLMS_SKILL_REFERENCES_PREFIX):
+            name = relative[len(LLMS_SKILL_REFERENCES_PREFIX) :]
+            if not name.endswith(".md"):
+                return None
+            return root / ".agents" / "skills" / "tenferro-compute" / "references" / name
         if relative.endswith("/"):
             relative += "index.md"
         elif relative.endswith(".html"):
@@ -112,6 +121,46 @@ def llms_source_path(root: pathlib.Path, url: str) -> pathlib.Path | None:
     if parsed.netloc == "github.com" and parsed.path.startswith(github_prefix):
         return root / unquote(parsed.path[len(github_prefix) :])
     return None
+
+
+def llms_skill_reference_names(text: str) -> set[str]:
+    names: set[str] = set()
+    for match in LLMS_LINK_RE.finditer(text):
+        url = match.group(2)
+        parsed = urlsplit(url)
+        if parsed.netloc != "tensor4all.org":
+            continue
+        relative = unquote(parsed.path)
+        if not relative.startswith(LLMS_SITE_PREFIX + LLMS_SKILL_REFERENCES_PREFIX):
+            continue
+        name = relative[len(LLMS_SITE_PREFIX + LLMS_SKILL_REFERENCES_PREFIX) :]
+        if name.endswith(".md"):
+            names.add(name)
+    return names
+
+
+def markdown_link_targets(text: str) -> set[str]:
+    return {target for target in re.findall(r"\[[^]]*\]\(([^)]+)\)", text)}
+
+
+def check_reachability(root: pathlib.Path) -> list[str]:
+    """Assert the README is the single router and llms.txt links back to it."""
+    errors: list[str] = []
+    readme = root / "README.md"
+    if not readme.is_file():
+        return ["README.md is missing; router reachability cannot be checked"]
+    readme_targets = markdown_link_targets(readme.read_text(encoding="utf-8"))
+    if not any(target == "docs/llms.txt" or target.endswith("/docs/llms.txt") for target in readme_targets):
+        errors.append("README.md must link docs/llms.txt (single router)")
+    if not any(LLMS_SKILL_PATH in target for target in readme_targets):
+        errors.append(f"README.md must link {LLMS_SKILL_PATH}")
+    llms_index = root / "docs" / "llms.txt"
+    llms_targets = (
+        markdown_link_targets(llms_index.read_text(encoding="utf-8")) if llms_index.is_file() else set()
+    )
+    if LLMS_README_URL not in llms_targets:
+        errors.append(f"docs/llms.txt must link back to the README ({LLMS_README_URL})")
+    return errors
 
 
 def check_llms_index(root: pathlib.Path, docs_site_root: pathlib.Path | None = None) -> list[str]:
@@ -145,8 +194,13 @@ def check_llms_index(root: pathlib.Path, docs_site_root: pathlib.Path | None = N
         errors.append(f"docs/llms.txt must link {LLMS_SKILL_PATH}")
     elif not (root / LLMS_SKILL_PATH).is_file():
         errors.append(f"docs/llms.txt skill target does not exist: {LLMS_SKILL_PATH}")
-    if docs_site_root is not None and docs_site_root.exists() and not (docs_site_root / "llms.txt").is_file():
-        errors.append(f"built docs site is missing root llms.txt: {docs_site_root / 'llms.txt'}")
+    if docs_site_root is not None and docs_site_root.exists():
+        if not (docs_site_root / "llms.txt").is_file():
+            errors.append(f"built docs site is missing root llms.txt: {docs_site_root / 'llms.txt'}")
+        for name in sorted(llms_skill_reference_names(index.read_text(encoding="utf-8"))):
+            built = docs_site_root / LLMS_SKILL_REFERENCES_PREFIX / name
+            if not built.is_file():
+                errors.append(f"built docs site is missing republished skill reference: {built}")
     return errors
 
 
@@ -323,6 +377,13 @@ def main() -> int:
     if llms_errors:
         print("llms.txt validation failed:", file=sys.stderr)
         for error in llms_errors:
+            print(f"- {error}", file=sys.stderr)
+        return 1
+
+    reachability_errors = check_reachability(root)
+    if reachability_errors:
+        print("docs reachability failed:", file=sys.stderr)
+        for error in reachability_errors:
             print(f"- {error}", file=sys.stderr)
         return 1
 
