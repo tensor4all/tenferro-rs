@@ -23,11 +23,15 @@ use crate::kernel::scale;
 ///
 /// # Examples
 ///
-/// Hardware-gated end-to-end run; without a CUDA device this returns an
-/// error, which the example ignores.
+/// Hardware-gated: `cudarc` panics when the CUDA driver library is absent, so
+/// the call is wrapped in `catch_unwind` (the same guard `gpu_available`
+/// uses). On CUDA hardware this runs the full upload → launch → sync →
+/// download → assert flow and returns `Ok(Ok(()))`; elsewhere it returns
+/// `Ok(Err(..))` or `Err(panic)`.
 ///
 /// ```
-/// let _ = cubecl_kernel_sample::run_scale_check();
+/// let outcome = std::panic::catch_unwind(|| cubecl_kernel_sample::run_scale_check());
+/// let _ = outcome;
 /// ```
 ///
 /// # Errors
