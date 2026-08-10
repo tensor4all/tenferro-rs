@@ -69,6 +69,10 @@ class RunProfileTests(unittest.TestCase):
                 "--features cpu-blas --no-fail-fast",
                 "cargo test --doc --workspace --profile ci --no-default-features "
                 "--features cpu-blas",
+                # Issue #1602: downstream BLAS interop example linked against
+                # the system OpenBLAS/LAPACK via the profile RUSTFLAGS.
+                "cargo run -p tenferro-tutorial-code --profile ci "
+                "--no-default-features --features cpu-blas --bin blas_interop",
             ),
         )
 
@@ -129,6 +133,26 @@ class RunProfileTests(unittest.TestCase):
         self.assertIn("python3 scripts/test-gen-dep-graph.py", commands)
         self.assertLess(
             commands.index("python3 scripts/test-gen-dep-graph.py"),
+            commands.index("bash scripts/build_docs_site.sh"),
+        )
+
+    def test_docs_profile_runs_external_linalg_interop_examples(self) -> None:
+        commands = commands_for("docs")
+        self.assertIn(
+            "cargo run -p tenferro-tutorial-code --profile ci "
+            "--no-default-features --features cpu-faer --bin faer_interop",
+            commands,
+        )
+        self.assertIn(
+            "RUSTFLAGS='-l dylib=openblas -l dylib=lapack' "
+            "cargo run -p tenferro-tutorial-code --profile ci "
+            "--no-default-features --features cpu-blas --bin blas_interop",
+            commands,
+        )
+        self.assertLess(
+            commands.index("cargo run -p tenferro-tutorial-code --profile ci "
+                           "--no-default-features --features cpu-faer "
+                           "--bin faer_interop"),
             commands.index("bash scripts/build_docs_site.sh"),
         )
 

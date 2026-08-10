@@ -91,6 +91,13 @@ fn tutorial_binaries_run_successfully() {
         "tenferro_compute_skill",
         env!("CARGO_BIN_EXE_tenferro_compute_skill"),
     );
+    #[cfg(feature = "cpu-faer")]
+    run_tutorial("faer_interop", env!("CARGO_BIN_EXE_faer_interop"));
+    // blas_interop requires a linked native provider; the blas-openblas feature
+    // (which implies cpu-blas) supplies one. Running it under bare cpu-blas
+    // would fail to link when no provider library is present.
+    #[cfg(feature = "blas-openblas")]
+    run_tutorial("blas_interop", env!("CARGO_BIN_EXE_blas_interop"));
     #[cfg(feature = "apple-shared")]
     {
         run_tutorial("apple_shared_fft", env!("CARGO_BIN_EXE_apple_shared_fft"));

@@ -51,6 +51,11 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features cpu-blas --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
         "--features cpu-blas",
+        # Downstream BLAS interop example (issue #1602): links the system
+        # OpenBLAS/LAPACK through the profile RUSTFLAGS, so native symbol
+        # linkage is verified, not just compilation.
+        f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
+        "--features cpu-blas --bin blas_interop",
     ),
     "blas-inject": (
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
@@ -75,6 +80,14 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/test-check-guide-dependency-snippets.py",
         "python3 scripts/check-guide-dependency-snippets.py",
         "python3 scripts/check-operation-categories.py --fail-on-findings",
+        # Downstream external-linalg interop examples (issue #1602): compiled
+        # and run as a consumer that uses only public tenferro APIs. The BLAS
+        # binary links the system OpenBLAS/LAPACK installed by the docs CI job
+        # (the RUSTFLAGS are scoped to this one command).
+        f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
+        "--features cpu-faer --bin faer_interop",
+        f"RUSTFLAGS='-l dylib=openblas -l dylib=lapack' cargo run -p tenferro-tutorial-code "
+        f"{_CARGO_TEST_PROFILE} --no-default-features --features cpu-blas --bin blas_interop",
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (

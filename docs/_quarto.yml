@@ -60,6 +60,7 @@ website:
           - storage-ownership.md
           - guides/einsum.md
           - guides/linear-algebra.md
+          - guides/external-linalg-interop.md
           - guides/custom-operations.md
           - text: "FFT (extension)"
             href: guides/tenferro-fft.md

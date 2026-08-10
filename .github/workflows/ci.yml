@@ -252,6 +252,12 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends graphviz
           fi
+      - name: Install BLAS/LAPACK libraries for the interop tutorial binaries
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libopenblas-dev liblapack-dev
       - name: Validate and build docs site
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         run: python3 scripts/ci/run_profile.py docs
