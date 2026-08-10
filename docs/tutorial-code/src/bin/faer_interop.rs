@@ -187,8 +187,9 @@ fn faer_rejects_non_host_storage() -> tenferro_tensor::Result<()> {
         "unexpected error: {error}"
     );
 
-    // The required transfer is an explicit tenferro operation (for example
-    // CpuBackend download/canonicalization); only then can faer read the data.
+    // The required transfer is an explicit download through the owning
+    // backend (CpuBackend rejects foreign backend buffers); only then can faer
+    // read the data.
     Ok(())
 }
 // snippet-end:faer-non-host

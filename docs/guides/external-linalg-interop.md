@@ -107,9 +107,11 @@ kind, so the zero-copy slice it hands to faer is provably compact column-major.
 
 A non-contiguous view (transpose, slice, broadcast) is rejected by `as_slice()`
 with an explicit error and is never silently materialized. A backend-placed
-tensor is rejected the same way and is never implicitly downloaded. In both
-cases the caller performs the explicit copy or transfer, for example
-`CpuBackend::to_contiguous` or an explicit download.
+tensor is rejected the same way and is never implicitly downloaded. The caller
+performs the explicit copy or transfer: `CpuBackend::to_contiguous` for host
+non-contiguous views, and the owning backend's explicit download API for
+backend buffers (`CpuBackend` itself rejects foreign backend buffers, so the
+tensor's own backend must perform the transfer).
 
 ## faer: zero-copy views over tenferro storage
 
@@ -274,8 +276,9 @@ fn faer_rejects_non_host_storage() -> tenferro_tensor::Result<()> {
         "unexpected error: {error}"
     );
 
-    // The required transfer is an explicit tenferro operation (for example
-    // CpuBackend download/canonicalization); only then can faer read the data.
+    // The required transfer is an explicit download through the owning
+    // backend (CpuBackend rejects foreign backend buffers); only then can faer
+    // read the data.
     Ok(())
 }
 ```
@@ -392,10 +395,13 @@ fn lapack_potrf_on_host_storage() -> tenferro_tensor::Result<()> {
   `i32::try_from` and handle overflow instead of casting blindly. There is no
   ILP64 variant of these crates in the tested configuration.
 - **Complex ABI.** CBLAS complex entry points take interleaved real/imaginary
-  pairs. `num_complex::Complex<f64>` has exactly that layout, so `Complex64`
-  slices can be passed directly; tenferro uses the same `num_complex` types for
-  its `C64` dtypes. Do not reinterpret a complex slice as twice as many reals
-  and hand that to a complex routine.
+  pairs. `cblas-sys` models a complex value as `[f64; 2]`
+  (`c_double_complex`); `num_complex::Complex<f64>` is layout-compatible, so a
+  `Complex64` slice can be passed where a `*const c_double_complex` is
+  expected after an explicit pointer cast. Unlike real entry points, complex
+  CBLAS entry points take `alpha` and `beta` **by pointer**. tenferro uses the
+  same `num_complex` types for its `C64` dtypes. Do not reinterpret a complex
+  slice as twice as many reals and hand that to a complex routine.
 - **Provider thread control.** Direct BLAS/LAPACK calls run on the provider's
   own threads, controlled by process-wide environment variables
   (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, and
@@ -410,9 +416,11 @@ context: its thread count, buffer pool, and (for faer) its selected faer
 parallelism. Direct external calls deliberately sit outside that context:
 
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
-- A direct faer call with `Par::Rayon(n)` uses rayon's **global** thread pool,
-  the same ambient pool tenferro's own `CpuContext` threads belong to — not a
-  dedicated pool you control through `CpuBackend::with_threads(n)`.
+- A direct faer call with `Par::Rayon(n)` uses rayon's **global** thread pool.
+  That is not the pool tenferro's faer-backed kernels use: `CpuContext`
+  constructs its own Rayon pools scoped to the requested thread count and CPU
+  affinity. A direct call therefore does not participate in tenferro's CPU
+  resource domain at all — not its pool, not its budget, not its affinity.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.
 
