@@ -5,11 +5,11 @@ use std::hash::{Hash, Hasher};
 
 use tenferro_tensor::BoxError;
 
-use crate::cubecl::identity::{CudaComputeCapability, CudaDeviceUuid};
 use crate::cubecl::device::{
     discover_with, unavailable_device_error, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
     DiscoveryDriver,
 };
+use crate::cubecl::identity::{CudaComputeCapability, CudaDeviceUuid};
 
 fn test_uuid(ordinal: u32) -> CudaDeviceUuid {
     CudaDeviceUuid::from_bytes([ordinal as u8; 16])
@@ -91,8 +91,7 @@ impl DiscoveryDriver for FakeDriver {
     fn device_name(&self, device: CudaDeviceId) -> Result<String, BoxError> {
         self.calls.borrow_mut().push("device_name");
         self.attempted_ordinals.borrow_mut().push(device);
-        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
-        {
+        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device) {
             return Err(Box::new(std::io::Error::other("fake device name failure")));
         }
         Ok(self.names[device.ordinal() as usize].clone())
@@ -100,20 +99,15 @@ impl DiscoveryDriver for FakeDriver {
 
     fn device_uuid(&self, device: CudaDeviceId) -> Result<CudaDeviceUuid, BoxError> {
         self.calls.borrow_mut().push("device_uuid");
-        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
-        {
+        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device) {
             return Err(Box::new(std::io::Error::other("fake device uuid failure")));
         }
         Ok(test_uuid(device.ordinal()))
     }
 
-    fn compute_capability(
-        &self,
-        device: CudaDeviceId,
-    ) -> Result<CudaComputeCapability, BoxError> {
+    fn compute_capability(&self, device: CudaDeviceId) -> Result<CudaComputeCapability, BoxError> {
         self.calls.borrow_mut().push("compute_capability");
-        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
-        {
+        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device) {
             return Err(Box::new(std::io::Error::other(
                 "fake compute capability failure",
             )));
@@ -123,8 +117,7 @@ impl DiscoveryDriver for FakeDriver {
 
     fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError> {
         self.calls.borrow_mut().push("total_memory_bytes");
-        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device)
-        {
+        if matches!(self.scenario, FakeDriverScenario::NameFailure(failed) if failed == device) {
             return Err(Box::new(std::io::Error::other("fake total memory failure")));
         }
         Ok(40 * 1024 * 1024 * 1024)
@@ -343,9 +336,9 @@ fn cuda_device_error_unavailable_preserves_fields_without_source() {
                 test_info(CudaDeviceId::from_ordinal(1), "NVIDIA A100"),
             ]
     ));
-    assert!(error.to_string().contains(
-        "requested CUDA device CudaDeviceId(2) is unavailable; discovered devices: ["
-    ));
+    assert!(error
+        .to_string()
+        .contains("requested CUDA device CudaDeviceId(2) is unavailable; discovered devices: ["));
     assert!(error.to_string().contains(
         "CudaDeviceInfo { id: CudaDeviceId(0), name: \"NVIDIA H100\", uuid: CudaDeviceUuid([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), compute_capability: CudaComputeCapability { major: 9, minor: 0 }, total_memory_bytes: 42949672960 }"
     ));

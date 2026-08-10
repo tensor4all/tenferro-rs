@@ -216,7 +216,9 @@ pub(crate) trait DiscoveryDriver {
     fn total_memory_bytes(&self, device: CudaDeviceId) -> Result<u64, BoxError>;
 }
 
-pub(crate) fn discover_with(driver: &impl DiscoveryDriver) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
+pub(crate) fn discover_with(
+    driver: &impl DiscoveryDriver,
+) -> Result<Vec<CudaDeviceInfo>, CudaDeviceError> {
     driver
         .initialize()
         .map_err(|source| CudaDeviceError::Discovery {

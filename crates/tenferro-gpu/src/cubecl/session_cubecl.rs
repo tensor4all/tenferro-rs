@@ -156,8 +156,9 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when the one-dimensional launch
-    /// for `len` elements would require more than `u32::MAX` workgroups.
+    /// Returns [`crate::Error::Validation`] carrying
+    /// `ValidationError::InvalidArgument` when the one-dimensional launch for
+    /// `len` elements would require more than `u32::MAX` workgroups.
     pub fn cube_count_1d(&self, len: usize) -> crate::Result<CubeCount> {
         super::interop::cube_count_for_len(len)
     }

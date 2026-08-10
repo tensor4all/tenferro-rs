@@ -171,7 +171,8 @@ impl LaunchConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when `block == 0`.
+    /// Returns [`crate::Error::Validation`] carrying
+    /// `ValidationError::InvalidArgument` when `block == 0`.
     pub fn flat(threads: u32, block: u32, shared_mem_bytes: u32) -> crate::Result<Self> {
         if block == 0 {
             return Err(crate::Error::invalid_argument(
@@ -558,8 +559,10 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns typed validation errors for geometry/limit violations and
-    /// backend errors when the driver rejects the launch.
+    /// Returns [`crate::Error::Validation`] carrying
+    /// `ValidationError::InvalidArgument` when the launch geometry or limits
+    /// are invalid, or [`crate::Error::BackendSource`] when the driver rejects
+    /// the launch.
     pub unsafe fn launch(
         &self,
         function: &Function,
@@ -625,8 +628,8 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Propagates the initializer's typed error or a cache poison/runtime-state
-    /// error.
+    /// Returns the initializer's typed error, or
+    /// [`crate::Error::RuntimeState`] when the extension cache is poisoned.
     pub fn resource<T>(
         &self,
         init: impl FnOnce() -> crate::Result<T>,
