@@ -113,3 +113,47 @@ Import recipes:
 
 If a method is present in the guide but Rust reports E0599, check the owning
 crate's root re-exports and bring its `*Ext` trait into the local module.
+
+## Borrowing external memory
+
+Wrap an existing column-major buffer (a `faer::Mat`, an ndarray view, or any
+slice plus strides) zero-copy with `TypedTensorView::from_slice`; use
+`TypedTensorViewMut::from_slice` to write through the borrowed buffer. This is
+how a tenferro kernel consumes memory owned by another library without a
+migration: no tensor ownership is transferred.
+
+<!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#borrowing-external-memory -->
+```rust
+use tenferro_runtime::TypedTensorView;
+use tenferro_tensor::TypedTensorViewMut;
+
+// Wrap a column-major faer::Mat without copying. faer pads columns to
+// alignment, so the borrowed slice spans `col_stride * ncols` elements and the
+// column stride is passed explicitly; the padding is never read logically.
+let mat = faer::Mat::from_fn(2, 3, |r, c| (r * 3 + c) as f64);
+let data = unsafe { std::slice::from_raw_parts(mat.as_ref().as_ptr(), (mat.col_stride() as usize) * mat.ncols()) };
+let view = TypedTensorView::from_slice(vec![2, 3], vec![1_isize, mat.col_stride()], 0, data)?;
+assert_eq!(view.get(&[1, 2]), Some(&5.0));
+
+// Wrap an ndarray row-major view the same way. Strides are arbitrary, so a
+// row-major buffer is not transposed; it is only wrapped.
+let arr = ndarray::Array2::from_shape_vec((2, 3), (0..6).map(|i| i as f64).collect())?;
+let nview = TypedTensorView::from_slice(arr.shape(), arr.strides(), 0, arr.as_slice().expect("row-major array is contiguous"))?;
+assert_eq!(nview.get(&[0, 2]), Some(&2.0));
+
+// The mutable variant writes through the borrowed buffer.
+let mut buffer = [0.0_f64, 0.0, 0.0, 0.0];
+let mut mview = TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 2], 0, &mut buffer)?;
+*mview.get_mut(&[0, 0]).expect("in-bounds index") = 7.0;
+assert_eq!(buffer[0], 7.0);
+```
+<!-- end-snippet-source -->
+
+Because strides are arbitrary, row-major data wraps without transposition —
+but kernels are tuned for column-major contiguity. Materialize a copy when the
+wrapped buffer is row-major or its lifetime ends before the operation;
+`TypedTensorView::duplicate()` requires a column-major-contiguous view, so for
+a row-major wrap copy into a fresh `TypedTensor` (or an owned `Vec` in
+column-major order) instead. If you search for the retired
+`TypedStridedTensorView` (tenferro-rs#886), stop: `TypedTensorView::from_slice`
+is its successor.

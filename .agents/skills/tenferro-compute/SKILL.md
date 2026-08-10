@@ -28,9 +28,19 @@ not when changing tenferro itself.
 
 ## Non-negotiable defaults
 
-- Dense flat buffers are column-major: the leftmost dimension varies fastest.
-- Bind one backend/runtime/compiler and reuse it across related work.
-- Compile traced programs once outside repeated execution loops.
+- **Column-major storage.** Dense buffers are column-major: the leftmost
+  dimension varies fastest. Row-major data passed to `from_vec_col_major` is
+  silently reinterpreted as column-major — permuted/wrong values, never
+  rejected.
+- **No facade crate.** `cargo add tenferro` fails by design; depend on the
+  crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
+- **Explicit backend.** Direct operations take an explicit backend argument;
+  construct the backend/runtime once and reuse it — per-call construction
+  discards the buffer pool.
+- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); `...`
+  ellipsis is unsupported.
+- **Result-returning operators.** Traced operators return `Result`; propagate
+  with `?`.
 - CPU/GPU transfers are explicit; unsupported GPU operations do not silently
   fall back to CPU.
 - Traced standard extensions need an explicitly installed extension module and

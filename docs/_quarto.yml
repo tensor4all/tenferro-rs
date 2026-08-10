@@ -35,6 +35,7 @@ website:
           - getting-started/index.md
           - getting-started/core-concepts.md
           - getting-started/pytorch-jax-mapping.md
+          - getting-started/ndarray-nalgebra-mapping.md
       - section: "Tutorials"
         contents:
           - tutorials/index.md

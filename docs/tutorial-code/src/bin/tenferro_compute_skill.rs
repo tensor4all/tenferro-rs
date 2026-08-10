@@ -116,10 +116,40 @@ for (input, expected) in [
     Ok(())
 }
 
+#[rustfmt::skip]
+fn borrowing_external_memory() -> Result<(), Box<dyn std::error::Error>> {
+    // snippet-start:borrowing-external-memory
+use tenferro_runtime::TypedTensorView;
+use tenferro_tensor::TypedTensorViewMut;
+
+// Wrap a column-major faer::Mat without copying. faer pads columns to
+// alignment, so the borrowed slice spans `col_stride * ncols` elements and the
+// column stride is passed explicitly; the padding is never read logically.
+let mat = faer::Mat::from_fn(2, 3, |r, c| (r * 3 + c) as f64);
+let data = unsafe { std::slice::from_raw_parts(mat.as_ref().as_ptr(), (mat.col_stride() as usize) * mat.ncols()) };
+let view = TypedTensorView::from_slice(vec![2, 3], vec![1_isize, mat.col_stride()], 0, data)?;
+assert_eq!(view.get(&[1, 2]), Some(&5.0));
+
+// Wrap an ndarray row-major view the same way. Strides are arbitrary, so a
+// row-major buffer is not transposed; it is only wrapped.
+let arr = ndarray::Array2::from_shape_vec((2, 3), (0..6).map(|i| i as f64).collect())?;
+let nview = TypedTensorView::from_slice(arr.shape(), arr.strides(), 0, arr.as_slice().expect("row-major array is contiguous"))?;
+assert_eq!(nview.get(&[0, 2]), Some(&2.0));
+
+// The mutable variant writes through the borrowed buffer.
+let mut buffer = [0.0_f64, 0.0, 0.0, 0.0];
+let mut mview = TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 2], 0, &mut buffer)?;
+*mview.get_mut(&[0, 0]).expect("in-bounds index") = 7.0;
+assert_eq!(buffer[0], 7.0);
+    // snippet-end:borrowing-external-memory
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     concrete_operation_and_column_major()?;
     eager_operation()?;
     traced_operation_with_extension_registration()?;
     compile_once_run_many()?;
+    borrowing_external_memory()?;
     Ok(())
 }

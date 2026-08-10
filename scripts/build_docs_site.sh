@@ -12,6 +12,11 @@ rm -rf "$OUT_DIR"
 mkdir -p "$API_DIR"
 cp "$ROOT_DIR/docs/llms.txt" "$OUT_DIR/llms.txt"
 
+# Republish the skill's snippet-verified references so llms.txt recipes are one
+# fetch away; the site copies are byte-identical to the canonical skill files.
+mkdir -p "$OUT_DIR/skill-references"
+cp "$ROOT_DIR/.agents/skills/tenferro-compute/references/"*.md "$OUT_DIR/skill-references/"
+
 render_overview_html() {
   if [[ -f "$API_INDEX_MD" ]]; then
     if command -v pandoc >/dev/null 2>&1; then

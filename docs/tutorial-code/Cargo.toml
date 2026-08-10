@@ -26,6 +26,8 @@ cuda = [
 ]
 
 [dependencies]
+faer.workspace = true
+ndarray = "0.16"
 num-complex.workspace = true
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
