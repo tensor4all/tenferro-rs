@@ -262,7 +262,9 @@ optimization-sensitive behavior, or a maintainer explicitly requests it.
 If the formatting step fails, run `cargo fmt --all`, then
 `cargo fmt --manifest-path ext/tropical/Cargo.toml --all` and
 `cargo fmt --manifest-path ext/sparse/Cargo.toml --all` to fix formatting
-automatically. Run the local LLM review on the committed PR head;
+automatically. Run the local repository-rules review on the committed PR
+head (the external LLM review is permanently disabled, so run it with
+`--dry-run --llm-skipped-reason "local deterministic review"`);
 `--worktree` is acceptable only as an earlier preview, and must be rerun
 without `--worktree` before PR creation.
 

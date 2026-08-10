@@ -306,16 +306,20 @@ def test_review_bot_workflow_exists() -> None:
 
     assert "name: review bot" in text
     assert "name: repository rules review gate" in text
-    assert "DEEPSEEK_API_KEY" in text
+    # The external LLM review is permanently disabled: the review runs the
+    # deterministic checks with an explicit skip reason and never sends the
+    # diff to a model provider.
+    assert "DEEPSEEK_API_KEY" not in text
+    assert "--llm-skipped-reason" in text
     assert "rules-review:waive" in text
 
 
-def test_review_bot_uses_current_deepseek_model_fallback() -> None:
+def test_review_bot_runs_deterministic_checks_without_llm() -> None:
     text = read(".github/workflows/review_bot.yml")
 
-    assert "deepseek-v4-pro" in text
-    assert "'deepseek-chat'" not in text
-    assert "'deepseek-reasoner'" not in text
+    assert "--dry-run" in text
+    assert "deepseek-v4-pro" not in text
+    assert "DEEPSEEK_MODEL" not in text
 
 
 def test_repo_settings_requires_repository_rules_review() -> None:
@@ -342,7 +346,7 @@ def test_gpu_ci_waits_for_review_bot_gate_before_cuda_work() -> None:
     assert "needs: [pre-gpu-gate]" not in text
 
 
-def test_pre_pr_checklist_requires_local_llm_review() -> None:
+def test_pre_pr_checklist_requires_local_repository_rules_review() -> None:
     text = read("AGENTS.md")
     template = read(".github/pull_request_template.md")
 
@@ -350,7 +354,8 @@ def test_pre_pr_checklist_requires_local_llm_review() -> None:
     assert "--base origin/main" in text
     assert "--head HEAD" in text
     assert "--worktree" in text
-    assert "local repository-rules LLM review" in template
+    assert "local repository-rules review" in template
+    assert "permanently disabled" in template
 
 
 def test_operation_surface_checker_requires_inherent_tensor_methods() -> None:
@@ -658,10 +663,10 @@ def main() -> int:
         test_design_documentation_requirements_have_named_rendered_homes,
         test_ci_enforces_public_error_docs_and_extension_clippy,
         test_review_bot_workflow_exists,
-        test_review_bot_uses_current_deepseek_model_fallback,
+        test_review_bot_runs_deterministic_checks_without_llm,
         test_repo_settings_requires_repository_rules_review,
         test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,
-        test_pre_pr_checklist_requires_local_llm_review,
+        test_pre_pr_checklist_requires_local_repository_rules_review,
         test_operation_surface_checker_requires_inherent_tensor_methods,
         test_operation_surface_checker_rejects_tensor_module_exports,
         test_operation_surface_checker_skips_rendered_search_index_metadata,
