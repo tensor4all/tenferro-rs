@@ -720,7 +720,8 @@ pub(crate) fn linearize_svd(
         eps * eps,
         matrix_shape(k.clone(), k.clone(), batch_shape),
         s_dtype,
-    );
+        "linearize_svd",
+    )?;
     let safe_gap = fixed_add(builder, ValueRef::Local(s_gap_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(s_gap), ValueRef::Local(safe_gap));
     let s_dim_linear_dtype =
@@ -738,7 +739,8 @@ pub(crate) fn linearize_svd(
             eps * eps,
             vector_shape(k.clone(), batch_shape),
             s_dtype,
-        );
+            "linearize_svd",
+        )?;
         let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
         let s_inv = fixed_div(builder, s.clone(), ValueRef::Local(safe_s_sq));
         let s_inv_mat = embed_diag_fixed(builder, ValueRef::Local(s_inv));
@@ -755,7 +757,8 @@ pub(crate) fn linearize_svd(
             0.5,
             matrix_shape(k.clone(), k.clone(), batch_shape),
             dtype,
-        );
+            "linearize_svd",
+        )?;
 
         let dss = hadamard_fixed_linear(builder, s_dim_linear_dtype.clone(), ds_mat);
         let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
@@ -953,7 +956,8 @@ pub(crate) fn linearize_eigh(
         matrix_rank,
         dtype,
         vector_shape(n.clone(), batch_shape),
-    );
+        "linearize_eigh",
+    )?;
 
     let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank, dtype);
     let tmp = matmul_linear(
@@ -1003,7 +1007,8 @@ pub(crate) fn linearize_eigh(
         eps * eps,
         matrix_shape(n.clone(), n.clone(), batch_shape),
         w_dtype,
-    );
+        "linearize_eigh",
+    )?;
     let safe_diff = fixed_add(builder, ValueRef::Local(diff_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(diff), ValueRef::Local(safe_diff));
     let f = convert_fixed_ref_to_dtype(builder, ValueRef::Local(f), w_dtype, dtype);
@@ -1052,7 +1057,8 @@ pub(crate) fn linearize_eigh_values(
         matrix_rank,
         dtype,
         vector_shape(n.clone(), batch_shape),
-    );
+        "linearize_eigh_values",
+    )?;
     let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank, dtype);
     let tmp = matmul_linear(
         builder,
@@ -1112,7 +1118,8 @@ pub(crate) fn linearize_cholesky(
         matrix_rank,
         dtype,
         vector_shape(n.clone(), batch_shape),
-    );
+        "linearize_cholesky",
+    )?;
     let l_conj = conjugate_primal_if_dtype_complex(builder, l.clone(), dtype);
 
     let tmp = builder.add_operation(
@@ -1154,7 +1161,8 @@ pub(crate) fn linearize_cholesky(
         0.5,
         vector_shape(n.clone(), batch_shape),
         dtype,
-    );
+        "linearize_cholesky",
+    )?;
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     let phi_s = linear_add(builder, strict_lower, half_diag_mat);
     let dl = matmul_linear(
@@ -1254,7 +1262,8 @@ pub(crate) fn linearize_qr(
             0.5,
             vector_shape(m.clone(), batch_shape),
             dtype,
-        );
+            "linearize_qr",
+        )?;
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -1405,8 +1414,14 @@ pub(crate) fn linearize_qr(
             },
         )[0];
         let sym_diag = extract_diag_linear(builder, sym);
-        let half_sym_diag =
-            linear_scale_with_dtype(builder, sym_diag, 0.5, vector_shape(k, batch_shape), dtype);
+        let half_sym_diag = linear_scale_with_dtype(
+            builder,
+            sym_diag,
+            0.5,
+            vector_shape(k, batch_shape),
+            dtype,
+            "linearize_qr",
+        )?;
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -1508,7 +1523,8 @@ pub(crate) fn linearize_qr(
         0.5,
         vector_shape(n.clone(), batch_shape),
         dtype,
-    );
+        "linearize_qr",
+    )?;
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 

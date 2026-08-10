@@ -123,6 +123,20 @@ fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
         !filled_section.contains("let len = shape.iter().product();"),
         "CPU zero/fill pooled output allocation must not use unchecked shape.iter().product()"
     );
+    assert!(
+        filled_section.contains("PooledUninitOutput::<T>::new(buffers, shape)?"),
+        "CPU fill pooled outputs must use the full-overwrite uninit guard"
+    );
+    assert!(
+        filled_section.contains(".fill(MaybeUninit::new(fill))")
+            && filled_section.contains("// INVARIANT:")
+            && filled_section.contains("// SAFETY:"),
+        "CPU fill pooled outputs must fill the entire destination before the completion handoff and record the invariant markers"
+    );
+    assert!(
+        !filled_section.contains("acquire_zeroed"),
+        "CPU fill pooled outputs must not zero-fill a destination that is fully overwritten"
+    );
 }
 
 #[test]

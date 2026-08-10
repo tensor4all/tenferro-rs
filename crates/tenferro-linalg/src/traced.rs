@@ -9,7 +9,7 @@ use tenferro_runtime::{
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
-use crate::validation::validate_lstsq;
+use crate::validation::{ensure_float_or_complex, validate_lstsq};
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
@@ -51,7 +51,9 @@ pub trait TracedTensorLinalgExt {
     /// # Errors
     ///
     /// Returns `Error::Validation` when the input is not a batched matrix
-    /// (rank `>= 2`), or `Error::Extension` for graph registration failures.
+    /// (rank `>= 2`), `Error::Extension` with `ErrorKind::Unsupported` for
+    /// integer or boolean dtypes, or `Error::Extension` for graph
+    /// registration failures.
     ///
     /// # Deferred errors
     ///
@@ -521,6 +523,7 @@ pub fn svd_with_options(
     options: SvdOptions,
 ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     validate_derivative_eps("svd_with_options", options.derivative_eps)?;
+    ensure_float_or_complex("svd", a.dtype)?;
     three_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Svd {
@@ -557,8 +560,9 @@ pub fn svd_with_options(
 /// # Errors
 ///
 /// Returns `Error::Validation` when the input is not a batched matrix
-/// (rank `>= 2`), or `Error::RuntimeState` when extension registration is
-/// unavailable.
+/// (rank `>= 2`) or `Error::Extension` with `ErrorKind::Unsupported` for
+/// integer or boolean dtypes; `Error::RuntimeState` when extension
+/// registration is unavailable.
 ///
 /// # Deferred errors
 ///
@@ -568,6 +572,7 @@ pub fn svd_with_options(
 /// intentionally unsupported for the full variant (see the linalg AD support
 /// manifest) and surfaces a typed AD error, not a silent thin-SVD fallback.
 pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    ensure_float_or_complex("svd_full", a.dtype)?;
     three_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::SvdFull)), &[a])?,
         "svd_full",
@@ -632,6 +637,7 @@ pub fn qr_with_options(
     a: &TracedTensor,
     options: QrOptions,
 ) -> Result<(TracedTensor, TracedTensor)> {
+    ensure_float_or_complex("qr", a.dtype)?;
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Qr {
@@ -710,6 +716,7 @@ pub fn eigh_with_options(
     options: EighOptions,
 ) -> Result<(TracedTensor, TracedTensor)> {
     validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
+    ensure_float_or_complex("eigh", a.dtype)?;
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
@@ -746,6 +753,7 @@ pub fn eigh_with_options(
 /// Symbolic square-shape constraints can fail later as
 /// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
+    ensure_float_or_complex("cholesky", a.dtype)?;
     one_output(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
         "cholesky",
@@ -1225,6 +1233,7 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 /// Symbolic square-shape constraints can fail later as
 /// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
+    ensure_float_or_complex("eigvalsh", a.dtype)?;
     eigh_values(a)
 }
 
@@ -1529,15 +1538,6 @@ fn real_values_dtype(dtype: DType) -> DType {
         DType::C64 => DType::F64,
         DType::C32 => DType::F32,
         other => other,
-    }
-}
-
-fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
-    match dtype {
-        DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
-        DType::I32 | DType::I64 | DType::Bool => Err(Error::TensorRuntime(
-            crate::error::unsupported_dtype(op, dtype),
-        )),
     }
 }
 
