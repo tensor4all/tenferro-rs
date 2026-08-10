@@ -313,7 +313,7 @@ fn zeroed_tensor_from_pool<T>(
     shape: Vec<usize>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Zero + Clone + PoolScalar + 'static,
+    T: Zero + PoolScalar + 'static,
 {
     filled_tensor_from_pool(buffers, op, shape, T::zero())
 }
@@ -325,12 +325,18 @@ fn filled_tensor_from_pool<T>(
     fill: T,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar + 'static,
+    T: PoolScalar + 'static,
 {
-    let len = checked_shape_product(op, "output shape", &shape)?;
-    let mut data = buffers.acquire_zeroed::<T>(len);
-    data.fill(fill);
-    TypedTensor::from_vec_col_major(shape, data)
+    // Preserve operation-specific shape-product error attribution, then fill
+    // the pooled full-overwrite destination exactly once.
+    checked_shape_product(op, "output shape", &shape)?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
+    // INVARIANT: the pooled destination is fully overwritten by the fill pass
+    // below before the completion handoff, so no uninitialized element is
+    // ever read or dropped.
+    out.as_uninit_slice_mut().fill(MaybeUninit::new(fill));
+    // SAFETY: the fill pass writes every logical destination element.
+    unsafe { out.assume_init() }
 }
 
 fn clone_host_tensor_from_pool<T>(
