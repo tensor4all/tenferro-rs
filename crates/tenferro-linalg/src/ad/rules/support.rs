@@ -1,6 +1,8 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_ops::ad::{support as ad_support, PrimitiveRuleBuilder};
+use tenferro_ops::ad::{
+    support as ad_support, ADRuleError, ADRuleKind, ADRuleResult, PrimitiveRuleBuilder,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
@@ -168,13 +170,14 @@ pub(super) fn fixed_scale_with_dtype(
     factor: f64,
     shape: Vec<DimExpr>,
     dtype: DType,
-) -> LocalValueId {
-    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype);
-    builder.add_operation(
+    op: &'static str,
+) -> ADRuleResult<LocalValueId> {
+    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype, op)?;
+    Ok(builder.add_operation(
         StdTensorOp::Mul,
         vec![ValueRef::Local(constant), input],
         OperationRole::Primary,
-    )[0]
+    )[0])
 }
 
 fn broadcast_scalar_constant_with_dtype(
@@ -182,15 +185,22 @@ fn broadcast_scalar_constant_with_dtype(
     factor: f64,
     shape: Vec<DimExpr>,
     dtype: DType,
-) -> LocalValueId {
-    let op = match dtype {
+    op: &'static str,
+) -> ADRuleResult<LocalValueId> {
+    let op_value = match dtype {
         DType::F64 => StdTensorOp::constant(factor),
         DType::F32 => StdTensorOp::constant(factor as f32),
         DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
         DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
-        DType::I32 | DType::I64 | DType::Bool => StdTensorOp::constant(factor),
+        DType::I32 | DType::I64 | DType::Bool => {
+            return Err(ADRuleError::invalid_input(
+                format!("tenferro-linalg.{op}"),
+                ADRuleKind::Jvp,
+                format!("dtype {dtype:?} is not supported by linalg decomposition derivatives"),
+            ));
+        }
     };
-    broadcast_scalar_constant_with_op(builder, op, shape)
+    Ok(broadcast_scalar_constant_with_op(builder, op_value, shape))
 }
 
 fn broadcast_scalar_constant_with_op(
@@ -269,15 +279,16 @@ pub(super) fn linear_scale_with_dtype(
     factor: f64,
     shape: Vec<DimExpr>,
     dtype: DType,
-) -> LocalValueId {
-    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype);
-    builder.add_operation(
+    op: &'static str,
+) -> ADRuleResult<LocalValueId> {
+    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype, op)?;
+    Ok(builder.add_operation(
         StdTensorOp::Mul,
         vec![ValueRef::Local(constant), ValueRef::Local(input)],
         OperationRole::Linearized {
             active_mask: vec![false, true],
         },
-    )[0]
+    )[0])
 }
 
 pub(super) fn linear_sub(
@@ -472,7 +483,8 @@ pub(super) fn self_adjoint_from_lower_linear(
     rank: usize,
     dtype: DType,
     diag_shape: Vec<DimExpr>,
-) -> LocalValueId {
+    op: &'static str,
+) -> ADRuleResult<LocalValueId> {
     let strict_lower = builder.add_operation(
         StdTensorOp::Tril { k: -1 },
         vec![ValueRef::Local(input)],
@@ -489,10 +501,10 @@ pub(super) fn self_adjoint_from_lower_linear(
     } else {
         let diag_h = conjugate_linear_if_dtype_complex(builder, diag, dtype);
         let diag_sum = linear_add(builder, diag, diag_h);
-        linear_scale_with_dtype(builder, diag_sum, 0.5, diag_shape, dtype)
+        linear_scale_with_dtype(builder, diag_sum, 0.5, diag_shape, dtype, op)?
     };
     let diag_mat = embed_diag_linear(builder, diag);
-    linear_add(builder, offdiag, diag_mat)
+    Ok(linear_add(builder, offdiag, diag_mat))
 }
 
 pub(super) fn matmul_fixed(
@@ -851,124 +863,4 @@ pub(super) fn take_leading_rows_linear(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use computegraph::graph::{Graph, GraphBuilder};
-    use computegraph::types::ValueRef;
-    use tenferro_ops::dim_expr::DimExpr;
-    use tenferro_ops::input_key::TensorInputKey;
-    use tenferro_ops::std_tensor_op::StdTensorOp;
-    use tenferro_tensor::DType;
-
-    use super::{identity_matrix_fixed, leading_column_selector_symbolic, one_like_fixed};
-
-    fn op_kind_name(op: &StdTensorOp) -> &'static str {
-        match op {
-            StdTensorOp::Constant { .. } => "Constant",
-            StdTensorOp::BroadcastInDim { .. } => "BroadcastInDim",
-            StdTensorOp::EmbedDiag { .. } => "EmbedDiag",
-            StdTensorOp::Exp => "Exp",
-            StdTensorOp::Log => "Log",
-            StdTensorOp::Sin => "Sin",
-            StdTensorOp::Cos => "Cos",
-            StdTensorOp::Tanh => "Tanh",
-            StdTensorOp::Sqrt => "Sqrt",
-            StdTensorOp::Rsqrt => "Rsqrt",
-            StdTensorOp::Expm1 => "Expm1",
-            StdTensorOp::Log1p => "Log1p",
-            _ => "Other",
-        }
-    }
-
-    fn op_kind_histogram(graph: &Graph<StdTensorOp>) -> BTreeMap<&'static str, usize> {
-        let mut counts = BTreeMap::new();
-        for op in graph.operations() {
-            *counts.entry(op_kind_name(&op.operation)).or_insert(0) += 1;
-        }
-        counts
-    }
-
-    fn assert_no_analytic_constant_shortcuts(graph: &computegraph::graph::Graph<StdTensorOp>) {
-        for op in graph.operations() {
-            assert!(
-                !matches!(
-                    op.operation,
-                    StdTensorOp::Exp
-                        | StdTensorOp::Log
-                        | StdTensorOp::Sin
-                        | StdTensorOp::Cos
-                        | StdTensorOp::Tanh
-                        | StdTensorOp::Sqrt
-                        | StdTensorOp::Rsqrt
-                        | StdTensorOp::Expm1
-                        | StdTensorOp::Log1p
-                ),
-                "constant and identity rule helpers must use semantic constant emission, not analytic shortcuts; saw {:?}",
-                op.operation
-            );
-        }
-    }
-
-    #[test]
-    fn one_like_fixed_uses_semantic_constant_not_analytic_shortcut() {
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let anchor = builder.add_input(TensorInputKey::User { id: 2 });
-
-        let one = one_like_fixed(&mut builder, DType::F64, ValueRef::Local(anchor), 2);
-        let graph = builder.build();
-
-        assert!(graph.values()[one].producer.is_some());
-        assert_no_analytic_constant_shortcuts(&graph);
-        assert_eq!(
-            op_kind_histogram(&graph),
-            BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1)])
-        );
-    }
-
-    #[test]
-    fn identity_matrix_fixed_uses_semantic_constant_not_analytic_shortcut() {
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let anchor = builder.add_input(TensorInputKey::User { id: 1 });
-
-        let identity =
-            identity_matrix_fixed(&mut builder, DType::F64, 2, &[], ValueRef::Local(anchor));
-        let graph = builder.build();
-
-        assert!(graph.values()[identity].producer.is_some());
-        assert_no_analytic_constant_shortcuts(&graph);
-        assert_eq!(
-            op_kind_histogram(&graph),
-            BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1), ("EmbedDiag", 1)])
-        );
-    }
-
-    #[test]
-    fn symbolic_leading_selector_broadcasts_scalar_constants_once() {
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let anchor = builder.add_input(TensorInputKey::User { id: 3 });
-
-        let selector = leading_column_selector_symbolic(
-            &mut builder,
-            DType::F64,
-            DimExpr::InputDim {
-                input_idx: 0,
-                axis: 1,
-            },
-            DimExpr::InputDim {
-                input_idx: 0,
-                axis: 0,
-            },
-            &[],
-            ValueRef::Local(anchor),
-        );
-        let graph = builder.build();
-
-        assert!(graph.values()[selector].producer.is_some());
-        assert_eq!(
-            op_kind_histogram(&graph).get("BroadcastInDim"),
-            Some(&2),
-            "selector constants must remain scalar until their one required broadcast"
-        );
-    }
-}
+mod tests;

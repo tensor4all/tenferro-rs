@@ -3,7 +3,7 @@ use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Resul
 use tenferro_runtime::ErrorPhase;
 
 use crate::eager_ext::{eig, eigh, lu, qr, solve, svd, triangular_solve};
-use crate::validation::validate_lstsq;
+use crate::validation::{ensure_float_or_complex, validate_lstsq};
 
 pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     let (_p, _l, u, parity) = lu(a)?;
@@ -137,15 +137,6 @@ fn scalar_real(anchor: &EagerTensor, value: f64) -> Result<EagerTensor> {
         DType::C32 => Tensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])?,
     };
     EagerTensor::from_tensor_in(tensor, anchor.runtime().clone())
-}
-
-fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
-    match dtype {
-        DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
-        DType::I32 | DType::I64 | DType::Bool => Err(Error::TensorRuntime(
-            crate::error::unsupported_dtype(op, dtype),
-        )),
-    }
 }
 
 fn can_square_without_abs(dtype: DType, axes_len: usize, ord: Option<f64>) -> bool {

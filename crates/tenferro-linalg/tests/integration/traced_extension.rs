@@ -509,3 +509,39 @@ fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         );
     }
 }
+
+fn assert_unsupported_dtype_at_construction(
+    result: tenferro_runtime::Result<()>,
+    op: &'static str,
+    dtype: DType,
+) {
+    let err = match result {
+        Ok(()) => panic!("expected unsupported dtype error for {op} {dtype:?}"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            Error::TensorRuntime(TensorError::Extension {
+                op: found_op,
+                family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                kind: tenferro_tensor::ErrorKind::Unsupported,
+                ..
+            }) if found_op == op
+        ),
+        "expected unsupported dtype error for {op} {dtype:?}, got {err:?}"
+    );
+}
+
+#[test]
+fn traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction() {
+    for dtype in [DType::I32, DType::I64, DType::Bool] {
+        let tensor = traced_with_dtype(dtype, vec![2, 2]);
+        assert_unsupported_dtype_at_construction(tensor.svd().map(|_| ()), "svd", dtype);
+        assert_unsupported_dtype_at_construction(tensor.svd_full().map(|_| ()), "svd_full", dtype);
+        assert_unsupported_dtype_at_construction(tensor.eigh().map(|_| ()), "eigh", dtype);
+        assert_unsupported_dtype_at_construction(tensor.eigvalsh().map(|_| ()), "eigvalsh", dtype);
+        assert_unsupported_dtype_at_construction(tensor.qr().map(|_| ()), "qr", dtype);
+        assert_unsupported_dtype_at_construction(tensor.cholesky().map(|_| ()), "cholesky", dtype);
+    }
+}
