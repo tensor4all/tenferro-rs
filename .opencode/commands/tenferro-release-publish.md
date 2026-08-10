@@ -20,7 +20,10 @@ human maintainer runs Phase 3 publication from the tag. The maintainer can
 generate a guarded handoff script with
 `python3 scripts/release-publish.py X.Y.Z --generate-script PATH` that re-runs the
 preflight and requires one exact lowercase `y` at a TTY before `--execute`;
-agents never run publication and never type that confirmation. Phase 3
+agents never run publication and never type that confirmation. This
+target-neutral example intentionally omits `--approve-new-package`; add one
+`--approve-new-package PACKAGE` only for each genuinely new package named by
+the user's explicit approval. Phase 3
 validation is change-aware (`scripts/release-validation-policy.py`); a rerun
 is skipped only when the exact-SHA CI check passes
 (`verify_release_ci` in `scripts/release-publish.py`). After human

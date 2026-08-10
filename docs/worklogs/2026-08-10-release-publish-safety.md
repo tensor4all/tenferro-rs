@@ -144,3 +144,27 @@ do not impose tenferro topology.
   as full.
 - Handoff-script checksum mismatch test also covers the canonical workflow
   file; skills document the versioned `--generate-script` command.
+
+## Next-release approval cleanup
+
+The generic Phase 3 preflight, handoff-generation, and execution examples now
+omit new-package approval arguments. They add `--approve-new-package PACKAGE`
+only when a release really contains a new package and the user explicitly names
+it. This keeps existing packages out of the approval set while preserving the
+helper's fail-closed gate for future new packages; helper semantics did not
+change. The three byte-identical skills and the OpenCode adapter carry the same
+target-neutral rule, guarded by a focused documentation contract test.
+
+The shared-rule dependency is resolved: tensor4all-agent-rules PR #10 merged as
+`5cff8254`, with its `validate-rules` check successful. The current shared
+`rules/common/repository.md` contains the publication and release safety policy
+used here.
+
+Focused verification passed for the documentation and no-approval handoff
+contracts, the existing exact/stale new-package approval gate, publish layout,
+release validation policy, Python byte compilation, formatting, adapter byte
+identity, deterministic repository-rules review, and `git diff --check`.
+`ci-config` reaches the same release-helper suite but its interactive handoff
+tests require GNU `script -qec` and a Git `master` default branch, which are not
+available in this macOS environment; the affected changed tests pass when run
+without those Linux-only interactive cases.

@@ -30,7 +30,10 @@ Keep the interaction incremental:
    `python3 scripts/release-publish.py X.Y.Z --generate-script PATH`
    that re-runs the fail-closed preflight and requires one exact lowercase
    `y` at a TTY before invoking the helper with `--execute`; agents never run
-   publication and never type that confirmation. Phase 3 validation is
+   publication and never type that confirmation. This target-neutral example
+   intentionally omits `--approve-new-package`; add one
+   `--approve-new-package PACKAGE` only for each genuinely new package named by
+   the user's explicit approval. Phase 3 validation is
    change-aware (`scripts/release-validation-policy.py`): helper-only or
    publication-metadata-only diffs run focused lanes, and a rerun is skipped
    only when the exact-SHA CI check passes

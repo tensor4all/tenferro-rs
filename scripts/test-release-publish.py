@@ -105,6 +105,25 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
                 normalized_adapter,
             )
 
+    def test_next_release_examples_do_not_reuse_stale_new_package_approval(self) -> None:
+        paths = (
+            "ai/contribution-workflows/release-publish.md",
+            *self.SKILL_PATHS,
+            ".opencode/commands/tenferro-release-publish.md",
+        )
+        for relative in paths:
+            text = (self.ROOT / relative).read_text()
+            stale_approval = (
+                "--approve-new-package " + "tenferro-internal-cpu-kernels"
+            )
+            self.assertNotIn(stale_approval, text)
+            self.assertIn("--approve-new-package PACKAGE", text)
+
+        workflow = (self.ROOT / paths[0]).read_text()
+        self.assertIn("genuinely new", workflow)
+        self.assertIn(
+            'python3 scripts/release-publish.py X.Y.Z --execute', workflow
+        )
 
     def test_change_aware_validation_and_exact_sha_are_documented(self) -> None:
         text = (self.ROOT / "ai/contribution-workflows/release-publish.md").read_text()
@@ -126,8 +145,8 @@ class ReleaseDocumentationContractTests(unittest.TestCase):
 
 
 class HandoffScriptTests(unittest.TestCase):
-    VERSION = "0.3.0"
-    APPROVALS = {"tenferro-internal-cpu-kernels"}
+    VERSION = "1.2.3"
+    APPROVALS = {"tenferro-new-package"}
     STUB = (
         "#!/usr/bin/env python3\n"
         "import os, sys\n"
@@ -246,11 +265,16 @@ class HandoffScriptTests(unittest.TestCase):
             self.log_lines(self.worktree),
             [
                 f"{self.VERSION} --approve-new-package "
-                "tenferro-internal-cpu-kernels",
+                "tenferro-new-package",
                 f"{self.VERSION} --approve-new-package "
-                "tenferro-internal-cpu-kernels --execute",
+                "tenferro-new-package --execute",
             ],
         )
+
+    def test_generated_script_omits_approval_flags_when_none_are_required(self) -> None:
+        output = Path(self._directory.name) / "no-approvals.sh"
+        RELEASE.generate_handoff_script(self.VERSION, set(), output, root=self.worktree)
+        self.assertIn("APPROVALS=()", output.read_text())
 
     def test_non_y_answers_abort_before_any_execute(self) -> None:
         for stdin in (b"n\n", b"Y\n", b"yes\n", b""):
@@ -276,7 +300,7 @@ class HandoffScriptTests(unittest.TestCase):
         self.assertEqual(self.log_lines(self.worktree), [])
 
     def test_multiple_approvals_are_forwarded_verbatim(self) -> None:
-        approvals = {"tenferro-internal-cpu-kernels", "t4a-tblis-src"}
+        approvals = {"tenferro-new-package", "t4a-tblis-src"}
         output = Path(self._directory.name) / "multi.sh"
         RELEASE.generate_handoff_script(self.VERSION, approvals, output, root=self.worktree)
         returncode, _output = self.run_handoff(self.worktree, output, b"y\n", tty=True)
@@ -285,9 +309,9 @@ class HandoffScriptTests(unittest.TestCase):
             self.log_lines(self.worktree),
             [
                 f"{self.VERSION} --approve-new-package t4a-tblis-src "
-                "--approve-new-package tenferro-internal-cpu-kernels",
+                "--approve-new-package tenferro-new-package",
                 f"{self.VERSION} --approve-new-package t4a-tblis-src "
-                "--approve-new-package tenferro-internal-cpu-kernels --execute",
+                "--approve-new-package tenferro-new-package --execute",
             ],
         )
 

@@ -149,14 +149,14 @@ Agents must stop after validation and must never execute a publication.
    python3 scripts/release-publish.py X.Y.Z
    ```
 
-   **New-package gate:** `tenferro-internal-cpu-kernels` is new for v0.3.0.
-   The command above must abort before publishing anything unless the user's
-   approval names exactly `tenferro-internal-cpu-kernels`. After recording that
-   exact approval, the human operator asserts it concretely with:
+   **New-package gate:** use the command above unchanged when every publishable
+   package already exists on crates.io. If the helper reports a genuinely new
+   package, stop until the user's approval names that exact package. After
+   recording the approval, the human operator asserts it concretely with:
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels
+     --approve-new-package PACKAGE
    ```
 
    Never infer this approval from a general release request. On restart, keep
@@ -172,7 +172,6 @@ Agents must stop after validation and must never execute a publication.
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels \
      --generate-script "$TMPDIR/publish-X.Y.Z.sh"
    ```
 
@@ -180,7 +179,10 @@ Agents must stop after validation and must never execute a publication.
    on untracked files). The generated script pins SHA-256 checksums of the
    helper and this workflow, aborts unless stdin is a TTY and the worktree is
    clean and detached, and carries exactly the `--approve-new-package` values
-   passed at generation. Run it from the release worktree root:
+   passed at generation. For a release with an explicitly approved new package,
+   add one `--approve-new-package PACKAGE` argument per approved package;
+   otherwise do not pass that option. Run the script from the release worktree
+   root:
 
    ```bash
    cd <fresh-path> && bash "$TMPDIR/publish-X.Y.Z.sh"
@@ -213,13 +215,13 @@ Agents must stop after validation and must never execute a publication.
    after the single exact `y`):
 
    ```bash
-   python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels \
-     --execute
+   python3 scripts/release-publish.py X.Y.Z --execute
    ```
 
-   Before each `cargo publish`, the helper waits for every prerequisite registry
-   archive, then runs `cargo package` and inspects that exact local `.crate` file.
+   If the preflight required explicitly approved new-package arguments, repeat
+   those same arguments before `--execute`. Before each `cargo publish`, the
+   helper waits for every prerequisite registry archive, then runs
+   `cargo package` and inspects that exact local `.crate` file.
    It checks the file list and normalized metadata (name, version, description,
    license, repository, homepage, documentation, README, `rust-version`,
    keywords, categories, and `include`/`exclude`), verifies
