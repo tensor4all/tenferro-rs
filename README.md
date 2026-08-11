@@ -18,6 +18,12 @@ VJP and JVP. Eager mode also supports PyTorch-style `backward()` for scalar
 losses, while traced mode is the main surface for reusable graph transforms and
 HVP-style higher-order composition.
 
+tenferro-rs is the tensor engine behind the
+[tensor4all](https://github.com/tensor4all) scientific-computing stack and is
+dogfooded in its core product,
+[tensor4all-rs](https://github.com/tensor4all/tensor4all-rs), and the related
+Julia wrapper [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl).
+
 Positioning: tenferro-rs sits between low-level array crates and full
 deep-learning frameworks for Rust scientific code that needs column-major
 storage, LAPACK/Fortran/Julia-friendly layouts, dynamic-shape traced programs,
