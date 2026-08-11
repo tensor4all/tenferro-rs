@@ -73,7 +73,13 @@ Complete this phase before changing manifests or making any other release edit.
 
    (With `cargo-edit` installed, `cargo set-version --workspace X.Y.Z`
    performs steps 2-3 in one command.)
-4. Verify locally:
+4. Bump the published-version pins in the same PR:
+   `grep -rn 'tenferro-.*= "0\.[0-9]"' README.md docs/` — the quickstart
+   `[dependencies]` blocks in `README.md` and `docs/getting-started/index.md`
+   must name the new version. A `"0.2"`-style pin never admits `0.3`, so a
+   copy-paste user would resolve the previous minor against the current
+   quickstart code.
+5. Verify locally:
 
    ```bash
    cargo metadata --format-version 1 > /dev/null   # resolution sanity
@@ -84,7 +90,7 @@ Complete this phase before changing manifests or making any other release edit.
    `cargo publish --dry-run` works only for crates whose internal
    dependencies are already on the registry at the new version, so deep
    crates are verified live in Phase 3; that is expected.
-5. Open the PR to `main` and merge it through the normal auto-merge flow.
+6. Open the PR to `main` and merge it through the normal auto-merge flow.
 
 ## Phase 2 — Tag
 
@@ -149,30 +155,31 @@ Agents must stop after validation and must never execute a publication.
    python3 scripts/release-publish.py X.Y.Z
    ```
 
-   **New-package gate:** `tenferro-internal-cpu-kernels` is new for v0.3.0.
-   The command above must abort before publishing anything unless the user's
-   approval names exactly `tenferro-internal-cpu-kernels`. After recording that
-   exact approval, the human operator asserts it concretely with:
+   **New-package gate:** run the preflight with no approvals. If any
+   publishable crate has never been on crates.io, the helper aborts before
+   publishing anything and lists the new packages. Record the user's exact
+   approval of each, then rerun asserting it concretely with one flag per
+   approved package:
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels
+     --approve-new-package <exact-package-name>
    ```
 
    Never infer this approval from a general release request. On restart, keep
-   the exact command unchanged: the helper accepts that approval after the
+   the exact command unchanged: the helper accepts an approval after the
    package exists only when crates.io also has the target version, whose archive
-   must still pass all checks before it is skipped. It rejects the approval as
+   must still pass all checks before it is skipped. It rejects an approval as
    stale when the package exists but the target version does not.
 
-   **Generated handoff script (recommended):** instead of typing the two
-   commands below by hand, generate a guarded handoff script that re-runs the
-   same preflight and requires one exact lowercase `y` at a TTY before it
-   invokes the helper with `--execute`:
+   **Generated handoff script (recommended):** instead of typing the commands
+   below by hand, generate a guarded handoff script that re-runs the same
+   preflight and requires one exact lowercase `y` at a TTY before it invokes
+   the helper with `--execute`. Pass the same `--approve-new-package` flags the
+   preflight required (none if there are no new packages):
 
    ```bash
    python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels \
      --generate-script "$TMPDIR/publish-X.Y.Z.sh"
    ```
 
@@ -213,9 +220,7 @@ Agents must stop after validation and must never execute a publication.
    after the single exact `y`):
 
    ```bash
-   python3 scripts/release-publish.py X.Y.Z \
-     --approve-new-package tenferro-internal-cpu-kernels \
-     --execute
+   python3 scripts/release-publish.py X.Y.Z --execute
    ```
 
    Before each `cargo publish`, the helper waits for every prerequisite registry

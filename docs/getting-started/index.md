@@ -32,9 +32,9 @@ extension from crates.io:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.2"
-tenferro-cpu = "0.2"
-tenferro-linalg = "0.2"
+tenferro-runtime = "0.3"
+tenferro-cpu = "0.3"
+tenferro-linalg = "0.3"
 ```
 
 For development against a local checkout of this repository, use path
@@ -187,9 +187,9 @@ Add `tenferro-ad` when the same tensor stack needs graph-based derivatives:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.2"
-tenferro-cpu = "0.2"
-tenferro-ad = "0.2"
+tenferro-runtime = "0.3"
+tenferro-cpu = "0.3"
+tenferro-ad = "0.3"
 ```
 
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
