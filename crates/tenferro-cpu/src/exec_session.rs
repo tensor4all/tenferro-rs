@@ -352,17 +352,21 @@ impl TensorStructural for CpuExecSession<'_> {
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| structural::reshape(input, shape))
+        // INVARIANT: typed_reshape performs a serial host copy (to_vec); no
+        // parallel kernel runs, so the engine entry is pure overhead on
+        // multi-thread pools.
+        structural::reshape(input, shape)
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        let materializes = matches!(&input, TensorRead::View(_));
-        if materializes {
-            self.run_native_fresh(|buffers| {
+        match &input {
+            // INVARIANT: compact inputs take the serial host-copy path, so
+            // they must not pay the engine entry; views may materialize via
+            // strided kernels and keep the entry.
+            TensorRead::Tensor(tensor) => structural::reshape(tensor, shape),
+            TensorRead::View(_) => self.run_native_fresh(|buffers| {
                 structural::reshape_read_with_pool(buffers, input, shape)
-            })
-        } else {
-            self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+            }),
         }
     }
 

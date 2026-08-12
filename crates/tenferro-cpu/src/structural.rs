@@ -789,6 +789,10 @@ pub fn typed_reshape<T: Clone + TensorScalar + 'static>(
     // INVARIANT: `typed_reshape` returns an independently owned tensor while
     // the borrowed input remains live; sharing its move-only root would violate
     // the single-owner contract, so this explicit host duplicate is required.
+    // TODO(perf): for large tensors, consider a parallel host copy (strided
+    // kernel / Rayon par-chunks) instead of the serial to_vec(); if a parallel
+    // path lands, revisit whether the entry-skip fast paths in backend.rs /
+    // exec_session.rs should pay the engine entry for large inputs.
     let mut output = TypedTensor::from_vec_col_major(shape.to_vec(), tensor.host_data()?.to_vec())?;
     output.set_placement(tensor.placement().clone());
     Ok(output)
