@@ -111,6 +111,11 @@ name = "linalg_vjp_gate"
 harness = false
 required-features = ["autodiff", "__bench_unification_semantic_ad_api"]
 
+[[bench]]
+name = "eager_extension_dispatch"
+harness = false
+required-features = ["autodiff"]
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
