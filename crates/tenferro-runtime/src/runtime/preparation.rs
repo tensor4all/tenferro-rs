@@ -39,6 +39,91 @@ use super::{
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
 
+/// Resolve and prepare a single extension operation for immediate eager
+/// execution against the runtime's registered engines.
+///
+/// This is the native immediate path for single-op eager extension calls
+/// (issue #1665). It bypasses SemanticProgram staging, operation dispatch
+/// search, and the prepared-program cache entirely. Capability resolution runs
+/// before request construction: engines without an extension slot for `op`'s
+/// family are skipped before any planning fields are allocated.
+///
+/// For the first engine that owns the op's family, the request reuses the
+/// same snapshot-retained values as the compiled preparation path
+/// ([`operation_dispatch_candidates`]): binding identity, resolved placement,
+/// hardware class, resolved planning policy, prepare-options key, planning
+/// config, and the fully polymorphic specialization projection. Provider
+/// decisions therefore match the compiled path for the same op and signature.
+///
+/// Returns [`PrepareCapability::Unsupported`] when no engine has an extension
+/// slot for the op's family, so callers may fall back to the compiled path.
+pub(super) fn prepare_extension_immediate(
+    runtime: &Runtime,
+    op: &dyn tenferro_ops::ext_op::ExtensionOp,
+    signature: &InputSignature,
+) -> PreparedProgramResult<super::PrepareCapability> {
+    let snapshot = runtime
+        .snapshot()
+        .map_err(|source| Arc::new(PrepareError::CacheState { source }))?;
+    let options = PrepareOptions::new();
+    for engine in snapshot.engine_views_for_preparation() {
+        // Capability check before planning: engines without this family have no
+        // provider, so they are skipped before any request fields are built.
+        let Some(slot) =
+            snapshot.extension_slot_for_preparation(op.family_id(), engine.engine_id())
+        else {
+            continue;
+        };
+        let resolved_placement = ResolvedProgramPlacement::new(
+            engine.engine_id().clone(),
+            engine.default_storage_class().clone(),
+        );
+        let planning = ResolvedPlanningConfig::resolve(
+            snapshot.execution_policy(),
+            &options,
+            engine.hardware_class().clone(),
+        );
+        let prepare_options_key = PrepareOptionsKey::from_resolved(
+            resolved_placement.clone(),
+            planning.hard_workspace_limit_bytes(),
+            planning.planning_seed(),
+        );
+        let binding = PreparedOperationBinding::new(
+            runtime.id(),
+            snapshot.epoch(),
+            slot.engine_id().clone(),
+            slot.registration_identity(),
+            slot.context_identity(),
+            engine.hardware_class().clone(),
+        );
+        let specialization = project_requirements(
+            &SpecializationRequirements::polymorphic(signature.entries().len()),
+            signature,
+        )?;
+        let request = ExtensionPrepareRequest::new(
+            op,
+            &binding,
+            &resolved_placement,
+            engine.hardware_class(),
+            &planning,
+            slot.config().as_ref(),
+            signature,
+            &prepare_options_key,
+            &specialization,
+        );
+        return slot.engine().prepare(request).map_err(|source| {
+            Arc::new(PrepareError::Engine {
+                source: Arc::new(source),
+            })
+        });
+    }
+    Ok(super::PrepareCapability::Unsupported(
+        UnsupportedReason::Operation {
+            operation: op.family_id(),
+        },
+    ))
+}
+
 #[derive(Clone)]
 struct ExtensionPlanningIdentity {
     module_id: ExtensionModuleId,

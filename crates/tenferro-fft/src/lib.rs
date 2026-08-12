@@ -141,7 +141,7 @@ use tenferro_ad::semantic_extension::{
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_exec_session;
+use tenferro_gpu::cuda::{with_cuda_exec_session, CudaBackend};
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
@@ -1399,7 +1399,6 @@ pub(crate) fn execute_fft_extension_reads_owner<B: TensorBackend + 'static>(
     })
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn execute_fft_extension_reads_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
@@ -1490,7 +1489,39 @@ define_extension_runtime! {
     op_type = FftOp,
     execute = execute_fft_extension_reads_owner,
     execute_reads = execute_fft_extension_reads_owner,
+    execute_in_session = execute_fft_extension_reads_in_session,
+    session_supported = fft_session_supported,
     backend_bound = TensorBackend,
+}
+
+/// Adapter from the scheduler/`apply_eager` borrowed-session shape to the
+/// existing FFT session executor. Reuses the same forward kernel already shared
+/// by the owner and eager paths; do not reimplement it here.
+fn execute_fft_extension_reads_in_session(
+    op: &FftOp,
+    session: &mut dyn BackendSession,
+    caches: &mut ExtensionCacheStore,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut ctx = ExtensionExecutionContext::new(session, caches);
+    execute_fft_extension_reads_session(op, inputs, &mut ctx)
+}
+
+fn fft_session_supported<B: BackendSession + 'static>(_op: &FftOp) -> bool {
+    // The session executor routes CPU/CUDA/WebGPU through their FftBackend exec
+    // sessions; keep scheduler-session admission consistent with the backends
+    // that `execute_fft_extension_reads_on_session` actually handles.
+    let type_id = std::any::TypeId::of::<B>();
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+        #[cfg(feature = "cuda")]
+        {
+            type_id == std::any::TypeId::of::<CudaBackend>()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
 }
 
 /// Build a one-dimensional FFT along `axis`.

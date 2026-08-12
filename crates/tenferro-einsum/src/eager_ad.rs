@@ -25,7 +25,7 @@ use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
     EINSUM_EXTENSION_FAMILY_ID,
 };
-use crate::extension::{execute_einsum_extension_session_reads, EinsumExtensionOp};
+use crate::extension::EinsumExtensionOp;
 use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
     EinsumPlanSpec,
@@ -206,15 +206,8 @@ pub fn einsum_subscripts(
         output_shape_hint,
         EinsumPlanSpec::Auto(default_auto_options()),
     ));
-    let execute_op = Arc::clone(&op);
-    let mut outputs = apply_eager_with_extension_session(
-        op,
-        inputs,
-        eager_cpu_extension_module()?,
-        move |_op, input_reads, ctx| {
-            execute_einsum_extension_session_reads(&execute_op, input_reads, ctx)
-        },
-    )?;
+    let mut outputs =
+        apply_eager_with_extension_session(op, inputs, eager_cpu_extension_module()?)?;
     outputs.pop().ok_or_else(|| {
         Error::Runtime(tenferro_runtime::Error::MissingInput(
             "einsum extension produced no eager output".into(),

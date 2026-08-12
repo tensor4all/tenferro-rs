@@ -914,6 +914,8 @@ define_extension_runtime! {
     op_type = EinsumExtensionOp,
     execute = execute_einsum_extension,
     execute_reads = execute_einsum_extension_reads,
+    execute_in_session = execute_einsum_extension_reads_in_session,
+    session_supported = einsum_session_supported,
 }
 
 fn execute_einsum_extension<B: TensorBackend + 'static>(
@@ -984,7 +986,6 @@ pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn execute_einsum_extension_session_reads(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
@@ -1006,6 +1007,36 @@ pub(crate) fn execute_einsum_extension_session_reads(
     })?;
     let output = crate::eager::eager_einsum_exec_read(ctx.backend_mut(), inputs, &tree)?;
     Ok(vec![output])
+}
+
+/// Adapter from the scheduler/`apply_eager` borrowed-session shape to the
+/// eager session executor. Reuses the existing forward kernel; reimplementing
+/// it here is explicitly out of scope for issue #1665.
+fn execute_einsum_extension_reads_in_session(
+    op: &EinsumExtensionOp,
+    session: &mut dyn BackendSession,
+    caches: &mut tenferro_runtime::ExtensionCacheStore,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut ctx = ExtensionExecutionContext::new(session, caches);
+    execute_einsum_extension_session_reads(op, inputs, &mut ctx)
+}
+
+fn einsum_session_supported<B: BackendSession + 'static>(_op: &EinsumExtensionOp) -> bool {
+    // The session executor runs the same forward kernel on any backend session
+    // below (the einsum execution only needs elementwise/dot session ops), so
+    // CPU and CUDA sessions both qualify for `apply_eager`'s native path.
+    let type_id = std::any::TypeId::of::<B>();
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+        #[cfg(feature = "cuda")]
+        {
+            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
 }
 
 #[derive(Clone)]

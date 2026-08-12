@@ -647,9 +647,22 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp) -> bool {
-    matches!(op.op(), LinalgOp::LuSolvePrepared { .. })
-        && std::any::TypeId::of::<B>() == std::any::TypeId::of::<tenferro_cpu::CpuBackend>()
+fn linalg_session_supported<B: BackendSession + 'static>(_op: &LinalgExtensionOp) -> bool {
+    // The session executor below handles every LinalgOp on the CPU and CUDA
+    // exec sessions; keep scheduler-session admission consistent with it. This
+    // is what lets `apply_eager` take the native prepared path for all linalg
+    // ops instead of falling back to the compiled-program path (issue #1665).
+    let type_id = std::any::TypeId::of::<B>();
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+        #[cfg(feature = "cuda")]
+        {
+            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
 }
 
 fn execute_linalg_extension_in_session(
@@ -658,22 +671,9 @@ fn execute_linalg_extension_in_session(
     _extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if !matches!(op.op(), LinalgOp::LuSolvePrepared { .. }) {
-        return Err(Error::unsupported(
-            "linalg_extension",
-            "linalg operation has no scheduler-session implementation",
-        ));
-    };
-    if inputs.len() != 4 {
-        return Err(Error::invalid_argument(
-            "linalg_extension",
-            "inputs",
-            format!(
-                "LuSolvePrepared session execution expected 4 inputs, got {}",
-                inputs.len()
-            ),
-        ));
-    }
+    // Reuse the existing session executor that the eager and scheduler paths
+    // already share; it downcasts the borrowed session to the CPU/CUDA exec
+    // session and runs the same forward kernel for every LinalgOp.
     execute_linalg_extension_reads_on_session(op, inputs, session)
 }
 

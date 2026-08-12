@@ -10,14 +10,14 @@ use crate::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::{
-    EngineId, Error, ErrorPhase, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
-    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
-    ExtensionPrepareRequest, PrepareCapability, PrepareError, Runtime, RuntimeConfigError,
-    RuntimeReconfigureError, UnsupportedReason,
+    EngineId, ErasedExecutionContext, Error, ErrorPhase, ExecutionContextIdentity, ExtensionEngine,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
+    ExtensionPlanningConfig, ExtensionPrepareRequest, PrepareCapability, PrepareError,
+    PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
+    PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan, Runtime,
+    RuntimeConfigError, RuntimeReconfigureError, SpecializationProjection,
 };
-#[cfg(any(feature = "cuda", feature = "webgpu"))]
-use tenferro_tensor::TensorRead;
-use tenferro_tensor::{DType, Tensor, TensorStructural};
+use tenferro_tensor::{BackendSession, DType, Tensor, TensorRead, TensorStructural};
 #[cfg(feature = "cuda")]
 use tenferro_tensor::{MemoryKind, TensorValue};
 
@@ -125,13 +125,77 @@ impl ExtensionEngine for BridgeEngine {
 
     fn prepare(
         &self,
-        _request: ExtensionPrepareRequest<'_>,
+        request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
-        Ok(PrepareCapability::Unsupported(
-            UnsupportedReason::Operation {
-                operation: "eager-extension-bridge-test",
-            },
+        // Native prepared path: the probe op is session-capable, so
+        // `apply_eager` executes it through the prepared plan instead of the
+        // compiled-program fallback.
+        let prepared = Arc::new(BridgePrepared {
+            binding: request.binding().clone(),
+            specialization: request.specialization().clone(),
+        });
+        let operation: PreparedOperationHandle = Arc::clone(&prepared) as PreparedOperationHandle;
+        let executor: PreparedOperationExecutorHandle = prepared as PreparedOperationExecutorHandle;
+        Ok(PrepareCapability::Prepared(
+            PreparedOperationPlan::executable(operation, executor),
         ))
+    }
+}
+
+#[derive(Debug)]
+struct BridgePrepared {
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+}
+
+impl PreparedOperation for BridgePrepared {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl PreparedOperationExecutor for BridgePrepared {
+    fn execute(
+        &self,
+        context: &mut ErasedExecutionContext<'_>,
+        _caches: &mut tenferro_runtime::ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
+        let backend = context
+            .downcast_mut::<CpuBackend>(self.binding.context_identity())
+            .map_err(|source| {
+                tenferro_runtime::Error::runtime_state_source(
+                    "eager-extension-bridge-test",
+                    ErrorPhase::Execution,
+                    source,
+                )
+            })?;
+        let output = TensorStructural::to_contiguous_read(backend, inputs[0].clone())
+            .map_err(tenferro_runtime::Error::from)?;
+        Ok(vec![output])
+    }
+
+    fn supports_session(&self) -> bool {
+        true
+    }
+
+    fn execute_in_session(
+        &self,
+        session: &mut dyn BackendSession,
+        _caches: &mut tenferro_runtime::ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
+        let output = TensorStructural::to_contiguous_read(session, inputs[0].clone())
+            .map_err(tenferro_runtime::Error::from)?;
+        Ok(vec![output])
     }
 }
 
@@ -197,10 +261,7 @@ fn execute_probe(
     input: &EagerTensor,
     factory: impl FnOnce(EagerExtensionTarget) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>>,
 ) -> tenferro_runtime::Result<Vec<EagerTensor>> {
-    apply_eager_with_targeted_extension_session(op, &[input], factory, |_op, inputs, ctx| {
-        let output = TensorStructural::to_contiguous_read(ctx.backend_mut(), inputs[0].clone())?;
-        Ok(vec![output])
-    })
+    apply_eager_with_targeted_extension_session(op, &[input], factory)
 }
 
 fn execute_legacy_probe(
@@ -208,10 +269,7 @@ fn execute_legacy_probe(
     input: &EagerTensor,
     module: Arc<dyn ExtensionModule>,
 ) -> tenferro_runtime::Result<Vec<EagerTensor>> {
-    apply_eager_with_extension_session(op, &[input], module, |_op, inputs, ctx| {
-        let output = TensorStructural::to_contiguous_read(ctx.backend_mut(), inputs[0].clone())?;
-        Ok(vec![output])
-    })
+    apply_eager_with_extension_session(op, &[input], module)
 }
 
 #[test]
@@ -375,7 +433,6 @@ fn eager_extension_input_context_mismatch_is_reported_before_factory() {
             *called_by_factory.lock().unwrap() = true;
             Ok(BridgeModule::without_engine())
         },
-        |_op, _inputs, _ctx| unreachable!("input validation must run first"),
     )
     .unwrap_err();
 
