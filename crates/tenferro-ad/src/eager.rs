@@ -1374,8 +1374,12 @@ impl EagerRuntime {
     /// Install or replace one extension module on this eager context's runtime.
     ///
     /// Eager extension wrappers call this as an idempotent "ensure installed"
-    /// step. The eager context serializes this path so parallel first-use of the
-    /// same extension family cannot publish over another thread's base snapshot.
+    /// step. When the exact module instance (same module ID and allocation) is
+    /// already installed, this is a read-only no-op that returns the current
+    /// runtime epoch without acquiring the install lock or reconfiguring. The
+    /// cold or replacement paths keep the transactional install-or-replace
+    /// behavior, serialized so parallel first-use of the same extension family
+    /// cannot publish over another thread's base snapshot.
     ///
     /// # Errors
     ///
@@ -1385,6 +1389,12 @@ impl EagerRuntime {
         &self,
         module: Arc<dyn ExtensionModule>,
     ) -> Result<RuntimeEpoch> {
+        let snapshot = self.runtime.snapshot().map_err(|source| {
+            runtime_state_source("EagerRuntime::install_extension_module", source)
+        })?;
+        if snapshot.has_extension_module_identical(&module) {
+            return Ok(snapshot.epoch());
+        }
         let _install_guard = self.lock_extension_install()?;
         self.runtime
             .reconfigure(|edit| {
@@ -1402,6 +1412,12 @@ impl EagerRuntime {
         family_id: &'static str,
         engine_id: &EngineId,
     ) -> Result<RuntimeEpoch> {
+        let snapshot = self.runtime.snapshot().map_err(|source| {
+            runtime_state_source("EagerRuntime::ensure_extension_module_for_engine", source)
+        })?;
+        if snapshot.has_extension_module_engine(module.module_id(), family_id, engine_id) {
+            return Ok(snapshot.epoch());
+        }
         let _install_guard = self.lock_extension_install()?;
         self.runtime
             .reconfigure(|edit| {

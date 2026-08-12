@@ -104,6 +104,29 @@ fn cpu_registration_with(
     .expect("executable binding")
 }
 
+#[test]
+fn extension_install_steady_state_is_read_only_noop() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let module = super::ReadPathFallbackModule::module();
+
+    let first = runtime
+        .install_extension_module(Arc::clone(&module))
+        .unwrap();
+    let before = runtime.runtime.snapshot().unwrap();
+    assert_eq!(before.epoch(), first);
+    assert_eq!(before.extension_module_count(), 1);
+
+    // Re-installing the exact same module instance must not publish a new
+    // snapshot or take the install lock: the steady-state path is a no-op.
+    let second = runtime
+        .install_extension_module(Arc::clone(&module))
+        .unwrap();
+    let after = runtime.runtime.snapshot().unwrap();
+    assert_eq!(second, first);
+    assert_eq!(after.epoch(), before.epoch());
+    assert!(Arc::ptr_eq(&before, &after));
+}
+
 fn assert_bound_matches_current_runtime(cpu: &CpuPlacementBoundEager) {
     assert_eq!(cpu.epoch, cpu.runtime.runtime.epoch().unwrap());
     assert_eq!(cpu.snapshot.epoch(), cpu.epoch);

@@ -348,6 +348,32 @@ impl FrozenExtensionSlots {
             .contains_key(&(family_id, engine_id.clone()))
     }
 
+    /// Return whether the exact validated module instance is installed.
+    ///
+    /// This mirrors the `module_identical` no-op predicate of
+    /// `replace_extension_module_candidate`: the same module ID and the same
+    /// allocation, which is the eager direct-bridge steady-state no-op.
+    pub(super) fn has_module_identical(&self, module: &Arc<dyn ExtensionModule>) -> bool {
+        self.modules
+            .get(module.module_id())
+            .is_some_and(|installed| Arc::ptr_eq(installed, module))
+    }
+
+    /// Return whether the installed module with `module_id` owns the exact
+    /// `(family_id, engine_id)` registration.
+    ///
+    /// This mirrors the no-op predicate of the owner-scoped
+    /// `ensure_extension_module_for_engine` edit without building a candidate.
+    pub(super) fn has_module_engine(
+        &self,
+        module_id: &ExtensionModuleId,
+        family_id: ExtensionFamilyId,
+        engine_id: &EngineId,
+    ) -> bool {
+        self.extension_engine_slot(family_id, engine_id)
+            .is_some_and(|slot| &slot.module_id == module_id)
+    }
+
     fn extension_engine_slot(
         &self,
         family_id: ExtensionFamilyId,

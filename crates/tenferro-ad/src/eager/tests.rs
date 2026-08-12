@@ -1283,3 +1283,36 @@ fn eager_retention_exposes_borrowed_values_and_explicit_duplication() {
     assert!(matches!(error, crate::IntoValueError::NotUnique(_)));
     drop(sibling);
 }
+
+/// The steady-state install must be a real no-op: it must not block on the
+/// extension install lock, because `EagerRuntime::install_extension_module`
+/// returns from the read-only snapshot check before acquiring it.
+#[test]
+fn warm_extension_install_skips_install_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let module = ReadPathFallbackModule::module();
+    ctx.install_extension_module(Arc::clone(&module)).unwrap();
+
+    let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel::<()>();
+    let install_thread = std::thread::spawn({
+        let ctx = Arc::clone(&ctx);
+        move || {
+            let _guard = ctx.lock_extension_install().unwrap();
+            lock_held_tx.send(()).unwrap();
+            // Brief hold so a warm install that wrongly blocks on the lock
+            // would exceed the assertion below.
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    });
+    lock_held_rx.recv().unwrap();
+
+    let started = std::time::Instant::now();
+    ctx.install_extension_module(Arc::clone(&module)).unwrap();
+    let elapsed = started.elapsed();
+
+    install_thread.join().unwrap();
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "warm install blocked on the install lock: {elapsed:?}"
+    );
+}

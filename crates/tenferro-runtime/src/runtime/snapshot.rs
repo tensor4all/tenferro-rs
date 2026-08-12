@@ -501,6 +501,35 @@ impl RuntimeConfigSnapshot {
         self.extensions.has_engine(family_id, engine_id)
     }
 
+    /// Return whether the exact validated module instance is installed.
+    ///
+    /// This narrow, doc-hidden query is the eager direct-bridge steady-state
+    /// no-op contract: it mirrors the `module_identical` no-op predicate of the
+    /// replace-extension-module edit without building a candidate
+    /// configuration.
+    #[doc(hidden)]
+    pub fn has_extension_module_identical(&self, module: &Arc<dyn ExtensionModule>) -> bool {
+        self.extensions.has_module_identical(module)
+    }
+
+    /// Return whether the installed module with this exact module ID owns the
+    /// given family/engine registration.
+    ///
+    /// Mirrors the owner-scoped ensure-extension-module edit's no-op predicate
+    /// on the published snapshot. The module ID must be the one that owns the
+    /// registration; a different module registering the same family/engine
+    /// pair does not satisfy this query.
+    #[doc(hidden)]
+    pub fn has_extension_module_engine(
+        &self,
+        module_id: &ExtensionModuleId,
+        family_id: &'static str,
+        engine_id: &EngineId,
+    ) -> bool {
+        self.extensions
+            .has_module_engine(module_id, family_id, engine_id)
+    }
+
     /// Return an immutable view of a registered engine slot.
     pub fn engine(&self, id: &EngineId) -> Option<EngineSnapshotView<'_>> {
         self.engine_indices
