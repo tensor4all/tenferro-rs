@@ -330,6 +330,13 @@ impl TensorAnalytic for CpuExecSession<'_> {
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        // INVARIANT: compact tensors need no kernel and no engine entry; the
+        // Arc clone is the only work, so it must not pay the multi-thread pool
+        // entry cost (O(us) on a 4-thread pool). Views still go through the
+        // entry path because they may materialize via strided kernels.
+        if matches!(input, TensorRead::Tensor(_)) {
+            return materialize_tensor_read(self.buffers, "CpuBackend::to_contiguous_read", input);
+        }
         self.run_native_fresh(|buffers| {
             materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
         })
