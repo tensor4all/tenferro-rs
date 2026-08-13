@@ -109,6 +109,51 @@ pub use crate::extension_execution_context::ExtensionExecutionContext;
 /// are returned as [`Error::TensorRuntime`] containing the typed tensor
 /// validation source, while poisoned metadata state is retained as
 /// [`Error::RuntimeStateSource`].
+pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
+    if inputs.len() != op.input_count() {
+        return Err(Error::invalid_argument(
+            "extension::apply",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!(
+                "op family {:?} expects {} inputs, got {}",
+                op.family_id(),
+                op.input_count(),
+                inputs.len()
+            ),
+        ));
+    }
+
+    let append = append_raw_op(StdTensorOp::Extension(op.clone()), inputs)?;
+    let analysis = analyze_extension_graph(append.graph.as_ref())?;
+    let output_metas = append
+        .output_ids
+        .iter()
+        .map(|&output| {
+            let meta = registered_meta(&append.graph.values()[output].key)?;
+            let shape = meta.bound_shape().ok_or_else(|| {
+                Error::invalid_argument(
+                    "extension::apply",
+                    ErrorPhase::Compile,
+                    "output_metadata",
+                    format!(
+                        "extension family {:?} produced unknown output shape metadata",
+                        op.family_id()
+                    ),
+                )
+            })?;
+            Ok((meta.dtype, shape))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    traced_outputs_from_analysis(
+        inputs,
+        append.graph,
+        &append.output_ids,
+        output_metas,
+        analysis,
+    )
+}
+
 /// Raw result of appending one op to a traced/eager graph without analysis.
 #[doc(hidden)]
 pub struct RawAppend {
@@ -158,51 +203,6 @@ pub(crate) fn analyze_extension_graph(
     graph: &Graph<StdTensorOp>,
 ) -> Result<RegisteredGraphAnalysis> {
     register_scoped_graph_analysis(graph, std::iter::empty())
-}
-
-pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
-    if inputs.len() != op.input_count() {
-        return Err(Error::invalid_argument(
-            "extension::apply",
-            ErrorPhase::GraphBuild,
-            "inputs",
-            format!(
-                "op family {:?} expects {} inputs, got {}",
-                op.family_id(),
-                op.input_count(),
-                inputs.len()
-            ),
-        ));
-    }
-
-    let append = append_raw_op(StdTensorOp::Extension(op.clone()), inputs)?;
-    let analysis = analyze_extension_graph(append.graph.as_ref())?;
-    let output_metas = append
-        .output_ids
-        .iter()
-        .map(|&output| {
-            let meta = registered_meta(&append.graph.values()[output].key)?;
-            let shape = meta.bound_shape().ok_or_else(|| {
-                Error::invalid_argument(
-                    "extension::apply",
-                    ErrorPhase::Compile,
-                    "output_metadata",
-                    format!(
-                        "extension family {:?} produced unknown output shape metadata",
-                        op.family_id()
-                    ),
-                )
-            })?;
-            Ok((meta.dtype, shape))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    traced_outputs_from_analysis(
-        inputs,
-        append.graph,
-        &append.output_ids,
-        output_metas,
-        analysis,
-    )
 }
 
 /// Apply a core standard op in the traced graph.
