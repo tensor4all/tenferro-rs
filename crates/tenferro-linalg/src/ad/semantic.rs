@@ -132,10 +132,11 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
         // The linalg family is one rule across solve/eigen/qr ops whose
         // transposes collectively read every operand: triangular solve reads
         // both inputs plus the solution output, and the linearize+fragment
-        // path can consume any input/output value.
+        // path can consume any input/output value (svd reads outputs 0-2,
+        // eigh/qr read outputs 0-1).
         // ponytail: family-level mask; per-op masks would require splitting
         // `LinalgAdRule` per op.
-        ResidualSpec::all_inputs().with_output(0)
+        ResidualSpec::all_inputs().with_all_outputs()
     }
 
     fn linear_transpose(
@@ -1917,5 +1918,18 @@ mod tests {
                 dims: vec![1],
             }
         );
+    }
+
+    #[test]
+    fn linalg_residual_mask_declares_all_inputs_and_outputs() {
+        // The linalg family is one rule across solve/eigen/qr ops. SVD reads
+        // outputs 0-2 and eigh/qr read outputs 0-1 as tensor residuals, so the
+        // mask must declare every input and output (issue #1665 step 5).
+        let mask = LinalgAdRule.residual_mask();
+        assert!(mask.declares_input(0));
+        assert!(mask.declares_input(1));
+        assert!(mask.declares_output(0));
+        assert!(mask.declares_output(1));
+        assert!(mask.declares_output(2));
     }
 }

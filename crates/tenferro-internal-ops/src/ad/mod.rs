@@ -159,6 +159,18 @@ impl ResidualSpec {
         self
     }
 
+    /// Add every input index to this mask.
+    pub const fn with_all_inputs(mut self) -> Self {
+        self.input_mask = u64::MAX;
+        self
+    }
+
+    /// Add every output index to this mask.
+    pub const fn with_all_outputs(mut self) -> Self {
+        self.output_mask = u64::MAX;
+        self
+    }
+
     /// A mask declaring every input index as a tensor residual.
     ///
     /// Used by rules whose required operand set depends on the active-input
