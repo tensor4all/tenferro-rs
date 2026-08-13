@@ -397,23 +397,24 @@ impl ResourceArbiter {
         expected: usize,
         timeout: std::time::Duration,
     ) -> bool {
-        let Ok(mut state) = self.inner.state.lock() else {
-            return false;
-        };
+        // Poll instead of waiting on the production condvar: the acquire
+        // fast path legitimately skips the broadcast when a waiter is the
+        // only one, so a helper without a waiter-list entry would otherwise
+        // wait the full timeout.
         let deadline = std::time::Instant::now() + timeout;
-        while state.waiters.len() < expected {
-            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-                return false;
+        loop {
+            let count = match self.inner.state.lock() {
+                Ok(state) => state.waiters.len(),
+                Err(_) => return false,
             };
-            let Ok((next, wait)) = self.inner.changed.wait_timeout(state, remaining) else {
-                return false;
-            };
-            state = next;
-            if wait.timed_out() && state.waiters.len() < expected {
+            if count >= expected {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
                 return false;
             }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        true
     }
 
     #[cfg(test)]
@@ -461,9 +462,11 @@ impl Drop for ResourcePermit {
         if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
             state.active.swap_remove(position);
         }
-        // Only broadcast when a waiter could be released; with none waiting the
-        // futex wake is pure overhead on the hot drop path.
-        if !state.waiters.is_empty() {
+        // Broadcast when a queued waiter could be released, or when the request
+        // id is exhausted: the exhaustion-recovery loop parks on the condvar
+        // WITHOUT a waiter-list entry until active and waiters are both empty,
+        // so dropping the last active permit must still wake it (issue #1667).
+        if !state.waiters.is_empty() || state.next_request_id == u64::MAX {
             self.inner.changed.notify_all();
         }
     }

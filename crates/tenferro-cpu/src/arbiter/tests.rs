@@ -107,6 +107,37 @@ fn older_blocked_node_waiter_does_not_serialize_a_disjoint_node() {
 }
 
 #[test]
+fn exhaustion_recovery_waiter_wakes_when_last_active_permit_drops() {
+    // The request-id-exhaustion recovery loop parks on the condvar WITHOUT a
+    // waiter-list entry until active and waiters are both empty. Dropping the
+    // last active permit must still wake it (issue #1667 drop fast path);
+    // otherwise it sleeps forever.
+    let arbiter = Arc::new(ResourceArbiter::new());
+    let active = arbiter.acquire(cpu_set([0])).unwrap();
+    {
+        let mut state = arbiter.inner.state.lock().unwrap();
+        state.next_request_id = u64::MAX;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let arbiter2 = Arc::clone(&arbiter);
+    let handle = std::thread::spawn(move || {
+        // Use the recovering path (as the backend does); the plain test
+        // helper returns RequestIdExhausted directly without recovery.
+        let permit = arbiter2.acquire_recovering(cpu_set([1]), request_owner());
+        tx.send(()).unwrap();
+        permit
+    });
+    // Give the acquire thread time to hit the exhaustion-recovery park.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    drop(active);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok(),
+        "exhaustion-recovery waiter was not woken by the last active drop"
+    );
+    drop(handle.join().unwrap());
+}
+
+#[test]
 fn poisoned_state_returns_a_typed_error() {
     let arbiter = ResourceArbiter::new();
     arbiter.poison_for_test();

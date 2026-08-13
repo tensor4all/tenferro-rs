@@ -52,11 +52,13 @@ above.
 
 ## Measurement method
 
-`TENFERRO_PROFILE_CPU_SESSION=1` +
-`TENFERRO_PROFILE_CPU_SESSION_PRINT_EVERY=N` enables per-section recording in
-`run_backend_session_cached` (`setup.pre_entry`, `entry.managed_session`,
-`run.resources_lock`, `session_construct`, `exec_body`). The bench target is
-`crates/tenferro-linalg/benches/eager_extension_dispatch.rs`.
+Temporary instrumentation added sections around `run_backend_session_cached`
+(`setup.pre_entry`, `entry.managed_session`, `run.resources_lock`) alongside
+the sections the source still records (`session_construct`, `exec_body`),
+printed via `TENFERRO_PROFILE_CPU_SESSION` +
+`TENFERRO_PROFILE_CPU_SESSION_PRINT_EVERY=N`. The bench target is
+`crates/tenferro-linalg/benches/eager_extension_dispatch.rs`. Re-measure with
+the same instrumentation if the session-open cost is revisited.
 
 ## Remaining work (not in this PR)
 
