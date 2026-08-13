@@ -22,6 +22,8 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             LinalgOp::FullPivLuSolve { transpose_a: false },
             LinalgAdOpKind::FullPivLuSolve,
         ),
+        // Single-op partial-pivot solve shares the solve-family manifest kind.
+        (LinalgOp::Solve, LinalgAdOpKind::FullPivLuSolve),
         (
             LinalgOp::Svd {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,

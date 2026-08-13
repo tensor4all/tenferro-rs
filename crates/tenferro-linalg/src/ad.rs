@@ -88,6 +88,9 @@ impl LinalgAdRule {
                 transpose_a,
                 ctx,
             ),
+            LinalgOp::Solve => {
+                rules::linearize_solve(builder, primal_in, primal_out, tangent_in, false, ctx)
+            }
             LinalgOp::TriangularSolve {
                 left_side,
                 lower,
@@ -198,6 +201,17 @@ impl LinalgAdRule {
                     &value_inputs,
                     &mode,
                     transpose_a,
+                    ctx,
+                )
+            }
+            LinalgOp::Solve => {
+                let value_inputs = linear_solve_transpose_inputs("solve", inputs, active_mask)?;
+                rules::transpose_solve(
+                    &mut builder,
+                    cotangent_out,
+                    &value_inputs,
+                    &mode,
+                    false,
                     ctx,
                 )
             }
