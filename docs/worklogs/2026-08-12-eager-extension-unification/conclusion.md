@@ -50,6 +50,8 @@
 2. `crates/tenferro-ad/src/extension.rs` `finish_eager_extension_outputs`（~L420）: 現在の `!eager_grad_recording_enabled()` 早出しに `|| !inputs.iter().any(|i| i.requires_grad)` を追加し、`record_eager_outputs` を skip。
 3. 移行: 現行の「untracked 中間値を後から `wrt` に選ぶ functional JVP/VJP」（semantic trace 依存）が壊れるため、**明示 trace/capture API を先に追加**し、`detach` / 明示 trace への移行テストを perf 実装より先に置く（conclusion 5.4 の順序）。
 
+**なぜ breaking か（確認済み）**: `EagerTensor::detach()`（eager.rs:3322）は `requires_grad: false` だが `semantic_trace: Some(TracedTensor::from_tensor_symbolic_shape(...))` を作る。この detached テンソルを op に入れると `!any_requires_grad` 分岐（branch 2）に入り、`record_eager_outputs` が semantic trace を伝播 → detached 中間値の下流を後から functional AD できる。active-edge 化（branch 2 で record を skip）はこれを壊すため、明示 trace/capture API が必須。metadata registry の `register_scoped_metadata_batch` は `registered_meta(key)` で AD graph 解析時にのみ参照されるので、all-untracked（semantic trace なし）チェーンの登録は実質 dead work（~8µs）。
+
 さらに `ResidualSpec`（最小残存 mask）を全 AD rule に付与（conclusion 5.5）。**breaking change のため単独 PR で実施。**
 
 ### session フロア（~11µs）
