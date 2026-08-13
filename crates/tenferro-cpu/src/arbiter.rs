@@ -269,26 +269,30 @@ impl ResourceArbiter {
                     self.inner.state.clear_poison();
                 }
                 Err(ResourceArbiterError::RequestIdExhausted) => {
-                    #[cfg(test)]
-                    self.inner
-                        .recovery_waiters
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let mut state = self
                         .inner
                         .state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     while !state.active.is_empty() || !state.waiters.is_empty() {
+                        // Mark the park while holding the mutex, immediately
+                        // before wait releases it into the condvar: a drop can
+                        // then only notify after this thread is actually parked
+                        // (the drop cannot acquire the mutex first).
+                        #[cfg(test)]
+                        self.inner
+                            .recovery_waiters
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         state = self
                             .inner
                             .changed
                             .wait(state)
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        #[cfg(test)]
+                        self.inner
+                            .recovery_waiters
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                    #[cfg(test)]
-                    self.inner
-                        .recovery_waiters
-                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     state.next_request_id = 0;
                 }
             }
