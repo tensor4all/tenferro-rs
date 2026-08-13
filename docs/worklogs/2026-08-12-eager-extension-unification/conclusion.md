@@ -25,21 +25,22 @@
 
 ## ベンチマーク（1スレッド, Linux, faer, `cargo bench -p tenferro-linalg --bench eager_extension_dispatch --features autodiff`）
 
-| op (2x2 f64) | pre-#1665 no_ad | no_ad | eager_ad_forward |
+| op (2x2 f64) | pre-#1665 no_ad | no_ad | eager_ad_forward（tracked） |
 |---|---:|---:|---:|
-| matmul（標準op参照） | 26.3 µs | **16.8 µs** | 21.1 µs |
-| solve | 92.4 µs | **44.1 µs** | 41.8 µs |
-| svd | 43.8 µs | **16.5 µs** | 24.8 µs |
-| eigh | 26.3 µs | **14.6 µs** | 14.9 µs |
+| matmul（標準op参照） | 26.3 µs | 16.1 µs | 29.3 µs |
+| solve | 92.4 µs | **41.3 µs** | 75.8 µs |
+| svd | 43.8 µs | **17.4 µs** | 37.2 µs |
+| eigh | 26.3 µs | **14.7 µs** | 32.7 µs |
 
-- 改善: solve −52%、svd −62%、eigh −44%、matmul −36%。
+- 改善（no_ad）: solve −55%、svd −60%、eigh −44%、matmul −39%。
+- **eager-AD tracked forward は no_ad の ~2倍**（+13〜35µs の録音コスト）。この差分が deferred materialization（conclusion 3.2/3.4）の対象。
 - extension 固有のディスパッチオーバーヘッドは ~75µs → ~1.8µs に崩壊。
 
-## 残り（未達: 1桁 µs / PyTorch 同等）
+## 残り（未達）
 
-残り ~14µs は **session フロア**（`run_backend_session_cached` の permit + session construct + 出力 wrap）。標準 op の `matmul` も ~17µs。これは #1628/#1662 系の一般 eager ディスパッチ回帰で、**#1665 のスコープ外**（別 issue）。
-
-- `ResidualSpec`（保存 tensor の最小 mask）は未実装。backward の保存量削減（メモリ）に関わるが、forward 単発 op のレイテンシには寄与しない。conclusion 5.5 の残タスク。
+- **eager-AD tracked forward の録音コスト（+13〜35µs）**: `record_semantic_eager_outputs` → `extension::apply`（semantic graph 構築）+ metadata 登録 + scope Vec merge を forward 毎回実行している。conclusion 3.2/3.4 の deferred materialization（`extension::apply` を `append_raw_extension_op`（O(1)）+ `analyze_extension_graph`（初回 AD 要求時のみ）に分離）が未実装。**これは eager-AD forward レイテンシに直接寄与する残タスク**。
+- **`ResidualSpec`（保存 tensor 最小化）**: backward メモリ削減。未実装。
+- **session フロア ~14µs**: `run_backend_session_cached`（permit + session construct）。標準 op 共通の #1628/#1662 系別 issue（PyTorch 同等の唯一のブロッカー）。
 
 ## 検証
 
