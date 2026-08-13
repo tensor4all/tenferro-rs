@@ -383,7 +383,7 @@ fn finish_eager_extension_outputs(
         )));
     }
 
-    if !eager_grad_recording_enabled() {
+    if !eager_grad_recording_enabled() || !inputs.iter().any(|input| input.requires_grad) {
         return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))

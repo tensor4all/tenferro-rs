@@ -1179,7 +1179,7 @@ impl EagerTensor {
             }
         }
 
-        if !eager_grad_recording_enabled() {
+        if !eager_grad_recording_enabled() || !tensors.iter().any(|tensor| tensor.requires_grad) {
             return Self::new_untracked_value_result(ctx, value);
         }
 
@@ -1233,7 +1233,7 @@ impl EagerTensor {
         let any_requires_grad = profile_eager_op_section("nary_op.requires_grad_scan", || {
             eager_grad_recording_enabled() && tensors.iter().any(|tensor| tensor.requires_grad)
         });
-        if !eager_grad_recording_enabled() {
+        if !any_requires_grad {
             let input_reads = profile_eager_op_section("nary_op.collect_input_reads", || {
                 tensors
                     .iter()
@@ -1245,49 +1245,6 @@ impl EagerTensor {
             })?;
             let result = profile_eager_op_section("nary_op.new_untracked_result", || {
                 Self::new_untracked_result(ctx, output)
-            });
-            if let Some(total_started) = total_started {
-                record_eager_op_profile("nary_op.total", total_started.elapsed());
-                maybe_print_eager_op_profile();
-            }
-            return result;
-        }
-
-        if !any_requires_grad {
-            let input_reads = profile_eager_op_section("nary_op.collect_input_reads", || {
-                tensors
-                    .iter()
-                    .map(|tensor| tensor.tensor_read())
-                    .collect::<Vec<_>>()
-            });
-            let output = profile_eager_op_section("nary_op.exec_single_output_read", || {
-                exec_single_output_read(&op, &input_reads, &ctx)
-            })?;
-            let outputs = vec![&output];
-            let mut recorded =
-                profile_eager_op_section("nary_op.record_untracked_outputs", || {
-                    record_eager_outputs(&op, &outputs, tensors)
-                })?;
-            let trace = recorded.traces.pop().ok_or_else(|| {
-                Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
-            })?;
-            let semantic_trace = recorded.semantic_traces.pop().flatten();
-            let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-            for tensor in tensors {
-                for scope in &tensor.metadata_scopes {
-                    push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-                }
-            }
-            let result = profile_eager_op_section("nary_op.new_untracked_semantic_result", || {
-                Self::new_unregistered_result_with_semantic_trace(
-                    ctx,
-                    trace.key,
-                    output,
-                    trace.requires_grad,
-                    trace.trace,
-                    semantic_trace,
-                    metadata_scopes,
-                )
             });
             if let Some(total_started) = total_started {
                 record_eager_op_profile("nary_op.total", total_started.elapsed());

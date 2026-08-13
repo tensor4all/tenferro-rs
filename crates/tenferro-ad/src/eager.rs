@@ -4011,13 +4011,29 @@ fn record_semantic_eager_outputs(
     output_count: usize,
     inputs: &[&EagerTensor],
 ) -> Result<Vec<Option<TracedTensor>>> {
-    let Some(semantic_inputs) = inputs
+    // Materialize a constant semantic leaf for any untracked input that lost
+    // its implicit semantic trace on the active-edge fast path. This keeps
+    // "untracked constant feeds tracked AD" working (PyTorch-style: untracked
+    // = constant leaf, no gradient flows to it) without re-recording every
+    // untracked op at creation time.
+    let mut owned_constants = Vec::<TracedTensor>::new();
+    for input in inputs {
+        if input.semantic_trace.is_none() {
+            owned_constants.push(TracedTensor::from_tensor_symbolic_shape(
+                input.to_tensor()?,
+            )?);
+        }
+    }
+    let mut constants = owned_constants.iter();
+    let semantic_inputs: Vec<&TracedTensor> = inputs
         .iter()
-        .map(|input| input.semantic_trace.as_ref())
-        .collect::<Option<Vec<_>>>()
-    else {
-        return Ok(vec![None; output_count]);
-    };
+        .map(|input| {
+            input
+                .semantic_trace
+                .as_ref()
+                .unwrap_or_else(|| constants.next().expect("materialized constant"))
+        })
+        .collect();
     let semantic_outputs = match op {
         StdTensorOp::Extension(ext) => {
             tenferro_runtime::extension::apply(Arc::clone(ext), &semantic_inputs)?
