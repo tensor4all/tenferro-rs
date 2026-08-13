@@ -301,7 +301,12 @@ impl ResourceArbiter {
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
         state.waiters.push_back(Waiter { id, request, owner });
-        self.inner.changed.notify_all();
+        // Skip the broadcast when we are the only waiter: no other thread is
+        // blocked on this arbiter's condvar, so the futex wake is pure overhead.
+        // The grant/release paths still notify when there is someone to wake.
+        if state.waiters.len() > 1 {
+            self.inner.changed.notify_all();
+        }
 
         loop {
             let Some(position) = state.waiters.iter().position(|waiter| waiter.id == id) else {
@@ -456,7 +461,11 @@ impl Drop for ResourcePermit {
         if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
             state.active.swap_remove(position);
         }
-        self.inner.changed.notify_all();
+        // Only broadcast when a waiter could be released; with none waiting the
+        // futex wake is pure overhead on the hot drop path.
+        if !state.waiters.is_empty() {
+            self.inner.changed.notify_all();
+        }
     }
 }
 
