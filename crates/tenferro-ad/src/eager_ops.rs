@@ -20,7 +20,6 @@ use crate::eager::{
 };
 use crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads;
 use crate::error::{Error, Result};
-use crate::metadata::push_metadata_scope;
 
 pub(crate) fn broadcast_binary(
     op: &'static str,
@@ -1191,12 +1190,6 @@ impl EagerTensor {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
         let semantic_trace = recorded.semantic_traces.pop().flatten();
-        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-        for tensor in tensors {
-            for scope in &tensor.metadata_scopes {
-                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-            }
-        }
 
         Self::new_result_value(
             ctx,
@@ -1205,7 +1198,6 @@ impl EagerTensor {
             trace.requires_grad,
             trace.trace,
             semantic_trace,
-            metadata_scopes,
         )
     }
 
@@ -1277,12 +1269,6 @@ impl EagerTensor {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
         let semantic_trace = recorded.semantic_traces.pop().flatten();
-        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-        for tensor in tensors {
-            for scope in &tensor.metadata_scopes {
-                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-            }
-        }
 
         let result = profile_eager_op_section("nary_op.new_tracked_result", || {
             Self::new_result_with_semantic_trace(
@@ -1292,7 +1278,6 @@ impl EagerTensor {
                 trace.requires_grad,
                 trace.trace,
                 semantic_trace,
-                metadata_scopes,
             )
         });
         if let Some(total_started) = total_started {

@@ -1,6 +1,6 @@
 //! Internal support surface used by `tenferro-ad`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -14,6 +14,9 @@ use tenferro_tensor::{DType, Tensor, TypedTensor};
 pub use crate::checkpoint::{CheckpointNode, RetainedValue};
 use crate::error::ErrorPhase;
 use crate::metadata::MetadataScopeChain;
+use tenferro_ops::ad::context::TensorMeta;
+
+use crate::metadata::concrete_tensor_meta;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
     push_metadata_scope, register_scoped_graph_analysis, register_scoped_graph_metadata,
@@ -299,6 +302,103 @@ pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
 
 pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
+}
+
+/// Merge the input-value maps of several traced tensors into one bindings map.
+///
+/// The eager-AD raw carrier needs the same merged leaf bindings (`inputs_map`)
+/// that [`crate::extension::apply`] attaches to analyzed traces, so the
+/// deferred `compile_ad_source` can bind concrete values without re-walking.
+#[doc(hidden)]
+pub fn merge_traced_inputs_map<'a>(
+    inputs: impl IntoIterator<Item = &'a TracedTensor>,
+) -> Arc<HashMap<TensorInputKey, Arc<RetainedValue>>> {
+    crate::traced::merge_traced_inputs_map(inputs)
+}
+
+/// Run the deferred graph analysis over an eagerly appended raw semantic trace
+/// once, at the first AD request, and return the analyzed twin.
+///
+/// The eager forward records ops via [`crate::extension::append_raw_op`]
+/// without running `infer_output_meta` / metadata registration / constraint
+/// inference. This runs that analysis pass over the whole parent graph chain
+/// (idempotently, post-order so parents are registered before dependents) and
+/// attaches the resulting metadata and constraint scopes, so downstream
+/// `compile_ad_source` sees the same scoped graph the eager forward used to
+/// build.
+///
+/// Leaf metadata is not read from the global registry: it is seeded from the
+/// raw carrier's own bindings (`inputs_map`), so constants materialized at
+/// forward time (untracked inputs feeding tracked ops) stay analyzable even
+/// after their leaf scopes are dropped. The seeded registrations live in the
+/// scopes attached to the returned trace, keeping them alive through
+/// `compile_ad_source`.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] or
+/// [`crate::Error::RuntimeStateSource`] when analysis fails for any live graph
+/// in the chain.
+#[doc(hidden)]
+pub fn analyze_deferred_semantic_trace(raw: &TracedTensor) -> Result<TracedTensor> {
+    let mut graphs = Vec::new();
+    let mut seen = HashSet::new();
+    for root in raw.resolve_roots() {
+        collect_chain_graphs(&root, &mut graphs, &mut seen);
+    }
+
+    // Canonical symbolic leaves: derive dtype/shape for every bound input key
+    // from the raw carrier's own bindings. Attached once per append via the
+    // shared Arc inputs_map; re-registered here (analysis-time, not forward).
+    let seeded: Vec<(ValueKey<StdTensorOp>, TensorMeta)> = raw
+        .inputs_map
+        .iter()
+        .map(|(key, value)| {
+            (
+                ValueKey::Input(key.clone()),
+                concrete_tensor_meta(value.dtype(), value.shape()),
+            )
+        })
+        .collect();
+
+    let mut metadata_scopes = Vec::with_capacity(graphs.len());
+    let mut constraint_scopes = Vec::with_capacity(graphs.len());
+    for graph in &graphs {
+        let analysis = register_scoped_graph_analysis(graph, seeded.iter().cloned())?;
+        metadata_scopes.push(Arc::new(analysis.metadata));
+        if !analysis.constraints.is_empty() {
+            constraint_scopes.push(Arc::new(analysis.constraints));
+        }
+    }
+
+    let mut analyzed = raw.clone();
+    analyzed.metadata_scopes = MetadataScopeChain::from_materialized(metadata_scopes);
+    analyzed.constraint_scopes = constraint_chain_from_materialized(constraint_scopes);
+    Ok(analyzed)
+}
+
+fn collect_chain_graphs(
+    root: &Arc<Graph<StdTensorOp>>,
+    graphs: &mut Vec<Arc<Graph<StdTensorOp>>>,
+    seen: &mut HashSet<*const Graph<StdTensorOp>>,
+) {
+    if !seen.insert(Arc::as_ptr(root)) {
+        return;
+    }
+    for parent in root.parents() {
+        collect_chain_graphs(parent, graphs, seen);
+    }
+    graphs.push(Arc::clone(root));
+}
+
+fn constraint_chain_from_materialized(
+    scopes: Vec<Arc<ShapeConstraintScope>>,
+) -> ConstraintScopeChain {
+    let mut chain = ConstraintScopeChain::empty();
+    for scope in scopes.into_iter().rev() {
+        chain = ConstraintScopeChain::with_scope(scope, [&chain]);
+    }
+    chain
 }
 
 /// Compile a traced tensor as an AD source program.

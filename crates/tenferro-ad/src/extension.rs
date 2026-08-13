@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{
     Error, ErrorPhase, ExtensionModule, InputSignature, PrepareCapability, PrepareError, Result,
     Runtime, RuntimeConfigError,
@@ -412,13 +411,6 @@ fn finish_eager_extension_outputs(
             recorded.traces.len()
         )));
     }
-    let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-    for input in inputs {
-        for scope in &input.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
-    }
-
     recorded
         .traces
         .into_iter()
@@ -433,7 +425,6 @@ fn finish_eager_extension_outputs(
                     trace.requires_grad,
                     trace.trace,
                     semantic_trace,
-                    metadata_scopes.clone(),
                 )
             } else {
                 EagerTensor::new_unregistered_result_with_semantic_trace(
@@ -443,7 +434,6 @@ fn finish_eager_extension_outputs(
                     trace.requires_grad,
                     trace.trace,
                     semantic_trace,
-                    metadata_scopes.clone(),
                 )
             }
         })

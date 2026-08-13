@@ -70,8 +70,5 @@ pub mod error {
 }
 
 pub(crate) mod metadata {
-    pub use tenferro_runtime::ad_support::{
-        metadata_scopes_for_scope, push_metadata_scope, register_scoped_metadata_batch,
-        register_scoped_value_metadata, tensor_meta_from_tensor, GlobalMetadataScope,
-    };
+    pub use tenferro_runtime::ad_support::tensor_meta_from_tensor;
 }

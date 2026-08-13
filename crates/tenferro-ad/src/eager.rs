@@ -30,7 +30,10 @@ use tenferro_gpu::webgpu::WebGpuBackend;
 #[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
-use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor, RetainedValue};
+use tenferro_runtime::ad_support::{
+    analyze_deferred_semantic_trace, compile_ad_source, ones_tensor, tensor_from_parts,
+    ConstraintScopeTransfer, RetainedValue, TracedTensorParts,
+};
 use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{
     CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
@@ -54,12 +57,7 @@ use crate::eager_backend::{
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
 use crate::eager_exec::{exec_op_on_tensor_reads_with_runtime, exec_op_on_tensors_with_runtime};
 use crate::error::{ContextId, Error, Result};
-#[cfg(test)]
-use crate::metadata::push_metadata_scope;
-use crate::metadata::{
-    metadata_scopes_for_scope, register_scoped_metadata_batch, register_scoped_value_metadata,
-    tensor_meta_from_tensor, GlobalMetadataScope,
-};
+use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
 use crate::traced::{derivative_trace_from_frozen_program, next_input_key};
 use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
@@ -2277,14 +2275,7 @@ impl EagerRuntime {
             let mut backend = self.lock_backend()?;
             one_like_tensor(&value, &mut *backend)?
         };
-        let seed = EagerTensor::new_result(
-            Arc::clone(self),
-            eager_val_key(),
-            seed,
-            false,
-            None,
-            Vec::new(),
-        )?;
+        let seed = EagerTensor::new_result(Arc::clone(self), eager_val_key(), seed, false, None)?;
         self.vjp_optional(output, wrt, &seed)
     }
 
@@ -2693,7 +2684,7 @@ fn semantic_eager_vjp_optional(
     if !eager_semantic_vjp_enabled() {
         return Ok(None);
     }
-    let (Some(output_trace), Some(wrt_trace)) =
+    let (Some(raw_output_trace), Some(wrt_trace)) =
         (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
     else {
         return Ok(None);
@@ -2701,14 +2692,20 @@ fn semantic_eager_vjp_optional(
     let Some(wrt_key) = wrt_trace.input_key() else {
         return Ok(None);
     };
-    if !output_trace.has_attached_input_key(&wrt_key) {
+    if !raw_output_trace.has_attached_input_key(&wrt_key) {
         return Ok(None);
     }
+
+    // First AD request on this output: run the deferred graph analysis over
+    // the whole raw carrier chain once (metadata registration + constraint
+    // scopes), so `compile_ad_source` sees the same analyzed graph the eager
+    // forward used to append.
+    let output_trace = analyze_deferred_semantic_trace(raw_output_trace)?;
 
     // First compile the trace to get bindings and wrt_input_index.
     // (The compile step is needed even for cache hits to extract tensor bindings.)
     let mut compiler = GraphCompiler::new();
-    let source = compile_ad_source(&mut compiler, output_trace)?;
+    let source = compile_ad_source(&mut compiler, &output_trace)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2838,7 +2835,7 @@ fn semantic_eager_vjp_optional(
         derivative_program.frozen_program(),
         derivative_output_index,
         &[(seed_input_index, Arc::clone(&cotangent_tensor))],
-        &[output_trace, wrt_trace, &cotangent_trace],
+        &[&output_trace, wrt_trace, &cotangent_trace],
         None,
         "semantic_eager_vjp",
     )?;
@@ -2853,7 +2850,6 @@ fn semantic_eager_vjp_optional(
         true,
         None,
         Some(semantic_trace),
-        Vec::new(),
     )?)))
 }
 
@@ -2866,7 +2862,7 @@ fn semantic_eager_jvp_optional(
     if !eager_semantic_vjp_enabled() {
         return Ok(None);
     }
-    let (Some(output_trace), Some(wrt_trace)) =
+    let (Some(raw_output_trace), Some(wrt_trace)) =
         (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
     else {
         return Ok(None);
@@ -2874,12 +2870,16 @@ fn semantic_eager_jvp_optional(
     let Some(wrt_key) = wrt_trace.input_key() else {
         return Ok(None);
     };
-    if !output_trace.has_attached_input_key(&wrt_key) {
+    if !raw_output_trace.has_attached_input_key(&wrt_key) {
         return Ok(None);
     }
 
+    // First AD request on this output: run the deferred graph analysis once
+    // over the whole raw carrier chain before compiling.
+    let output_trace = analyze_deferred_semantic_trace(raw_output_trace)?;
+
     let mut compiler = GraphCompiler::new();
-    let source = compile_ad_source(&mut compiler, output_trace)?;
+    let source = compile_ad_source(&mut compiler, &output_trace)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2970,7 +2970,7 @@ fn semantic_eager_jvp_optional(
         derivative.frozen(),
         derivative_output_index,
         &[(seed_input_index, Arc::clone(&tangent_tensor))],
-        &[output_trace, wrt_trace, &tangent_trace],
+        &[&output_trace, wrt_trace, &tangent_trace],
         None,
         "semantic_eager_jvp",
     )?;
@@ -2982,7 +2982,6 @@ fn semantic_eager_jvp_optional(
         true,
         None,
         Some(semantic_trace),
-        Vec::new(),
     )?)))
 }
 
@@ -3055,7 +3054,6 @@ pub struct EagerTensor {
     pub(crate) semantic_trace: Option<TracedTensor>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
-    pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     pub(crate) ctx: Arc<EagerRuntime>,
     _record: Arc<EagerTensorRecord>,
 }
@@ -3067,7 +3065,6 @@ pub(crate) struct EagerTensorRecord {
     semantic_trace: Option<TracedTensor>,
     requires_grad: bool,
     grad_slot: GradSlot,
-    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ctx: Arc<EagerRuntime>,
 }
 
@@ -3078,7 +3075,6 @@ struct EagerTensorParts {
     trace: Option<EagerTrace>,
     semantic_trace: Option<TracedTensor>,
     value: Arc<AdValueRecord>,
-    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     register_value: bool,
 }
 
@@ -3177,12 +3173,12 @@ impl EagerTensor {
             .map_err(Error::from)?;
         let semantic_value = Arc::new(RetainedValue::from_tensor(semantic_tensor));
         let semantic_trace = TracedTensor::from_shared_tensor_value_symbolic_shape(semantic_value)?;
-        let metadata_scope =
-            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
-                |err| {
-                    Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
-                },
-            )?;
+        // Deferred materialization: the per-op/leaf global-metadata registry
+        // write for the eager tensor key was unreadable after the semantic
+        // trace became the sole AD carrier, so it is dropped.
+        // ponytail: leaf input-key metadata is still registered by
+        // `from_shared_tensor_value_symbolic_shape`; the eager-key entry was
+        // vestigial and removed. Add back only if something reads it.
         let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_leaf")?;
         Self::from_parts(EagerTensorParts {
             ctx,
@@ -3191,7 +3187,6 @@ impl EagerTensor {
             trace: None,
             semantic_trace: Some(semantic_trace),
             value,
-            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             register_value: true,
         })
     }
@@ -3202,17 +3197,8 @@ impl EagerTensor {
         tensor: Tensor,
         requires_grad: bool,
         trace: Option<EagerTrace>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::new_result_with_semantic_trace(
-            ctx,
-            key,
-            tensor,
-            requires_grad,
-            trace,
-            None,
-            metadata_scopes,
-        )
+        Self::new_result_with_semantic_trace(ctx, key, tensor, requires_grad, trace, None)
     }
 
     pub(crate) fn new_result_with_semantic_trace(
@@ -3222,7 +3208,6 @@ impl EagerTensor {
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_result")?;
         Self::from_parts(EagerTensorParts {
@@ -3232,7 +3217,6 @@ impl EagerTensor {
             trace,
             semantic_trace,
             value,
-            metadata_scopes,
             register_value: true,
         })
     }
@@ -3244,7 +3228,6 @@ impl EagerTensor {
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_unregistered_result")?;
         Self::from_parts(EagerTensorParts {
@@ -3254,7 +3237,6 @@ impl EagerTensor {
             trace,
             semantic_trace,
             value,
-            metadata_scopes,
             register_value: false,
         })
     }
@@ -3266,7 +3248,6 @@ impl EagerTensor {
         requires_grad: bool,
         trace: Option<EagerTrace>,
         semantic_trace: Option<TracedTensor>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
             Error::runtime_state(
@@ -3283,7 +3264,6 @@ impl EagerTensor {
             trace,
             semantic_trace,
             value,
-            metadata_scopes,
             register_value: true,
         })
     }
@@ -3296,7 +3276,6 @@ impl EagerTensor {
             trace,
             semantic_trace,
             value,
-            metadata_scopes,
             register_value,
         } = parts;
         let grad_slot = Arc::new(Mutex::new(None));
@@ -3310,7 +3289,6 @@ impl EagerTensor {
             semantic_trace: semantic_trace.clone(),
             requires_grad,
             grad_slot: Arc::clone(&grad_slot),
-            metadata_scopes: metadata_scopes.clone(),
             ctx: Arc::clone(&ctx),
         });
         if register_value {
@@ -3323,7 +3301,6 @@ impl EagerTensor {
             semantic_trace,
             requires_grad,
             grad_slot,
-            metadata_scopes,
             ctx,
             _record: record,
         })
@@ -3371,7 +3348,6 @@ impl EagerTensor {
             semantic_trace: semantic_trace.clone(),
             requires_grad: false,
             grad_slot: Arc::clone(&grad_slot),
-            metadata_scopes: Vec::new(),
             ctx: Arc::clone(&ctx),
         });
         Self {
@@ -3380,7 +3356,6 @@ impl EagerTensor {
             semantic_trace,
             requires_grad: false,
             grad_slot,
-            metadata_scopes: Vec::new(),
             ctx,
             _record: record,
         }
@@ -3393,7 +3368,6 @@ impl EagerTensor {
             semantic_trace: record.semantic_trace.clone(),
             requires_grad: record.requires_grad,
             grad_slot: Arc::clone(&record.grad_slot),
-            metadata_scopes: record.metadata_scopes.clone(),
             ctx: Arc::clone(&record.ctx),
             _record: record,
         }
@@ -3554,7 +3528,6 @@ impl EagerTensor {
             semantic_trace,
             requires_grad,
             grad_slot,
-            metadata_scopes,
             ctx,
         } = record;
         let value = match Arc::try_unwrap(value) {
@@ -3567,7 +3540,6 @@ impl EagerTensor {
                     semantic_trace,
                     requires_grad,
                     grad_slot,
-                    metadata_scopes,
                     ctx,
                 });
                 return Err(IntoValueError::NotUnique(Self::from_record(record)));
@@ -3594,7 +3566,6 @@ impl EagerTensor {
                     semantic_trace,
                     requires_grad,
                     grad_slot,
-                    metadata_scopes,
                     ctx,
                 });
                 return Err(IntoValueError::NotUnique(Self::from_record(record)));
@@ -3615,7 +3586,6 @@ impl EagerTensor {
                     semantic_trace,
                     requires_grad,
                     grad_slot,
-                    metadata_scopes,
                     ctx,
                 });
                 Err(IntoValueError::Extract {
@@ -3877,7 +3847,6 @@ impl EagerTensor {
                         false,
                         None,
                         None,
-                        Vec::new(),
                     )
                 })
                 .collect();
@@ -3897,13 +3866,6 @@ impl EagerTensor {
             )));
         }
 
-        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-        for input in inputs {
-            for scope in &input.metadata_scopes {
-                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-            }
-        }
-
         recorded
             .traces
             .into_iter()
@@ -3917,7 +3879,6 @@ impl EagerTensor {
                     trace.requires_grad,
                     trace.trace,
                     semantic_trace,
-                    metadata_scopes.clone(),
                 )
             })
             .collect()
@@ -4016,14 +3977,8 @@ impl EagerTensor {
     }
 
     fn backward_from_seed(&self, seed: Tensor) -> Result<Gradients> {
-        let cotangent = EagerTensor::new_result(
-            Arc::clone(&self.ctx),
-            eager_val_key(),
-            seed,
-            false,
-            None,
-            Vec::new(),
-        )?;
+        let cotangent =
+            EagerTensor::new_result(Arc::clone(&self.ctx), eager_val_key(), seed, false, None)?;
         let candidate_keys = {
             let mut slots = self.ctx.lock_grad_slots()?;
             let mut keys = Vec::new();
@@ -4082,7 +4037,6 @@ pub(crate) struct RecordedEagerTrace {
 pub(crate) struct RecordedEagerOutputs {
     pub(crate) traces: Vec<RecordedEagerTrace>,
     pub(crate) semantic_traces: Vec<Option<TracedTensor>>,
-    pub(crate) metadata_scope: Arc<GlobalMetadataScope>,
 }
 
 pub(crate) fn record_eager_outputs(
@@ -4090,9 +4044,11 @@ pub(crate) fn record_eager_outputs(
     outputs: &[&Tensor],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
-    let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
-    let output_metadata = outputs.iter().map(|output| tensor_meta_from_tensor(output));
-    record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
+    let output_metadata = outputs
+        .iter()
+        .map(|output| tensor_meta_from_tensor(output))
+        .collect::<Vec<_>>();
+    record_eager_outputs_inner(op, output_metadata, inputs)
 }
 
 pub(crate) fn record_eager_value_outputs(
@@ -4100,14 +4056,25 @@ pub(crate) fn record_eager_value_outputs(
     outputs: &[&TensorValue],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
-    let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
-    let output_metadata = outputs.iter().map(|output| tensor_meta_from_value(output));
+    let output_metadata = outputs
+        .iter()
+        .map(|output| tensor_meta_from_value(output))
+        .collect::<Vec<_>>();
+    record_eager_outputs_inner(op, output_metadata, inputs)
+}
+
+fn record_eager_outputs_inner(
+    op: &StdTensorOp,
+    output_metadata: Vec<TensorMeta>,
+    inputs: &[&EagerTensor],
+) -> Result<RecordedEagerOutputs> {
+    let semantic_traces = record_semantic_eager_outputs(op, &output_metadata, inputs)?;
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
 fn record_semantic_eager_outputs(
     op: &StdTensorOp,
-    output_count: usize,
+    output_metadata: &[TensorMeta],
     inputs: &[&EagerTensor],
 ) -> Result<Vec<Option<TracedTensor>>> {
     // Materialize a constant semantic leaf for any untracked input that lost
@@ -4133,19 +4100,48 @@ fn record_semantic_eager_outputs(
                 .unwrap_or_else(|| constants.next().expect("materialized constant"))
         })
         .collect();
-    let semantic_outputs = match op {
-        StdTensorOp::Extension(ext) => {
-            tenferro_runtime::extension::apply(Arc::clone(ext), &semantic_inputs)?
-        }
-        _ => tenferro_runtime::extension::apply_standard_op(op.clone(), &semantic_inputs)?,
-    };
-    if semantic_outputs.len() != output_count {
+    // Deferred materialization (issue #1665 steps 6-7): append the op to the
+    // raw `Graph<StdTensorOp>` carrier only. Metadata inference, registry
+    // registration, and constraint discovery run once at the first AD request
+    // via `analyze_deferred_semantic_trace`, reusing the existing
+    // compile/AdTransformCache/prepared-derivative machinery.
+    let append = tenferro_runtime::extension::append_raw_op(op.clone(), &semantic_inputs)?;
+    if append.output_ids.len() != output_metadata.len() {
         return Err(Error::Internal(format!(
-            "semantic eager recording expected {output_count} outputs for {op:?}, got {}",
-            semantic_outputs.len()
+            "semantic eager recording expected {} outputs for {op:?}, got {}",
+            output_metadata.len(),
+            append.output_ids.len()
         )));
     }
-    Ok(semantic_outputs.into_iter().map(Some).collect())
+    let inputs_map =
+        tenferro_runtime::ad_support::merge_traced_inputs_map(semantic_inputs.iter().copied());
+    let mut extra_roots = Vec::new();
+    for input in &semantic_inputs {
+        extra_roots.extend(tenferro_runtime::ad_support::extra_roots(input));
+    }
+    // ponytail: eager semantic traces never checkpoint, so the carrier keeps
+    // `checkpoint_chain = None` instead of merging input chains.
+    let outputs = append
+        .output_ids
+        .iter()
+        .zip(output_metadata)
+        .map(|(&val, meta)| {
+            tensor_from_parts(TracedTensorParts {
+                rank: meta.rank(),
+                dtype: meta.dtype,
+                graph: Arc::clone(&append.graph),
+                val,
+                data: None,
+                shape_hint: None,
+                inputs_map: Arc::clone(&inputs_map),
+                extra_roots: extra_roots.clone(),
+                checkpoint_chain: None,
+                metadata_scopes: Vec::new(),
+                constraint_scope_transfer: ConstraintScopeTransfer::empty(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(outputs.into_iter().map(Some).collect())
 }
 
 #[cfg(test)]
@@ -4251,24 +4247,18 @@ fn record_eager_outputs_from_metadata(
     }
     let requires_grad =
         eager_grad_recording_enabled() && inputs.iter().any(|input| input.requires_grad);
-    let mut registrations = Vec::with_capacity(output_metadata.len());
-    let traces = output_metadata
-        .into_iter()
-        .map(|metadata| {
-            let key = eager_val_key();
-            registrations.push((key.clone(), metadata));
-            RecordedEagerTrace {
-                key,
-                trace: None,
-                requires_grad,
-            }
+    let trace_count = output_metadata.len();
+    let traces = (0..trace_count)
+        .map(|_| RecordedEagerTrace {
+            key: eager_val_key(),
+            trace: None,
+            requires_grad,
         })
         .collect();
 
     Ok(RecordedEagerOutputs {
         traces,
         semantic_traces,
-        metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)?),
     })
 }
 
