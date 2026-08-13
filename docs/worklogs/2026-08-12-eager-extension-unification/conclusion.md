@@ -39,7 +39,7 @@
 - `apply.finish` ~8µs（出力を `AllocationGroup::from_tensors` で毎回 wrap）
 - `to_tensor()` materialization（bench の consume に含む）
 
-標準 op の `matmul` 参照も ~24µs（v0.2.0 は ~3µs）。これは #1628/#1662 系列の「一般 eager ディスパッチ」回帰で、別 issue 相当。
+**フロアはベンチマークの artifacts ではない**ことを確認: `eager_dispatch_baseline` の `lazy/dot_general_f64/2`（`to_tensor()` なしの lazy consume）も ~22µs。つまり標準 op の `matmul`/`dot_general` は materialization を含めなくても ~20µs かかり、コストは eager op 機構（backend session open + 出力 wrap）そのもの。v0.2.0 は ~3µs なのでこれは #1628/#1662 系列の「一般 eager ディスパッチ」回帰で、別 issue 相当。
 
 ## 残タスク
 
