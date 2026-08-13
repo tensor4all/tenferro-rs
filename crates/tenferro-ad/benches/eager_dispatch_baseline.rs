@@ -1,3 +1,10 @@
+//! Eager standard-op dispatch baseline (lazy vs materialized consume).
+//!
+//! The per-op floor includes the CPU session-open cost that issue #1667 tracks:
+//! for a single worker the `enter_managed_session` wrapper (~5-8 us) plus the
+//! eager view-read materialization are currently hard to avoid. See
+//! docs/design/cpu-session-open-cost.md.
+
 use std::sync::Arc;
 use std::time::Duration;
 

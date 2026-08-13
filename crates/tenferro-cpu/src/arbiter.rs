@@ -200,6 +200,8 @@ struct ArbiterState {
 struct ArbiterInner {
     state: Mutex<ArbiterState>,
     changed: Condvar,
+    #[cfg(test)]
+    recovery_waiters: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -273,11 +275,23 @@ impl ResourceArbiter {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     while !state.active.is_empty() || !state.waiters.is_empty() {
+                        // Mark the park while holding the mutex, immediately
+                        // before wait releases it into the condvar: a drop can
+                        // then only notify after this thread is actually parked
+                        // (the drop cannot acquire the mutex first).
+                        #[cfg(test)]
+                        self.inner
+                            .recovery_waiters
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         state = self
                             .inner
                             .changed
                             .wait(state)
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        #[cfg(test)]
+                        self.inner
+                            .recovery_waiters
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     state.next_request_id = 0;
                 }
@@ -301,7 +315,13 @@ impl ResourceArbiter {
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
         state.waiters.push_back(Waiter { id, request, owner });
-        self.inner.changed.notify_all();
+        // Skip the broadcast when we are the only queued waiter: no other
+        // queued waiter can be blocked on the condvar. (Exhaustion-recovery
+        // waiters are intentionally uncovered here; the unconditional drop
+        // broadcast below wakes them.)
+        if state.waiters.len() > 1 {
+            self.inner.changed.notify_all();
+        }
 
         loop {
             let Some(position) = state.waiters.iter().position(|waiter| waiter.id == id) else {
@@ -392,23 +412,24 @@ impl ResourceArbiter {
         expected: usize,
         timeout: std::time::Duration,
     ) -> bool {
-        let Ok(mut state) = self.inner.state.lock() else {
-            return false;
-        };
+        // Poll instead of waiting on the production condvar: the acquire
+        // fast path legitimately skips the broadcast when a waiter is the
+        // only one, so a helper without a waiter-list entry would otherwise
+        // wait the full timeout.
         let deadline = std::time::Instant::now() + timeout;
-        while state.waiters.len() < expected {
-            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-                return false;
+        loop {
+            let count = match self.inner.state.lock() {
+                Ok(state) => state.waiters.len(),
+                Err(_) => return false,
             };
-            let Ok((next, wait)) = self.inner.changed.wait_timeout(state, remaining) else {
-                return false;
-            };
-            state = next;
-            if wait.timed_out() && state.waiters.len() < expected {
+            if count >= expected {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
                 return false;
             }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        true
     }
 
     #[cfg(test)]
@@ -456,6 +477,10 @@ impl Drop for ResourcePermit {
         if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
             state.active.swap_remove(position);
         }
+        // Always broadcast: the request-id-exhaustion recovery loop parks on
+        // the condvar WITHOUT a waiter-list entry (until active and waiters
+        // are both empty), so the waiter list cannot tell whether a thread is
+        // parked. Skipping here would risk stranding that recovery waiter.
         self.inner.changed.notify_all();
     }
 }
