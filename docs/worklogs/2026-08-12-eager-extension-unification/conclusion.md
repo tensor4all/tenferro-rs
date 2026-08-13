@@ -8,6 +8,7 @@
 ### 実行経路統一（#1664 回帰の本丸）
 
 - `apply_eager` 単一入口 + snapshot-resolved native immediate path（`ExtensionEngine::prepare` → session executor、`Unsupported` のみ compiled fallback）。linalg/einsum/fft を単一入口へ移行。
+- **native-session / native-context 両経路**: session executor（`execute_in_session`）と、session 非対応 executor の必須 `execute`（`ErasedExecutionContext`）を両方即時実行（out-of-tree の context-only prepared op 対応）。
 - `install/ensure_extension_module` の steady-state read-only no-op。
 - native prepare を exact engine に pin + returned-plan 検証、linalg の per-op/per-backend session admission（CPU `SvdFull` 除外含む）。
 
