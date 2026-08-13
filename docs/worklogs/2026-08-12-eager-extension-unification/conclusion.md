@@ -33,13 +33,12 @@
 
 ## 未達: PyTorch 同等（1桁 µs）
 
-単一 op の残り ~24µs は**共有 eager-op フロア**で、#1665 の対象（extension 経路統一）ではない:
+単一 op の残り ~20µs は**共有 eager-op フロア**で、内訳は2つに分かれる:
 
-- `session_execute` ~11µs（backend lock + session open + 実計算）
-- `apply.finish` ~8µs（出力を `AllocationGroup::from_tensors` で毎回 wrap）
-- `to_tensor()` materialization（bench の consume に含む）
+1. `session_execute` ~11µs（backend lock + session open + 実計算）— **#1628/#1662 系の別 issue**（一般 eager ディスパッチ）。
+2. `apply.finish` ~8µs（出力 wrap + `register_scoped_metadata_batch` の global registry write）— **eager-AD Def 1 の対象**。現行は「grad-active input 0 でも全出力を metadata batch に登録」する implicit all-untracked 録音（`record_eager_outputs_from_metadata` の `requires_grad == false` でも `eager_val_key()` + `register_scoped_metadata_batch` を実行）。Def 1 の「grad-active input 0 ⇒ autograd node 0」で消せる。
 
-**フロアはベンチマークの artifacts ではない**ことを確認: `eager_dispatch_baseline` の `lazy/dot_general_f64/2`（`to_tensor()` なしの lazy consume）も ~22µs。つまり標準 op の `matmul`/`dot_general` は materialization を含めなくても ~20µs かかり、コストは eager op 機構（backend session open + 出力 wrap）そのもの。v0.2.0 は ~3µs なのでこれは #1628/#1662 系列の「一般 eager ディスパッチ」回帰で、別 issue 相当。
+**フロアはベンチマークの artifacts ではない**ことを確認: `eager_dispatch_baseline` の `lazy/dot_general_f64/2`（`to_tensor()` なし）も ~22µs。つまり `apply.finish` の ~8µs は #1665 の eager-AD 部分（Def 1）で回収可能だが、残り ~11µs は別 issue の session フロア。
 
 ## 残タスク
 
