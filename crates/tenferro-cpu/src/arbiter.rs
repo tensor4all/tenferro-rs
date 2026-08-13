@@ -462,13 +462,11 @@ impl Drop for ResourcePermit {
         if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
             state.active.swap_remove(position);
         }
-        // Broadcast when a queued waiter could be released, or when the request
-        // id is exhausted: the exhaustion-recovery loop parks on the condvar
-        // WITHOUT a waiter-list entry until active and waiters are both empty,
-        // so dropping the last active permit must still wake it (issue #1667).
-        if !state.waiters.is_empty() || state.next_request_id == u64::MAX {
-            self.inner.changed.notify_all();
-        }
+        // Always broadcast: the request-id-exhaustion recovery loop parks on
+        // the condvar WITHOUT a waiter-list entry (until active and waiters
+        // are both empty), so the waiter list cannot tell whether a thread is
+        // parked. Skipping here would risk stranding that recovery waiter.
+        self.inner.changed.notify_all();
     }
 }
 

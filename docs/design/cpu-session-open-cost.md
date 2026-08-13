@@ -41,10 +41,12 @@ above.
    native entry. This is part of `exec_body` for linalg ops.
 
 3. **The `ResourceArbiter` is cheap (~0.5 µs) but does a futex broadcast per
-   acquire and per drop even when uncontended.** Skipping the broadcast when
-   there is no waiter is a safe micro-optimization (implemented in #1667):
-   `acquire_request` notifies only when another waiter exists, and
-   `ResourcePermit::drop` notifies only when the waiter list is non-empty.
+   acquire even when uncontended.** Skipping the broadcast on `acquire_request`
+   when the new waiter is the only one (no other thread can be blocked) is a
+   safe micro-optimization (implemented in #1667). The permit-drop broadcast is
+   kept unconditional: the request-id-exhaustion recovery loop parks without a
+   waiter-list entry, so the waiter list cannot reveal whether a thread is
+   parked, and skipping the drop broadcast would risk stranding it.
 
 4. **`exec_body` for linalg ops is the largest remaining cost** (~12 µs for a
    2x2 solve) and is dominated by the eager view-read materialization plus the
