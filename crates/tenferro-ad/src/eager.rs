@@ -91,6 +91,7 @@ thread_local! {
     static EAGER_OP_PROFILE_STATE: RefCell<HashMap<&'static str, EagerOpProfileEntry>> =
         RefCell::new(HashMap::new());
     static EAGER_NO_GRAD_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static EAGER_CAPTURE_DEPTH: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
@@ -104,6 +105,10 @@ pub(crate) static EAGER_SEMANTIC_VJP_EXECUTIONS: AtomicUsize = AtomicUsize::new(
 
 pub(crate) fn eager_grad_recording_enabled() -> bool {
     EAGER_NO_GRAD_DEPTH.with(|depth| depth.get() == 0)
+}
+
+pub(crate) fn eager_capture_active() -> bool {
+    EAGER_CAPTURE_DEPTH.with(|depth| depth.get() > 0)
 }
 
 fn eager_semantic_vjp_enabled() -> bool {
@@ -152,6 +157,56 @@ impl Drop for EagerNoGradGuard {
             return;
         }
         EAGER_NO_GRAD_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+        self.active = false;
+    }
+}
+
+/// Scope guard that keeps semantic-trace recording active for untracked
+/// intermediates.
+///
+/// Under active-edge semantics (issue #1665 Def 1), an operation whose inputs
+/// are all untracked produces no autograd nodes and drops its semantic trace.
+/// Inside this guard, such operations still record their semantic trace, so a
+/// later functional JVP/VJP can differentiate with respect to an untracked or
+/// detached leaf. This replaces the pre-Def-1 implicit recording.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+///     ctx.clone(),
+/// )?;
+/// let (y, x) = {
+///     let _capture = ctx.capture_trace();
+///     let y = x.mul(&x)?;
+///     (y, x)
+/// };
+/// let seed = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+///     ctx.clone(),
+/// )?;
+/// let dx = ctx.vjp(&y, &x, &seed)?;
+/// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct EagerTraceCaptureGuard {
+    active: bool,
+}
+
+impl Drop for EagerTraceCaptureGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        EAGER_CAPTURE_DEPTH.with(|depth| {
             depth.set(depth.get().saturating_sub(1));
         });
         self.active = false;
@@ -1369,6 +1424,16 @@ impl EagerRuntime {
             depth.set(depth.get().saturating_add(1));
         });
         EagerNoGradGuard { active: true }
+    }
+
+    /// Keep semantic-trace recording active for untracked intermediates.
+    ///
+    /// See [`EagerTraceCaptureGuard`] for the full contract and an example.
+    pub fn capture_trace(&self) -> EagerTraceCaptureGuard {
+        EAGER_CAPTURE_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_add(1));
+        });
+        EagerTraceCaptureGuard { active: true }
     }
 
     /// Install or replace one extension module on this eager context's runtime.

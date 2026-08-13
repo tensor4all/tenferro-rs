@@ -11,7 +11,10 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::{Tensor, TensorRead, TensorValue};
 
-use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
+use crate::eager::{
+    eager_capture_active, eager_grad_recording_enabled, record_eager_outputs, EagerRuntime,
+    EagerTensor,
+};
 
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
@@ -383,7 +386,9 @@ fn finish_eager_extension_outputs(
         )));
     }
 
-    if !eager_grad_recording_enabled() || !inputs.iter().any(|input| input.requires_grad) {
+    if !eager_grad_recording_enabled()
+        || (!eager_capture_active() && !inputs.iter().any(|input| input.requires_grad))
+    {
         return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
