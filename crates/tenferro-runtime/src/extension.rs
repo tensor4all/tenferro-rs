@@ -32,7 +32,9 @@ use crate::metadata::{
 };
 use crate::shape_constraint::{ConstraintScopeChain, ScopedShapeConstraint, ShapeConstraintScope};
 use crate::shape_infer::{infer_extension_output_meta_with_constraints, InferredExtensionMeta};
-use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
+use crate::traced::{
+    merge_traced_inputs_map, merge_traced_leaf_metas, next_traced_id, TracedTensor,
+};
 
 type ExpandedOutputMetas = Vec<(tenferro_tensor::DType, Vec<SymDim>)>;
 
@@ -569,6 +571,7 @@ fn traced_outputs_from_analysis(
     let constraint_scope = Arc::new(analysis.constraints);
 
     let merged_map = merge_traced_inputs_map(inputs.iter().copied());
+    let merged_leaf_metas = merge_traced_leaf_metas(inputs.iter().copied());
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
     let metadata_scopes = MetadataScopeChain::with_scope(
@@ -607,6 +610,7 @@ fn traced_outputs_from_analysis(
                 data: None,
                 shape_hint,
                 inputs_map: merged_map.clone(),
+                leaf_metas: merged_leaf_metas.clone(),
                 extra_roots: extra_roots.clone(),
                 checkpoint_chain: checkpoint_chain.clone(),
                 metadata_scopes: metadata_scopes.clone(),

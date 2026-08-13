@@ -730,6 +730,54 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
 }
 
 #[test]
+fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
+    // The deferred analysis must seed leaves from their retained symbolic
+    // construction-time metadata (symbolic_input_meta), not from concrete
+    // extents derived from the bound values: the compiled AD source must
+    // classify eager-AD inputs symbolically (InputDim extents), exactly like
+    // the traced path, so the semantic fingerprint does not embed concrete
+    // extents.
+    use std::sync::Arc;
+    use tenferro_runtime::ad_support::{
+        analyze_deferred_semantic_trace, compile_ad_source, RetainedValue,
+    };
+    use tenferro_runtime::{extension, TracedTensor};
+
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+    let raw = y
+        .semantic_trace
+        .as_ref()
+        .expect("tracked eager output should retain a semantic trace");
+    let analyzed = analyze_deferred_semantic_trace(raw).unwrap();
+
+    // Traced-path reference: the same symbolic leaf + Mul op, analyzed at
+    // apply time; its input extent identity is symbolic.
+    let data = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ));
+    let leaf = TracedTensor::from_shared_tensor_value_symbolic_shape(data).unwrap();
+    let traced = extension::apply_standard_op(StdTensorOp::Mul, &[&leaf, &leaf]).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let eager_source = compile_ad_source(&mut compiler, &analyzed).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let traced_source = compile_ad_source(&mut compiler, &traced[0]).unwrap();
+
+    assert_eq!(
+        eager_source.program().semantic_fingerprint(),
+        traced_source.program().semantic_fingerprint(),
+        "deferred eager-AD program must be symbolically consistent with the traced path \
+         (leaf extents must be InputDim, not concrete constants)"
+    );
+}
+
+#[test]
 fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let x = EagerTensor::requires_grad_in(

@@ -8,7 +8,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{SymDim, TensorMeta};
 use tenferro_runtime::ad_support::{
     allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, compile_ad_source,
-    frozen_input_value, inputs_map as tensor_inputs_map, leaf_input_key,
+    frozen_input_value, inputs_map as tensor_inputs_map, leaf_input_key, merge_traced_leaf_metas,
     metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new, ones_tensor,
     register_scoped_graph_analysis, shape_hint as tensor_shape_hint, tensor_from_parts,
     ConstraintScopeTransfer, RetainedValue, TracedTensorParts,
@@ -909,6 +909,11 @@ pub(crate) fn derivative_trace_from_frozen_program(
         data: None,
         shape_hint: output_meta.exact_shape().or(fallback_shape_hint),
         inputs_map: Arc::new(inputs_map),
+        // The derivative graph is standalone (its input keys reference the
+        // source leaves directly), so the retained leaf metas of the inherited
+        // source tensors cover every leaf key the deferred eager analysis may
+        // re-seed from this trace.
+        leaf_metas: merge_traced_leaf_metas(inherited_tensors.iter().copied()),
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: metadata_scopes_with_new(

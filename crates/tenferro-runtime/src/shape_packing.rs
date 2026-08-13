@@ -16,7 +16,7 @@ use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{
     apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, merge_traced_inputs_map,
-    next_traced_id, try_concrete_shape,
+    merge_traced_leaf_metas, next_traced_id, try_concrete_shape,
 };
 use crate::TracedTensor;
 
@@ -717,6 +717,7 @@ fn apply_nary_concatenate(
         ))?;
 
     let inputs_map = merge_traced_inputs_map(tensors.iter());
+    let leaf_metas = merge_traced_leaf_metas(tensors.iter());
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
     for tensor in &tensors {
@@ -733,6 +734,7 @@ fn apply_nary_concatenate(
         data: None,
         shape_hint: Some(out_shape),
         inputs_map,
+        leaf_metas,
         extra_roots,
         checkpoint_chain,
         metadata_scopes: MetadataScopeChain::with_new(

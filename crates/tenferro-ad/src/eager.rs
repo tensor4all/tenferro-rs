@@ -4115,6 +4115,8 @@ fn record_semantic_eager_outputs(
     }
     let inputs_map =
         tenferro_runtime::ad_support::merge_traced_inputs_map(semantic_inputs.iter().copied());
+    let leaf_metas =
+        tenferro_runtime::ad_support::merge_traced_leaf_metas(semantic_inputs.iter().copied());
     let mut extra_roots = Vec::new();
     for input in &semantic_inputs {
         extra_roots.extend(tenferro_runtime::ad_support::extra_roots(input));
@@ -4134,6 +4136,7 @@ fn record_semantic_eager_outputs(
                 data: None,
                 shape_hint: None,
                 inputs_map: Arc::clone(&inputs_map),
+                leaf_metas: Arc::clone(&leaf_metas),
                 extra_roots: extra_roots.clone(),
                 checkpoint_chain: None,
                 metadata_scopes: Vec::new(),
