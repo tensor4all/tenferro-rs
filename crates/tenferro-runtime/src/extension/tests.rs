@@ -536,3 +536,31 @@ fn parent_owner_index_is_not_built_for_registered_inputs() {
     assert_eq!(index_builds, 0);
     assert_eq!(parent_value_visits, 0);
 }
+
+#[test]
+fn append_raw_op_builds_carrier_without_analysis() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let append = append_raw_op(StdTensorOp::Add, &[&x, &y]).unwrap();
+    assert_eq!(append.output_ids.len(), 1);
+    // The raw carrier holds exactly one op; no metadata analysis ran yet.
+    assert_eq!(append.graph.operations().len(), 1);
+    assert_eq!(append.graph.outputs().len(), 1);
+}
+
+#[test]
+fn append_then_analyze_registers_output_metadata() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let append = append_raw_op(StdTensorOp::Add, &[&x, &y]).unwrap();
+    let analysis = analyze_extension_graph(append.graph.as_ref()).unwrap();
+    // Analysis registers output metadata; the analysis scope keeps it alive.
+    let out_key = &append.graph.values()[append.output_ids[0]].key;
+    let meta = registered_meta(out_key).unwrap();
+    assert_eq!(meta.dtype, DType::F64);
+    assert_eq!(meta.rank(), 1);
+    // Keep the analysis scopes alive so `registered_meta` resolves.
+    let _ = analysis;
+}

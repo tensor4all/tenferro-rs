@@ -3,8 +3,9 @@ use std::hash::Hasher;
 use std::sync::{Arc, Barrier, Mutex};
 
 use super::{
-    apply_eager_with_extension_session, apply_eager_with_targeted_extension_session,
-    EagerExtensionBackendKind, EagerExtensionTarget, ExtensionOp,
+    adopt_untracked_eager_value, apply_eager_with_extension_session,
+    apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
+    ExtensionOp,
 };
 use crate::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
@@ -15,11 +16,11 @@ use tenferro_runtime::{
     ExtensionPlanningConfig, ExtensionPrepareRequest, PrepareCapability, PrepareError,
     PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
     PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan, Runtime,
-    RuntimeConfigError, RuntimeReconfigureError, SpecializationProjection,
+    RuntimeConfigError, RuntimeReconfigureError, SpecializationProjection, UnsupportedReason,
 };
-use tenferro_tensor::{BackendSession, DType, Tensor, TensorRead, TensorStructural};
 #[cfg(feature = "cuda")]
-use tenferro_tensor::{MemoryKind, TensorValue};
+use tenferro_tensor::MemoryKind;
+use tenferro_tensor::{BackendSession, DType, Tensor, TensorRead, TensorStructural, TensorValue};
 
 #[derive(Clone, Debug)]
 struct BridgeProbe {
@@ -109,6 +110,7 @@ struct BridgeEngine {
     family_id: &'static str,
     engine_id: EngineId,
     session_capable: bool,
+    unsupported_prepare: bool,
 }
 
 impl ExtensionEngine for BridgeEngine {
@@ -128,6 +130,13 @@ impl ExtensionEngine for BridgeEngine {
         &self,
         request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
+        if self.unsupported_prepare {
+            return Ok(PrepareCapability::Unsupported(
+                UnsupportedReason::Operation {
+                    operation: self.family_id,
+                },
+            ));
+        }
         // Native prepared path: the probe op is session-capable, so
         // `apply_eager` executes it through the prepared plan instead of the
         // compiled-program fallback.
@@ -207,6 +216,7 @@ struct BridgeModule {
     module_id: ExtensionModuleId,
     engine_id: Option<EngineId>,
     session_capable: bool,
+    unsupported_prepare: bool,
 }
 
 impl BridgeModule {
@@ -216,6 +226,7 @@ impl BridgeModule {
                 .unwrap(),
             engine_id: None,
             session_capable: true,
+            unsupported_prepare: false,
         })
     }
 
@@ -225,6 +236,7 @@ impl BridgeModule {
                 .unwrap(),
             engine_id: Some(engine_id),
             session_capable: true,
+            unsupported_prepare: false,
         })
     }
 
@@ -234,6 +246,17 @@ impl BridgeModule {
                 .unwrap(),
             engine_id: Some(engine_id),
             session_capable: false,
+            unsupported_prepare: false,
+        })
+    }
+
+    fn for_engine_unsupported_prepare(engine_id: EngineId) -> Arc<dyn ExtensionModule> {
+        Arc::new(Self {
+            module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
+                .unwrap(),
+            engine_id: Some(engine_id),
+            session_capable: true,
+            unsupported_prepare: true,
         })
     }
 }
@@ -254,6 +277,7 @@ impl ExtensionModule for BridgeModule {
             family_id: BridgeProbe::one().family_id(),
             engine_id: engine_id.clone(),
             session_capable: self.session_capable,
+            unsupported_prepare: self.unsupported_prepare,
         }))?;
         registrar.register_planning_config(
             engine_id.clone(),
@@ -818,5 +842,39 @@ fn eager_extension_factory_receives_exact_webgpu_target() {
             .as_ref()
             .map(|target| target.engine_id.as_str()),
         Some(webgpu_runtime_engine_id().unwrap().as_str())
+    );
+}
+
+#[test]
+fn adopt_untracked_eager_value_registers_value() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let value = TensorValue::from_tensor(tensor);
+    let eager = adopt_untracked_eager_value(Arc::clone(&ctx), value).unwrap();
+    assert_eq!(eager.shape(), &[1]);
+    assert!(!eager.tracks_grad());
+}
+
+#[test]
+fn apply_eager_falls_back_to_compiled_on_unsupported_prepare() {
+    // An engine whose prepare returns Unsupported makes the native immediate
+    // path decline; apply_eager then falls back to the compiled-program path
+    // (exec_outputs_read). The compiled path shares the same engine, so the
+    // fallback surfaces the engine's unsupported error rather than panicking.
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+    let result = execute_legacy_probe(
+        Arc::new(BridgeProbe::one()),
+        &input,
+        BridgeModule::for_engine_unsupported_prepare(engine_id),
+    );
+    let Err(error) = result else {
+        panic!("unsupported prepare should surface an error through the fallback");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("tenferro-tests.eager-extension-bridge.v1"),
+        "{message}"
     );
 }

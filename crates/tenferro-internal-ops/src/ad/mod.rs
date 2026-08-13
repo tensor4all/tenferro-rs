@@ -437,3 +437,40 @@ pub fn transpose_rule(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod residual_spec_tests {
+    use super::ResidualSpec;
+
+    #[test]
+    fn residual_spec_builders_and_queries_cover_always_on_api() {
+        let none = ResidualSpec::none();
+        assert!(none.is_empty());
+        assert!(!none.declares_input(0));
+        assert!(!none.declares_output(0));
+
+        let single = ResidualSpec::input(1).with_output(0);
+        assert!(!single.declares_input(0));
+        assert!(single.declares_input(1));
+        assert!(single.declares_output(0));
+        assert!(!single.is_empty());
+
+        let chained = ResidualSpec::output(2).with_input(0).with_input(3);
+        assert!(chained.declares_input(0) && chained.declares_input(3));
+        assert!(!chained.declares_input(1));
+        assert!(chained.declares_output(2));
+
+        let all_in = ResidualSpec::all_inputs();
+        assert!(all_in.declares_input(0) && all_in.declares_input(63));
+        assert!(!all_in.declares_output(0));
+        let all_out = ResidualSpec::all_outputs();
+        assert!(all_out.declares_output(0) && all_out.declares_output(63));
+        assert!(!all_out.declares_input(0));
+
+        let both = ResidualSpec::all_inputs().with_all_outputs();
+        assert!(both.declares_input(63) && both.declares_output(63));
+        assert!(!both.declares_input(64) && !both.declares_output(64));
+
+        assert!(ResidualSpec::default().is_empty());
+    }
+}

@@ -101,6 +101,7 @@ impl SemanticLinearizeRule for IdentityRule {
         assert_eq!(request.primal_inputs().len(), 1);
         assert_eq!(request.primal_outputs().len(), 1);
         assert_eq!(request.active_outputs(), &[true]);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
         assert_eq!(
             request.provenance().label(),
             Some("tenferro-ad.semantic-identity.v1")
@@ -136,6 +137,10 @@ impl SemanticLinearTransposeRule for IdentityRule {
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
         assert_eq!(request.residuals().len(), 1);
+        assert_eq!(request.primal_inputs().len(), 1);
+        assert_eq!(request.primal_outputs().len(), 1);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
+        assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
     }
 }
@@ -155,6 +160,8 @@ impl SemanticPrimalVjpRule for IdentityRule {
         _builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
+        assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
     }
 }
