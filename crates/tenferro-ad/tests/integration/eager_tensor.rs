@@ -338,6 +338,34 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
 }
 
 #[test]
+fn untracked_leaf_functional_vjp_requires_explicit_capture() {
+    let ctx = test_ctx();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+
+    // Under active-edge semantics (issue #1665 Def 1), an all-untracked chain
+    // drops its semantic trace, so functional VJP w.r.t. the untracked leaf is
+    // inactive unless the region is wrapped in an explicit capture.
+    let y = x.mul(&x).unwrap();
+    assert!(ctx.vjp_optional(&y, &x, &seed).unwrap().is_none());
+
+    let (y_captured, x_captured) = {
+        let _capture = ctx.capture_trace();
+        (x.mul(&x).unwrap(), x)
+    };
+    let dx = ctx.vjp(&y_captured, &x_captured, &seed).unwrap();
+    assert_close_slice(f64_data(&dx.to_tensor().unwrap()), &[2.0, 4.0], TOL);
+}
+
+#[test]
 fn eager_dot_general_with_conj_uses_untracked_fast_path() {
     let ctx = test_ctx();
     let lhs = EagerTensor::from_tensor_in(

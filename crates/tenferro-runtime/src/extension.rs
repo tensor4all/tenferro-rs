@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use computegraph::graph::GraphBuilder;
+use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::{OperationRole, ValueRef};
 use computegraph::GraphOperation;
 use tenferro_ops::dim_expr::DimExpr;
@@ -32,7 +32,9 @@ use crate::metadata::{
 };
 use crate::shape_constraint::{ConstraintScopeChain, ScopedShapeConstraint, ShapeConstraintScope};
 use crate::shape_infer::{infer_extension_output_meta_with_constraints, InferredExtensionMeta};
-use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
+use crate::traced::{
+    merge_traced_inputs_map, merge_traced_leaf_metas, next_traced_id, TracedTensor,
+};
 
 type ExpandedOutputMetas = Vec<(tenferro_tensor::DType, Vec<SymDim>)>;
 
@@ -122,25 +124,13 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
         ));
     }
 
-    // Build the carrier graph first; the graph-analysis pass below resolves
-    // registered input metadata and invokes canonical extension inference once.
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    for input in inputs {
-        builder.add_parent(input.graph.clone());
-    }
-    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
-        .iter()
-        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
-        .collect();
-    let carrier = StdTensorOp::Extension(op.clone());
-    let outputs = builder.add_operation(carrier, op_inputs, OperationRole::Primary);
-    builder.set_outputs(outputs.clone());
-    let graph = Arc::new(builder.build());
-    let analysis = register_scoped_graph_analysis(graph.as_ref(), std::iter::empty())?;
-    let output_metas = outputs
+    let append = append_raw_op(StdTensorOp::Extension(op.clone()), inputs)?;
+    let analysis = analyze_extension_graph(append.graph.as_ref())?;
+    let output_metas = append
+        .output_ids
         .iter()
         .map(|&output| {
-            let meta = registered_meta(&graph.values()[output].key)?;
+            let meta = registered_meta(&append.graph.values()[output].key)?;
             let shape = meta.bound_shape().ok_or_else(|| {
                 Error::invalid_argument(
                     "extension::apply",
@@ -155,7 +145,64 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
             Ok((meta.dtype, shape))
         })
         .collect::<Result<Vec<_>>>()?;
-    traced_outputs_from_analysis(inputs, graph, &outputs, output_metas, analysis)
+    traced_outputs_from_analysis(
+        inputs,
+        append.graph,
+        &append.output_ids,
+        output_metas,
+        analysis,
+    )
+}
+
+/// Raw result of appending one op to a traced/eager graph without analysis.
+#[doc(hidden)]
+pub struct RawAppend {
+    pub graph: Arc<Graph<StdTensorOp>>,
+    pub output_ids: Vec<usize>,
+}
+
+/// Append one op to a traced graph without running metadata analysis.
+///
+/// This is the O(inputs)/op half of [`apply`]: it builds only the raw
+/// `Graph<StdTensorOp>` carrier (parent edges + op + declared outputs).
+/// Analysis (metadata registration, `infer_output_meta`, constraint scopes)
+/// is deferred via [`analyze_extension_graph`]. The traced path runs both
+/// immediately; the eager-AD path appends now and analyzes at the first AD
+/// request.
+#[doc(hidden)]
+pub fn append_raw_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<RawAppend> {
+    let expected = op.input_count();
+    if inputs.len() != expected {
+        return Err(Error::invalid_argument(
+            "extension::append_raw_op",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!("op expects {expected} inputs, got {}", inputs.len()),
+        ));
+    }
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    for input in inputs {
+        builder.add_parent(input.graph.clone());
+    }
+    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
+        .iter()
+        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
+        .collect();
+    let output_ids = builder.add_operation(op, op_inputs, OperationRole::Primary);
+    builder.set_outputs(output_ids.clone());
+    Ok(RawAppend {
+        graph: Arc::new(builder.build()),
+        output_ids,
+    })
+}
+
+/// Run the deferred analysis half of an append once: register metadata and
+/// derive constraint scopes for every live value. Idempotent per graph value
+/// key, so repeated calls (one per first AD request) are safe.
+pub(crate) fn analyze_extension_graph(
+    graph: &Graph<StdTensorOp>,
+) -> Result<RegisteredGraphAnalysis> {
+    register_scoped_graph_analysis(graph, std::iter::empty())
 }
 
 /// Apply a core standard op in the traced graph.
@@ -202,22 +249,13 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<Ve
         ));
     }
 
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    for input in inputs {
-        builder.add_parent(input.graph.clone());
-    }
-    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
-        .iter()
-        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
-        .collect();
-    let outputs = builder.add_operation(op, op_inputs, OperationRole::Primary);
-    builder.set_outputs(outputs.clone());
-    let graph = Arc::new(builder.build());
-    let analysis = register_scoped_graph_analysis(graph.as_ref(), std::iter::empty())?;
-    let output_metas = outputs
+    let append = append_raw_op(op, inputs)?;
+    let analysis = analyze_extension_graph(append.graph.as_ref())?;
+    let output_metas = append
+        .output_ids
         .iter()
         .map(|&output| {
-            let meta = registered_meta(&graph.values()[output].key)?;
+            let meta = registered_meta(&append.graph.values()[output].key)?;
             let shape = meta.bound_shape().ok_or_else(|| {
                 Error::invalid_argument(
                     "extension::apply_standard_op",
@@ -229,7 +267,13 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<Ve
             Ok((meta.dtype, shape))
         })
         .collect::<Result<Vec<_>>>()?;
-    traced_outputs_from_analysis(inputs, graph, &outputs, output_metas, analysis)
+    traced_outputs_from_analysis(
+        inputs,
+        append.graph,
+        &append.output_ids,
+        output_metas,
+        analysis,
+    )
 }
 
 /// Attach an extension's inferred shape contract to an equivalent expanded output.
@@ -527,6 +571,7 @@ fn traced_outputs_from_analysis(
     let constraint_scope = Arc::new(analysis.constraints);
 
     let merged_map = merge_traced_inputs_map(inputs.iter().copied());
+    let merged_leaf_metas = merge_traced_leaf_metas(inputs.iter().copied());
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
     let metadata_scopes = MetadataScopeChain::with_scope(
@@ -565,6 +610,7 @@ fn traced_outputs_from_analysis(
                 data: None,
                 shape_hint,
                 inputs_map: merged_map.clone(),
+                leaf_metas: merged_leaf_metas.clone(),
                 extra_roots: extra_roots.clone(),
                 checkpoint_chain: checkpoint_chain.clone(),
                 metadata_scopes: metadata_scopes.clone(),

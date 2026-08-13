@@ -648,8 +648,40 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
 }
 
 fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp) -> bool {
-    matches!(op.op(), LinalgOp::LuSolvePrepared { .. })
-        && std::any::TypeId::of::<B>() == std::any::TypeId::of::<tenferro_cpu::CpuBackend>()
+    // The `supports_session` contract (capability.rs) requires that an op is
+    // admitted to a scheduler session only when the session executor genuinely
+    // executes it without returning `Unsupported`. Admission is exactly
+    // per-op/per-backend so `apply_eager` keeps the native prepared path for
+    // every op the session can actually run (issue #1665).
+    let type_id = std::any::TypeId::of::<B>();
+    if type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() {
+        // The CPU backend type does not carry its provider kind (faer vs BLAS)
+        // at this type-only seam, and the BLAS provider does not implement
+        // in-session full-matrices SVD, so SvdFull is conservatively rejected
+        // and falls back to the compiled path. Every other CPU linalg kernel
+        // runs in-session on both faer and BLAS providers.
+        return op.op() != LinalgOp::SvdFull;
+    }
+    #[cfg(feature = "cuda")]
+    {
+        if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>() {
+            return match op.op() {
+                // Complete-pivoting LU and general eig have no CUDA kernels.
+                LinalgOp::FullPivLu | LinalgOp::FullPivLuSolve { .. } => false,
+                LinalgOp::Eig { .. } | LinalgOp::EigVals { .. } => false,
+                // Full-matrices SVD falls back to the default `svd_full`
+                // impl, which reports `Unsupported`.
+                LinalgOp::SvdFull => false,
+                // Conjugate-only prepared LU solve is unsupported on CUDA.
+                LinalgOp::LuSolvePrepared {
+                    transpose_a: false,
+                    conjugate_a: true,
+                } => false,
+                _ => true,
+            };
+        }
+    }
+    false
 }
 
 fn execute_linalg_extension_in_session(
@@ -658,22 +690,9 @@ fn execute_linalg_extension_in_session(
     _extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if !matches!(op.op(), LinalgOp::LuSolvePrepared { .. }) {
-        return Err(Error::unsupported(
-            "linalg_extension",
-            "linalg operation has no scheduler-session implementation",
-        ));
-    };
-    if inputs.len() != 4 {
-        return Err(Error::invalid_argument(
-            "linalg_extension",
-            "inputs",
-            format!(
-                "LuSolvePrepared session execution expected 4 inputs, got {}",
-                inputs.len()
-            ),
-        ));
-    }
+    // Reuse the existing session executor that the eager and scheduler paths
+    // already share; it downcasts the borrowed session to the CPU/CUDA exec
+    // session and runs the same forward kernel for every LinalgOp.
     execute_linalg_extension_reads_on_session(op, inputs, session)
 }
 

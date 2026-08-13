@@ -16,6 +16,7 @@ use tenferro_ops::broadcast::{
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::TensorMeta;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, IntoShapeVec,
     PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, TensorValue,
@@ -59,6 +60,14 @@ pub struct TracedTensor {
     pub(crate) data: Option<Arc<RetainedValue>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<TracedInputMap>,
+    /// Retained construction-time metadata per bound leaf input key.
+    ///
+    /// Populated by data-attached leaf constructors with the exact
+    /// `TensorMeta` they register (symbolic `tensor_axis` extents for
+    /// [`TracedTensor::from_shared_tensor_value_symbolic_shape`]), so the
+    /// deferred eager-AD analysis can seed symbolic leaf metadata without
+    /// deriving concrete extents from the bound values.
+    pub(crate) leaf_metas: Arc<HashMap<TensorInputKey, TensorMeta>>,
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: MetadataScopeChain,
@@ -112,15 +121,56 @@ fn input_map_matches_ordered_merge(
     candidate: &TracedInputMap,
     maps: &[&Arc<TracedInputMap>],
 ) -> bool {
+    merged_map_matches_ordered(candidate, maps, Arc::ptr_eq)
+}
+
+/// Merge the retained leaf-metadata maps of several traced tensors into one.
+///
+/// Sibling of [`merge_traced_inputs_map`]: the merged map covers exactly the
+/// same leaf keys as the merged bindings map, mapping each to the
+/// construction-time `TensorMeta` its leaf registered (symbolic for symbolic
+/// leaves).
+pub(crate) fn merge_traced_leaf_metas<'a>(
+    inputs: impl IntoIterator<Item = &'a TracedTensor>,
+) -> Arc<HashMap<TensorInputKey, TensorMeta>> {
+    let maps: Vec<_> = inputs
+        .into_iter()
+        .map(|input| &input.leaf_metas)
+        .filter(|map| !map.is_empty())
+        .collect();
+    match maps.as_slice() {
+        [] => return Arc::new(HashMap::new()),
+        [single] => return Arc::clone(*single),
+        _ => {}
+    }
+
+    for &candidate in &maps {
+        if merged_map_matches_ordered(candidate.as_ref(), &maps, |a, b| a == b) {
+            return Arc::clone(candidate);
+        }
+    }
+
+    let mut merged = (**maps[0]).clone();
+    for map in maps.iter().skip(1) {
+        merged.extend(map.iter().map(|(key, meta)| (key.clone(), meta.clone())));
+    }
+    Arc::new(merged)
+}
+
+fn merged_map_matches_ordered<V>(
+    candidate: &HashMap<TensorInputKey, V>,
+    maps: &[&Arc<HashMap<TensorInputKey, V>>],
+    matches: impl Fn(&V, &V) -> bool,
+) -> bool {
     for map in maps {
         for key in map.keys() {
-            let Some(final_tensor) = maps.iter().rev().find_map(|source| source.get(key)) else {
+            let Some(final_value) = maps.iter().rev().find_map(|source| source.get(key)) else {
                 return false;
             };
-            let Some(candidate_tensor) = candidate.get(key) else {
+            let Some(candidate_value) = candidate.get(key) else {
                 return false;
             };
-            if !Arc::ptr_eq(candidate_tensor, final_tensor) {
+            if !matches(candidate_value, final_value) {
                 return false;
             }
         }
@@ -672,6 +722,7 @@ impl TracedTensor {
         let key = next_input_key();
         let id = next_traced_id();
         let data = Arc::new(RetainedValue::from_tensor(tensor));
+        let meta = concrete_tensor_meta(dtype, &shape);
 
         let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
@@ -679,11 +730,13 @@ impl TracedTensor {
         let graph = Arc::new(builder.build());
         let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
-            concrete_tensor_meta(dtype, &shape),
+            meta.clone(),
         ))?;
 
         let mut map = HashMap::new();
-        map.insert(key, Arc::clone(&data));
+        map.insert(key.clone(), Arc::clone(&data));
+        let mut leaf_metas = HashMap::new();
+        leaf_metas.insert(key, meta);
 
         Ok(Self {
             id,
@@ -694,6 +747,7 @@ impl TracedTensor {
             data: Some(data),
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
             inputs_map: Arc::new(map),
+            leaf_metas: Arc::new(leaf_metas),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
@@ -765,6 +819,7 @@ impl TracedTensor {
         let dtype = data.dtype();
         let key = next_input_key();
         let id = next_traced_id();
+        let meta = symbolic_input_meta(dtype, id, rank);
 
         let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
@@ -772,11 +827,13 @@ impl TracedTensor {
         let graph = Arc::new(builder.build());
         let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
-            symbolic_input_meta(dtype, id, rank),
+            meta.clone(),
         ))?;
 
         let mut map = HashMap::new();
-        map.insert(key, Arc::clone(&data));
+        map.insert(key.clone(), Arc::clone(&data));
+        let mut leaf_metas = HashMap::new();
+        leaf_metas.insert(key, meta);
 
         Ok(Self {
             id,
@@ -787,6 +844,7 @@ impl TracedTensor {
             data: Some(data),
             shape_hint: None,
             inputs_map: Arc::new(map),
+            leaf_metas: Arc::new(leaf_metas),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
@@ -840,6 +898,7 @@ impl TracedTensor {
             data: None,
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
             inputs_map: Arc::new(HashMap::new()),
+            leaf_metas: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
@@ -891,6 +950,7 @@ impl TracedTensor {
             data: None,
             shape_hint: None,
             inputs_map: Arc::new(HashMap::new()),
+            leaf_metas: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
@@ -2845,6 +2905,7 @@ pub(crate) fn apply_unary_with_dtype(
         data: None,
         shape_hint: out_shape_hint,
         inputs_map: input.inputs_map.clone(),
+        leaf_metas: input.leaf_metas.clone(),
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
         metadata_scopes: MetadataScopeChain::with_new(metadata_scope, [&input.metadata_scopes]),
@@ -2887,6 +2948,8 @@ pub(crate) fn apply_unary_with_shape_refs(
 
     let inputs_map =
         merge_traced_inputs_map(std::iter::once(input).chain(shape_refs.iter().copied()));
+    let leaf_metas =
+        merge_traced_leaf_metas(std::iter::once(input).chain(shape_refs.iter().copied()));
 
     let mut extra_roots = input.extra_roots.clone();
     for t in shape_refs {
@@ -2908,6 +2971,7 @@ pub(crate) fn apply_unary_with_shape_refs(
         data: None,
         shape_hint: out_shape_hint,
         inputs_map,
+        leaf_metas,
         extra_roots,
         checkpoint_chain,
         metadata_scopes: MetadataScopeChain::with_new(
@@ -2944,6 +3008,7 @@ pub(crate) fn apply_nullary(
         data: None,
         shape_hint,
         inputs_map: Arc::new(HashMap::new()),
+        leaf_metas: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
@@ -3136,6 +3201,7 @@ fn apply_binary_with_output_dtype(
         data: None,
         shape_hint: out_shape_hint,
         inputs_map: merge_traced_inputs_map([lhs, rhs]),
+        leaf_metas: merge_traced_leaf_metas([lhs, rhs]),
         extra_roots,
         checkpoint_chain: CheckpointNode::merge_chains(
             lhs.checkpoint_chain.clone(),
@@ -3200,6 +3266,7 @@ fn apply_ternary_with_output_dtype(
         data: None,
         shape_hint: out_shape_hint,
         inputs_map: merge_traced_inputs_map([first, second, third]),
+        leaf_metas: merge_traced_leaf_metas([first, second, third]),
         extra_roots,
         checkpoint_chain,
         metadata_scopes: MetadataScopeChain::with_new(

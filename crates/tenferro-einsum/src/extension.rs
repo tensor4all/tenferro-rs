@@ -10,7 +10,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
@@ -347,6 +347,14 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
         EINSUM_EXTENSION_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The einsum VJP reads every non-active operand as a tensor operand
+        // (conjugate + contract with the cotangent); which operands are read
+        // depends on the active-input configuration, so all inputs are
+        // declared. The output is only used for its shape.
+        ResidualSpec::all_inputs()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -358,6 +366,7 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
             request.primal_outputs(),
             request.cotangent_outputs(),
             request.active_inputs(),
+            request.residual_mask(),
             builder,
         )
     }
@@ -367,6 +376,12 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
 impl SemanticPrimalVjpRule for EinsumAdRule {
     fn family_id(&self) -> &'static str {
         EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // Same operand set as the linear transpose: every non-active input is
+        // read as a tensor; the output only for its shape.
+        ResidualSpec::all_inputs()
     }
 
     fn primal_vjp(
@@ -380,6 +395,7 @@ impl SemanticPrimalVjpRule for EinsumAdRule {
             request.primal_outputs(),
             request.cotangent_outputs(),
             request.active_inputs(),
+            request.residual_mask(),
             builder,
         )
     }
@@ -392,6 +408,7 @@ fn semantic_einsum_vjp(
     primal_outputs: &[ProgramValue],
     cotangent_outputs: &[AdValue],
     active_inputs: &[bool],
+    residual_mask: ResidualSpec,
     builder: &mut SemanticProgramBuilder,
 ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
     let op = semantic_einsum_payload(payload, SemanticAdRuleRole::LinearTranspose)?;
@@ -434,6 +451,11 @@ fn semantic_einsum_vjp(
             }
             vjp_input_labels.push(input_labels[input_idx].clone());
             vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
+            debug_assert!(
+                residual_mask.declares_input(input_idx),
+                "einsum transpose read primal input {input_idx} as a tensor operand but the \
+                 residual mask does not declare it; declare it in the einsum rule's residual mask"
+            );
             vjp_inputs.push(semantic_conjugate_if_complex(
                 builder,
                 primal_inputs[input_idx],
@@ -914,6 +936,8 @@ define_extension_runtime! {
     op_type = EinsumExtensionOp,
     execute = execute_einsum_extension,
     execute_reads = execute_einsum_extension_reads,
+    execute_in_session = execute_einsum_extension_reads_in_session,
+    session_supported = einsum_session_supported,
 }
 
 fn execute_einsum_extension<B: TensorBackend + 'static>(
@@ -984,7 +1008,6 @@ pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn execute_einsum_extension_session_reads(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
@@ -1006,6 +1029,36 @@ pub(crate) fn execute_einsum_extension_session_reads(
     })?;
     let output = crate::eager::eager_einsum_exec_read(ctx.backend_mut(), inputs, &tree)?;
     Ok(vec![output])
+}
+
+/// Adapter from the scheduler/`apply_eager` borrowed-session shape to the
+/// eager session executor. Reuses the existing forward kernel; reimplementing
+/// it here is explicitly out of scope for issue #1665.
+fn execute_einsum_extension_reads_in_session(
+    op: &EinsumExtensionOp,
+    session: &mut dyn BackendSession,
+    caches: &mut tenferro_runtime::ExtensionCacheStore,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut ctx = ExtensionExecutionContext::new(session, caches);
+    execute_einsum_extension_session_reads(op, inputs, &mut ctx)
+}
+
+fn einsum_session_supported<B: BackendSession + 'static>(_op: &EinsumExtensionOp) -> bool {
+    // The session executor runs the same forward kernel on any backend session
+    // below (the einsum execution only needs elementwise/dot session ops), so
+    // CPU and CUDA sessions both qualify for `apply_eager`'s native path.
+    let type_id = std::any::TypeId::of::<B>();
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+        #[cfg(feature = "cuda")]
+        {
+            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
 }
 
 #[derive(Clone)]

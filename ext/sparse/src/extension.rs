@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
@@ -760,6 +760,11 @@ impl SemanticLinearTransposeRule for SparseMatmulAdRule {
         FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -780,6 +785,11 @@ impl SemanticLinearTransposeRule for SparseMatmulAdRule {
 impl SemanticLinearTransposeRule for SparseMatmulJvpTransposeRule {
     fn family_id(&self) -> &'static str {
         JVP_FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
     }
 
     fn linear_transpose(
@@ -804,6 +814,11 @@ impl SemanticPrimalVjpRule for SparseMatmulJvpTransposeRule {
         JVP_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
+    }
+
     fn primal_vjp(
         &self,
         request: SemanticPrimalVjpRequest<'_>,
@@ -824,6 +839,11 @@ impl SemanticPrimalVjpRule for SparseMatmulJvpTransposeRule {
 impl SemanticPrimalVjpRule for SparseMatmulAdRule {
     fn family_id(&self) -> &'static str {
         FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
     }
 
     fn primal_vjp(

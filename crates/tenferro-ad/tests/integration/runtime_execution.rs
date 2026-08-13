@@ -238,6 +238,7 @@ fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
         data: None,
         shape_hint: Some(vec![SymDim::from(2usize)]),
         inputs_map: Arc::new(HashMap::from([(primal_key, primal)])),
+        leaf_metas: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),

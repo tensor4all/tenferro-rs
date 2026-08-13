@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
@@ -704,6 +704,11 @@ impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
         TROPICAL_EINSUM_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -724,6 +729,11 @@ impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
 impl SemanticLinearTransposeRule for TropicalEinsumJvpTransposeRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_JVP_FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
     }
 
     fn linear_transpose(
@@ -748,6 +758,11 @@ impl SemanticPrimalVjpRule for TropicalEinsumJvpTransposeRule {
         TROPICAL_EINSUM_JVP_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
+    }
+
     fn primal_vjp(
         &self,
         request: SemanticPrimalVjpRequest<'_>,
@@ -768,6 +783,11 @@ impl SemanticPrimalVjpRule for TropicalEinsumJvpTransposeRule {
 impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // The VJP reads every non-active operand as a tensor operand.
+        ResidualSpec::all_inputs()
     }
 
     fn primal_vjp(

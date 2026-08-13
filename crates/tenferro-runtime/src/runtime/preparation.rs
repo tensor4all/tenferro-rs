@@ -39,6 +39,141 @@ use super::{
 
 pub(crate) type PreparedProgramResult<T> = Result<T, Arc<PrepareError>>;
 
+/// Resolve and prepare a single extension operation for immediate eager
+/// execution against a single, exact runtime engine.
+///
+/// This is the native immediate path for single-op eager extension calls
+/// (issue #1665). It bypasses SemanticProgram staging, operation dispatch
+/// search, and the prepared-program cache entirely. The eager runtime owns its
+/// exact engine (see `EagerRuntime::eager_extension_target`), so provider
+/// selection is pinned to `engine_id`; it never wanders to a different engine
+/// that happens to be first in slot order.
+///
+/// Everything the compiled path filters or validates before exposing a
+/// prepared operation is mirrored here:
+/// - non-executable engines are removed from consideration
+///   (mirrors `resolve_preparation_context`);
+/// - capability resolution runs before request construction: an engine without
+///   an extension slot for `op`'s family skips all planning-field allocation;
+/// - every input entry must have ingress into the exact engine
+///   (mirrors `resolve_input_locations`);
+/// - a returned [`PrepareCapability::Prepared`] plan must carry the exact
+///   binding and specialization the request demanded
+///   (mirrors `validate_prepared_operation`).
+///
+/// The request reuses the same snapshot-retained values as the compiled
+/// preparation path ([`operation_dispatch_candidates`]): binding identity,
+/// resolved placement, hardware class, resolved planning policy,
+/// prepare-options key, planning config, and the fully polymorphic
+/// specialization projection. Provider decisions therefore match the compiled
+/// path for the same op and signature.
+///
+/// Returns [`PrepareCapability::Unsupported`] when `engine_id` is not
+/// registered, is not executable, or has no extension slot for the op's
+/// family, so callers may fall back to the compiled path.
+pub(super) fn prepare_extension_immediate(
+    runtime: &Runtime,
+    engine_id: &EngineId,
+    op: &dyn tenferro_ops::ext_op::ExtensionOp,
+    signature: &InputSignature,
+) -> PreparedProgramResult<super::PrepareCapability> {
+    let snapshot = runtime
+        .snapshot()
+        .map_err(|source| Arc::new(PrepareError::CacheState { source }))?;
+    let options = PrepareOptions::new();
+    // Pin provider selection to the eager runtime's exact engine. Any other
+    // engine (even one that owns the family first in slot order) is not the
+    // engine the eager runtime executes through.
+    let Some(engine) = snapshot
+        .engine_views_for_preparation()
+        .find(|engine| engine.engine_id() == engine_id)
+    else {
+        return Ok(super::PrepareCapability::Unsupported(
+            UnsupportedReason::Operation {
+                operation: op.family_id(),
+            },
+        ));
+    };
+    // Remove non-executable engines, mirroring the compiled path's
+    // `resolve_preparation_context` executable-candidate filter.
+    if engine.executable_witness().is_none() {
+        return Ok(super::PrepareCapability::Unsupported(
+            UnsupportedReason::Operation {
+                operation: op.family_id(),
+            },
+        ));
+    }
+    // Capability check before planning: an engine without this family's slot
+    // has no provider, so no request fields are built.
+    let Some(slot) = snapshot.extension_slot_for_preparation(op.family_id(), engine_id) else {
+        return Ok(super::PrepareCapability::Unsupported(
+            UnsupportedReason::Operation {
+                operation: op.family_id(),
+            },
+        ));
+    };
+    // Input ingress into the exact engine, mirroring the compiled path's
+    // `resolve_input_locations` per-entry ingress resolution.
+    for (input_index, entry) in signature.entries().iter().enumerate() {
+        if !engine.accepts_input_signature(entry) {
+            return Err(Arc::new(PrepareError::NoInputIngress {
+                input_index,
+                placement: entry.placement().clone(),
+            }));
+        }
+    }
+    let resolved_placement = ResolvedProgramPlacement::new(
+        engine.engine_id().clone(),
+        engine.default_storage_class().clone(),
+    );
+    let planning = ResolvedPlanningConfig::resolve(
+        snapshot.execution_policy(),
+        &options,
+        engine.hardware_class().clone(),
+    );
+    let prepare_options_key = PrepareOptionsKey::from_resolved(
+        resolved_placement.clone(),
+        planning.hard_workspace_limit_bytes(),
+        planning.planning_seed(),
+    );
+    let binding = PreparedOperationBinding::new(
+        runtime.id(),
+        snapshot.epoch(),
+        slot.engine_id().clone(),
+        slot.registration_identity(),
+        slot.context_identity(),
+        engine.hardware_class().clone(),
+    );
+    let specialization = project_requirements(
+        &SpecializationRequirements::polymorphic(signature.entries().len()),
+        signature,
+    )?;
+    let request = ExtensionPrepareRequest::new(
+        op,
+        &binding,
+        &resolved_placement,
+        engine.hardware_class(),
+        &planning,
+        slot.config().as_ref(),
+        signature,
+        &prepare_options_key,
+        &specialization,
+    );
+    let capability = slot.engine().prepare(request).map_err(|source| {
+        Arc::new(PrepareError::Engine {
+            source: Arc::new(source),
+        })
+    })?;
+    // Mirror `prepare_entry`: a returned prepared plan must carry the exact
+    // binding and specialization the request asked for, or the provider
+    // violated its contract. `NeedsSpecialization`/`Unsupported` are returned
+    // untouched so callers fall back to the compiled path.
+    if let super::PrepareCapability::Prepared(plan) = &capability {
+        validate_prepared_operation(plan.operation().as_ref(), &binding, &specialization)?;
+    }
+    Ok(capability)
+}
+
 #[derive(Clone)]
 struct ExtensionPlanningIdentity {
     module_id: ExtensionModuleId,

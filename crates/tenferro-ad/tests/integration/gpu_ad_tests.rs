@@ -163,17 +163,22 @@ fn test_gpu_matmul_vjp() {
     let a_gpu = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();
-    let y_gpu = a_gpu
-        .dot_general(
-            &b_gpu,
-            DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
-            },
-        )
-        .unwrap();
+    let y_gpu = {
+        // Def 1 (active-edge): functional VJP over untracked leaves requires
+        // explicit capture so the forward records the semantic trace.
+        let _capture = ctx.capture_trace();
+        a_gpu
+            .dot_general(
+                &b_gpu,
+                DotGeneralConfig {
+                    lhs_contracting_dims: vec![1],
+                    rhs_contracting_dims: vec![0],
+                    lhs_batch_dims: vec![],
+                    rhs_batch_dims: vec![],
+                },
+            )
+            .unwrap()
+    };
     let gpu_grad_a = ctx
         .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
         .unwrap()

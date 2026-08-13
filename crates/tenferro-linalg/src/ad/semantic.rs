@@ -4,7 +4,7 @@ use std::sync::Arc;
 use computegraph::traits::GraphOperation;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
 };
@@ -128,6 +128,17 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
         LINALG_EXTENSION_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The linalg family is one rule across solve/eigen/qr ops whose
+        // transposes collectively read every operand: triangular solve reads
+        // both inputs plus the solution output, and the linearize+fragment
+        // path can consume any input/output value (svd reads outputs 0-2,
+        // eigh/qr read outputs 0-1).
+        // ponytail: family-level mask; per-op masks would require splitting
+        // `LinalgAdRule` per op.
+        ResidualSpec::all_inputs().with_all_outputs()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -145,6 +156,7 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 request.primal_outputs(),
                 request.cotangent_outputs(),
                 request.active_inputs(),
+                request.residual_mask(),
                 builder,
                 left_side,
                 lower,
@@ -217,6 +229,7 @@ fn semantic_triangular_solve_transpose(
     primal_outputs: &[ProgramValue],
     cotangent_outputs: &[AdValue],
     active_inputs: &[bool],
+    residual_mask: ResidualSpec,
     builder: &mut SemanticProgramBuilder,
     left_side: bool,
     lower: bool,
@@ -259,6 +272,11 @@ fn semantic_triangular_solve_transpose(
     }
 
     let conjugated_a = conjugate_if_complex(builder, primal_inputs[0])?;
+    debug_assert!(
+        residual_mask.declares_input(0),
+        "linalg triangular_solve transpose read primal input 0 as a tensor operand but the \
+         residual mask does not declare it; declare it in the linalg rule's residual mask"
+    );
     let rhs_cotangent = builder.add_extension(
         Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
             left_side,
@@ -273,6 +291,11 @@ fn semantic_triangular_solve_transpose(
         result[1] = AdValue::Value(rhs_cotangent);
     }
     if active_inputs[0] {
+        debug_assert!(
+            residual_mask.declares_output(0),
+            "linalg triangular_solve transpose read primal output 0 as a tensor operand but the \
+             residual mask does not declare it; declare it in the linalg rule's residual mask"
+        );
         let matrix_cotangent = semantic_solve_matrix_cotangent(
             builder,
             rhs_cotangent,
@@ -1895,5 +1918,18 @@ mod tests {
                 dims: vec![1],
             }
         );
+    }
+
+    #[test]
+    fn linalg_residual_mask_declares_all_inputs_and_outputs() {
+        // The linalg family is one rule across solve/eigen/qr ops. SVD reads
+        // outputs 0-2 and eigh/qr read outputs 0-1 as tensor residuals, so the
+        // mask must declare every input and output (issue #1665 step 5).
+        let mask = LinalgAdRule.residual_mask();
+        assert!(mask.declares_input(0));
+        assert!(mask.declares_input(1));
+        assert!(mask.declares_output(0));
+        assert!(mask.declares_output(1));
+        assert!(mask.declares_output(2));
     }
 }

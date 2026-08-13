@@ -133,15 +133,15 @@ use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
-    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
-    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
-    SemanticPrimalVjpRule,
+    AdValue, ResidualSpec, SemanticAdError, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_exec_session;
+use tenferro_gpu::cuda::{with_cuda_exec_session, CudaBackend};
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
@@ -1217,6 +1217,12 @@ impl SemanticLinearTransposeRule for FftAdRule {
         FFT_EXTENSION_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The variable-length adjoint path reads primal input 0 as a tensor
+        // (ShapeOf + PadToMatch against the original input).
+        ResidualSpec::input(0)
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -1227,6 +1233,7 @@ impl SemanticLinearTransposeRule for FftAdRule {
             request.cotangent_outputs()[0],
             request.active_inputs()[0],
             request.primal_inputs()[0],
+            request.residual_mask(),
             builder,
         )?]
         .into())
@@ -1239,6 +1246,10 @@ impl SemanticPrimalVjpRule for FftAdRule {
         FFT_EXTENSION_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::input(0)
+    }
+
     fn primal_vjp(
         &self,
         request: SemanticPrimalVjpRequest<'_>,
@@ -1249,6 +1260,7 @@ impl SemanticPrimalVjpRule for FftAdRule {
             request.cotangent_outputs()[0],
             request.active_inputs()[0],
             request.primal_inputs()[0],
+            request.residual_mask(),
             builder,
         )?]
         .into())
@@ -1282,6 +1294,7 @@ fn semantic_fft_adjoint(
     cotangent: AdValue,
     active: bool,
     primal_input: ProgramValue,
+    residual_mask: ResidualSpec,
     builder: &mut SemanticProgramBuilder,
 ) -> std::result::Result<AdValue, SemanticAdError> {
     if !active {
@@ -1301,7 +1314,7 @@ fn semantic_fft_adjoint(
         .c2c_adjoint()
         .ok_or_else(|| semantic_fft_unsupported(fft_op.operation, SemanticAdRuleKind::Transpose))?;
     let adjoint = builder.add_extension(Arc::new(adjoint_op), &[cotangent])?[0];
-    restore_semantic_c2c_adjoint_input_length(builder, adjoint, primal_input, fft_op)
+    restore_semantic_c2c_adjoint_input_length(builder, adjoint, primal_input, residual_mask, fft_op)
         .map(AdValue::Value)
 }
 
@@ -1310,11 +1323,17 @@ fn restore_semantic_c2c_adjoint_input_length(
     builder: &mut SemanticProgramBuilder,
     adjoint: ProgramValue,
     primal_input: ProgramValue,
+    residual_mask: ResidualSpec,
     fft_op: &FftOp,
 ) -> std::result::Result<ProgramValue, SemanticAdError> {
     let Some(transform_len) = fft_op.n else {
         return Ok(adjoint);
     };
+    debug_assert!(
+        residual_mask.declares_input(0),
+        "fft transpose read primal input 0 as a tensor operand but the residual mask does not \
+         declare it; declare it in the fft rule's residual mask"
+    );
     let input_len = builder
         .value_metadata(primal_input)?
         .shape()
@@ -1399,7 +1418,6 @@ pub(crate) fn execute_fft_extension_reads_owner<B: TensorBackend + 'static>(
     })
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn execute_fft_extension_reads_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
@@ -1490,7 +1508,39 @@ define_extension_runtime! {
     op_type = FftOp,
     execute = execute_fft_extension_reads_owner,
     execute_reads = execute_fft_extension_reads_owner,
+    execute_in_session = execute_fft_extension_reads_in_session,
+    session_supported = fft_session_supported,
     backend_bound = TensorBackend,
+}
+
+/// Adapter from the scheduler/`apply_eager` borrowed-session shape to the
+/// existing FFT session executor. Reuses the same forward kernel already shared
+/// by the owner and eager paths; do not reimplement it here.
+fn execute_fft_extension_reads_in_session(
+    op: &FftOp,
+    session: &mut dyn BackendSession,
+    caches: &mut ExtensionCacheStore,
+    inputs: &[TensorRead<'_>],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut ctx = ExtensionExecutionContext::new(session, caches);
+    execute_fft_extension_reads_session(op, inputs, &mut ctx)
+}
+
+fn fft_session_supported<B: BackendSession + 'static>(_op: &FftOp) -> bool {
+    // The session executor routes CPU/CUDA/WebGPU through their FftBackend exec
+    // sessions; keep scheduler-session admission consistent with the backends
+    // that `execute_fft_extension_reads_on_session` actually handles.
+    let type_id = std::any::TypeId::of::<B>();
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+        #[cfg(feature = "cuda")]
+        {
+            type_id == std::any::TypeId::of::<CudaBackend>()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
 }
 
 /// Build a one-dimensional FFT along `axis`.

@@ -14,8 +14,8 @@ use tenferro_runtime::{ErrorPhase, ExtensionModule};
 use tenferro_tensor::DType;
 
 use crate::{
-    execute_fft_extension_reads_session, extension_module, prepare_runtime_fft_op,
-    require_runtime_dtype, runtime_forward_fft_operation, FftNorm, FftOperation,
+    extension_module, prepare_runtime_fft_op, require_runtime_dtype, runtime_forward_fft_operation,
+    FftNorm, FftOperation,
 };
 
 /// FFT extension methods for [`EagerTensor`].
@@ -177,16 +177,9 @@ fn apply_eager_fft(
     )?;
 
     let op = Arc::new(op);
-    let execute_op = Arc::clone(&op);
-    let mut outputs = apply_eager_with_targeted_extension_session(
-        op,
-        &[input],
-        eager_extension_module,
-        move |_op, input_reads, ctx| {
-            execute_fft_extension_reads_session(&execute_op, input_reads, ctx)
-        },
-    )?
-    .into_iter();
+    let mut outputs =
+        apply_eager_with_targeted_extension_session(op, &[input], eager_extension_module)?
+            .into_iter();
     match (outputs.next(), outputs.next()) {
         (Some(output), None) => Ok(output),
         _ => Err(Error::Internal(

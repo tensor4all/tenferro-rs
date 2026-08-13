@@ -3,10 +3,10 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
-    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
-    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
-    SemanticPrimalVjpRule,
+    AdValue, ResidualSpec, SemanticAdError, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
 use tenferro_ad::AdContext;
 use tenferro_ops::dim_expr::DimExpr;
@@ -101,6 +101,7 @@ impl SemanticLinearizeRule for IdentityRule {
         assert_eq!(request.primal_inputs().len(), 1);
         assert_eq!(request.primal_outputs().len(), 1);
         assert_eq!(request.active_outputs(), &[true]);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
         assert_eq!(
             request.provenance().label(),
             Some("tenferro-ad.semantic-identity.v1")
@@ -123,6 +124,12 @@ impl SemanticLinearTransposeRule for IdentityRule {
         "tenferro-ad.semantic-identity.v1"
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The identity transpose only forwards cotangents; it reads no primal
+        // tensor, though linearize may save the output as a residual.
+        ResidualSpec::none()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -130,6 +137,10 @@ impl SemanticLinearTransposeRule for IdentityRule {
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
         assert_eq!(request.residuals().len(), 1);
+        assert_eq!(request.primal_inputs().len(), 1);
+        assert_eq!(request.primal_outputs().len(), 1);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
+        assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
     }
 }
@@ -139,12 +150,18 @@ impl SemanticPrimalVjpRule for IdentityRule {
         "tenferro-ad.semantic-identity.v1"
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::none()
+    }
+
     fn primal_vjp(
         &self,
         request: SemanticPrimalVjpRequest<'_>,
         _builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
+        assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
+        assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
     }
 }

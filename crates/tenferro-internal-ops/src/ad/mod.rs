@@ -94,6 +94,120 @@ impl ADRuleError {
 #[cfg(feature = "autodiff")]
 pub type ADRuleResult<T> = std::result::Result<T, ADRuleError>;
 
+/// Per-rule declaration of which primal inputs/outputs a transpose (VJP) rule
+/// reads as full tensor residuals versus which need only shape/dtype metadata.
+///
+/// The AD engine uses this to bound residual retention: an index not declared
+/// here may only be accessed through its metadata, never as a tensor operand.
+/// Indices are counted in primal-input order (input mask) and primal-output
+/// order (output mask).
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ad::ResidualSpec;
+///
+/// // `add` needs no tensor residuals; `mul` keeps both operands.
+/// let add = ResidualSpec::none();
+/// let mul = ResidualSpec::input(0).with_input(1);
+/// assert!(add.is_empty());
+/// assert!(mul.declares_input(0) && mul.declares_input(1));
+/// // Unary ops that reuse the forward output (e.g. exp) declare it.
+/// let exp = ResidualSpec::output(0);
+/// assert!(exp.declares_output(0));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResidualSpec {
+    input_mask: u64,
+    output_mask: u64,
+}
+
+impl ResidualSpec {
+    /// A mask declaring no tensor residuals (metadata-only rule).
+    pub const fn none() -> Self {
+        Self {
+            input_mask: 0,
+            output_mask: 0,
+        }
+    }
+
+    /// A mask declaring one input index as a tensor residual.
+    pub const fn input(index: usize) -> Self {
+        Self {
+            input_mask: 1 << index,
+            output_mask: 0,
+        }
+    }
+
+    /// A mask declaring one output index as a tensor residual.
+    pub const fn output(index: usize) -> Self {
+        Self {
+            input_mask: 0,
+            output_mask: 1 << index,
+        }
+    }
+
+    /// Add one input index to this mask.
+    pub const fn with_input(mut self, index: usize) -> Self {
+        self.input_mask |= 1 << index;
+        self
+    }
+
+    /// Add one output index to this mask.
+    pub const fn with_output(mut self, index: usize) -> Self {
+        self.output_mask |= 1 << index;
+        self
+    }
+
+    /// Add every input index to this mask.
+    pub const fn with_all_inputs(mut self) -> Self {
+        self.input_mask = u64::MAX;
+        self
+    }
+
+    /// Add every output index to this mask.
+    pub const fn with_all_outputs(mut self) -> Self {
+        self.output_mask = u64::MAX;
+        self
+    }
+
+    /// A mask declaring every input index as a tensor residual.
+    ///
+    /// Used by rules whose required operand set depends on the active-input
+    /// configuration (e.g. `mul`, concatenate, einsum), and by multi-op
+    /// families whose individual ops collectively read any operand.
+    pub const fn all_inputs() -> Self {
+        Self {
+            input_mask: u64::MAX,
+            output_mask: 0,
+        }
+    }
+
+    /// A mask declaring every output index as a tensor residual.
+    pub const fn all_outputs() -> Self {
+        Self {
+            input_mask: 0,
+            output_mask: u64::MAX,
+        }
+    }
+
+    /// Whether input `index` is declared as a tensor residual.
+    pub const fn declares_input(&self, index: usize) -> bool {
+        index < 64 && (self.input_mask >> index) & 1 == 1
+    }
+
+    /// Whether output `index` is declared as a tensor residual.
+    pub const fn declares_output(&self, index: usize) -> bool {
+        index < 64 && (self.output_mask >> index) & 1 == 1
+    }
+
+    /// Whether this mask declares no tensor residuals.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.input_mask == 0 && self.output_mask == 0
+    }
+}
+
 #[cfg(feature = "autodiff")]
 #[derive(Clone, Debug)]
 pub enum PrimitiveTransposeInput<Op: computegraph::GraphOperation> {
@@ -306,18 +420,57 @@ pub fn transpose_rule(
         );
     }
 
-    let transpose_inputs = inputs
-        .iter()
-        .map(transpose_input::TransposeInputRef::new)
-        .collect::<Vec<_>>();
     let kind = op
         .primitive_kind()
         .ok_or_else(|| missing_primitive_kind(op, ADRuleKind::Transpose))?;
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Transpose))?;
+    let mask = rule.residual_mask();
+    let transpose_inputs = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| transpose_input::TransposeInputRef::new(input, index, mask))
+        .collect::<Vec<_>>();
     let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;
     rule.transpose_rule(op, builder_dyn, cotangent_out, &transpose_inputs, mode, ctx)
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod residual_spec_tests {
+    use super::ResidualSpec;
+
+    #[test]
+    fn residual_spec_builders_and_queries_cover_always_on_api() {
+        let none = ResidualSpec::none();
+        assert!(none.is_empty());
+        assert!(!none.declares_input(0));
+        assert!(!none.declares_output(0));
+
+        let single = ResidualSpec::input(1).with_output(0);
+        assert!(!single.declares_input(0));
+        assert!(single.declares_input(1));
+        assert!(single.declares_output(0));
+        assert!(!single.is_empty());
+
+        let chained = ResidualSpec::output(2).with_input(0).with_input(3);
+        assert!(chained.declares_input(0) && chained.declares_input(3));
+        assert!(!chained.declares_input(1));
+        assert!(chained.declares_output(2));
+
+        let all_in = ResidualSpec::all_inputs();
+        assert!(all_in.declares_input(0) && all_in.declares_input(63));
+        assert!(!all_in.declares_output(0));
+        let all_out = ResidualSpec::all_outputs();
+        assert!(all_out.declares_output(0) && all_out.declares_output(63));
+        assert!(!all_out.declares_input(0));
+
+        let both = ResidualSpec::all_inputs().with_all_outputs();
+        assert!(both.declares_input(63) && both.declares_output(63));
+        assert!(!both.declares_input(64) && !both.declares_output(64));
+
+        assert!(ResidualSpec::default().is_empty());
+    }
+}

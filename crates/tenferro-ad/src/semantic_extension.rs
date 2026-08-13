@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub use tenferro_ops::ad::ResidualSpec;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::{
     ProgramBuildError, ProgramValue, SemanticOpRef, SemanticOperationView, SemanticProgramBuilder,
@@ -221,6 +222,7 @@ pub struct SemanticLinearTransposeRequest<'a> {
     cotangent_outputs: &'a [AdValue],
     active_inputs: &'a [bool],
     residuals: &'a [ProgramValue],
+    residual_mask: ResidualSpec,
     provenance: SemanticProvenanceView<'a>,
 }
 
@@ -255,6 +257,13 @@ impl<'a> SemanticLinearTransposeRequest<'a> {
         self.residuals
     }
 
+    /// Return this rule's declared residual mask: which primal input/output
+    /// indices may be read as tensor values. Accesses outside the mask must
+    /// only use shape/dtype metadata.
+    pub const fn residual_mask(self) -> ResidualSpec {
+        self.residual_mask
+    }
+
     /// Return bounded operation provenance.
     pub const fn provenance(self) -> SemanticProvenanceView<'a> {
         self.provenance
@@ -269,6 +278,7 @@ pub struct SemanticPrimalVjpRequest<'a> {
     primal_outputs: &'a [ProgramValue],
     cotangent_outputs: &'a [AdValue],
     active_inputs: &'a [bool],
+    residual_mask: ResidualSpec,
     provenance: SemanticProvenanceView<'a>,
 }
 
@@ -296,6 +306,13 @@ impl<'a> SemanticPrimalVjpRequest<'a> {
     /// Borrow the ordered active-input mask.
     pub const fn active_inputs(self) -> &'a [bool] {
         self.active_inputs
+    }
+
+    /// Return this rule's declared residual mask: which primal input/output
+    /// indices may be read as tensor values. Accesses outside the mask must
+    /// only use shape/dtype metadata.
+    pub const fn residual_mask(self) -> ResidualSpec {
+        self.residual_mask
     }
 
     /// Return bounded operation provenance.
@@ -328,6 +345,10 @@ pub trait SemanticLinearTransposeRule: Debug + Send + Sync + 'static {
     /// Return the versioned extension family handled by this rule.
     fn family_id(&self) -> &'static str;
 
+    /// Declare which primal input/output indices this rule reads as tensor
+    /// residuals. Indices not declared may only be accessed through metadata.
+    fn residual_mask(&self) -> ResidualSpec;
+
     /// Emit ordered optional input cotangents into `builder`.
     ///
     /// # Errors
@@ -346,6 +367,10 @@ pub trait SemanticLinearTransposeRule: Debug + Send + Sync + 'static {
 pub trait SemanticPrimalVjpRule: Debug + Send + Sync + 'static {
     /// Return the versioned extension family handled by this rule.
     fn family_id(&self) -> &'static str;
+
+    /// Declare which primal input/output indices this rule reads as tensor
+    /// residuals. Indices not declared may only be accessed through metadata.
+    fn residual_mask(&self) -> ResidualSpec;
 
     /// Emit ordered optional input cotangents into `builder`.
     ///
@@ -637,6 +662,7 @@ impl SemanticExtensionRuleSet {
                 cotangent_outputs,
                 active_inputs,
                 residuals,
+                residual_mask: rule.residual_mask(),
                 provenance: operation.provenance(),
             },
             builder,
@@ -686,6 +712,7 @@ impl SemanticExtensionRuleSet {
                 primal_outputs,
                 cotangent_outputs,
                 active_inputs,
+                residual_mask: rule.residual_mask(),
                 provenance: operation.provenance(),
             },
             builder,

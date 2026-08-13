@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::ad_support::push_metadata_scope;
 use tenferro_runtime::{
-    Error, ErrorPhase, ExtensionModule, InputSignature, PrepareError, Result, Runtime,
-    RuntimeConfigError,
+    Error, ErrorPhase, ExtensionModule, InputSignature, PrepareCapability, PrepareError, Result,
+    Runtime, RuntimeConfigError,
 };
-use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorValue};
+use tenferro_tensor::{Tensor, TensorRead, TensorValue};
 
-use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
+use crate::eager::{
+    eager_capture_active, eager_grad_recording_enabled, record_eager_outputs, EagerRuntime,
+    EagerTensor,
+};
 
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
@@ -143,86 +145,75 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     let std_op = StdTensorOp::Extension(op);
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+    // Native immediate path: resolve the extension engine from the runtime
+    // snapshot, prepare the op, and execute through the prepared plan's
+    // scheduler-session executor when it is session-capable. This skips the
+    // SemanticProgram build/compile + run_compiled cost on every call.
+    if let Some(outputs) = try_prepared_eager_extension(&ctx, &std_op, &input_reads)? {
+        return finish_eager_extension_outputs(ctx, std_op, inputs, outputs);
+    }
     let outputs = ctx.exec_outputs_read(&std_op, &input_reads)?;
     finish_eager_extension_outputs(ctx, std_op, inputs, outputs)
 }
 
-/// Apply an extension op to eager tensors through a direct prepared-operation
-/// callback receiving a non-owning backend session.
+/// Run one extension op through the snapshot-resolved native prepared path.
 ///
-/// This is the original eager extension bridge: callers provide the already
-/// selected module, which is installed with the eager runtime's ordinary
-/// extension-module semantics before the callback runs.
+/// Returns `None` (so the caller falls back to the compiled-program path for
+/// the exact op and signature) when the eager runtime has no exact extension
+/// engine, the engine has no slot for the op's family and cannot prepare it,
+/// or the prepared plan has no scheduler-session executor. AD recording is
+/// never touched here; the caller owns `finish_eager_extension_outputs`.
+fn try_prepared_eager_extension(
+    ctx: &EagerRuntime,
+    op: &StdTensorOp,
+    input_reads: &[TensorRead<'_>],
+) -> Result<Option<Vec<Tensor>>> {
+    let StdTensorOp::Extension(ext) = op else {
+        return Ok(None);
+    };
+    // The eager runtime owns its exact extension engine; provider selection
+    // must not wander to a different engine that happens to be first in slot
+    // order. If the target is unavailable (e.g. the recording test backend),
+    // fall back to the compiled path.
+    let Ok(target) = ctx.eager_extension_target() else {
+        return Ok(None);
+    };
+    let signature = InputSignature::from_reads(input_reads).map_err(|source| {
+        Error::runtime_state_source("extension::apply_eager", ErrorPhase::Execution, source)
+    })?;
+    let PrepareCapability::Prepared(plan) =
+        ctx.runtime()
+            .prepare_extension_immediate(&target.engine_id, ext.as_ref(), &signature)?
+    else {
+        return Ok(None);
+    };
+    let Some(executor) = plan.executor() else {
+        return Ok(None);
+    };
+    let executor = Arc::clone(executor);
+    if executor.supports_session() {
+        // native-session: scheduler-owned session executor.
+        let outputs = ctx.with_extension_execution_context(|extension_ctx| {
+            let (session, caches) = extension_ctx.parts_mut();
+            executor.execute_in_session(session, caches, input_reads)
+        })??;
+        Ok(Some(outputs))
+    } else {
+        // native-context: mandatory `execute` bridge over the erased backend
+        // context (for out-of-tree prepared ops without a session executor).
+        let outputs = ctx.with_extension_erased_context(|erased, caches| {
+            executor.execute(erased, caches, input_reads)
+        })??;
+        Ok(Some(outputs))
+    }
+}
+
+/// Ensure an eager extension module is installed, then apply the op through
+/// the single [`apply_eager`] entry.
 ///
-/// # Examples
-///
-/// ```rust
-/// use std::any::Any;
-/// use std::hash::Hasher;
-/// use std::sync::Arc;
-///
-/// use tenferro_ad::extension::{apply_eager_with_extension_session, ExtensionOp};
-/// use tenferro_ad::{EagerRuntime, EagerTensor};
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_ops::ExtensionShapeContext;
-/// use tenferro_runtime::{
-///     ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-/// };
-/// use tenferro_tensor::{DType, Tensor};
-///
-/// #[derive(Debug)]
-/// struct ExampleOp;
-///
-/// impl ExtensionOp for ExampleOp {
-///     fn family_id(&self) -> &'static str { "example.eager-bridge.v1" }
-///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-///         other.as_any().downcast_ref::<Self>().is_some()
-///     }
-///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(Self) }
-///     fn as_any(&self) -> &dyn Any { self }
-///     fn input_count(&self) -> usize { 1 }
-///     fn output_count(&self) -> usize { 1 }
-///     fn infer_output_meta(
-///         &self,
-///         ctx: &mut ExtensionShapeContext<'_>,
-///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<tenferro_ops::SymDim>)>> {
-///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-///     }
-/// }
-///
-/// #[derive(Debug)]
-/// struct ExampleModule(ExtensionModuleId);
-///
-/// impl ExtensionModule for ExampleModule {
-///     fn module_id(&self) -> &ExtensionModuleId { &self.0 }
-///     fn configure(
-///         &self,
-///         _registrar: &mut ExtensionModuleRegistrar<'_>,
-///     ) -> Result<(), ExtensionModuleError> { Ok(()) }
-/// }
-///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-/// let input = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
-///     runtime,
-/// )?;
-/// let result = apply_eager_with_extension_session(
-///     Arc::new(ExampleOp),
-///     &[&input],
-///     Arc::new(ExampleModule(ExtensionModuleId::new(
-///         "example.eager-bridge.module",
-///     )?)),
-///     |_op, _inputs, _session| {
-///         Err(tenferro_tensor::Error::Unsupported {
-///             op: "example",
-///             message: "demonstration failure".into(),
-///         })
-///     },
-/// );
-/// assert!(result.is_err());
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
+/// This thin wrapper is retained for module-owner eager call sites (linalg,
+/// einsum). Forward execution always routes through [`apply_eager`]'s native
+/// prepared path; this wrapper only owns the install-ensure step.
 ///
 /// # Errors
 ///
@@ -230,38 +221,25 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// or its length differs from the extension's declared input count. Returns
 /// `Error::ContextMismatch` when tensors belong to different eager runtimes;
 /// backend, extension, and runtime-state failures retain their typed sources.
+#[doc(hidden)]
 pub fn apply_eager_with_extension_session(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&EagerTensor],
     module: Arc<dyn ExtensionModule>,
-    execute: impl FnOnce(
-            &dyn ExtensionOp,
-            &[TensorRead<'_>],
-            &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
-        ) -> tenferro_tensor::Result<Vec<Tensor>>
-        + Send,
 ) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     ctx.install_extension_module(module)?;
-    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
-    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
-        execute(op.as_ref(), &input_reads, extension_ctx)
-    })??;
-    finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
+    apply_eager(op, inputs)
 }
 
 /// Apply an eager extension through the owner-selected engine and backend kind.
 ///
-/// This narrow sibling-crate bridge is used by FFT, whose module factory must
+/// This narrow sibling-crate wrapper is used by FFT, whose module factory must
 /// follow the eager runtime's exact backend selection. Input, target, and
 /// ingress validation always run before `module_factory`; errors returned by
 /// the factory are propagated unchanged. The returned module is then passed to
-/// the owner-scoped ensure operation. When the runtime already has the factory
-/// module's ID registered for this exact family/engine pair, that existing
-/// validated registration is reused without configuring or inspecting the fresh
-/// module, so a same-ID invalid `Ok` module is a no-op. When the registration is
-/// absent, the returned module is configured and its exact family/engine
-/// registration is validated transactionally before entering the session.
+/// the owner-scoped ensure operation. Forward execution always routes through
+/// [`apply_eager`]'s native prepared path.
 ///
 /// # Errors
 ///
@@ -275,18 +253,9 @@ pub fn apply_eager_with_extension_session(
 /// engine is missing through
 /// [`tenferro_runtime::RuntimeConfigError::MissingEngine`], an input has no
 /// ingress through [`tenferro_runtime::PrepareError::NoInputIngress`], or the
-/// cold/missing-registration ensure path rejects the module. That path retains
-/// [`tenferro_runtime::RuntimeConfigError::MissingExtensionEngine`] for a
-/// missing family/engine registration and
-/// [`tenferro_runtime::RuntimeConfigError::ExtensionModule`] for a module
-/// configuration failure; both are wrapped through
-/// [`tenferro_runtime::RuntimeReconfigureError`] in the source chain. Errors
-/// returned by `module_factory` are propagated unchanged. Errors returned by
-/// `execute` are propagated as
-/// [`tenferro_runtime::Error::TensorRuntime`]. Returns
-/// [`tenferro_runtime::Error::Internal`] if execution produces the wrong number
-/// of outputs; session, cache, and output registration failures retain their
-/// typed runtime sources.
+/// cold/missing-registration ensure path rejects the module. Errors returned by
+/// `module_factory` are propagated unchanged. Session, cache, and output
+/// registration failures retain their typed runtime sources.
 #[doc(hidden)]
 pub fn apply_eager_with_targeted_extension_session(
     op: Arc<dyn ExtensionOp>,
@@ -294,12 +263,6 @@ pub fn apply_eager_with_targeted_extension_session(
     module_factory: impl FnOnce(
         EagerExtensionTarget,
     ) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>>,
-    execute: impl FnOnce(
-            &dyn ExtensionOp,
-            &[TensorRead<'_>],
-            &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
-        ) -> tenferro_tensor::Result<Vec<Tensor>>
-        + Send,
 ) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
     let target = ctx.eager_extension_target()?;
@@ -307,10 +270,7 @@ pub fn apply_eager_with_targeted_extension_session(
     validate_eager_extension_input_signature(&ctx, &target, &input_reads)?;
     let module = module_factory(target.clone())?;
     ctx.ensure_extension_module_for_engine(module, op.family_id(), &target.engine_id)?;
-    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
-        execute(op.as_ref(), &input_reads, extension_ctx)
-    })??;
-    finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
+    apply_eager(op, inputs)
 }
 
 pub(crate) fn validate_eager_extension_target(
@@ -432,7 +392,9 @@ fn finish_eager_extension_outputs(
         )));
     }
 
-    if !eager_grad_recording_enabled() {
+    if !eager_grad_recording_enabled()
+        || (!eager_capture_active() && !inputs.iter().any(|input| input.requires_grad))
+    {
         return outputs
             .into_iter()
             .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
@@ -449,13 +411,6 @@ fn finish_eager_extension_outputs(
             recorded.traces.len()
         )));
     }
-    let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-    for input in inputs {
-        for scope in &input.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
-    }
-
     recorded
         .traces
         .into_iter()
@@ -470,7 +425,6 @@ fn finish_eager_extension_outputs(
                     trace.requires_grad,
                     trace.trace,
                     semantic_trace,
-                    metadata_scopes.clone(),
                 )
             } else {
                 EagerTensor::new_unregistered_result_with_semantic_trace(
@@ -480,7 +434,6 @@ fn finish_eager_extension_outputs(
                     trace.requires_grad,
                     trace.trace,
                     semantic_trace,
-                    metadata_scopes.clone(),
                 )
             }
         })

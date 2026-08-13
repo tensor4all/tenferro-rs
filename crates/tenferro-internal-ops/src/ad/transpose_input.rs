@@ -1,4 +1,4 @@
-use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput, ResidualSpec};
 use computegraph::types::{ValueKey, ValueRef};
 
 use crate::ad::context::ShapeGuardContext;
@@ -8,11 +8,20 @@ use crate::sym_dim::SymDim;
 
 pub struct TransposeInputRef<'a> {
     input: &'a PrimitiveTransposeInput<StdTensorOp>,
+    /// Position of this input in the operation's ordered input list.
+    index: usize,
+    /// The owning rule's declared residual mask; tensor-value access to an
+    /// undeclared input is an undeclared-access violation.
+    mask: ResidualSpec,
 }
 
 impl<'a> TransposeInputRef<'a> {
-    pub fn new(input: &'a PrimitiveTransposeInput<StdTensorOp>) -> Self {
-        Self { input }
+    pub fn new(
+        input: &'a PrimitiveTransposeInput<StdTensorOp>,
+        index: usize,
+        mask: ResidualSpec,
+    ) -> Self {
+        Self { input, index, mask }
     }
 
     pub fn key(&self) -> &ValueKey<StdTensorOp> {
@@ -24,6 +33,7 @@ impl<'a> TransposeInputRef<'a> {
     }
 
     pub fn fixed_value(&self, op: &str, index: usize) -> ADRuleResult<ValueRef<StdTensorOp>> {
+        self.check_declared(op, "retained as a tensor operand");
         self.primal_or_residual_value(op, index, "retained as a tensor operand")
     }
 
@@ -32,7 +42,18 @@ impl<'a> TransposeInputRef<'a> {
         op: &str,
         index: usize,
     ) -> ADRuleResult<ValueRef<StdTensorOp>> {
+        self.check_declared(op, "used as a runtime shape source");
         self.primal_or_residual_value(op, index, "used as a runtime shape source")
+    }
+
+    fn check_declared(&self, op: &str, use_case: &str) {
+        debug_assert!(
+            self.mask.declares_input(self.index),
+            "transpose rule {op} accessed input {} as {use_case} but its residual mask does \
+             not declare input {}; declare it in the rule's residual mask",
+            self.index,
+            self.index
+        );
     }
 
     fn primal_or_residual_value(
@@ -111,6 +132,7 @@ impl<'a> TransposeInputRef<'a> {
     }
 
     fn runtime_shape_source(&self) -> ADRuleResult<ValueRef<StdTensorOp>> {
+        self.check_declared("transpose shape operand", "a runtime shape source");
         match self.input {
             PrimitiveTransposeInput::Residual(key) => Ok(ValueRef::External(key.clone())),
             PrimitiveTransposeInput::Linear {

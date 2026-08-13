@@ -18,9 +18,10 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{
-    Error, ExecutionContextIdentity, ExtensionEngine, ExtensionModule, ExtensionModuleError,
-    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
-    GraphCompiler, PrepareCapability, PrepareError, Runtime, UnsupportedReason,
+    ErasedExecutionContext, Error, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, GraphCompiler, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationExecutor, Runtime,
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
@@ -476,13 +477,74 @@ impl ExtensionEngine for ReadPathFallbackEngine {
 
     fn prepare(
         &self,
-        _request: ExtensionPrepareRequest<'_>,
+        request: ExtensionPrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError> {
-        Ok(PrepareCapability::Unsupported(
-            UnsupportedReason::Operation {
-                operation: "read-path-fallback-test",
-            },
+        let prepared = Arc::new(ReadPathFallbackPrepared {
+            binding: request.binding().clone(),
+            specialization: request.specialization().clone(),
+        });
+        let operation: tenferro_runtime::PreparedOperationHandle =
+            Arc::clone(&prepared) as tenferro_runtime::PreparedOperationHandle;
+        let executor: tenferro_runtime::PreparedOperationExecutorHandle =
+            prepared as tenferro_runtime::PreparedOperationExecutorHandle;
+        Ok(PrepareCapability::Prepared(
+            tenferro_runtime::PreparedOperationPlan::executable(operation, executor),
         ))
+    }
+}
+
+#[derive(Debug)]
+struct ReadPathFallbackPrepared {
+    binding: tenferro_runtime::PreparedOperationBinding,
+    specialization: tenferro_runtime::SpecializationProjection,
+}
+
+impl PreparedOperation for ReadPathFallbackPrepared {
+    fn binding(&self) -> &tenferro_runtime::PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &tenferro_runtime::SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl PreparedOperationExecutor for ReadPathFallbackPrepared {
+    fn execute(
+        &self,
+        context: &mut ErasedExecutionContext<'_>,
+        _caches: &mut tenferro_runtime::ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
+        let backend = context
+            .downcast_mut::<CpuBackend>(self.binding.context_identity())
+            .map_err(|source| {
+                tenferro_runtime::Error::runtime_state_source(
+                    "read-path-fallback-test",
+                    tenferro_runtime::ErrorPhase::Execution,
+                    source,
+                )
+            })?;
+        let materialized = TensorStructural::to_contiguous_read(backend, inputs[0].clone())?;
+        Ok(vec![materialized.duplicate()?])
+    }
+
+    fn supports_session(&self) -> bool {
+        true
+    }
+
+    fn execute_in_session(
+        &self,
+        session: &mut dyn BackendSession,
+        _caches: &mut tenferro_runtime::ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> tenferro_runtime::Result<Vec<Tensor>> {
+        let materialized = TensorStructural::to_contiguous_read(session, inputs[0].clone())?;
+        Ok(vec![materialized.duplicate()?])
     }
 }
 
@@ -532,20 +594,6 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
         Arc::new(ReadPathFallbackProbe),
         &[&x_t],
         ReadPathFallbackModule::module(),
-        |op, inputs, ctx| {
-            op.as_any()
-                .downcast_ref::<ReadPathFallbackProbe>()
-                .expect("test op payload");
-            let backend = ctx.backend_mut();
-            let materialized_inputs = inputs
-                .iter()
-                .cloned()
-                .map(|input| TensorStructural::to_contiguous_read(backend, input))
-                .collect::<tenferro_tensor::Result<Vec<_>>>();
-            let materialized_inputs = materialized_inputs?;
-            let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-            Ok(vec![input_refs[0].duplicate()?])
-        },
     )
     .expect("eager extension dispatch");
 
@@ -679,6 +727,54 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
     assert!(program2.program().semantic_eq(program3.program()));
     assert_eq!(program2.bindings().iter().next().unwrap().1.shape(), &[2]);
     assert_eq!(program3.bindings().iter().next().unwrap().1.shape(), &[3]);
+}
+
+#[test]
+fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
+    // The deferred analysis must seed leaves from their retained symbolic
+    // construction-time metadata (symbolic_input_meta), not from concrete
+    // extents derived from the bound values: the compiled AD source must
+    // classify eager-AD inputs symbolically (InputDim extents), exactly like
+    // the traced path, so the semantic fingerprint does not embed concrete
+    // extents.
+    use std::sync::Arc;
+    use tenferro_runtime::ad_support::{
+        analyze_deferred_semantic_trace, compile_ad_source, RetainedValue,
+    };
+    use tenferro_runtime::{extension, TracedTensor};
+
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = x.mul(&x).unwrap();
+    let raw = y
+        .semantic_trace
+        .as_ref()
+        .expect("tracked eager output should retain a semantic trace");
+    let analyzed = analyze_deferred_semantic_trace(raw).unwrap();
+
+    // Traced-path reference: the same symbolic leaf + Mul op, analyzed at
+    // apply time; its input extent identity is symbolic.
+    let data = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+    ));
+    let leaf = TracedTensor::from_shared_tensor_value_symbolic_shape(data).unwrap();
+    let traced = extension::apply_standard_op(StdTensorOp::Mul, &[&leaf, &leaf]).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let eager_source = compile_ad_source(&mut compiler, &analyzed).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let traced_source = compile_ad_source(&mut compiler, &traced[0]).unwrap();
+
+    assert_eq!(
+        eager_source.program().semantic_fingerprint(),
+        traced_source.program().semantic_fingerprint(),
+        "deferred eager-AD program must be symbolically consistent with the traced path \
+         (leaf extents must be InputDim, not concrete constants)"
+    );
 }
 
 #[test]
@@ -1282,4 +1378,37 @@ fn eager_retention_exposes_borrowed_values_and_explicit_duplication() {
     let error = x.into_value().unwrap_err();
     assert!(matches!(error, crate::IntoValueError::NotUnique(_)));
     drop(sibling);
+}
+
+/// The steady-state install must be a real no-op: it must not block on the
+/// extension install lock, because `EagerRuntime::install_extension_module`
+/// returns from the read-only snapshot check before acquiring it.
+#[test]
+fn warm_extension_install_skips_install_lock() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let module = ReadPathFallbackModule::module();
+    ctx.install_extension_module(Arc::clone(&module)).unwrap();
+
+    let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel::<()>();
+    let install_thread = std::thread::spawn({
+        let ctx = Arc::clone(&ctx);
+        move || {
+            let _guard = ctx.lock_extension_install().unwrap();
+            lock_held_tx.send(()).unwrap();
+            // Brief hold so a warm install that wrongly blocks on the lock
+            // would exceed the assertion below.
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    });
+    lock_held_rx.recv().unwrap();
+
+    let started = std::time::Instant::now();
+    ctx.install_extension_module(Arc::clone(&module)).unwrap();
+    let elapsed = started.elapsed();
+
+    install_thread.join().unwrap();
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "warm install blocked on the install lock: {elapsed:?}"
+    );
 }

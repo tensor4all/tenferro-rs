@@ -25,12 +25,13 @@ use super::schedule::EventDomainId;
 use super::{
     CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
     ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    FrozenTransferRegistry, HardwareClassId, InputSignature, PrepareOptions,
+    FrozenTransferRegistry, HardwareClassId, InputSignature, PrepareCapability, PrepareOptions,
     ProviderDeviceIdentity, RegistrationIdentity, RegistrationKey, ResolvedTransferEndpoint,
     ResolvedTransferRoute, RuntimeCacheError, RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch,
     RuntimeId, RuntimeReconfigureError, RuntimeStateError, StorageClass, TransferEndpoint,
     TransferProvider, TransferRoute,
 };
+use crate::{Error, ErrorPhase};
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_REGISTRATION_ISSUER: AtomicU64 = AtomicU64::new(1);
@@ -501,6 +502,35 @@ impl RuntimeConfigSnapshot {
         self.extensions.has_engine(family_id, engine_id)
     }
 
+    /// Return whether the exact validated module instance is installed.
+    ///
+    /// This narrow, doc-hidden query is the eager direct-bridge steady-state
+    /// no-op contract: it mirrors the `module_identical` no-op predicate of the
+    /// replace-extension-module edit without building a candidate
+    /// configuration.
+    #[doc(hidden)]
+    pub fn has_extension_module_identical(&self, module: &Arc<dyn ExtensionModule>) -> bool {
+        self.extensions.has_module_identical(module)
+    }
+
+    /// Return whether the installed module with this exact module ID owns the
+    /// given family/engine registration.
+    ///
+    /// Mirrors the owner-scoped ensure-extension-module edit's no-op predicate
+    /// on the published snapshot. The module ID must be the one that owns the
+    /// registration; a different module registering the same family/engine
+    /// pair does not satisfy this query.
+    #[doc(hidden)]
+    pub fn has_extension_module_engine(
+        &self,
+        module_id: &ExtensionModuleId,
+        family_id: &'static str,
+        engine_id: &EngineId,
+    ) -> bool {
+        self.extensions
+            .has_module_engine(module_id, family_id, engine_id)
+    }
+
     /// Return an immutable view of a registered engine slot.
     pub fn engine(&self, id: &EngineId) -> Option<EngineSnapshotView<'_>> {
         self.engine_indices
@@ -807,6 +837,127 @@ impl Runtime {
         options: &PrepareOptions,
     ) -> PreparedProgramResult<Arc<PreparedProgram>> {
         super::preparation::prepare_compiled_for(self, &self.0.caches, program, signature, options)
+    }
+
+    /// Resolve and prepare a single extension operation for immediate eager
+    /// execution against one exact engine, bypassing SemanticProgram planning
+    /// and the prepared-program cache.
+    ///
+    /// Provider selection is pinned to `engine_id` (the eager context's exact
+    /// engine); the op is prepared only when that engine is executable, owns
+    /// the family's extension slot, and accepts every input signature entry.
+    /// Capability resolution happens before any planning fields are built.
+    /// Returns [`PrepareCapability::Unsupported`] when `engine_id` is not
+    /// registered, is not executable, or has no extension slot for the op's
+    /// family so callers may fall back to the compiled path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::any::Any;
+    /// use std::hash::Hasher;
+    /// use std::sync::Arc;
+    ///
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ops::ExtensionShapeContext;
+    /// use tenferro_runtime::extension::ExtensionOp;
+    /// use tenferro_runtime::{
+    ///     ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ///     ExtensionModuleRegistrar, ExtensionPlanningConfig, InputSignature, PrepareCapability,
+    ///     PrepareError, PrepareOptions, Runtime, UnsupportedReason, Tensor, TensorRead,
+    /// };
+    /// use tenferro_tensor::DType;
+    ///
+    /// #[derive(Debug)]
+    /// struct Probe;
+    ///
+    /// impl ExtensionOp for Probe {
+    ///     fn family_id(&self) -> &'static str { "tenferro-tests.immediate-probe.v1" }
+    ///     fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool { other.as_any().downcast_ref::<Self>().is_some() }
+    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(Self) }
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn input_count(&self) -> usize { 1 }
+    ///     fn output_count(&self) -> usize { 1 }
+    ///     fn infer_output_meta(&self, ctx: &mut ExtensionShapeContext<'_>) -> tenferro_tensor::Result<Vec<(DType, Vec<tenferro_ops::SymDim>)>> {
+    ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    ///     }
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct Config;
+    ///
+    /// impl ExtensionPlanningConfig for Config {
+    ///     fn family_id(&self) -> &'static str { Probe.family_id() }
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn payload_hash(&self, _state: &mut dyn Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool { other.as_any().downcast_ref::<Self>().is_some() }
+    ///     fn retained_bytes(&self) -> usize { 0 }
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct Module(ExtensionModuleId);
+    ///
+    /// impl ExtensionModule for Module {
+    ///     fn module_id(&self) -> &ExtensionModuleId { &self.0 }
+    ///     fn configure(&self, registrar: &mut ExtensionModuleRegistrar<'_>) -> Result<(), ExtensionModuleError> {
+    ///         let Ok(engine_id) = tenferro_cpu::runtime_engine_id() else {
+    ///             // Best-effort: an unresolvable engine id keeps the op unsupported.
+    ///             return Ok(());
+    ///         };
+    ///         registrar.register_engine(Arc::new(NoopEngine { engine_id: engine_id.clone() }))?;
+    ///         registrar.register_planning_config(engine_id, Arc::new(Config))?;
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct NoopEngine { engine_id: tenferro_runtime::EngineId }
+    ///
+    /// impl ExtensionEngine for NoopEngine {
+    ///     fn family_id(&self) -> &'static str { Probe.family_id() }
+    ///     fn engine_id(&self) -> &tenferro_runtime::EngineId { &self.engine_id }
+    ///     fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity { tenferro_runtime::ExecutionContextIdentity::of::<CpuBackend>() }
+    ///     fn prepare(&self, _request: tenferro_runtime::ExtensionPrepareRequest<'_>) -> Result<PrepareCapability, PrepareError> {
+    ///         Ok(PrepareCapability::Unsupported(UnsupportedReason::Operation { operation: Probe.family_id() }))
+    ///     }
+    /// }
+    ///
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// builder.install_extension_module(Arc::new(Module(ExtensionModuleId::new("tenferro-tests.immediate-probe.module")?)))?;
+    /// let runtime = builder.build()?;
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let signature = InputSignature::from_reads(&[TensorRead::from_tensor(&tensor)])?;
+    /// let engine_id = tenferro_cpu::runtime_engine_id()?;
+    /// let capability = runtime.prepare_extension_immediate(&engine_id, &Probe, &signature)?;
+    /// assert!(matches!(capability, PrepareCapability::Unsupported { .. }));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the snapshot cannot be read
+    /// or an engine's preparation fails, with the typed
+    /// [`PrepareError`]/[`RuntimeStateError`] source retained.
+    pub fn prepare_extension_immediate(
+        &self,
+        engine_id: &EngineId,
+        op: &dyn tenferro_ops::ext_op::ExtensionOp,
+        signature: &InputSignature,
+    ) -> crate::Result<PrepareCapability> {
+        super::preparation::prepare_extension_immediate(self, engine_id, op, signature).map_err(
+            |source| {
+                Error::runtime_state_source(
+                    "Runtime::prepare_extension_immediate",
+                    ErrorPhase::Execution,
+                    source,
+                )
+            },
+        )
     }
 
     /// Run a compiled graph synchronously with borrowed tensor inputs.
