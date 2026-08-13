@@ -3,6 +3,14 @@
 //! This benchmark isolates the per-call eager extension execution cost that
 //! issue #1664 root-caused (SemanticProgram build + compile + run_compiled per
 //! call, or per-call module install). It is the pre/post gate for issue #1665.
+//!
+//! Remaining hard-to-avoid per-op costs (issue #1667): with a single worker
+//! (`CpuBackend::with_threads(1)`), the CPU session-open still pays the
+//! `enter_managed_session` wrapper (~5-8 us: owner/reentrancy guards + scoped-job
+//! indirection, with no Rayon pool to enter) and the eager view-read
+//! materialization inside `exec_body` (eager reads are `TensorRead::View`, so
+//! the #1662 compact-read fast path does not apply). See
+//! docs/design/cpu-session-open-cost.md for the measured breakdown.
 
 use std::sync::Arc;
 use std::time::Duration;
