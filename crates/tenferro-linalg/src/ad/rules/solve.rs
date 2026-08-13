@@ -96,11 +96,16 @@ pub(crate) fn linearize_triangular_solve(
 #[derive(Clone, Copy)]
 enum LinearSolveOp {
     FullPivLuSolve,
+    Solve,
 }
 
 fn linear_solve_op(kind: LinearSolveOp, transpose_a: bool) -> StdTensorOp {
     match kind {
         LinearSolveOp::FullPivLuSolve => linalg_std_op(LinalgOp::FullPivLuSolve { transpose_a }),
+        // The plain partial-pivot solve has no transpose flag; the adjoint
+        // solve transposes the matrix before the plain solve (see
+        // `transpose_linear_solve`), so `transpose_a` is always false here.
+        LinearSolveOp::Solve => linalg_std_op(LinalgOp::Solve),
     }
 }
 
@@ -232,6 +237,25 @@ pub(crate) fn linearize_full_piv_lu_solve(
     )
 }
 
+pub(crate) fn linearize_solve(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    linearize_linear_solve(
+        builder,
+        primal_in,
+        primal_out,
+        tangent_in,
+        transpose_a,
+        ctx,
+        LinearSolveOp::Solve,
+    )
+}
+
 fn invalid_input(op: &'static str, rule: ADRuleKind, message: impl Into<String>) -> ADRuleError {
     ADRuleError::invalid_input(format!("{LINALG_AD_OP_PREFIX}{op}"), rule, message)
 }
@@ -242,6 +266,7 @@ impl LinearSolveOp {
     fn op_name(self) -> &'static str {
         match self {
             LinearSolveOp::FullPivLuSolve => "full_piv_lu_solve",
+            LinearSolveOp::Solve => "solve",
         }
     }
 }
@@ -437,9 +462,20 @@ fn transpose_linear_solve(
         validate_square_matrix_input(kind.op_name(), ADRuleKind::Transpose, &inputs[0], ctx)?;
         let dtype = ctx.dtype_of(&inputs[0])?;
         let conjugated_a = conjugate_primal_if_dtype_complex(builder, inputs[0].clone(), dtype);
+        // `LinalgOp::Solve` carries no transpose flag (partial-pivot plain
+        // solve), so the adjoint solve op(A)^T y = ct is expressed as a plain
+        // solve of the transposed (and, for complex dtypes, conjugated)
+        // matrix instead of a transposed-solve op.
+        let (adjoint_a, adjoint_transpose_a) = match kind {
+            LinearSolveOp::Solve => {
+                let transposed = transpose_matrix_fixed(builder, conjugated_a, rank);
+                (ValueRef::Local(transposed), false)
+            }
+            LinearSolveOp::FullPivLuSolve => (conjugated_a, !transpose_a),
+        };
         let out = builder.add_operation(
-            linear_solve_op(kind, !transpose_a),
-            vec![conjugated_a, ValueRef::Local(ct)],
+            linear_solve_op(kind, adjoint_transpose_a),
+            vec![adjoint_a, ValueRef::Local(ct)],
             OperationRole::Linearized {
                 active_mask: vec![false, true],
             },
@@ -587,6 +623,25 @@ pub(crate) fn transpose_full_piv_lu_solve(
         transpose_a,
         ctx,
         LinearSolveOp::FullPivLuSolve,
+    )
+}
+
+pub(crate) fn transpose_solve(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    transpose_linear_solve(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        transpose_a,
+        ctx,
+        LinearSolveOp::Solve,
     )
 }
 

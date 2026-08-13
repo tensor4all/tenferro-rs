@@ -187,6 +187,15 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 builder,
                 SemanticAdRuleRole::LinearTranspose,
             ),
+            LinalgOp::Solve => semantic_custom_transpose(
+                request.op(),
+                request.primal_inputs(),
+                request.primal_outputs(),
+                request.cotangent_outputs(),
+                request.active_inputs(),
+                builder,
+                SemanticAdRuleRole::LinearTranspose,
+            ),
             LinalgOp::LuFactor | LinalgOp::SvdFull => Err(SemanticAdError::Unsupported {
                 family_id: LINALG_EXTENSION_FAMILY_ID,
                 role: SemanticAdRuleRole::LinearTranspose,
@@ -1719,6 +1728,7 @@ fn transpose_linalg_extension(
         LinalgOp::TriangularSolve { .. }
             | LinalgOp::LuSolvePrepared { .. }
             | LinalgOp::FullPivLuSolve { .. }
+            | LinalgOp::Solve
     ) {
         return Err(semantic_internal(
             role,

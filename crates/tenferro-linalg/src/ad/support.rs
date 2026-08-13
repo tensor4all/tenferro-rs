@@ -143,6 +143,10 @@ impl LinalgAdOpKind {
             LinalgOp::LuSolvePrepared { .. } => Self::LuSolvePrepared,
             LinalgOp::FullPivLu => Self::FullPivLu,
             LinalgOp::FullPivLuSolve { .. } => Self::FullPivLuSolve,
+            // The partial-pivot single-op solve shares the solve-family AD
+            // route (linearize + custom linear transpose) with FullPivLuSolve
+            // and is not separately exposed in the public manifest.
+            LinalgOp::Solve => Self::FullPivLuSolve,
             LinalgOp::Svd { .. } => Self::Svd,
             LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,

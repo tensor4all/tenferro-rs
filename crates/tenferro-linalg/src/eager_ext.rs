@@ -1124,30 +1124,7 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 /// metadata, `Error::Extension` for an unsupported dtype or singular system,
 /// and `Error::RuntimeState` when the backend is unavailable.
 pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
-    let mut factor_outputs = apply_linalg_eager(LinalgOp::LuFactor, &[a])?.into_iter();
-    let (packed_lu, pivots) = match (
-        factor_outputs.next(),
-        factor_outputs.next(),
-        factor_outputs.next(),
-        factor_outputs.next(),
-    ) {
-        (Some(packed_lu), Some(pivots), Some(_parity), None) => (packed_lu, pivots),
-        _ => {
-            return Err(Error::Internal(
-                "lu_factor eager op returned an unexpected number of outputs".to_string(),
-            ));
-        }
-    };
-    one_output(
-        apply_linalg_eager(
-            LinalgOp::LuSolvePrepared {
-                transpose_a: false,
-                conjugate_a: false,
-            },
-            &[a, &packed_lu, &pivots, b],
-        )?,
-        "solve",
-    )
+    one_output(apply_linalg_eager(LinalgOp::Solve, &[a, b])?, "solve")
 }
 
 /// Cholesky factorization for eager tensors.

@@ -285,6 +285,12 @@ pub(crate) enum LinalgOp {
     FullPivLuSolve {
         transpose_a: bool,
     },
+    /// Solve `a @ x = b` with partial-pivot LU (same kernel as
+    /// `LinalgBackend::solve`). Two inputs (matrix, rhs) to one output.
+    /// Only the eager surface (autodiff feature) constructs this variant;
+    /// the traced `solve` composite stays LuFactor + LuSolvePrepared.
+    #[cfg_attr(not(feature = "autodiff"), allow(dead_code))]
+    Solve,
     Svd {
         derivative_eps: f64,
         gauge: SvdGauge,
@@ -330,6 +336,7 @@ impl LinalgOp {
             | Self::LogAbsDetFromLuFactor
             | Self::LuSolvePrepared { .. }
             | Self::SignDetFromLuFactor
+            | Self::Solve
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } | Self::SvdFull => 3,
@@ -342,7 +349,7 @@ impl LinalgOp {
 
     fn input_count(self) -> usize {
         match self {
-            Self::FullPivLuSolve { .. } | Self::TriangularSolve { .. } => 2,
+            Self::FullPivLuSolve { .. } | Self::Solve | Self::TriangularSolve { .. } => 2,
             Self::LogAbsDetFromLuFactor => 2,
             Self::SignDetFromLuFactor => 3,
             Self::LuSolvePrepared { .. } => 4,
@@ -369,6 +376,7 @@ impl LinalgOp {
             Self::SvdFull => 15,
             Self::LogAbsDetFromLuFactor => 16,
             Self::SignDetFromLuFactor => 17,
+            Self::Solve => 18,
         }
     }
 }
@@ -447,7 +455,8 @@ impl ExtensionOp for LinalgExtensionOp {
             | LinalgOp::LogAbsDetFromLuFactor
             | LinalgOp::SignDetFromLuFactor
             | LinalgOp::FullPivLu
-            | LinalgOp::SvdFull => {}
+            | LinalgOp::SvdFull
+            | LinalgOp::Solve => {}
         }
     }
 
@@ -515,6 +524,11 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::FullPivLuSolve { .. } => {
                 require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[0])?;
                 require_matrix_meta("tenferro-linalg.full_piv_lu_solve", input_shapes[1])?;
+                vec![(promote_dtypes(&input_dtypes), input_shapes[1].to_vec())]
+            }
+            LinalgOp::Solve => {
+                require_matrix_meta("tenferro-linalg.solve", input_shapes[0])?;
+                require_matrix_meta("tenferro-linalg.solve", input_shapes[1])?;
                 vec![(promote_dtypes(&input_dtypes), input_shapes[1].to_vec())]
             }
             LinalgOp::TriangularSolve { .. } => {
@@ -669,6 +683,11 @@ fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp)
                 // Complete-pivoting LU and general eig have no CUDA kernels.
                 LinalgOp::FullPivLu | LinalgOp::FullPivLuSolve { .. } => false,
                 LinalgOp::Eig { .. } | LinalgOp::EigVals { .. } => false,
+                // Plain partial-pivot solve runs in-session via cuSOLVER
+                // getrf plus prepared pivot/triangular solves
+                // (`gpu/linalg.rs::solve` = lu_factor + lu_solve_prepared, no
+                // Unsupported path for F32/F64/C32/C64), so it is admitted.
+                LinalgOp::Solve => true,
                 // Full-matrices SVD falls back to the default `svd_full`
                 // impl, which reports `Unsupported`.
                 LinalgOp::SvdFull => false,
@@ -740,6 +759,7 @@ fn execute_linalg<B: LinalgBackend>(
             inputs[1],
             transpose_a,
         )?]),
+        LinalgOp::Solve => Ok(vec![backend.solve(inputs[0], inputs[1])?]),
         LinalgOp::Svd {
             derivative_eps,
             gauge,
