@@ -5,7 +5,7 @@ use computegraph::types::OperationRole;
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 
 use crate::ad::context::ShapeGuardContext;
-use crate::ad::registry::{primitive_ad_rule, PrimitiveAdRule};
+use crate::ad::registry::primitive_ad_rule;
 use crate::std_tensor_op::StdTensorOp;
 
 #[test]
