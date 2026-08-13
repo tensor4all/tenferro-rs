@@ -3,7 +3,9 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
+use std::marker::PhantomData;
 use std::mem::{size_of, size_of_val};
+use std::rc::Rc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
@@ -149,6 +151,9 @@ fn eager_semantic_vjp_enabled() -> bool {
 #[derive(Debug)]
 pub struct EagerNoGradGuard {
     active: bool,
+    // Thread-local depth guard: must not be Send so it cannot be moved to and
+    // dropped on another thread (which would corrupt the creator's depth).
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for EagerNoGradGuard {
@@ -199,6 +204,9 @@ impl Drop for EagerNoGradGuard {
 #[derive(Debug)]
 pub struct EagerTraceCaptureGuard {
     active: bool,
+    // Thread-local depth guard: must not be Send so it cannot be moved to and
+    // dropped on another thread (which would corrupt the creator's depth).
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl Drop for EagerTraceCaptureGuard {
@@ -1423,7 +1431,10 @@ impl EagerRuntime {
         EAGER_NO_GRAD_DEPTH.with(|depth| {
             depth.set(depth.get().saturating_add(1));
         });
-        EagerNoGradGuard { active: true }
+        EagerNoGradGuard {
+            active: true,
+            _not_send: PhantomData,
+        }
     }
 
     /// Keep semantic-trace recording active for untracked intermediates.
@@ -1433,7 +1444,10 @@ impl EagerRuntime {
         EAGER_CAPTURE_DEPTH.with(|depth| {
             depth.set(depth.get().saturating_add(1));
         });
-        EagerTraceCaptureGuard { active: true }
+        EagerTraceCaptureGuard {
+            active: true,
+            _not_send: PhantomData,
+        }
     }
 
     /// Install or replace one extension module on this eager context's runtime.
