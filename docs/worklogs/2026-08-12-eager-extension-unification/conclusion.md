@@ -42,9 +42,23 @@
 
 ## 残タスク
 
-- **PyTorch 同等（1桁 µs）**: 上記共有フロアの削減（session 再利用 / 出力 wrap 削減）。#1665 のスコープ外。
-- eager-AD の Def 1（active-edge 化・ResidualSpec 最小保存）: 設計は #1665 最終コメントにあり、**未実装**。今回の forward 高速化とは独立の breaking change。
-- PR: ベンチマーク改善（extension 28〜40%）は確認済み。作成可否はユーザー判断待ち。
+### eager-AD Def 1（active-edge 化）— 具体的な実装マップ
+
+設計は #1665 最終コメントで採用済み（breaking change）。`apply.finish` ~8µs の正体は「grad-active input 0 でも `record_eager_outputs` → `register_scoped_metadata_batch`（global registry write）+ semantic trace 記録」の implicit all-untracked 録音。変更点は以下3箇所:
+
+1. `crates/tenferro-ad/src/eager_ops.rs` `nary_op` の `!any_requires_grad` 分岐（~L1256）: 現在 `record_eager_outputs`（"record_untracked_outputs"）を実行 → 省略し、graph composite パス（`eager.rs:3769` の `!any(requires_grad)` 早出し）と同じく `new_unregistered_result_with_semantic_trace(..., semantic_trace: None, metadata_scopes: Vec::new())` へ。
+2. `crates/tenferro-ad/src/extension.rs` `finish_eager_extension_outputs`（~L420）: 現在の `!eager_grad_recording_enabled()` 早出しに `|| !inputs.iter().any(|i| i.requires_grad)` を追加し、`record_eager_outputs` を skip。
+3. 移行: 現行の「untracked 中間値を後から `wrt` に選ぶ functional JVP/VJP」（semantic trace 依存）が壊れるため、**明示 trace/capture API を先に追加**し、`detach` / 明示 trace への移行テストを perf 実装より先に置く（conclusion 5.4 の順序）。
+
+さらに `ResidualSpec`（最小残存 mask）を全 AD rule に付与（conclusion 5.5）。**breaking change のため単独 PR で実施。**
+
+### session フロア（~11µs）
+
+backend lock + `run_backend_session_cached`（permit + session construct）。#1628/#1662 系の別 issue。#1665 のスコープ外。
+
+### PR
+
+ベンチマーク改善（extension 28〜40%）は確認済み。作成可否はユーザー判断待ち。
 
 ## 備考
 
