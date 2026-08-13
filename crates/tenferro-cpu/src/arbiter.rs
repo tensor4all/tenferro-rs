@@ -200,6 +200,8 @@ struct ArbiterState {
 struct ArbiterInner {
     state: Mutex<ArbiterState>,
     changed: Condvar,
+    #[cfg(test)]
+    recovery_waiters: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -267,6 +269,10 @@ impl ResourceArbiter {
                     self.inner.state.clear_poison();
                 }
                 Err(ResourceArbiterError::RequestIdExhausted) => {
+                    #[cfg(test)]
+                    self.inner
+                        .recovery_waiters
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let mut state = self
                         .inner
                         .state
@@ -279,6 +285,10 @@ impl ResourceArbiter {
                             .wait(state)
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                     }
+                    #[cfg(test)]
+                    self.inner
+                        .recovery_waiters
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     state.next_request_id = 0;
                 }
             }
@@ -301,9 +311,10 @@ impl ResourceArbiter {
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
         state.waiters.push_back(Waiter { id, request, owner });
-        // Skip the broadcast when we are the only waiter: no other thread is
-        // blocked on this arbiter's condvar, so the futex wake is pure overhead.
-        // The grant/release paths still notify when there is someone to wake.
+        // Skip the broadcast when we are the only queued waiter: no other
+        // queued waiter can be blocked on the condvar. (Exhaustion-recovery
+        // waiters are intentionally uncovered here; the unconditional drop
+        // broadcast below wakes them.)
         if state.waiters.len() > 1 {
             self.inner.changed.notify_all();
         }

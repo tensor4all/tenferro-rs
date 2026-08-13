@@ -127,8 +127,21 @@ fn exhaustion_recovery_waiter_wakes_when_last_active_permit_drops() {
         tx.send(()).unwrap();
         permit
     });
-    // Give the acquire thread time to hit the exhaustion-recovery park.
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Wait until the recovery thread has entered the exhaustion-recovery park
+    // (it parks without a waiter-list entry), then drop the last active permit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while arbiter
+        .inner
+        .recovery_waiters
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == 0
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "recovery thread did not enter the exhaustion-recovery park"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     drop(active);
     assert!(
         rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok(),
