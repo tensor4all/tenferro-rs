@@ -648,21 +648,46 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
 }
 
 fn linalg_session_supported<B: BackendSession + 'static>(_op: &LinalgExtensionOp) -> bool {
-    // The session executor below handles every LinalgOp on the CPU and CUDA
-    // exec sessions; keep scheduler-session admission consistent with it. This
-    // is what lets `apply_eager` take the native prepared path for all linalg
-    // ops instead of falling back to the compiled-program path (issue #1665).
+    // The `supports_session` contract (capability.rs) requires that an op is
+    // admitted to a scheduler session only when the session executor genuinely
+    // executes it without returning `Unsupported`. The CPU exec session runs
+    // every linalg kernel, so admission is op-agnostic there. The CUDA session
+    // has explicit gaps for complete-pivoting LU, general eig, full-matrices
+    // SVD, and conjugate-only prepared LU solves (gpu/linalg.rs and the
+    // default `svd_full`/`eig_values` implementations). Admission is exactly
+    // per-op/per-backend so `apply_eager` keeps the native prepared path for
+    // every op the session can actually run (issue #1665).
     let type_id = std::any::TypeId::of::<B>();
-    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
-        #[cfg(feature = "cuda")]
-        {
-            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            false
+    if type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() {
+        // ponytail: B is only the backend TypeId, not its `CpuBackendKind`.
+        // The default (faer) provider executes every op, so all admit on CPU;
+        // a feature-gated Blas-provider CPU backend would return `Unsupported`
+        // for `SvdFull` here. Ceiling: per-op/per-provider admission would
+        // need the provider kind visible to `supports_session`, which this
+        // trait seam does not expose.
+        return true;
+    }
+    #[cfg(feature = "cuda")]
+    {
+        let op = _op;
+        if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>() {
+            return match op.op() {
+                // Complete-pivoting LU and general eig have no CUDA kernels.
+                LinalgOp::FullPivLu | LinalgOp::FullPivLuSolve { .. } => false,
+                LinalgOp::Eig { .. } | LinalgOp::EigVals { .. } => false,
+                // Full-matrices SVD falls back to the default `svd_full`
+                // impl, which reports `Unsupported`.
+                LinalgOp::SvdFull => false,
+                // Conjugate-only prepared LU solve is unsupported on CUDA.
+                LinalgOp::LuSolvePrepared {
+                    transpose_a: false,
+                    conjugate_a: true,
+                } => false,
+                _ => true,
+            };
         }
     }
+    false
 }
 
 fn execute_linalg_extension_in_session(

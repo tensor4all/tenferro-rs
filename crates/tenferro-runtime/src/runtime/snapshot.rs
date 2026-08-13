@@ -840,14 +840,16 @@ impl Runtime {
     }
 
     /// Resolve and prepare a single extension operation for immediate eager
-    /// execution, bypassing SemanticProgram planning and the prepared-program
-    /// cache.
+    /// execution against one exact engine, bypassing SemanticProgram planning
+    /// and the prepared-program cache.
     ///
-    /// The engine is resolved from the published snapshot by the op's family
-    /// and the runtime's registered engines. Capability resolution happens
-    /// before any planning fields are built. Returns
-    /// [`PrepareCapability::Unsupported`] when no engine has an extension slot
-    /// for the op's family so callers may fall back to the compiled path.
+    /// Provider selection is pinned to `engine_id` (the eager context's exact
+    /// engine); the op is prepared only when that engine is executable, owns
+    /// the family's extension slot, and accepts every input signature entry.
+    /// Capability resolution happens before any planning fields are built.
+    /// Returns [`PrepareCapability::Unsupported`] when `engine_id` is not
+    /// registered, is not executable, or has no extension slot for the op's
+    /// family so callers may fall back to the compiled path.
     ///
     /// # Examples
     ///
@@ -929,7 +931,8 @@ impl Runtime {
     /// let runtime = builder.build()?;
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// let signature = InputSignature::from_reads(&[TensorRead::from_tensor(&tensor)])?;
-    /// let capability = runtime.prepare_extension_immediate(&Probe, &signature)?;
+    /// let engine_id = tenferro_cpu::runtime_engine_id()?;
+    /// let capability = runtime.prepare_extension_immediate(&engine_id, &Probe, &signature)?;
     /// assert!(matches!(capability, PrepareCapability::Unsupported { .. }));
     /// # Ok(())
     /// # }
@@ -942,16 +945,19 @@ impl Runtime {
     /// [`PrepareError`]/[`RuntimeStateError`] source retained.
     pub fn prepare_extension_immediate(
         &self,
+        engine_id: &EngineId,
         op: &dyn tenferro_ops::ext_op::ExtensionOp,
         signature: &InputSignature,
     ) -> crate::Result<PrepareCapability> {
-        super::preparation::prepare_extension_immediate(self, op, signature).map_err(|source| {
-            Error::runtime_state_source(
-                "Runtime::prepare_extension_immediate",
-                ErrorPhase::Execution,
-                source,
-            )
-        })
+        super::preparation::prepare_extension_immediate(self, engine_id, op, signature).map_err(
+            |source| {
+                Error::runtime_state_source(
+                    "Runtime::prepare_extension_immediate",
+                    ErrorPhase::Execution,
+                    source,
+                )
+            },
+        )
     }
 
     /// Run a compiled graph synchronously with borrowed tensor inputs.

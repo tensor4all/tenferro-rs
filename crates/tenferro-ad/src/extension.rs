@@ -157,10 +157,10 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 /// Run one extension op through the snapshot-resolved native prepared path.
 ///
 /// Returns `None` (so the caller falls back to the compiled-program path for
-/// the exact op and signature) when the runtime has no engine for the op's
-/// family, the engine cannot prepare it, or the prepared plan has no
-/// scheduler-session executor. AD recording is never touched here; the caller
-/// owns `finish_eager_extension_outputs`.
+/// the exact op and signature) when the eager runtime has no exact extension
+/// engine, the engine has no slot for the op's family and cannot prepare it,
+/// or the prepared plan has no scheduler-session executor. AD recording is
+/// never touched here; the caller owns `finish_eager_extension_outputs`.
 fn try_prepared_eager_extension(
     ctx: &EagerRuntime,
     op: &StdTensorOp,
@@ -169,12 +169,19 @@ fn try_prepared_eager_extension(
     let StdTensorOp::Extension(ext) = op else {
         return Ok(None);
     };
+    // The eager runtime owns its exact extension engine; provider selection
+    // must not wander to a different engine that happens to be first in slot
+    // order. If the target is unavailable (e.g. the recording test backend),
+    // fall back to the compiled path.
+    let Ok(target) = ctx.eager_extension_target() else {
+        return Ok(None);
+    };
     let signature = InputSignature::from_reads(input_reads).map_err(|source| {
         Error::runtime_state_source("extension::apply_eager", ErrorPhase::Execution, source)
     })?;
-    let PrepareCapability::Prepared(plan) = ctx
-        .runtime()
-        .prepare_extension_immediate(ext.as_ref(), &signature)?
+    let PrepareCapability::Prepared(plan) =
+        ctx.runtime()
+            .prepare_extension_immediate(&target.engine_id, ext.as_ref(), &signature)?
     else {
         return Ok(None);
     };

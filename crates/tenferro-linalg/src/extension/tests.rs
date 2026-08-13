@@ -9,6 +9,79 @@ use super::{
 };
 
 #[test]
+fn session_support_admits_every_cpu_linear_algebra_op() {
+    use tenferro_cpu::CpuBackend;
+
+    // The CPU exec session runs every linalg kernel; admission must never be
+    // narrowed below the session executor's real support (issue #1665), or
+    // `apply_eager` would fall back to the compiled-program path for CPU
+    // solve/svd/eigh.
+    let ops = [
+        LinalgOp::Cholesky,
+        LinalgOp::Lu,
+        LinalgOp::LuFactor,
+        LinalgOp::LuSolvePrepared {
+            transpose_a: false,
+            conjugate_a: false,
+        },
+        LinalgOp::LuSolvePrepared {
+            transpose_a: false,
+            conjugate_a: true,
+        },
+        LinalgOp::LuSolvePrepared {
+            transpose_a: true,
+            conjugate_a: false,
+        },
+        LinalgOp::LuSolvePrepared {
+            transpose_a: true,
+            conjugate_a: true,
+        },
+        LinalgOp::SignDetFromLuFactor,
+        LinalgOp::LogAbsDetFromLuFactor,
+        LinalgOp::FullPivLu,
+        LinalgOp::FullPivLuSolve { transpose_a: false },
+        LinalgOp::FullPivLuSolve { transpose_a: true },
+        LinalgOp::Svd {
+            derivative_eps: 0.0,
+            gauge: SvdGauge::Raw,
+        },
+        LinalgOp::SvdFull,
+        LinalgOp::SvdVals {
+            derivative_eps: 0.0,
+        },
+        LinalgOp::Qr {
+            gauge: QrGauge::Raw,
+        },
+        LinalgOp::Eigh {
+            derivative_eps: 0.0,
+            gauge: EighGauge::Raw,
+        },
+        LinalgOp::EighVals {
+            derivative_eps: 0.0,
+        },
+        LinalgOp::Eig {
+            input_dtype: DType::F64,
+        },
+        LinalgOp::EigVals {
+            input_dtype: DType::F64,
+        },
+        LinalgOp::TriangularSolve {
+            left_side: false,
+            lower: false,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+    ];
+    for op in ops {
+        let admitted = super::linalg_session_supported::<CpuBackend>(&LinalgExtensionOp::new(op));
+        assert!(
+            admitted,
+            "the CPU linalg session executor runs every op; admission must not narrow: {op:?}"
+        );
+    }
+}
+
+#[test]
 fn infer_output_meta_returns_error_on_input_count_mismatch() {
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
