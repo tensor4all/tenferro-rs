@@ -73,3 +73,27 @@ let dy = ctx.vjp(&y, &x, &seed)?;  // capture した graph で functional AD
 - active-edge 化で `eager_ad_forward`（requires_grad だが grad 消費なし）の ~8µs が消え、no_ad と
   ほぼ同値（~12µs = session フロア）になる見込み。
 - 残る ~11µs は session フロア（別 issue #1628/#1662 系）で、本提案の対象外。
+
+## 7. 実験で確定した事実（branch 2 skip を実装して回帰テストで検証）
+
+`nary_op` branch 2 の `record_eager_outputs` を skip + `finish_eager_extension_outputs` に
+`|| !any(requires_grad)` を追加（active-edge 化のみ）を試し、**失敗は唯一 1 テスト**だった:
+
+- `crates/tenferro-ad/tests/integration/eager_tensor.rs:314`
+  `untracked_eager_intermediate_can_later_feed_tracked_ad` — `scale = plain.add(&plain)`（untracked 定数）
+  を `x.mul(&scale)`（tracked）に食わせて backward → `x.grad() == scale`。
+
+つまり Def 1 は **3 部構成**で、branch 2 skip だけでは「untracked 定数を tracked 鎖に食わせる」
+（PyTorch で言う定数 leaf）が壊れる:
+
+1. **branch 2 の記録 skip**（active-edge。上記実験で確認）
+2. **branch 3 での constant 遅延 materialization** — tracked op に untracked 入力が入った時、その入力の
+   concrete value から constant leaf を `TracedTensor::from_tensor_symbolic_shape` で遅延生成
+   （`detach()` と同じ要領）。`record_semantic_eager_outputs`（`eager.rs:4006`）の
+   `collect::<Option>` 全入力必須を「untracked 入力は constant leaf に」に変える。これで定数ケースが
+   暗黙録音なしで成立（PyTorch の「untracked = constant、grad は流れない」に一致）。
+3. **明示 trace/capture API**（§2）— 後から `wrt` に選ぶ functional AD のみ。
+
+**重要**: 定数ケース（テスト 1 件）は「branch 2 の暗黙録音」でなく「branch 3 の遅延 constant
+materialization」で維持すべき。branch 2 skip 単独では壊れるため、Def 1 は 1+2 を一体で実施し、
+3 は functional-AD-over-wrt 専用。
