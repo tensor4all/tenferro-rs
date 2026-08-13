@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticExtensionRuleSet, SemanticLinearTransposeRequest,
-    SemanticLinearTransposeRule, SemanticLinearizeRequest, SemanticLinearizeResult,
-    SemanticLinearizeRule, SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
+    AdValue, ResidualSpec, SemanticAdError, SemanticExtensionRuleSet,
+    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
+    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
+    SemanticPrimalVjpRule,
 };
 use tenferro_ad::semantic_transform::SemanticAdTransformError;
 use tenferro_ad::AdContext;
@@ -109,6 +110,11 @@ impl SemanticLinearTransposeRule for AddInputsRule {
         FAMILY
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The transpose only forwards cotangents; it reads no primal tensor.
+        ResidualSpec::none()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -127,6 +133,10 @@ impl SemanticLinearTransposeRule for AddInputsRule {
 impl SemanticPrimalVjpRule for AddInputsRule {
     fn family_id(&self) -> &'static str {
         FAMILY
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::none()
     }
 
     fn primal_vjp(

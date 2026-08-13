@@ -10,7 +10,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    AdValue, ResidualSpec, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
@@ -347,6 +347,14 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
         EINSUM_EXTENSION_FAMILY_ID
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The einsum VJP reads every non-active operand as a tensor operand
+        // (conjugate + contract with the cotangent); which operands are read
+        // depends on the active-input configuration, so all inputs are
+        // declared. The output is only used for its shape.
+        ResidualSpec::all_inputs()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -358,6 +366,7 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
             request.primal_outputs(),
             request.cotangent_outputs(),
             request.active_inputs(),
+            request.residual_mask(),
             builder,
         )
     }
@@ -367,6 +376,12 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
 impl SemanticPrimalVjpRule for EinsumAdRule {
     fn family_id(&self) -> &'static str {
         EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        // Same operand set as the linear transpose: every non-active input is
+        // read as a tensor; the output only for its shape.
+        ResidualSpec::all_inputs()
     }
 
     fn primal_vjp(
@@ -380,6 +395,7 @@ impl SemanticPrimalVjpRule for EinsumAdRule {
             request.primal_outputs(),
             request.cotangent_outputs(),
             request.active_inputs(),
+            request.residual_mask(),
             builder,
         )
     }
@@ -392,6 +408,7 @@ fn semantic_einsum_vjp(
     primal_outputs: &[ProgramValue],
     cotangent_outputs: &[AdValue],
     active_inputs: &[bool],
+    residual_mask: ResidualSpec,
     builder: &mut SemanticProgramBuilder,
 ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
     let op = semantic_einsum_payload(payload, SemanticAdRuleRole::LinearTranspose)?;
@@ -434,6 +451,11 @@ fn semantic_einsum_vjp(
             }
             vjp_input_labels.push(input_labels[input_idx].clone());
             vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
+            debug_assert!(
+                residual_mask.declares_input(input_idx),
+                "einsum transpose read primal input {input_idx} as a tensor operand but the \
+                 residual mask does not declare it; declare it in the einsum rule's residual mask"
+            );
             vjp_inputs.push(semantic_conjugate_if_complex(
                 builder,
                 primal_inputs[input_idx],

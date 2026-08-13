@@ -1,5 +1,5 @@
 use crate::ad::PrimitiveRuleBuilder;
-use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult, ResidualSpec};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_core_ops::PrimitiveOpKind;
 
@@ -31,6 +31,10 @@ pub(crate) type TransposeFn = fn(
 pub(crate) trait PrimitiveAdRule: Send + Sync {
     fn kind(&self) -> PrimitiveOpKind;
 
+    /// Declare which primal inputs this rule's transpose reads as tensor
+    /// residuals. Inputs not declared may only be accessed through metadata.
+    fn residual_mask(&self) -> ResidualSpec;
+
     fn linearize(
         &self,
         op: &StdTensorOp,
@@ -56,11 +60,16 @@ struct FunctionPrimitiveAdRule {
     kind: PrimitiveOpKind,
     linearize: LinearizeFn,
     transpose_rule: TransposeFn,
+    residual_mask: ResidualSpec,
 }
 
 impl PrimitiveAdRule for FunctionPrimitiveAdRule {
     fn kind(&self) -> PrimitiveOpKind {
         self.kind
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        self.residual_mask
     }
 
     fn linearize(
@@ -120,256 +129,307 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
         kind: PrimitiveOpKind::Add,
         linearize: linearize_add,
         transpose_rule: transpose_add,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sub,
         linearize: linearize_sub,
         transpose_rule: transpose_sub,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Mul,
         linearize: linearize_mul,
         transpose_rule: transpose_mul,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Neg,
         linearize: linearize_neg,
         transpose_rule: transpose_neg,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Conj,
         linearize: linearize_conj,
         transpose_rule: transpose_conj,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Div,
         linearize: linearize_div,
         transpose_rule: transpose_div,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Rem,
         linearize: linearize_compare,
         transpose_rule: transpose_compare,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Abs,
         linearize: linearize_abs,
         transpose_rule: transpose_abs,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sign,
         linearize: linearize_sign,
         transpose_rule: transpose_sign,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Maximum,
         linearize: linearize_maximum,
         transpose_rule: transpose_maximum,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Minimum,
         linearize: linearize_minimum,
         transpose_rule: transpose_minimum,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Compare,
         linearize: linearize_compare,
         transpose_rule: transpose_compare,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Select,
         linearize: linearize_select,
         transpose_rule: transpose_select,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Clamp,
         linearize: linearize_clamp,
         transpose_rule: transpose_clamp,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Exp,
         linearize: linearize_exp,
         transpose_rule: transpose_exp,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Log,
         linearize: linearize_log,
         transpose_rule: transpose_log,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sin,
         linearize: linearize_sin,
         transpose_rule: transpose_sin,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Cos,
         linearize: linearize_cos,
         transpose_rule: transpose_cos,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Tanh,
         linearize: linearize_tanh,
         transpose_rule: transpose_tanh,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sqrt,
         linearize: linearize_sqrt,
         transpose_rule: transpose_sqrt,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Rsqrt,
         linearize: linearize_rsqrt,
         transpose_rule: transpose_rsqrt,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Pow,
         linearize: linearize_pow,
         transpose_rule: transpose_pow,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Expm1,
         linearize: linearize_expm1,
         transpose_rule: transpose_expm1,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Log1p,
         linearize: linearize_log1p,
         transpose_rule: transpose_log1p,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DotGeneral,
         linearize: linearize_dot_general,
         transpose_rule: transpose_dot_general,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceSum,
         linearize: linearize_reduce_sum,
         transpose_rule: transpose_reduce_sum,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceSumSquares,
         linearize: linearize_reduce_sum_squares,
         transpose_rule: transpose_reduce_sum_squares,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceProd,
         linearize: linearize_reduce_prod,
         transpose_rule: transpose_reduce_prod,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceMax,
         linearize: linearize_reduce_max,
         transpose_rule: transpose_reduce_max,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceMin,
         linearize: linearize_reduce_min,
         transpose_rule: transpose_reduce_min,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Transpose,
         linearize: linearize_transpose,
         transpose_rule: transpose_transpose,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Reshape,
         linearize: linearize_reshape,
         transpose_rule: transpose_reshape,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::BroadcastInDim,
         linearize: linearize_broadcast_in_dim,
         transpose_rule: transpose_broadcast_in_dim,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Convert,
         linearize: linearize_convert,
         transpose_rule: transpose_convert,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ExtractDiag,
         linearize: linearize_extract_diag,
         transpose_rule: transpose_extract_diag,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::EmbedDiag,
         linearize: linearize_embed_diag,
         transpose_rule: transpose_embed_diag,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Tril,
         linearize: linearize_tril,
         transpose_rule: transpose_tril,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Triu,
         linearize: linearize_triu,
         transpose_rule: transpose_triu,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Gather,
         linearize: linearize_gather,
         transpose_rule: transpose_gather,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::GatherDynamicSliceSizes,
         linearize: linearize_gather_dynamic_slice_sizes,
         transpose_rule: transpose_gather_dynamic_slice_sizes,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Scatter,
         linearize: linearize_scatter,
         transpose_rule: transpose_scatter,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Slice,
         linearize: linearize_slice,
         transpose_rule: transpose_slice,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicSlice,
         linearize: linearize_dynamic_slice,
         transpose_rule: transpose_dynamic_slice,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicUpdateSlice,
         linearize: linearize_dynamic_update_slice,
         transpose_rule: transpose_dynamic_update_slice,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Pad,
         linearize: linearize_pad,
         transpose_rule: transpose_pad,
+        residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Concatenate,
         linearize: linearize_concatenate,
         transpose_rule: transpose_concatenate,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Reverse,
         linearize: linearize_reverse,
         transpose_rule: transpose_reverse,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ShapeOf,
         linearize: linearize_shape_of,
         transpose_rule: transpose_shape_of,
+        residual_mask: ResidualSpec::none(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicTruncate,
         linearize: linearize_dynamic_truncate,
         transpose_rule: transpose_dynamic_truncate,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::PadToMatch,
         linearize: linearize_pad_to_match,
         transpose_rule: transpose_pad_to_match,
+        residual_mask: ResidualSpec::all_inputs(),
     },
     &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Constant,
         linearize: linearize_constant,
         transpose_rule: transpose_constant,
+        residual_mask: ResidualSpec::none(),
     },
 ];
 

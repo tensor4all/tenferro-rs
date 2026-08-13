@@ -1,4 +1,5 @@
-use crate::ad::ADRuleKind;
+use crate::ad::transpose_input::TransposeInputRef;
+use crate::ad::{ADRuleKind, PrimitiveTransposeInput, ResidualSpec};
 use computegraph::graph::GraphBuilder;
 use computegraph::types::OperationRole;
 use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
@@ -6,6 +7,31 @@ use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::registry::primitive_ad_rule;
 use crate::std_tensor_op::StdTensorOp;
+
+#[test]
+#[should_panic(expected = "residual mask")]
+fn residual_mask_detector_rejects_undeclared_input_access() {
+    // The undeclared-access detector must fail when a transpose rule reads a
+    // tensor value its residual mask did not declare. `fixed_value` on an
+    // undeclared input panics under debug assertions.
+    let input = PrimitiveTransposeInput::<StdTensorOp>::Residual(super::input_key(1));
+    let reference = TransposeInputRef::new(&input, 0, ResidualSpec::none());
+    let _ = reference.fixed_value("test_rule", 0).unwrap();
+}
+
+#[test]
+fn residual_mask_detector_accepts_declared_input_access() {
+    let input = PrimitiveTransposeInput::<StdTensorOp>::Residual(super::input_key(1));
+    let reference = TransposeInputRef::new(&input, 0, ResidualSpec::input(0));
+    assert!(reference.fixed_value("test_rule", 0).is_ok());
+    assert!(reference.shape_source_value("test_rule", 0).is_ok());
+    // Metadata-only access stays allowed for undeclared indices.
+    let undeclared = TransposeInputRef::new(&input, 0, ResidualSpec::none());
+    assert_eq!(
+        undeclared.metadata_value(),
+        computegraph::types::ValueRef::External(super::input_key(1))
+    );
+}
 
 #[test]
 fn primitive_ad_registry_has_representative_rules() {

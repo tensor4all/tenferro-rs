@@ -3,10 +3,10 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::{
-    AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
-    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
-    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
-    SemanticPrimalVjpRule,
+    AdValue, ResidualSpec, SemanticAdError, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
 use tenferro_ad::AdContext;
 use tenferro_ops::dim_expr::DimExpr;
@@ -123,6 +123,12 @@ impl SemanticLinearTransposeRule for IdentityRule {
         "tenferro-ad.semantic-identity.v1"
     }
 
+    fn residual_mask(&self) -> ResidualSpec {
+        // The identity transpose only forwards cotangents; it reads no primal
+        // tensor, though linearize may save the output as a residual.
+        ResidualSpec::none()
+    }
+
     fn linear_transpose(
         &self,
         request: SemanticLinearTransposeRequest<'_>,
@@ -137,6 +143,10 @@ impl SemanticLinearTransposeRule for IdentityRule {
 impl SemanticPrimalVjpRule for IdentityRule {
     fn family_id(&self) -> &'static str {
         "tenferro-ad.semantic-identity.v1"
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::none()
     }
 
     fn primal_vjp(
