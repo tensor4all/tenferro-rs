@@ -191,15 +191,22 @@ fn try_prepared_eager_extension(
     let Some(executor) = plan.executor() else {
         return Ok(None);
     };
-    if !executor.supports_session() {
-        return Ok(None);
-    }
     let executor = Arc::clone(executor);
-    let outputs = ctx.with_extension_execution_context(|extension_ctx| {
-        let (session, caches) = extension_ctx.parts_mut();
-        executor.execute_in_session(session, caches, input_reads)
-    })??;
-    Ok(Some(outputs))
+    if executor.supports_session() {
+        // native-session: scheduler-owned session executor.
+        let outputs = ctx.with_extension_execution_context(|extension_ctx| {
+            let (session, caches) = extension_ctx.parts_mut();
+            executor.execute_in_session(session, caches, input_reads)
+        })??;
+        Ok(Some(outputs))
+    } else {
+        // native-context: mandatory `execute` bridge over the erased backend
+        // context (for out-of-tree prepared ops without a session executor).
+        let outputs = ctx.with_extension_erased_context(|erased, caches| {
+            executor.execute(erased, caches, input_reads)
+        })??;
+        Ok(Some(outputs))
+    }
 }
 
 /// Ensure an eager extension module is installed, then apply the op through

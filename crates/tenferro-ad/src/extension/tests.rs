@@ -108,6 +108,7 @@ impl ExtensionPlanningConfig for BridgeConfig {
 struct BridgeEngine {
     family_id: &'static str,
     engine_id: EngineId,
+    session_capable: bool,
 }
 
 impl ExtensionEngine for BridgeEngine {
@@ -133,6 +134,7 @@ impl ExtensionEngine for BridgeEngine {
         let prepared = Arc::new(BridgePrepared {
             binding: request.binding().clone(),
             specialization: request.specialization().clone(),
+            session_capable: self.session_capable,
         });
         let operation: PreparedOperationHandle = Arc::clone(&prepared) as PreparedOperationHandle;
         let executor: PreparedOperationExecutorHandle = prepared as PreparedOperationExecutorHandle;
@@ -146,6 +148,7 @@ impl ExtensionEngine for BridgeEngine {
 struct BridgePrepared {
     binding: PreparedOperationBinding,
     specialization: SpecializationProjection,
+    session_capable: bool,
 }
 
 impl PreparedOperation for BridgePrepared {
@@ -184,7 +187,7 @@ impl PreparedOperationExecutor for BridgePrepared {
     }
 
     fn supports_session(&self) -> bool {
-        true
+        self.session_capable
     }
 
     fn execute_in_session(
@@ -203,6 +206,7 @@ impl PreparedOperationExecutor for BridgePrepared {
 struct BridgeModule {
     module_id: ExtensionModuleId,
     engine_id: Option<EngineId>,
+    session_capable: bool,
 }
 
 impl BridgeModule {
@@ -211,6 +215,7 @@ impl BridgeModule {
             module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
                 .unwrap(),
             engine_id: None,
+            session_capable: true,
         })
     }
 
@@ -219,6 +224,16 @@ impl BridgeModule {
             module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
                 .unwrap(),
             engine_id: Some(engine_id),
+            session_capable: true,
+        })
+    }
+
+    fn for_engine_context_only(engine_id: EngineId) -> Arc<dyn ExtensionModule> {
+        Arc::new(Self {
+            module_id: ExtensionModuleId::new("tenferro-tests.eager-extension-bridge.module")
+                .unwrap(),
+            engine_id: Some(engine_id),
+            session_capable: false,
         })
     }
 }
@@ -238,6 +253,7 @@ impl ExtensionModule for BridgeModule {
         registrar.register_engine(Arc::new(BridgeEngine {
             family_id: BridgeProbe::one().family_id(),
             engine_id: engine_id.clone(),
+            session_capable: self.session_capable,
         }))?;
         registrar.register_planning_config(
             engine_id.clone(),
@@ -285,6 +301,26 @@ fn legacy_eager_extension_bridge_keeps_arc_module_contract() {
     .unwrap();
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[1]);
+}
+
+#[test]
+fn eager_extension_native_context_path_executes_through_erased_backend() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let input = input(&ctx);
+    let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+    // A context-only prepared op (supports_session == false) must execute
+    // through the mandatory `execute` bridge over the erased backend context,
+    // not fall back to the compiled-program path.
+    let outputs = execute_legacy_probe(
+        Arc::new(BridgeProbe::one()),
+        &input,
+        BridgeModule::for_engine_context_only(engine_id),
+    )
+    .unwrap();
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[1]);
+    let value = outputs[0].to_tensor().unwrap();
+    assert_eq!(value.as_slice::<f64>().unwrap(), &[1.0]);
 }
 
 #[test]

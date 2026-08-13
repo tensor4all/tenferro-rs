@@ -110,6 +110,22 @@ impl EagerBackend {
             Self::WebGpu(backend) => backend.synchronize(),
         }
     }
+
+    /// Return the concrete backend as a runtime-owned erased execution
+    /// context for the prepared-operation `execute` bridge (the native-context
+    /// path). The executor downcasts this to the concrete backend type that
+    /// matches its binding's `context_identity`.
+    pub(crate) fn erased_context(&mut self) -> tenferro_runtime::ErasedExecutionContext<'_> {
+        match self {
+            Self::Cpu(backend) => tenferro_runtime::ErasedExecutionContext::new(backend),
+            #[cfg(test)]
+            Self::Recording(backend) => tenferro_runtime::ErasedExecutionContext::new(backend),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(backend) => tenferro_runtime::ErasedExecutionContext::new(backend),
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(backend) => tenferro_runtime::ErasedExecutionContext::new(backend),
+        }
+    }
 }
 
 pub(crate) fn eager_runtime_for_backend(

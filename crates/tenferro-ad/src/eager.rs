@@ -1883,6 +1883,26 @@ impl EagerRuntime {
         }))
     }
 
+    /// Run a prepared extension executor through the runtime-owned erased
+    /// backend context (the native-context path).
+    ///
+    /// This is the sibling of [`Self::with_extension_execution_context`] for
+    /// prepared operations whose executor does not support the scheduler-owned
+    /// session but implements the mandatory `execute` bridge. The concrete
+    /// backend is exposed as an erased context whose type identity matches the
+    /// executor's binding.
+    pub(crate) fn with_extension_erased_context<R: Send>(
+        &self,
+        f: impl FnOnce(&mut tenferro_runtime::ErasedExecutionContext<'_>, &mut ExtensionCacheStore) -> R
+            + Send,
+    ) -> Result<R> {
+        let mut backend = self.lock_backend()?;
+        let mut extension_cache_guard = self.lock_extension_caches()?;
+        let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+        let mut erased = backend.erased_context();
+        Ok(f(&mut erased, extension_caches))
+    }
+
     /// Block the current thread until backend work submitted by this eager runtime completes.
     ///
     /// CPU runtimes return immediately. CUDA and WebGPU runtimes synchronize
