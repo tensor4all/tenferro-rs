@@ -647,29 +647,23 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: BackendSession + 'static>(_op: &LinalgExtensionOp) -> bool {
+fn linalg_session_supported<B: BackendSession + 'static>(op: &LinalgExtensionOp) -> bool {
     // The `supports_session` contract (capability.rs) requires that an op is
     // admitted to a scheduler session only when the session executor genuinely
-    // executes it without returning `Unsupported`. The CPU exec session runs
-    // every linalg kernel, so admission is op-agnostic there. The CUDA session
-    // has explicit gaps for complete-pivoting LU, general eig, full-matrices
-    // SVD, and conjugate-only prepared LU solves (gpu/linalg.rs and the
-    // default `svd_full`/`eig_values` implementations). Admission is exactly
+    // executes it without returning `Unsupported`. Admission is exactly
     // per-op/per-backend so `apply_eager` keeps the native prepared path for
     // every op the session can actually run (issue #1665).
     let type_id = std::any::TypeId::of::<B>();
     if type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() {
-        // ponytail: B is only the backend TypeId, not its `CpuBackendKind`.
-        // The default (faer) provider executes every op, so all admit on CPU;
-        // a feature-gated Blas-provider CPU backend would return `Unsupported`
-        // for `SvdFull` here. Ceiling: per-op/per-provider admission would
-        // need the provider kind visible to `supports_session`, which this
-        // trait seam does not expose.
-        return true;
+        // The CPU backend type does not carry its provider kind (faer vs BLAS)
+        // at this type-only seam, and the BLAS provider does not implement
+        // in-session full-matrices SVD, so SvdFull is conservatively rejected
+        // and falls back to the compiled path. Every other CPU linalg kernel
+        // runs in-session on both faer and BLAS providers.
+        return op.op() != LinalgOp::SvdFull;
     }
     #[cfg(feature = "cuda")]
     {
-        let op = _op;
         if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>() {
             return match op.op() {
                 // Complete-pivoting LU and general eig have no CUDA kernels.

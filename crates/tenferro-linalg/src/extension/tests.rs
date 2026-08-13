@@ -45,7 +45,6 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
             derivative_eps: 0.0,
             gauge: SvdGauge::Raw,
         },
-        LinalgOp::SvdFull,
         LinalgOp::SvdVals {
             derivative_eps: 0.0,
         },
@@ -79,6 +78,15 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
             "the CPU linalg session executor runs every op; admission must not narrow: {op:?}"
         );
     }
+
+    // SvdFull is conservatively rejected on CPU: the backend type does not
+    // carry its provider kind (faer vs BLAS), and BLAS has no in-session
+    // full-matrices SVD, so admission must not over-claim.
+    let svd_full = LinalgExtensionOp::new(LinalgOp::SvdFull);
+    assert!(
+        !super::linalg_session_supported::<CpuBackend>(&svd_full),
+        "SvdFull must not be admitted on CPU (BLAS has no in-session full SVD)"
+    );
 }
 
 #[test]
