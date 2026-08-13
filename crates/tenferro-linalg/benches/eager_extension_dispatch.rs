@@ -50,6 +50,14 @@ fn mat(rt: &Arc<EagerRuntime>, tracked: bool) -> EagerTensor {
     }
 }
 
+fn leaf(rt: &Arc<EagerRuntime>, tracked: bool, tensor: Tensor) -> EagerTensor {
+    if tracked {
+        eager_tracked_from(tensor, rt)
+    } else {
+        eager_untracked_from(tensor, rt)
+    }
+}
+
 fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
     let rt = runtime();
     let mut group = c.benchmark_group(format!("eager_extension_dispatch/{label}"));
@@ -68,8 +76,8 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
 
     // solve (extension op)
     {
-        let a = eager_untracked_from(mat2(2.0, 0.0, 0.0, 3.0), &rt);
-        let b = eager_untracked_from(tensor(vec![2, 1], vec![1.0, 1.0]), &rt);
+        let a = leaf(&rt, tracked, mat2(2.0, 0.0, 0.0, 3.0));
+        let b = leaf(&rt, tracked, tensor(vec![2, 1], vec![1.0, 1.0]));
         group.bench_function(BenchmarkId::new("solve_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let out = black_box(&a).solve(black_box(&b)).expect("solve");
@@ -80,7 +88,7 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
 
     // svd (extension op)
     {
-        let a = eager_untracked_from(mat2(1.0, 0.0, 0.0, 2.0), &rt);
+        let a = leaf(&rt, tracked, mat2(1.0, 0.0, 0.0, 2.0));
         group.bench_function(BenchmarkId::new("svd_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let (u, _s, _vt) = black_box(&a).svd().expect("svd");
@@ -91,7 +99,7 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
 
     // eigh (extension op)
     {
-        let a = eager_untracked_from(mat2(4.0, 1.0, 1.0, 3.0), &rt);
+        let a = leaf(&rt, tracked, mat2(4.0, 1.0, 1.0, 3.0));
         group.bench_function(BenchmarkId::new("eigh_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let (w, _v) = black_box(&a).eigh().expect("eigh");
