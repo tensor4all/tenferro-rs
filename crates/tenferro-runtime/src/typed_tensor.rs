@@ -8,11 +8,11 @@ use tenferro_ops::broadcast::{
 };
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    CompareDir, DType, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
-    ValidationError,
+    BackendSession, CompareDir, DType, Error, Result, Tensor, TensorBackend, TensorRead,
+    TensorScalar, ValidationError,
 };
 
-use crate::{TypedTensorMaskOpsExt, TypedTensorOpsExt};
+use crate::{TypedTensorMaskOpsExt, TypedTensorOpsExt, TypedTensorSessionOpsExt};
 use tenferro_tensor::TypedTensor;
 
 impl<T: TensorScalar> TypedTensorOpsExt<T> for TypedTensor<T> {
@@ -192,6 +192,42 @@ impl<T: TensorScalar> TypedTensorOpsExt<T> for TypedTensor<T> {
     }
 }
 
+impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
+    fn add_in(
+        &self,
+        rhs: &TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
+        let out = session.add_read(lhs.tensor_read(), rhs.tensor_read())?;
+        into_typed_result("add", out)
+    }
+
+    fn mul_in(
+        &self,
+        rhs: &TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
+        let out = session.mul_read(lhs.tensor_read(), rhs.tensor_read())?;
+        into_typed_result("mul", out)
+    }
+
+    fn exp_in(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = session.exp_read(T::tensor_read(self))?;
+        into_typed_result("exp", out)
+    }
+
+    fn reduce_sum_in(
+        &self,
+        axes: &[usize],
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.reduce_sum_read(T::tensor_read(self), axes)?;
+        into_typed_result("reduce_sum", out)
+    }
+}
+
 impl TypedTensorMaskOpsExt for TypedTensor<bool> {
     fn where_select<T: TensorScalar, B: TensorBackend>(
         &self,
@@ -220,10 +256,7 @@ fn add<T: TensorScalar>(
     rhs: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
-    let out =
-        backend.with_backend_session(|exec| exec.add_read(lhs.tensor_read(), rhs.tensor_read()))?;
-    into_typed_result("add", out)
+    backend.with_backend_session(|session| lhs.add_in(rhs, session))
 }
 
 macro_rules! unary_fn {
@@ -277,11 +310,6 @@ macro_rules! binary_fn {
 }
 
 binary_fn!(
-    mul,
-    mul_read,
-    "Elementwise multiplication with NumPy-style broadcasting."
-);
-binary_fn!(
     div,
     div_read,
     "Elementwise division with NumPy-style broadcasting."
@@ -311,7 +339,6 @@ unary_fn!(neg, neg_read, "Elementwise negation.");
 unary_fn!(abs, abs_read, "Elementwise absolute value.");
 unary_fn!(sign, sign_read, "Elementwise sign.");
 unary_fn!(conj, conj_read, "Elementwise complex conjugate.");
-unary_fn!(exp, exp_read, "Elementwise exponential.");
 unary_fn!(log, log_read, "Elementwise natural logarithm.");
 unary_fn!(sin, sin_read, "Elementwise sine.");
 unary_fn!(cos, cos_read, "Elementwise cosine.");
@@ -320,6 +347,44 @@ unary_fn!(sqrt, sqrt_read, "Elementwise square root.");
 unary_fn!(rsqrt, rsqrt_read, "Elementwise reciprocal square root.");
 unary_fn!(expm1, expm1_read, "Elementwise `exp(x) - 1`.");
 unary_fn!(log1p, log1p_read, "Elementwise `log(1 + x)`.");
+
+/// Elementwise multiplication with NumPy-style broadcasting.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
+/// # let mut backend = CpuBackend::new();
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
+/// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
+/// let z = x.mul(&y, &mut backend).unwrap();
+/// ```
+fn mul<T: TensorScalar>(
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    backend.with_backend_session(|session| lhs.mul_in(rhs, session))
+}
+
+/// Elementwise exponential.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
+/// # let mut backend = CpuBackend::new();
+/// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap();
+/// let y = x.exp(&mut backend).unwrap();
+/// ```
+fn exp<T: TensorScalar>(
+    input: &TypedTensor<T>,
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    backend.with_backend_session(|session| input.exp_in(session))
+}
 
 /// Elementwise subtraction with NumPy-style broadcasting.
 ///
@@ -482,9 +547,7 @@ fn reduce_sum<T: TensorScalar>(
     axes: &[usize],
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out =
-        backend.with_backend_session(|exec| exec.reduce_sum_read(T::tensor_read(input), axes))?;
-    into_typed_result("reduce_sum", out)
+    backend.with_backend_session(|session| input.reduce_sum_in(axes, session))
 }
 
 /// Reshape a typed tensor through the backend structural operation.
@@ -573,6 +636,38 @@ impl ReadInput<'_> {
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
         }
     }
+}
+
+fn broadcast_to_in_read<'a, T: TensorScalar>(
+    input: &'a TypedTensor<T>,
+    target_shape: &[usize],
+    session: &mut dyn BackendSession,
+) -> Result<ReadInput<'a>> {
+    if input.shape() == target_shape {
+        return Ok(ReadInput::Borrowed(T::tensor_read(input)));
+    }
+
+    let plan = broadcast_input_plan(input.shape(), target_shape).map_err(broadcast_error)?;
+    let source = if plan.source_shape == input.shape() {
+        ReadInput::Borrowed(T::tensor_read(input))
+    } else {
+        let reshaped = session.reshape_read(T::tensor_read(input), &plan.source_shape)?;
+        ReadInput::Owned(reshaped)
+    };
+    let out = session.broadcast_in_dim_read(source.tensor_read(), target_shape, &plan.dims)?;
+    Ok(ReadInput::Owned(out))
+}
+
+fn broadcast_binary_in_read<'a, T: TensorScalar>(
+    lhs: &'a TypedTensor<T>,
+    rhs: &'a TypedTensor<T>,
+    session: &mut dyn BackendSession,
+) -> Result<(ReadInput<'a>, ReadInput<'a>)> {
+    let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
+    Ok((
+        broadcast_to_in_read(lhs, &shape, session)?,
+        broadcast_to_in_read(rhs, &shape, session)?,
+    ))
 }
 
 fn broadcast_binary_read<'a, T: TensorScalar>(
