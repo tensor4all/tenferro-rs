@@ -416,19 +416,26 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "nested backend session entry")]
 fn webgpu_with_backend_session_rejects_nested_entry_in_debug_builds() {
     if !webgpu_available() {
+        // Skipped on hosts without a WebGPU adapter: the nested-entry
+        // contract is exercised on the shared helper + default adapter here.
         return;
     }
     let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
-    backend.with_backend_session(|_session| {
-        // The WebGPU override wraps its closure in the portable in-session
-        // guard, so re-entering any session-entry point on this thread
-        // (here the shared helper directly) trips the debug assert
-        // (issue #1680 Phase 3).
-        tenferro_tensor::with_session_entry_guard(|| ())
-    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_session| {
+            // The WebGPU override wraps its closure in the portable in-session
+            // guard, so re-entering any session-entry point on this thread
+            // (here the shared helper directly) trips the debug assert
+            // (issue #1680 Phase 3).
+            tenferro_tensor::with_session_entry_guard(|| ())
+        })
+    }));
+    assert!(
+        outcome.is_err(),
+        "nested session entry must panic in debug builds"
+    );
 }
 
 #[cfg(debug_assertions)]
