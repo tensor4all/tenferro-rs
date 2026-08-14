@@ -8,7 +8,7 @@ use tenferro_tensor::{
 
 use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
 use crate::util::map_label_occurrences;
-use crate::{ContractionTree, Subscripts};
+use crate::{ConcreteEinsumPlan, ContractionTree, EinsumSubscripts, Subscripts};
 
 mod profile;
 
@@ -888,64 +888,6 @@ pub(crate) fn eager_einsum_exec_read_into_accum(
     tenferro_tensor::backend::accumulate_dot_result_into(&result, accumulation, &mut out)
 }
 
-fn tensor_value_from_read(input: TensorRead<'_>) -> TensorValue<'_> {
-    match input {
-        TensorRead::Tensor(tensor) => TensorValue::Borrowed(tensor),
-        TensorRead::View(view) => TensorValue::View(view),
-    }
-}
-
-fn eager_einsum_exec_binary_read_fast(
-    exec: &mut dyn BackendSession,
-    inputs: &[TensorRead<'_>],
-    subscripts: &Subscripts,
-    plan: BinaryDotPlan,
-) -> Result<Tensor> {
-    let lhs = LabeledTensor {
-        tensor: tensor_value_from_read(inputs[0].clone()),
-        labels: subscripts.inputs[0].clone(),
-    };
-    let rhs = LabeledTensor {
-        tensor: tensor_value_from_read(inputs[1].clone()),
-        labels: subscripts.inputs[1].clone(),
-    };
-    execute_binary_dot_fast_plan(exec, lhs, rhs, plan, true)
-        .and_then(|result| result.tensor.into_tensor(exec))
-}
-
-fn try_eager_einsum_binary_read_fast(
-    ctx: &mut impl TensorBackend,
-    inputs: &[TensorRead<'_>],
-    subscripts: &Subscripts,
-) -> Option<Result<Tensor>> {
-    let total_started = eager_einsum_profile_enabled().then(Instant::now);
-    if inputs.len() != 2 || subscripts.inputs.len() != 2 {
-        return None;
-    }
-    if inputs[0].shape().len() != subscripts.inputs[0].len()
-        || inputs[1].shape().len() != subscripts.inputs[1].len()
-    {
-        return None;
-    }
-    let plan = profile_eager_einsum_section("fast.build_plan", || {
-        try_build_binary_dot_plan(
-            &subscripts.inputs[0],
-            &subscripts.inputs[1],
-            &subscripts.output,
-        )
-    })?;
-    let result = profile_eager_einsum_section("fast.with_backend_session", || {
-        ctx.with_backend_session(|exec| {
-            eager_einsum_exec_binary_read_fast(exec, inputs, subscripts, plan)
-        })
-    });
-    if let Some(started) = total_started {
-        record_eager_einsum_profile("total", started.elapsed());
-        maybe_print_eager_einsum_profile();
-    }
-    Some(result)
-}
-
 /// Eager N-ary einsum on concrete [`Tensor`] values.
 ///
 /// This applies the same contraction-tree optimization strategy used by the
@@ -963,35 +905,27 @@ pub(crate) fn eager_einsum(
     eager_einsum_subscripts(ctx, inputs, &subscripts)
 }
 
+/// Convert a prepared-plan error into the eager core's tensor error surface.
+fn into_tensor_error(error: crate::Error) -> tenferro_tensor::Error {
+    error.into_tensor_error(EAGER_EINSUM_OP)
+}
+
 /// Eager N-ary einsum on concrete [`Tensor`] values using integer labels.
 pub(crate) fn eager_einsum_subscripts(
     ctx: &mut impl TensorBackend,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    if inputs.len() == 2 {
-        let read_inputs = [
-            TensorRead::from_tensor(inputs[0]),
-            TensorRead::from_tensor(inputs[1]),
-        ];
-        if let Some(result) = try_eager_einsum_binary_read_fast(ctx, &read_inputs, subscripts) {
-            return result;
-        }
-    }
-
     if eager_einsum_profile_enabled() {
         let total_started = Instant::now();
-        let shapes = profile_eager_einsum_section("shape_collect", || {
-            inputs
-                .iter()
-                .map(|tensor| tensor.shape())
-                .collect::<Vec<_>>()
-        });
-        let tree = profile_eager_einsum_section("plan_subscripts", || {
-            plan_subscripts(subscripts, &shapes)
-        })?;
+        let plan = profile_eager_einsum_section("plan_subscripts", || {
+            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+        })
+        .map_err(into_tensor_error)?;
         let result = profile_eager_einsum_section("with_backend_session", || {
-            ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+            ctx.with_backend_session(|session| {
+                plan.execute(inputs, session).map_err(into_tensor_error)
+            })
         });
         record_eager_einsum_profile("total", total_started.elapsed());
         maybe_print_eager_einsum_profile();
@@ -1005,11 +939,15 @@ pub(crate) fn eager_einsum_subscripts(
         let shape_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let tree = plan_subscripts(subscripts, &shapes)?;
+        let plan =
+            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+                .map_err(into_tensor_error)?;
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let result = ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree));
+        let result = ctx.with_backend_session(|session| {
+            plan.execute(inputs, session).map_err(into_tensor_error)
+        });
         let exec_us = started.elapsed().as_secs_f64() * 1.0e6;
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
@@ -1017,14 +955,14 @@ pub(crate) fn eager_einsum_subscripts(
             "tenferro_eager_einsum_profile,input_count={},shapes={:?},steps={},shape_us={shape_us:.3},plan_us={plan_us:.3},exec_us={exec_us:.3},total_us={total_us:.3}",
             inputs.len(),
             shapes,
-            tree.step_count(),
+            plan.step_count(),
         );
         return result;
     }
 
-    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = plan_subscripts(subscripts, &shapes)?;
-    ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+    let plan = ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+        .map_err(into_tensor_error)?;
+    ctx.with_backend_session(|session| plan.execute(inputs, session).map_err(into_tensor_error))
 }
 
 #[cfg(feature = "autodiff")]
@@ -1048,13 +986,13 @@ pub(crate) fn eager_einsum_read_subscripts(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    if let Some(result) = try_eager_einsum_binary_read_fast(ctx, inputs, subscripts) {
-        return result;
-    }
-
-    let shapes: Vec<&[usize]> = inputs.iter().map(TensorRead::shape).collect();
-    let tree = plan_subscripts(subscripts, &shapes)?;
-    ctx.with_backend_session(|exec| eager_einsum_exec_read(exec, inputs, &tree))
+    let plan =
+        ConcreteEinsumPlan::prepare_read_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+            .map_err(into_tensor_error)?;
+    ctx.with_backend_session(|session| {
+        plan.execute_read(inputs, session)
+            .map_err(into_tensor_error)
+    })
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.

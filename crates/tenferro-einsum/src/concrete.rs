@@ -854,14 +854,15 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::ConcreteEinsumPlan;
-/// use tenferro_tensor::Tensor;
+/// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
 /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
 ///
 /// let mut backend = CpuBackend::new();
-/// let out = plan.execute([&lhs, &rhs], &mut backend)?;
+/// let out = backend
+///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -970,22 +971,9 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(read_input_specs(inputs.as_ref()), &subscripts)
     }
 
-    /// Execute this plan on dtype-erased concrete tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
-    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
-    /// for a typed backend failure.
-    pub fn execute<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
-    where
-        I: AsRef<[&'a Tensor]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend.with_backend_session(|session| self.execute_in_session(inputs, session))
+    /// Number of binary contraction steps in the prepared tree (diagnostics).
+    pub(crate) fn step_count(&self) -> usize {
+        self.tree.step_count()
     }
 
     /// Execute this plan on dtype-erased concrete tensor inputs inside a
@@ -1007,7 +995,7 @@ impl ConcreteEinsumPlan {
     ///
     /// let mut backend = CpuBackend::new();
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_in_session([&lhs, &rhs], session))?;
+    ///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1019,36 +1007,13 @@ impl ConcreteEinsumPlan {
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
     /// input dtype differs from the prepared contract, or [`Error::Tensor`]
     /// for a typed backend failure.
-    pub fn execute_in_session<'a, I>(
-        &self,
-        inputs: I,
-        session: &mut dyn BackendSession,
-    ) -> Result<Tensor>
+    pub fn execute<'a, I>(&self, inputs: I, session: &mut dyn BackendSession) -> Result<Tensor>
     where
         I: AsRef<[&'a Tensor]>,
     {
         let inputs = inputs.as_ref();
         self.validate_inputs(&input_specs(inputs), PLAN_EXECUTE_OP)?;
         eager_einsum_exec(session, inputs, &self.tree).map_err(Error::from)
-    }
-
-    /// Execute this plan on typed concrete tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
-    /// prepared dtype differs from `T` or the eager result dtype, or
-    /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed<'a, T, I, B>(&self, inputs: I, backend: &mut B) -> Result<TypedTensor<T>>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend.with_backend_session(|session| self.execute_typed_in_session(inputs, session))
     }
 
     /// Execute this plan on typed concrete tensor inputs inside a borrowed
@@ -1070,7 +1035,7 @@ impl ConcreteEinsumPlan {
     ///
     /// let mut backend = CpuBackend::new();
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_typed_in_session([&lhs, &rhs], session))?;
+    ///     .with_backend_session(|session| plan.execute_typed([&lhs, &rhs], session))?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1082,7 +1047,7 @@ impl ConcreteEinsumPlan {
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
     /// prepared dtype differs from `T` or the eager result dtype, or
     /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed_in_session<'a, T, I>(
+    pub fn execute_typed<'a, T, I>(
         &self,
         inputs: I,
         session: &mut dyn BackendSession,
@@ -1096,24 +1061,6 @@ impl ConcreteEinsumPlan {
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
         let result = eager_einsum_exec_read(session, &reads, &self.tree)?;
         into_typed_result(result, PLAN_EXECUTE_OP)
-    }
-
-    /// Execute this plan on read-only tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
-    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
-    /// for a typed backend failure.
-    pub fn execute_read<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
-    where
-        I: AsRef<[TensorRead<'a>]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend.with_backend_session(|session| self.execute_read_in_session(inputs, session))
     }
 
     /// Execute this plan on read-only tensor inputs inside a borrowed backend
@@ -1139,7 +1086,7 @@ impl ConcreteEinsumPlan {
     /// let mut backend = CpuBackend::new();
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_read_in_session(reads, session))?;
+    ///     .with_backend_session(|session| plan.execute_read(reads, session))?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1151,39 +1098,13 @@ impl ConcreteEinsumPlan {
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
     /// input dtype differs from the prepared contract, or [`Error::Tensor`]
     /// for a typed backend failure.
-    pub fn execute_read_in_session<'a, I>(
-        &self,
-        inputs: I,
-        session: &mut dyn BackendSession,
-    ) -> Result<Tensor>
+    pub fn execute_read<'a, I>(&self, inputs: I, session: &mut dyn BackendSession) -> Result<Tensor>
     where
         I: AsRef<[TensorRead<'a>]>,
     {
         let inputs = inputs.as_ref();
         self.validate_inputs(&read_input_specs(inputs), PLAN_EXECUTE_OP)?;
         eager_einsum_exec_read(session, inputs, &self.tree).map_err(Error::from)
-    }
-
-    /// Execute this plan on dtype-erased concrete tensor inputs into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_into<'a, I, B>(
-        &self,
-        inputs: I,
-        backend: &mut B,
-        out: TensorWrite<'_>,
-    ) -> Result<()>
-    where
-        I: AsRef<[&'a Tensor]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend.with_backend_session(|session| self.execute_into_in_session(inputs, session, out))
     }
 
     /// Execute this plan on dtype-erased concrete tensor inputs into
@@ -1206,7 +1127,7 @@ impl ConcreteEinsumPlan {
     /// let mut backend = CpuBackend::new();
     /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
     /// backend.with_backend_session(|session| {
-    ///     plan.execute_into_in_session(
+    ///     plan.execute_into(
     ///         [&lhs, &rhs],
     ///         session,
     ///         TensorWrite::from_tensor(&mut out),
@@ -1222,7 +1143,7 @@ impl ConcreteEinsumPlan {
     /// input-count contract violations, [`Error::Tensor`] with a
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_into_in_session<'a, I>(
+    pub fn execute_into<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn BackendSession,
@@ -1240,34 +1161,6 @@ impl ConcreteEinsumPlan {
             .map(|tensor| TensorRead::from_tensor(tensor))
             .collect();
         eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
-    }
-
-    /// Execute this plan on typed concrete tensor inputs into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
-    /// prepared dtype differs from `T` or the output dtype, or
-    /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed_into<'a, 'out, T, I, B, O>(
-        &self,
-        inputs: I,
-        backend: &mut B,
-        out: O,
-    ) -> Result<()>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-        B: TensorBackend,
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let inputs = inputs.as_ref();
-        let out = out.into();
-        backend.with_backend_session(|session| {
-            self.execute_typed_into_in_session(inputs, session, out)
-        })
     }
 
     /// Execute this plan on typed concrete tensor inputs into caller-provided
@@ -1290,7 +1183,7 @@ impl ConcreteEinsumPlan {
     /// let mut backend = CpuBackend::new();
     /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 4], vec![0.0; 8]).unwrap();
     /// backend.with_backend_session(|session| {
-    ///     plan.execute_typed_into_in_session([&lhs, &rhs], session, &mut out)
+    ///     plan.execute_typed_into([&lhs, &rhs], session, &mut out)
     /// })?;
     /// assert_eq!(out.as_slice()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
@@ -1303,7 +1196,7 @@ impl ConcreteEinsumPlan {
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
     /// prepared dtype differs from `T` or the output dtype, or
     /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed_into_in_session<'a, 'out, T, I, O>(
+    pub fn execute_typed_into<'a, 'out, T, I, O>(
         &self,
         inputs: I,
         session: &mut dyn BackendSession,
@@ -1321,29 +1214,6 @@ impl ConcreteEinsumPlan {
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
         eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
-    }
-
-    /// Execute this plan on read-only tensor inputs into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_read_into<'a, I, B>(
-        &self,
-        inputs: I,
-        backend: &mut B,
-        out: TensorWrite<'_>,
-    ) -> Result<()>
-    where
-        I: AsRef<[TensorRead<'a>]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend
-            .with_backend_session(|session| self.execute_read_into_in_session(inputs, session, out))
     }
 
     /// Execute this plan on read-only tensor inputs into caller-provided output
@@ -1370,7 +1240,7 @@ impl ConcreteEinsumPlan {
     /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     /// backend.with_backend_session(|session| {
-    ///     plan.execute_read_into_in_session(reads, session, TensorWrite::from_tensor(&mut out))
+    ///     plan.execute_read_into(reads, session, TensorWrite::from_tensor(&mut out))
     /// })?;
     /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
@@ -1382,7 +1252,7 @@ impl ConcreteEinsumPlan {
     /// input-count contract violations, [`Error::Tensor`] with a
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_read_into_in_session<'a, I>(
+    pub fn execute_read_into<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn BackendSession,
@@ -1396,59 +1266,6 @@ impl ConcreteEinsumPlan {
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
         eager_einsum_exec_read_into(session, inputs, &self.tree, out).map_err(Error::from)
-    }
-
-    /// Execute this plan on read-only inputs with scaled output accumulation.
-    ///
-    /// `accumulation` follows the dot-general contract:
-    /// `out = alpha * einsum(inputs) + beta * out`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{
-    ///     DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
-    /// };
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
-    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
-    /// let mut out = Tensor::from_vec_col_major(vec![], vec![1.0_f64])?;
-    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
-    /// let mut backend = CpuBackend::new();
-    /// plan.execute_read_into_accum(
-    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
-    ///     &mut backend,
-    ///     DotGeneralAccumulation::add_to(DType::F64)?,
-    ///     TensorWrite::from_tensor(&mut out),
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
-    /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_read_into_accum<'a, I, B>(
-        &self,
-        inputs: I,
-        backend: &mut B,
-        accumulation: DotGeneralAccumulation,
-        out: TensorWrite<'_>,
-    ) -> Result<()>
-    where
-        I: AsRef<[TensorRead<'a>]>,
-        B: TensorBackend,
-    {
-        let inputs = inputs.as_ref();
-        backend.with_backend_session(|session| {
-            self.execute_read_into_accum_in_session(inputs, session, accumulation, out)
-        })
     }
 
     /// Execute this plan on read-only inputs with scaled output accumulation
@@ -1472,7 +1289,7 @@ impl ConcreteEinsumPlan {
     /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
     /// let mut backend = CpuBackend::new();
     /// backend.with_backend_session(|session| {
-    ///     plan.execute_read_into_accum_in_session(
+    ///     plan.execute_read_into_accum(
     ///         [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
     ///         session,
     ///         DotGeneralAccumulation::add_to(DType::F64)?,
@@ -1490,7 +1307,7 @@ impl ConcreteEinsumPlan {
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
     /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_read_into_accum_in_session<'a, I>(
+    pub fn execute_read_into_accum<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn BackendSession,
@@ -1577,18 +1394,6 @@ fn typed_input_specs<T: TensorScalar>(inputs: &[&TypedTensor<T>]) -> Vec<Concret
         .collect()
 }
 
-fn typed_view_input_specs<T: TensorScalar>(
-    inputs: &[TypedTensorView<'_, T>],
-) -> Vec<ConcreteEinsumInputSpec> {
-    inputs
-        .iter()
-        .map(|tensor| ConcreteEinsumInputSpec {
-            dtype: T::dtype(),
-            shape: tensor.shape().to_vec(),
-        })
-        .collect()
-}
-
 fn read_input_specs(inputs: &[TensorRead<'_>]) -> Vec<ConcreteEinsumInputSpec> {
     inputs
         .iter()
@@ -1610,7 +1415,9 @@ fn typed_view_einsum_subscripts<T: TensorScalar>(
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
-    let result = eager_einsum_read_subscripts(backend, &reads, subscripts)?;
+    let plan =
+        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
+    let result = backend.with_backend_session(|session| plan.execute_read(&reads, session))?;
     into_typed_result(result, op)
 }
 
@@ -1621,16 +1428,9 @@ fn tensor_einsum_into_subscripts(
     out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
-    let specs = input_specs(inputs);
-    let plan = ConcreteEinsumPlan::prepare_subscripts_internal(specs.clone(), subscripts)?;
-    validate_output(&specs, &plan.tree, &out, op)?;
-    let reads: Vec<_> = inputs
-        .iter()
-        .map(|tensor| TensorRead::from_tensor(tensor))
-        .collect();
-    backend
-        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
-        .map_err(Error::from)
+    let plan = ConcreteEinsumPlan::prepare_subscripts_internal(input_specs(inputs), subscripts)?;
+    validate_output(&plan.inputs, &plan.tree, &out, op)?;
+    backend.with_backend_session(|session| plan.execute_into(inputs, session, out))
 }
 
 fn typed_view_einsum_into_subscripts<T: TensorScalar>(
@@ -1640,18 +1440,16 @@ fn typed_view_einsum_into_subscripts<T: TensorScalar>(
     out: TypedTensorWrite<'_, T>,
     op: &'static str,
 ) -> Result<()> {
-    let specs = typed_view_input_specs(inputs);
-    let plan = ConcreteEinsumPlan::prepare_subscripts_internal(specs.clone(), subscripts)?;
-    let out = out.into_tensor_write();
-    validate_output(&specs, &plan.tree, &out, op)?;
     let reads: Vec<_> = inputs
         .iter()
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
-    backend
-        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
-        .map_err(Error::from)
+    let plan =
+        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
+    let out = out.into_tensor_write();
+    validate_output(&plan.inputs, &plan.tree, &out, op)?;
+    backend.with_backend_session(|session| plan.execute_read_into(&reads, session, out))
 }
 
 fn typed_einsum_into_subscripts<T: TensorScalar>(
@@ -1661,14 +1459,12 @@ fn typed_einsum_into_subscripts<T: TensorScalar>(
     out: TypedTensorWrite<'_, T>,
     op: &'static str,
 ) -> Result<()> {
-    let specs = typed_input_specs(inputs);
-    let plan = ConcreteEinsumPlan::prepare_subscripts_internal(specs.clone(), subscripts)?;
-    let out = out.into_tensor_write();
-    validate_output(&specs, &plan.tree, &out, op)?;
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    backend
-        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
-        .map_err(Error::from)
+    let plan =
+        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
+    let out = out.into_tensor_write();
+    validate_output(&plan.inputs, &plan.tree, &out, op)?;
+    backend.with_backend_session(|session| plan.execute_read_into(&reads, session, out))
 }
 
 fn tensor_read_einsum_into_subscripts(
@@ -1678,12 +1474,10 @@ fn tensor_read_einsum_into_subscripts(
     out: TensorWrite<'_>,
     op: &'static str,
 ) -> Result<()> {
-    let specs = read_input_specs(inputs);
-    let plan = ConcreteEinsumPlan::prepare_subscripts_internal(specs.clone(), subscripts)?;
-    validate_output(&specs, &plan.tree, &out, op)?;
-    backend
-        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &plan.tree, out))
-        .map_err(Error::from)
+    let plan =
+        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(inputs), subscripts)?;
+    validate_output(&plan.inputs, &plan.tree, &out, op)?;
+    backend.with_backend_session(|session| plan.execute_read_into(inputs, session, out))
 }
 
 fn validate_output(
@@ -1757,7 +1551,9 @@ fn typed_einsum_subscripts<T: TensorScalar>(
     op: &'static str,
 ) -> Result<TypedTensor<T>> {
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    let result = eager_einsum_read_subscripts(backend, &reads, subscripts)?;
+    let plan =
+        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
+    let result = backend.with_backend_session(|session| plan.execute_read(&reads, session))?;
     into_typed_result(result, op)
 }
 

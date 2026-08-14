@@ -94,9 +94,8 @@ use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
 
 pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String {
-    let remedy = matches!(dtype, DType::I32 | DType::I64).then_some(format!(
-        "; convert {dtype:?} to F64 with TensorOpsExt::convert before contraction"
-    ));
+    let remedy = matches!(dtype, DType::I32 | DType::I64)
+        .then_some(format!("; convert {dtype:?} to F64 before contraction"));
     format!(
         "CPU contraction providers support F32/F64/C32/C64{}",
         remedy.unwrap_or_default()

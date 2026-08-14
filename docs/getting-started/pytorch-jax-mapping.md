@@ -5,7 +5,7 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 ## Import styles
 
 A focused module can keep its dependencies explicit with direct imports such as
-`use tenferro_runtime::{Tensor, TensorOpsExt};` and
+`use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
 `use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. A tutorial or a
 module that uses several operation families can use the equivalent crate-local
 preludes: `use tenferro_runtime::prelude::*;` and
@@ -33,11 +33,11 @@ backend and device choices remain explicit.
 |---|---|---|---|---|
 | Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
 | Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
-| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut ctx)` via `TensorOpsExt` | `a.matmul(&b)` |
-| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` via `TensorOpsExt` | `x.reshape(&shape)?` |
-| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` via `TensorOpsExt` | `x.transpose(&perm)` |
+| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `ctx.with_backend_session(\|s\| a.matmul(&b, s))` via `TensorSessionOpsExt` | `a.matmul(&b)` |
+| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `ctx.with_backend_session(\|s\| x.reshape(&shape, s))` via `TensorSessionOpsExt` | `x.reshape(&shape)?` |
+| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `ctx.with_backend_session(\|s\| x.transpose(&perm, s))` via `TensorSessionOpsExt` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` via `TensorOpsExt` | `x.reduce_sum(Some(&axes))` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `ctx.with_backend_session(\|s\| x.reduce_sum(&axes, s))` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `x.svd()?` via `TracedTensorLinalgExt` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `x.qr()?` via `TracedTensorLinalgExt` |

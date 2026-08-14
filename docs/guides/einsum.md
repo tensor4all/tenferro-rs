@@ -148,7 +148,7 @@ running the stored tree.
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
-use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
+use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
 
 let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
@@ -163,7 +163,8 @@ let result = inputs.einsum_read("ij,j->i", &mut backend)?;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
-let planned = plan.execute_read(inputs, &mut backend)?;
+let planned = backend
+    .with_backend_session(|session| plan.execute_read(inputs, session))?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;

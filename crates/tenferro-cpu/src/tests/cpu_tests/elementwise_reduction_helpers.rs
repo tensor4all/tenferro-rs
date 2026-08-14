@@ -655,7 +655,7 @@ fn unsupported_elementwise_dtype_messages_list_operation_sets() {
     assert!(matches!(
         conj(&i64_tensor),
         Err(crate::Error::Unsupported { op: "conj", message })
-            if message == "unsupported dtype I64; supported dtypes: F32/F64/C32/C64; convert to F64 with TensorOpsExt::convert before this operation"
+            if message == "unsupported dtype I64; supported dtypes: F32/F64/C32/C64; convert to F64 before this operation"
     ));
 }
 

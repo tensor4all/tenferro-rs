@@ -486,3 +486,93 @@ inputs/outputs inside.
 - Top-level einsum-trait `_in_session` variants (plan-level surface suffices;
   revisit only if Phase-1 callers need them).
 - GPU (CUDA/WebGPU) nested-entry enforcement (tracked gap from PR A).
+## Migration specification (issue #1680, Phase 2: single canonical core API)
+
+The release-boundary breaking change for the **tenferro-runtime core traits
+and the einsum plan surface**. Removes the one-shot core API, renames the
+transitional `_in`/`_in_session` methods to the final plain names, and
+migrates every workspace call site of those APIs. End state for THIS phase:
+one session-explicit concrete API for the core op vocabulary and
+`ConcreteEinsumPlan`.
+
+**Scope boundary (explicit)**: other backend-taking concrete surfaces are
+NOT migrated in this phase and are enumerated as follow-ups — the einsum
+top-level `einsum*`-trait methods (crates/tenferro-einsum/src/concrete.rs
+traits), `TensorFftExt`/`TensorReadFftExt` (tenferro-fft), the linalg
+concrete traits (tenferro-linalg/src/tensor_ext.rs), and
+`Tensor::index_select`/`Tensor::stack` (tenferro-tensor shape_packing).
+This phase covers the runtime core + plan-level einsum; the others migrate
+in follow-up PRs toward the same end state.
+
+### Removals
+
+- `TensorOpsExt` (crates/tenferro-runtime/src/lib.rs) and its impl.
+- `TypedTensorOpsExt<T>` and its impl.
+- `TypedTensorMaskOpsExt` (typed `where_select`, implemented only for
+  `TypedTensor<bool>` with a generic branch scalar) — replaced by a
+  **session-only mask trait** `TypedTensorMaskSessionOpsExt`, implemented for
+  `TypedTensor<bool>`, with `where_select(&self, on_true: &TypedTensor<U>,
+  on_false: &TypedTensor<U>, session)` using `broadcast_ternary_in_read` +
+  `session.select_read` + `into_typed_result` (preserves the compile-time
+  bool-condition contract; NOT folded into the generic
+  `TypedTensorSessionOpsExt<T>`).
+- `ConcreteEinsumPlan`'s seven backend-taking `execute*` methods (execute,
+  execute_typed, execute_read, execute_into, execute_typed_into,
+  execute_read_into, execute_read_into_accum).
+- The prelude re-exports only the session-explicit traits.
+
+### Renames (final plain names)
+
+- `TensorSessionOpsExt`: every `*_in` → the plain op name
+  (`add_in`→`add`, `convert_in`→`convert`, `matmul_in`→`matmul`, ...).
+- `TypedTensorSessionOpsExt<T>`: same rename.
+- `ConcreteEinsumPlan`: each `execute*_in_session` becomes the sole
+  unsuffixed `execute*` (the backend-taking forms are removed, so no
+  collision).
+- No receiver collisions: tensor-extension methods take `&Tensor`, backend
+  ops take `&mut self`.
+
+### Call-site migration (~58 sites + tests/examples/docs/skills)
+
+Mechanical rule, behavior-preserving:
+1. Single-op call `x.add(&y, &mut backend)` →
+   `backend.with_backend_session(|s| x.add(&y, s))?`; the closure's result
+   type is the op's `Result<Tensor>` (annotate when the closure contains
+   `?`-chains so error types are unambiguous).
+2. Consecutive session-capable ops on the same backend in one function are
+   grouped in ONE `with_backend_session`; grouping stops at helpers or
+   extension calls that still need `&mut backend` (avoid nested entry /
+   borrow conflicts).
+3. Reusable helpers that take `&mut TensorBackend` migrate to take
+   `&mut dyn BackendSession` where they are pure op sequences.
+4. Sites already inside a session call the ops directly.
+Diagnostics, README, docs/spec, tutorials, and shipped skills that reference
+the one-shot API migrate in the same PR. The Phase-1 one-shot-vs-`_in`
+parity tests become direct session tests against the independent expected
+values they already assert; the einsum mixed-session test gains independent
+expected values (drops the one-shot comparison arm).
+
+### Verification and gates (exact)
+
+- Workspace builds; full suites green (runtime, einsum, ad, cpu,
+  dependents).
+- **Scoped grep evidence** (exclude intentionally retained internal
+  spellings): no `\.(add|sub|...)_in\(` or `\.execute\w*_in_session\(` calls
+  on the core/plan surfaces; `PreparedOperation::execute_in_session`
+  (runtime capability.rs), `EagerTensor::from_tensor_in` (tenferro-ad), and
+  the einsum top-level/FFT/linalg/shape-packing surfaces are explicit
+  exclusions. Command: grep for `_in(`/`_in_session(` in tenferro-runtime,
+  tenferro-einsum (plan scope), and the migrated call sites, review each hit
+  against the exclusion list.
+- **Benches**: the one-shot arms are removed with the API; re-run the
+  remaining single-session arms (PR-B gate chain, Phase-1 chain, einsum
+  chain) and compare against the recorded Phase-1 medians (no regression;
+  the one-shot numbers are historical). Report pinned.
+- Public API change is the intended release boundary; documented in the PR
+  body/changelog.
+
+### Out of scope for Phase 2 (follow-up issues)
+
+- Einsum top-level traits, FFT, linalg, shape-packing one-shot surfaces.
+- GPU (CUDA/WebGPU) nested-entry enforcement.
+- Behavioral changes to any op (rename/removal only).

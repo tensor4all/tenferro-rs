@@ -16,8 +16,8 @@ mod runtime_foundations;
 mod runtime_preparation_api;
 #[path = "integration/runtime_public_api.rs"]
 mod runtime_public_api;
-#[path = "integration/session_in_ops.rs"]
-mod session_in_ops;
+#[path = "integration/session_ops.rs"]
+mod session_ops;
 #[path = "integration/trace_context.rs"]
 mod trace_context;
 #[path = "integration/typed_tensor_contract.rs"]
