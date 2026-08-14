@@ -403,3 +403,86 @@ outputs inside the iter.
   recommended repeated-execution API; trait variants are follow-up if the
   plan-level surface proves out).
 - Any change to the semantic/graph/AD einsum paths.
+
+## Migration specification (issue #1680, Phase 1: complete the `_in` surface)
+
+Extends the PR-B prototype to the FULL concrete op vocabulary, keeping the
+transitional `_in`/`_in_session` names (final plain-name rename + one-shot
+removal is Phase 2, a release-boundary breaking change). Additive and
+non-breaking.
+
+### Op inventory (PR-B already covers add/mul/exp/reduce_sum)
+
+**`TensorOpsExt` (dynamic `Tensor`) — 26 new ops**:
+- convert, cast (dtype)
+- sub, div, rem, pow, maximum, minimum (binary + broadcast)
+- neg, abs, sign, conj, log, expm1, log1p, sin, cos, tanh, sqrt, rsqrt
+  (unary)
+- compare (binary + broadcast, `CompareDir`)
+- where_select, clamp (ternary + broadcast)
+- matmul (`dot_general`)
+- reshape, transpose (structural)
+
+**`TypedTensorOpsExt<T>` (typed) — 24 new ops**: the dynamic set minus
+`convert`, `cast`, and `where_select` (typed `where_select` lives on the
+separate mask trait), plus `broadcast_in_dim`.
+
+### Per-family implementation (mirror the PR-B patterns exactly)
+
+- **Dynamic (owned)**: `broadcast_to_in` + `broadcast_binary_in` exist from
+  PR B; add `broadcast_ternary_in` for where_select/clamp. Each `_in` =
+  broadcast via the `_in` helpers + the session op, all on the borrowed
+  session; error mapping reuses `broadcast_error_to_validation`.
+- **Typed ternary**: add `broadcast_ternary_in_read` built from
+  `broadcast_shapes` + three `broadcast_to_in_read` calls (the existing typed
+  `broadcast_ternary_read` re-enters a session via `broadcast_to_read` and
+  must NOT be reused); typed `clamp_in` uses it before `session.clamp_read`.
+- **Unary**: `session.<op>` directly (`neg_in` → `session.neg`, `log_in` →
+  `session.log`, etc.).
+- **Structural**: `reshape_in` → `session.reshape`, `transpose_in` →
+  `session.transpose`.
+- **Dtype**: `convert_in` → `session.convert`, `cast_in` → `session.cast`
+  (the checked lattice / explicit projection live in the session ops).
+- **matmul**: `matmul_in` → `session.dot_general` with the standard
+  matmul config. **Cache-ownership decision (resolves the PR-B deferral)**:
+  the concrete surface uses the plain `with_backend_session`/borrowed-session
+  entry; `with_backend_session_cached` stays internal to the runtime
+  scheduler/eager execution paths. No `SessionCachedDot` in the concrete
+  surface.
+- **Typed (borrowed, read-based)**: mirror PR-B's typed path —
+  `reshape_read`/`broadcast_in_dim_read`/`<op>_read` + `into_typed_result`,
+  reusing the existing `ReadInput` and the typed manual broadcast-error
+  mapping.
+- **One-shot delegation**: every one-shot method becomes
+  `backend.with_backend_session(|s| self.<op>_in(...))`. Same accepted
+  validation-ordering change as PR B/C (invalid calls pay one entry before
+  the identical error; error-parity tested).
+
+### Tests
+
+- Per-family parity: `_in` == one-shot values (equal-shape + real broadcast
+  arms), structured-error parity, typed dtype conversion, session-counting
+  no-nested-entry (one entry for a chain using multiple new `_in` ops).
+- Runnable doctests (no ignore/no_run) on all new public methods.
+- One-shot delegation no-regression: the PR-B `session_chain` bench still
+  passes and the one-shot arms do not regress (re-measure; the delegation
+  can only reduce session entries).
+
+### Bench
+
+Extend `crates/tenferro-runtime/benches/session_chain.rs` with a second
+chain using the NEW ops — one-shot vs single-session arms, pinned reporting.
+Keep the PR-B chain (add/exp/mul/reduce_sum) as the gate bench. Exact chain
+(10 ops, shapes valid throughout): `[2,2]` f64 through
+sub→log→pow→maximum→neg (elementwise, operands chosen so values stay
+positive through `log`), reshape to `[4,1]`, transpose to `[1,4]`,
+scalar-broadcast clamp, matmul by a `[4,1]` rhs to `[1,1]`, then cast
+F64→F32. Validate a known result outside the timed region; `black_box`
+inputs/outputs inside.
+
+### Out of scope for Phase 1
+
+- One-shot trait removal and the `_in`→plain rename (Phase 2).
+- Top-level einsum-trait `_in_session` variants (plan-level surface suffices;
+  revisit only if Phase-1 callers need them).
+- GPU (CUDA/WebGPU) nested-entry enforcement (tracked gap from PR A).

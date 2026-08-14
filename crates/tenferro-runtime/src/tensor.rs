@@ -167,6 +167,136 @@ impl TensorSessionOpsExt for Tensor {
     fn reduce_sum_in(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
         session.reduce_sum(self, axes)
     }
+
+    fn convert_in(&self, to: DType, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.convert(self, to)
+    }
+
+    fn cast_in(&self, to: DType, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.cast(self, to)
+    }
+
+    fn sub_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.sub(&lhs, &rhs)
+    }
+
+    fn div_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.div(&lhs, &rhs)
+    }
+
+    fn rem_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.rem(&lhs, &rhs)
+    }
+
+    fn pow_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.pow(&lhs, &rhs)
+    }
+
+    fn maximum_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.maximum(&lhs, &rhs)
+    }
+
+    fn minimum_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.minimum(&lhs, &rhs)
+    }
+
+    fn neg_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.neg(self)
+    }
+
+    fn abs_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.abs(self)
+    }
+
+    fn sign_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.sign(self)
+    }
+
+    fn conj_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.conj(self)
+    }
+
+    fn log_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.log(self)
+    }
+
+    fn expm1_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.expm1(self)
+    }
+
+    fn log1p_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.log1p(self)
+    }
+
+    fn sin_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.sin(self)
+    }
+
+    fn cos_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.cos(self)
+    }
+
+    fn tanh_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.tanh(self)
+    }
+
+    fn sqrt_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.sqrt(self)
+    }
+
+    fn rsqrt_in(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.rsqrt(self)
+    }
+
+    fn compare_in(
+        &self,
+        rhs: &Tensor,
+        dir: CompareDir,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
+        session.compare(&lhs, &rhs, &dir)
+    }
+
+    fn where_select_in(
+        &self,
+        on_true: &Tensor,
+        on_false: &Tensor,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let (condition, on_true, on_false) =
+            broadcast_ternary_in(self, on_true, on_false, session)?;
+        session.select(&condition, &on_true, &on_false)
+    }
+
+    fn clamp_in(
+        &self,
+        lower: &Tensor,
+        upper: &Tensor,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let (input, lower, upper) = broadcast_ternary_in(self, lower, upper, session)?;
+        session.clamp(&input, &lower, &upper)
+    }
+
+    fn matmul_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let config = matmul_config_for_shapes("matmul", self.shape(), rhs.shape())?;
+        session.dot_general(self, rhs, &config)
+    }
+
+    fn reshape_in(&self, shape: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.reshape(self, shape)
+    }
+
+    fn transpose_in(&self, perm: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.transpose(self, perm)
+    }
 }
 
 /// Convert a tensor to a different dtype using the checked conversion lattice.
@@ -190,7 +320,7 @@ impl TensorSessionOpsExt for Tensor {
 /// dtype-promotion lattice, or when the backend does not support the requested
 /// conversion.
 fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    backend.with_backend_session(|exec| exec.convert(input, to))
+    backend.with_backend_session(|session| input.convert_in(to, session))
 }
 
 /// Cast a tensor to a different dtype using explicit dtype projection.
@@ -215,7 +345,7 @@ fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Resul
 /// Returns an error when the backend does not support the requested explicit
 /// dtype projection.
 fn cast(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    backend.with_backend_session(|exec| exec.cast(input, to))
+    backend.with_backend_session(|session| input.cast_in(to, session))
 }
 
 /// Elementwise addition with NumPy-style broadcasting.
@@ -248,7 +378,7 @@ macro_rules! unary_fn {
         #[doc = concat!("let y = x.", stringify!($name), "(&mut backend).unwrap();")]
         /// ```
         fn $name(input: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-            backend.with_backend_session(|exec| exec.$method(input))
+            backend.with_backend_session(|session| input.$method(session))
         }
     };
 }
@@ -268,46 +398,49 @@ macro_rules! binary_fn {
         #[doc = concat!("let z = x.", stringify!($name), "(&y, &mut backend).unwrap();")]
         /// ```
         fn $name(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-            let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-            backend.with_backend_session(|exec| exec.$method(&lhs, &rhs))
+            backend.with_backend_session(|session| lhs.$method(rhs, session))
         }
     };
 }
 
 binary_fn!(
     div,
-    div,
+    div_in,
     "Elementwise division with NumPy-style broadcasting."
 );
 binary_fn!(
     rem,
-    rem,
+    rem_in,
     "Elementwise remainder with NumPy-style broadcasting."
 );
-binary_fn!(pow, pow, "Elementwise power with NumPy-style broadcasting.");
+binary_fn!(
+    pow,
+    pow_in,
+    "Elementwise power with NumPy-style broadcasting."
+);
 binary_fn!(
     maximum,
-    maximum,
+    maximum_in,
     "Elementwise maximum with NumPy-style broadcasting."
 );
 binary_fn!(
     minimum,
-    minimum,
+    minimum_in,
     "Elementwise minimum with NumPy-style broadcasting."
 );
 
-unary_fn!(neg, neg, "Elementwise negation.");
-unary_fn!(abs, abs, "Elementwise absolute value.");
-unary_fn!(sign, sign, "Elementwise sign.");
-unary_fn!(conj, conj, "Elementwise complex conjugate.");
-unary_fn!(log, log, "Elementwise natural logarithm.");
-unary_fn!(sin, sin, "Elementwise sine.");
-unary_fn!(cos, cos, "Elementwise cosine.");
-unary_fn!(tanh, tanh, "Elementwise hyperbolic tangent.");
-unary_fn!(sqrt, sqrt, "Elementwise square root.");
-unary_fn!(rsqrt, rsqrt, "Elementwise reciprocal square root.");
-unary_fn!(expm1, expm1, "Elementwise `exp(x) - 1`.");
-unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
+unary_fn!(neg, neg_in, "Elementwise negation.");
+unary_fn!(abs, abs_in, "Elementwise absolute value.");
+unary_fn!(sign, sign_in, "Elementwise sign.");
+unary_fn!(conj, conj_in, "Elementwise complex conjugate.");
+unary_fn!(log, log_in, "Elementwise natural logarithm.");
+unary_fn!(sin, sin_in, "Elementwise sine.");
+unary_fn!(cos, cos_in, "Elementwise cosine.");
+unary_fn!(tanh, tanh_in, "Elementwise hyperbolic tangent.");
+unary_fn!(sqrt, sqrt_in, "Elementwise square root.");
+unary_fn!(rsqrt, rsqrt_in, "Elementwise reciprocal square root.");
+unary_fn!(expm1, expm1_in, "Elementwise `exp(x) - 1`.");
+unary_fn!(log1p, log1p_in, "Elementwise `log(1 + x)`.");
 
 /// Elementwise multiplication with NumPy-style broadcasting.
 ///
@@ -353,8 +486,7 @@ fn exp(input: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
 /// let z = x.sub(&y, &mut backend).unwrap();
 /// ```
 fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    backend.with_backend_session(|exec| exec.sub(&lhs, &rhs))
+    backend.with_backend_session(|session| lhs.sub_in(rhs, session))
 }
 
 /// Elementwise comparison with NumPy-style broadcasting.
@@ -378,8 +510,7 @@ fn compare(
     dir: CompareDir,
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
-    let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    backend.with_backend_session(|exec| exec.compare(&lhs, &rhs, &dir))
+    backend.with_backend_session(|session| lhs.compare_in(rhs, dir, session))
 }
 
 /// Select values from `on_true` or `on_false` using a condition tensor.
@@ -403,8 +534,7 @@ fn where_select(
     on_false: &Tensor,
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
-    let (condition, on_true, on_false) = broadcast_ternary(condition, on_true, on_false, backend)?;
-    backend.with_backend_session(|exec| exec.select(&condition, &on_true, &on_false))
+    backend.with_backend_session(|session| condition.where_select_in(on_true, on_false, session))
 }
 
 /// Clamp values elementwise between lower and upper bounds.
@@ -426,8 +556,7 @@ fn clamp(
     upper: &Tensor,
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
-    let (input, lower, upper) = broadcast_ternary(input, lower, upper, backend)?;
-    backend.with_backend_session(|exec| exec.clamp(&input, &lower, &upper))
+    backend.with_backend_session(|session| input.clamp_in(lower, upper, session))
 }
 
 /// Matrix multiplication helper for rank-2 tensors.
@@ -445,8 +574,7 @@ fn clamp(
 /// let c = a.matmul(&b, &mut backend).unwrap();
 /// ```
 fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    let config = matmul_config_for_shapes("matmul", a.shape(), b.shape())?;
-    backend.with_backend_session(|exec| exec.dot_general(a, b, &config))
+    backend.with_backend_session(|session| a.matmul_in(b, session))
 }
 
 /// Reshape a tensor without changing element order.
@@ -462,7 +590,7 @@ fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Result<Te
 /// assert_eq!(y.shape(), &[4]);
 /// ```
 fn reshape(input: &Tensor, shape: &[usize], backend: &mut impl TensorBackend) -> Result<Tensor> {
-    backend.with_backend_session(|exec| exec.reshape(input, shape))
+    backend.with_backend_session(|session| input.reshape_in(shape, session))
 }
 
 /// Permute tensor axes.
@@ -478,7 +606,7 @@ fn reshape(input: &Tensor, shape: &[usize], backend: &mut impl TensorBackend) ->
 /// assert_eq!(y.shape(), &[3, 2]);
 /// ```
 fn transpose(input: &Tensor, perm: &[usize], backend: &mut impl TensorBackend) -> Result<Tensor> {
-    backend.with_backend_session(|exec| exec.transpose(input, perm))
+    backend.with_backend_session(|session| input.transpose_in(perm, session))
 }
 
 /// Sum a tensor over one or more axes.
@@ -528,50 +656,19 @@ fn broadcast_binary_in(
     ))
 }
 
-fn broadcast_binary(
-    lhs: &Tensor,
-    rhs: &Tensor,
-    backend: &mut impl TensorBackend,
-) -> Result<(Tensor, Tensor)> {
-    let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
-    Ok((
-        broadcast_to(lhs, &shape, backend)?,
-        broadcast_to(rhs, &shape, backend)?,
-    ))
-}
-
-fn broadcast_ternary(
+fn broadcast_ternary_in(
     first: &Tensor,
     second: &Tensor,
     third: &Tensor,
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
 ) -> Result<(Tensor, Tensor, Tensor)> {
     let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
         .map_err(broadcast_error)?;
     Ok((
-        broadcast_to(first, &shape, backend)?,
-        broadcast_to(second, &shape, backend)?,
-        broadcast_to(third, &shape, backend)?,
+        broadcast_to_in(first, &shape, session)?,
+        broadcast_to_in(second, &shape, session)?,
+        broadcast_to_in(third, &shape, session)?,
     ))
-}
-
-fn broadcast_to(
-    input: &Tensor,
-    target_shape: &[usize],
-    backend: &mut impl TensorBackend,
-) -> Result<Tensor> {
-    let input_shape = input.shape();
-    if input_shape == target_shape {
-        return input.duplicate();
-    }
-
-    let plan = broadcast_input_plan(input_shape, target_shape).map_err(broadcast_error)?;
-    let source = if plan.source_shape == input_shape {
-        input.duplicate()?
-    } else {
-        backend.with_backend_session(|exec| exec.reshape(input, &plan.source_shape))?
-    };
-    backend.with_backend_session(|exec| exec.broadcast_in_dim(&source, target_shape, &plan.dims))
 }
 
 fn broadcast_error(err: tenferro_ops::broadcast::BroadcastError) -> Error {
