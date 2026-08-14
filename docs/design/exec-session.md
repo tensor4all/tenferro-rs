@@ -52,9 +52,15 @@ backend segment instead of one per instruction.
 `CpuContext` stores the requested CPU thread count and owns the Rayon pool used
 by tenferro-owned multi-threaded CPU work. `CpuContext::install` runs the
 closure on that owned pool for multi-thread contexts and inline for one-thread
-contexts. faer-backed kernels use `Par::Seq` for one thread and
-explicit `Par::rayon(n)` otherwise, so policy construction cannot inherit an
-unrelated ambient Rayon degree before joining the `CpuContext` pool.
+contexts — **with one exception**: `CpuContext::with_pinned_cpus` (used by the
+managed engine, `CpuEngine::new_managed`) constructs a real Rayon pool even
+for a single worker, so a pinned one-worker context also hands the closure off
+to a Rayon worker thread rather than running it inline. Consequently the
+closure given to `with_backend_session` may execute on a worker thread, and
+`Send` is a soundness requirement, not a convenience bound. faer-backed
+kernels use `Par::Seq` for one thread and explicit `Par::rayon(n)` otherwise,
+so policy construction cannot inherit an unrelated ambient Rayon degree before
+joining the `CpuContext` pool.
 
 ```rust
 impl TensorBackend for CpuBackend {
@@ -83,11 +89,13 @@ re-enter the pool.
 `CudaBackend` is the current CUDA GPU backend. It uses CubeCL/CubeCL-CUDA and
 runtime-loaded CUDA libraries from `crates/tenferro-gpu/src/cubecl/`.
 
-Today `CudaBackend` does not define a separate exec-session struct. It uses
-the default `TensorBackend::with_backend_session` adapter, so each `BackendSession`
-call forwards to the backend method. The backend method launches CubeCL kernels
-or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
-`CudaRuntime`.
+`CudaBackend` defines a dedicated exec-session struct, `CudaExecSession`, and
+overrides `BackendSessionHost::with_backend_session` to wrap the session and
+call `f` directly on the calling thread
+(`crates/tenferro-gpu/src/cubecl/exec_session.rs`). WebGPU similarly overrides
+with its own exec session (`crates/tenferro-gpu/src/webgpu/exec_session.rs`).
+The backend session methods launch CubeCL kernels or call the relevant
+cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's `CudaRuntime`.
 
 | CPU concept | CubeCL/CUDA concept |
 |---|---|
@@ -97,10 +105,10 @@ or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
 | faer/rayon CPU work | kernel launch on stream |
 | per-step session setup overhead | per-kernel launch/runtime dispatch overhead |
 
-Future CubeCL work may introduce a dedicated GPU exec session if there is a
-measurable benefit from binding temporary workspace, stream state, or device
-buffer pooling across an entire compiled program. That should extend
-`CudaBackend`; it should not add a separate `CudaBackend` type.
+GPU exec sessions run the closure on the calling thread, so `Send` is not
+needed for GPU; the trait still requires it because the CPU managed path does.
+Nested-entry detection for the GPU overrides is not yet wired to the portable
+debug guard (see `session-oriented-concrete-apis.md`).
 
 ### Default (no-op)
 
