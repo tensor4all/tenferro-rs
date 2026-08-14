@@ -274,3 +274,132 @@ already a workspace dependency), with an explicit `[[bench]]` target and
   representative large-op one-shot before/after pair for the no-regression
   criterion. Report pinned (idle core), matching the session floor
   methodology; the gate is evaluated on the pinned numbers.
+
+## Prototype specification (PR C: `ConcreteEinsumPlan::execute_in_session`)
+
+The first extension-crate example of the session-explicit concrete surface
+(design tier 1: concrete-only extensions composed from standard primitives —
+no `ExtensionOp`, `SemanticProgram`, runtime registration, or AD rules).
+
+### Key finding: the one-shot einsum already enters a session
+
+`ConcreteEinsumPlan::execute` etc. (`crates/tenferro-einsum/src/concrete.rs`,
+public plan type is **`ConcreteEinsumPlan`**) already do
+`backend.with_backend_session(|exec| eager_einsum_exec(exec, inputs,
+&self.tree))`; the eager core functions
+(`crates/tenferro-einsum/src/eager.rs::eager_einsum_exec*`) all take
+`&mut dyn BackendSession` already. `execute_*_in_session` is a thin
+addition: plan validation (pure — `validate_inputs`/`input_specs` need no
+backend) + the same core call on the caller's borrowed session — **no new
+session entry**. One-shot methods delegate to the `_in_session` variants.
+
+### Surface (complete signatures)
+
+`ConcreteEinsumPlan` gains a `_in_session` mirror of every one-shot execute
+method (all mechanical: validate + call the eager core on the borrowed
+session). Signatures mirror the one-shot forms with `backend: &mut B` →
+`session: &mut dyn BackendSession`:
+
+```rust
+pub fn execute_in_session<'a, I>(
+    &self, inputs: I, session: &mut dyn BackendSession,
+) -> Result<Tensor>
+where I: AsRef<[&'a Tensor]>;
+
+pub fn execute_typed_in_session<'a, T: TensorScalar, I>(
+    &self, inputs: I, session: &mut dyn BackendSession,
+) -> Result<TypedTensor<T>>
+where I: AsRef<[&'a TypedTensor<T>]>;
+
+pub fn execute_read_in_session<'a, I>(
+    &self, inputs: I, session: &mut dyn BackendSession,
+) -> Result<Tensor>
+where I: AsRef<[TensorRead<'a>]>;
+
+pub fn execute_into_in_session<'a, I>(
+    &self, inputs: I, session: &mut dyn BackendSession, out: TensorWrite<'_>,
+) -> Result<()>
+where I: AsRef<[&'a Tensor]>;
+
+pub fn execute_typed_into_in_session<'a, 'out, T: TensorScalar, I, O>(
+    &self, inputs: I, session: &mut dyn BackendSession, out: O,
+) -> Result<()>
+where I: AsRef<[&'a TypedTensor<T>]>, O: Into<TypedTensorWrite<'out, T>>;
+
+pub fn execute_read_into_in_session<'a, I>(
+    &self, inputs: I, session: &mut dyn BackendSession, out: TensorWrite<'_>,
+) -> Result<()>
+where I: AsRef<[TensorRead<'a>]>;
+
+pub fn execute_read_into_accum_in_session<'a, I>(
+    &self, inputs: I, session: &mut dyn BackendSession,
+    accumulation: DotGeneralAccumulation, out: TensorWrite<'_>,
+) -> Result<()>
+where I: AsRef<[TensorRead<'a>]>;
+```
+
+One-shot `execute*` become
+`backend.with_backend_session(|s| self.execute*_in_session(inputs, s))`.
+
+**Validation ordering change (accepted)**: the one-shot path currently
+validates before entering the session, so invalid calls are entry-free. After
+delegation, validation happens inside the session entry — an invalid call
+pays one entry (~3 µs) before returning the identical error. Accepted (error
+paths are exceptional); covered by an error-parity test asserting the same
+structured error both ways.
+
+**Naming**: `_in_session` matches the existing prepared-operation vocabulary
+(`crates/tenferro-runtime/src/runtime/capability.rs`:
+`prepared_operation.execute_in_session`); the runtime concrete noun ops use
+`_in` (PR B). Both are transitional; final canonical names drop the suffix.
+
+### Mixed chain (acceptance item)
+
+```rust
+backend.with_backend_session(|session| -> tenferro_einsum::Result<_> {
+    let x = plan.execute_in_session(&[&a, &b], session)?;   // einsum Result
+    let x = x.exp_in(session)?;                              // converts via From
+    Ok(x.reduce_sum_in(&[0], session)?)
+})
+```
+One entry covers standard ops + a prepared extension plan.
+
+### Bench (crates/tenferro-einsum/benches/, `[[bench]] harness=false`)
+
+Exact workload: a prepared plan for `"ij,jk->ik"` on 8×8 f64 column-major
+inputs, executed 10 times per iter (10 calls). Backend: one-worker
+`CpuBackend::with_threads(1)` for all arms. Correctness: validate one result
+outside the timed region (shape `[8,8]`, finite). `black_box` inputs and
+outputs inside the iter.
+
+- **Arm A (one-shot)**: 10 × `plan.execute([a, b], backend)` — 10 session
+  entries.
+- **Arm B (in-session)**: the same 10 calls inside one
+  `with_backend_session(|s| ... execute_in_session(...))` — 1 entry.
+- **Arm C (mixed)**: `execute_in_session` + `exp_in` + `reduce_sum_in` ×10
+  inside one session vs the one-shot equivalents.
+- **Reported**: pinned (idle core) medians for A/B/C; the A/B ratio and the
+  mixed-chain ratio; a baseline/post-delegation pair for the one-shot arms.
+  The PR-B trivial-chain ≥2 gate is a separate acceptance; for einsum the
+  recorded evidence is the measured ratios and the delegation baseline, not a
+  predicted number.
+
+### Acceptance (explicit before merge)
+
+- Runnable doctests (no `ignore`/`no_run`) for all seven `_in_session`
+  methods.
+- Parity tests: `_in_session` results == one-shot results (values) for
+  execute/execute_read/execute_typed; structured-error parity for invalid
+  inputs (both orderings); typed dtype conversion; `execute_into`/`accum`
+  output validation; and a session-counting test proving `_in_session` adds
+  no nested entry (one entry for a mixed einsum + `_in` chain).
+
+### Out of scope for PR C
+
+- Native-kernel extension capabilities (FFT, decompositions, sparse — design
+  tier 2) and runtime-integrated extension execution on the borrowed session
+  (tier 3).
+- Top-level `einsum()`-trait `_in_session` variants (the prepared plan is the
+  recommended repeated-execution API; trait variants are follow-up if the
+  plan-level surface proves out).
+- Any change to the semantic/graph/AD einsum paths.

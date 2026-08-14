@@ -1,8 +1,9 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    ContractionScalar, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
+    BackendSessionHost, ContractionScalar, DType, DotGeneralAccumulation, Tensor, TensorRead,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TypedTensorWrite,
 };
 
 use crate::{
@@ -683,4 +684,330 @@ fn concrete_einsum_typed_result_reports_defensive_dtype_mismatch() {
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
+}
+
+// ---------------------------------------------------------------------------
+// `_in_session` surface parity with the one-shot execute methods
+// ---------------------------------------------------------------------------
+
+fn assert_same_error(one_shot: &Error, in_session: &Error) {
+    assert_eq!(
+        format!("{in_session:?}"),
+        format!("{one_shot:?}"),
+        "in-session error must match the one-shot error structurally"
+    );
+}
+
+fn f64_plan_fixture() -> (Tensor, Tensor, ConcreteEinsumPlan) {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    (lhs, rhs, plan)
+}
+
+#[test]
+fn concrete_einsum_plan_in_session_values_match_one_shot() {
+    let (lhs, rhs, plan) = f64_plan_fixture();
+    let mut backend = CpuBackend::new();
+
+    let one_shot = plan.execute([&lhs, &rhs], &mut backend).unwrap();
+    let in_session = backend
+        .with_backend_session(|session| plan.execute_in_session([&lhs, &rhs], session))
+        .unwrap();
+    assert_f64_tensor(&in_session, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(
+        one_shot.as_slice::<f64>().unwrap(),
+        in_session.as_slice::<f64>().unwrap()
+    );
+
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let one_shot = plan.execute_read(reads.clone(), &mut backend).unwrap();
+    let in_session = backend
+        .with_backend_session(|session| plan.execute_read_in_session(reads.clone(), session))
+        .unwrap();
+    assert_f64_tensor(&in_session, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(
+        one_shot.as_slice::<f64>().unwrap(),
+        in_session.as_slice::<f64>().unwrap()
+    );
+
+    let typed_lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_plan =
+        ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let one_shot = typed_plan
+        .execute_typed([&typed_lhs, &typed_rhs], &mut backend)
+        .unwrap();
+    let in_session = backend
+        .with_backend_session(|session| {
+            typed_plan.execute_typed_in_session([&typed_lhs, &typed_rhs], session)
+        })
+        .unwrap();
+    assert_eq!(in_session.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(one_shot.as_slice().unwrap(), in_session.as_slice().unwrap());
+}
+
+#[test]
+fn concrete_einsum_plan_in_session_errors_match_one_shot() {
+    let (lhs, _rhs, plan) = f64_plan_fixture();
+    let wrong_shape = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let wrong_dtype = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f32; 6]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let one_shot = plan
+        .execute([&lhs, &wrong_shape], &mut backend)
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| plan.execute_in_session([&lhs, &wrong_shape], session))
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+    assert!(matches!(
+        in_session,
+        Error::Validation {
+            op: "ConcreteEinsumPlan::execute",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        }
+    ));
+
+    let one_shot = plan
+        .execute([&lhs, &wrong_dtype], &mut backend)
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| plan.execute_in_session([&lhs, &wrong_dtype], session))
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+    assert!(matches!(
+        in_session,
+        Error::Tensor(tenferro_tensor::Error::Validation {
+            op: "ConcreteEinsumPlan::execute",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
+    ));
+
+    let one_shot = plan.execute([&lhs], &mut backend).unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| plan.execute_in_session([&lhs], session))
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+    assert!(matches!(
+        in_session,
+        Error::Validation {
+            op: "ConcreteEinsumPlan::execute",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concrete_einsum_plan_in_session_typed_dtype_conversion_matches_one_shot() {
+    let typed_lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let mut backend = CpuBackend::new();
+
+    let one_shot = plan
+        .execute_typed([&typed_lhs, &typed_rhs], &mut backend)
+        .unwrap();
+    let in_session = backend
+        .with_backend_session(|session| {
+            plan.execute_typed_in_session([&typed_lhs, &typed_rhs], session)
+        })
+        .unwrap();
+    assert_eq!(in_session.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(one_shot.as_slice().unwrap(), in_session.as_slice().unwrap());
+
+    // Requesting a scalar type different from the prepared dtype must fail
+    // identically in both forms (validate_inputs dtype contract).
+    let f32_lhs = TypedTensor::<f32>::from_vec_col_major(vec![2, 3], vec![1.0_f32; 6]).unwrap();
+    let f32_rhs = TypedTensor::<f32>::from_vec_col_major(vec![3, 2], vec![1.0_f32; 6]).unwrap();
+    let one_shot = plan
+        .execute_typed([&f32_lhs, &f32_rhs], &mut backend)
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| {
+            plan.execute_typed_in_session([&f32_lhs, &f32_rhs], session)
+        })
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+    assert!(matches!(
+        in_session,
+        Error::Tensor(tenferro_tensor::Error::Validation {
+            op: "ConcreteEinsumPlan::execute",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
+    ));
+}
+
+#[test]
+fn concrete_einsum_plan_in_session_into_output_validation_matches_one_shot() {
+    let (lhs, rhs, plan) = f64_plan_fixture();
+    let mut backend = CpuBackend::new();
+
+    // execute_into: incompatible output shape.
+    let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
+    let one_shot = plan
+        .execute_into(
+            [&lhs, &rhs],
+            &mut backend,
+            TensorWrite::from_tensor(&mut wrong_shape),
+        )
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| {
+            plan.execute_into_in_session(
+                [&lhs, &rhs],
+                session,
+                TensorWrite::from_tensor(&mut wrong_shape),
+            )
+        })
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+    assert!(matches!(
+        in_session,
+        Error::Validation {
+            op: "ConcreteEinsumPlan::execute",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        }
+    ));
+
+    // execute_read_into: incompatible output dtype.
+    let mut wrong_dtype_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
+    let one_shot = plan
+        .execute_read_into(
+            [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+            &mut backend,
+            TensorWrite::from_tensor(&mut wrong_dtype_out),
+        )
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| {
+            plan.execute_read_into_in_session(
+                [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                session,
+                TensorWrite::from_tensor(&mut wrong_dtype_out),
+            )
+        })
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+
+    // execute_typed_into: incompatible output shape.
+    let typed_lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_plan =
+        ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![0.0; 3]).unwrap();
+    let one_shot = typed_plan
+        .execute_typed_into([&typed_lhs, &typed_rhs], &mut backend, &mut typed_out)
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| {
+            typed_plan.execute_typed_into_in_session(
+                [&typed_lhs, &typed_rhs],
+                session,
+                &mut typed_out,
+            )
+        })
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+
+    // execute_read_into_accum: incompatible output shape.
+    let mut accum_out = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
+    let accumulation = DotGeneralAccumulation::add_to(DType::F64).unwrap();
+    let one_shot = plan
+        .execute_read_into_accum(
+            [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+            &mut backend,
+            accumulation,
+            TensorWrite::from_tensor(&mut accum_out),
+        )
+        .unwrap_err();
+    let in_session = backend
+        .with_backend_session(|session| {
+            plan.execute_read_into_accum_in_session(
+                [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                session,
+                accumulation,
+                TensorWrite::from_tensor(&mut accum_out),
+            )
+        })
+        .unwrap_err();
+    assert_same_error(&one_shot, &in_session);
+
+    // Valid into execution parity (values).
+    let mut out_a = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
+    let mut out_b = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
+    plan.execute_into(
+        [&lhs, &rhs],
+        &mut backend,
+        TensorWrite::from_tensor(&mut out_a),
+    )
+    .unwrap();
+    backend
+        .with_backend_session(|session| {
+            plan.execute_into_in_session(
+                [&lhs, &rhs],
+                session,
+                TensorWrite::from_tensor(&mut out_b),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        out_a.as_slice::<f64>().unwrap(),
+        out_b.as_slice::<f64>().unwrap()
+    );
+    assert_eq!(out_b.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+/// A non-`Send` output adapter: `PhantomData<Rc<()>>` makes the type `!Send`
+/// (a `Cell` would not — `Cell<T>` is `Send` but `!Sync`). Calling
+/// `ConcreteEinsumPlan::execute_typed_into` with this type only compiles
+/// because the one-shot converts `out` to `TypedTensorWrite` before the
+/// backend session closure, so `O` itself never needs `Send`.
+struct NonSendIntoWrite<'a, T> {
+    write: TypedTensorWrite<'a, T>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl<'a, T> From<NonSendIntoWrite<'a, T>> for TypedTensorWrite<'a, T> {
+    fn from(adapter: NonSendIntoWrite<'a, T>) -> Self {
+        adapter.write
+    }
+}
+
+#[test]
+fn concrete_einsum_plan_execute_typed_into_accepts_non_send_adapter() {
+    let typed_lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+
+    let mut backend = CpuBackend::new();
+    let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap();
+    plan.execute_typed_into(
+        [&typed_lhs, &typed_rhs],
+        &mut backend,
+        NonSendIntoWrite {
+            write: TypedTensorWrite::from_tensor(&mut out),
+            _not_send: std::marker::PhantomData,
+        },
+    )
+    .unwrap();
+    assert_eq!(out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 }

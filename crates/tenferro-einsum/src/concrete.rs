@@ -1,8 +1,8 @@
 //! Public concrete tensor einsum extension API.
 
 use tenferro_tensor::{
-    DType, DotGeneralAccumulation, Tensor, TensorBackend, TensorRead, TensorScalar, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorWrite,
+    BackendSession, DType, DotGeneralAccumulation, Tensor, TensorBackend, TensorRead, TensorScalar,
+    TensorWrite, TypedTensor, TypedTensorView, TypedTensorWrite,
 };
 
 use crate::eager::{
@@ -974,27 +974,73 @@ impl ConcreteEinsumPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] when inputs differ from the prepared
-    /// rank, shape, or dtype contract, or [`Error::Tensor`] for a typed backend
-    /// failure.
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
+    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
+    /// for a typed backend failure.
     pub fn execute<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
     where
         I: AsRef<[&'a Tensor]>,
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend.with_backend_session(|session| self.execute_in_session(inputs, session))
+    }
+
+    /// Execute this plan on dtype-erased concrete tensor inputs inside a
+    /// borrowed backend session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, Tensor};
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend
+    ///     .with_backend_session(|session| plan.execute_in_session([&lhs, &rhs], session))?;
+    /// assert_eq!(out.shape(), &[2, 4]);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
+    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
+    /// for a typed backend failure.
+    pub fn execute_in_session<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor>
+    where
+        I: AsRef<[&'a Tensor]>,
+    {
+        let inputs = inputs.as_ref();
         self.validate_inputs(&input_specs(inputs), PLAN_EXECUTE_OP)?;
-        backend
-            .with_backend_session(|exec| eager_einsum_exec(exec, inputs, &self.tree))
-            .map_err(Error::from)
+        eager_einsum_exec(session, inputs, &self.tree).map_err(Error::from)
     }
 
     /// Execute this plan on typed concrete tensor inputs.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] when inputs differ from the prepared rank
-    /// or shape contract, or [`Error::Tensor`] for a typed backend failure.
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
+    /// prepared dtype differs from `T` or the eager result dtype, or
+    /// [`Error::Tensor`] for a typed backend failure.
     pub fn execute_typed<'a, T, I, B>(&self, inputs: I, backend: &mut B) -> Result<TypedTensor<T>>
     where
         T: TensorScalar,
@@ -1002,10 +1048,53 @@ impl ConcreteEinsumPlan {
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend.with_backend_session(|session| self.execute_typed_in_session(inputs, session))
+    }
+
+    /// Execute this plan on typed concrete tensor inputs inside a borrowed
+    /// backend session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    ///
+    /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+    /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend
+    ///     .with_backend_session(|session| plan.execute_typed_in_session([&lhs, &rhs], session))?;
+    /// assert_eq!(out.shape(), &[2, 4]);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
+    /// prepared dtype differs from `T` or the eager result dtype, or
+    /// [`Error::Tensor`] for a typed backend failure.
+    pub fn execute_typed_in_session<'a, T, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>>
+    where
+        T: TensorScalar,
+        I: AsRef<[&'a TypedTensor<T>]>,
+    {
+        let inputs = inputs.as_ref();
         self.validate_inputs(&typed_input_specs(inputs), PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        let result = backend
-            .with_backend_session(|exec| eager_einsum_exec_read(exec, &reads, &self.tree))?;
+        let result = eager_einsum_exec_read(session, &reads, &self.tree)?;
         into_typed_result(result, PLAN_EXECUTE_OP)
     }
 
@@ -1013,26 +1102,75 @@ impl ConcreteEinsumPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] when inputs differ from the prepared
-    /// rank, shape, or dtype contract, or [`Error::Tensor`] for a typed backend
-    /// failure.
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
+    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
+    /// for a typed backend failure.
     pub fn execute_read<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
     where
         I: AsRef<[TensorRead<'a>]>,
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend.with_backend_session(|session| self.execute_read_in_session(inputs, session))
+    }
+
+    /// Execute this plan on read-only tensor inputs inside a borrowed backend
+    /// session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare_read(
+    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+    ///     "ij,jk->ik",
+    /// )?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    /// let out = backend
+    ///     .with_backend_session(|session| plan.execute_read_in_session(reads, session))?;
+    /// assert_eq!(out.shape(), &[2, 4]);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
+    /// shape, or input-count contract, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
+    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
+    /// for a typed backend failure.
+    pub fn execute_read_in_session<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
         self.validate_inputs(&read_input_specs(inputs), PLAN_EXECUTE_OP)?;
-        backend
-            .with_backend_session(|exec| eager_einsum_exec_read(exec, inputs, &self.tree))
-            .map_err(Error::from)
+        eager_einsum_exec_read(session, inputs, &self.tree).map_err(Error::from)
     }
 
     /// Execute this plan on dtype-erased concrete tensor inputs into caller-provided output.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_into<'a, I, B>(
         &self,
@@ -1045,6 +1183,55 @@ impl ConcreteEinsumPlan {
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend.with_backend_session(|session| self.execute_into_in_session(inputs, session, out))
+    }
+
+    /// Execute this plan on dtype-erased concrete tensor inputs into
+    /// caller-provided output inside a borrowed backend session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorWrite};
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
+    /// backend.with_backend_session(|session| {
+    ///     plan.execute_into_in_session(
+    ///         [&lhs, &rhs],
+    ///         session,
+    ///         TensorWrite::from_tensor(&mut out),
+    ///     )
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
+    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
+    pub fn execute_into_in_session<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()>
+    where
+        I: AsRef<[&'a Tensor]>,
+    {
+        let inputs = inputs.as_ref();
         let specs = input_specs(inputs);
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
@@ -1052,17 +1239,18 @@ impl ConcreteEinsumPlan {
             .iter()
             .map(|tensor| TensorRead::from_tensor(tensor))
             .collect();
-        backend
-            .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &self.tree, out))
-            .map_err(Error::from)
+        eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
     }
 
     /// Execute this plan on typed concrete tensor inputs into caller-provided output.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] for input or output rank or shape
-    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
+    /// prepared dtype differs from `T` or the output dtype, or
+    /// [`Error::Tensor`] for a typed backend failure.
     pub fn execute_typed_into<'a, 'out, T, I, B, O>(
         &self,
         inputs: I,
@@ -1076,21 +1264,72 @@ impl ConcreteEinsumPlan {
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let inputs = inputs.as_ref();
+        let out = out.into();
+        backend.with_backend_session(|session| {
+            self.execute_typed_into_in_session(inputs, session, out)
+        })
+    }
+
+    /// Execute this plan on typed concrete tensor inputs into caller-provided
+    /// output inside a borrowed backend session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    ///
+    /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+    /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 4], vec![0.0; 8]).unwrap();
+    /// backend.with_backend_session(|session| {
+    ///     plan.execute_typed_into_in_session([&lhs, &rhs], session, &mut out)
+    /// })?;
+    /// assert_eq!(out.as_slice()?, vec![3.0_f64; 8].as_slice());
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
+    /// prepared dtype differs from `T` or the output dtype, or
+    /// [`Error::Tensor`] for a typed backend failure.
+    pub fn execute_typed_into_in_session<'a, 'out, T, I, O>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        T: TensorScalar,
+        I: AsRef<[&'a TypedTensor<T>]>,
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        let inputs = inputs.as_ref();
         let specs = typed_input_specs(inputs);
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         let out = out.into().into_tensor_write();
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        backend
-            .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &self.tree, out))
-            .map_err(Error::from)
+        eager_einsum_exec_read_into(session, &reads, &self.tree, out).map_err(Error::from)
     }
 
     /// Execute this plan on read-only tensor inputs into caller-provided output.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_read_into<'a, I, B>(
         &self,
@@ -1103,12 +1342,60 @@ impl ConcreteEinsumPlan {
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend
+            .with_backend_session(|session| self.execute_read_into_in_session(inputs, session, out))
+    }
+
+    /// Execute this plan on read-only tensor inputs into caller-provided output
+    /// inside a borrowed backend session.
+    ///
+    /// Validation and the contraction itself run in the caller's `session`;
+    /// this method never enters a new backend session.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorWrite};
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// let plan = ConcreteEinsumPlan::prepare_read(
+    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+    ///     "ij,jk->ik",
+    /// )?;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
+    /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    /// backend.with_backend_session(|session| {
+    ///     plan.execute_read_into_in_session(reads, session, TensorWrite::from_tensor(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
+    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
+    pub fn execute_read_into_in_session<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
         let specs = read_input_specs(inputs);
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
-        backend
-            .with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &self.tree, out))
-            .map_err(Error::from)
+        eager_einsum_exec_read_into(session, inputs, &self.tree, out).map_err(Error::from)
     }
 
     /// Execute this plan on read-only inputs with scaled output accumulation.
@@ -1142,7 +1429,9 @@ impl ConcreteEinsumPlan {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
     /// [`Error::Tensor`] for a typed backend failure.
     pub fn execute_read_into_accum<'a, I, B>(
@@ -1157,13 +1446,65 @@ impl ConcreteEinsumPlan {
         B: TensorBackend,
     {
         let inputs = inputs.as_ref();
+        backend.with_backend_session(|session| {
+            self.execute_read_into_accum_in_session(inputs, session, accumulation, out)
+        })
+    }
+
+    /// Execute this plan on read-only inputs with scaled output accumulation
+    /// inside a borrowed backend session.
+    ///
+    /// `accumulation` follows the dot-general contract:
+    /// `out = alpha * einsum(inputs) + beta * out`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_einsum::ConcreteEinsumPlan;
+    /// use tenferro_tensor::{
+    ///     BackendSessionHost, DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
+    /// };
+    ///
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
+    /// let mut out = Tensor::from_vec_col_major(vec![], vec![1.0_f64])?;
+    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
+    /// let mut backend = CpuBackend::new();
+    /// backend.with_backend_session(|session| {
+    ///     plan.execute_read_into_accum_in_session(
+    ///         [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+    ///         session,
+    ///         DotGeneralAccumulation::add_to(DType::F64)?,
+    ///         TensorWrite::from_tensor(&mut out),
+    ///     )
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
+    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or
+    /// input-count contract violations, [`Error::Tensor`] with a
+    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
+    /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
+    /// [`Error::Tensor`] for a typed backend failure.
+    pub fn execute_read_into_accum_in_session<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn BackendSession,
+        accumulation: DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> Result<()>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
         let specs = read_input_specs(inputs);
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
-        backend
-            .with_backend_session(|exec| {
-                eager_einsum_exec_read_into_accum(exec, inputs, &self.tree, accumulation, out)
-            })
+        eager_einsum_exec_read_into_accum(session, inputs, &self.tree, accumulation, out)
             .map_err(Error::from)
     }
 
