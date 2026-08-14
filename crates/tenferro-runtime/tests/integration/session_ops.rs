@@ -1,19 +1,16 @@
-//! Parity and single-session-entry tests for the `_in` session surfaces.
+//! Value, error, and single-session-entry tests for the session-explicit
+//! concrete-ops surface.
 //!
 //! Covers, per surface (dynamic [`Tensor`] and typed [`TypedTensor`]):
-//! equal-shape ops, real broadcast, invalid-broadcast structured-error parity
-//! with the one-shot path, dtype parity, typed output dtype validation
-//! (`into_typed_result`), and a deterministic proof that an `_in` chain
-//! executes inside exactly one backend session entry while the one-shot
-//! counterpart enters one session per op.
+//! equal-shape ops, real broadcast, invalid-broadcast structured errors, dtype
+//! conversion, typed output dtype validation (`into_typed_result`), and a
+//! deterministic proof that a session chain executes inside exactly one
+//! backend session entry.
 
 use std::cell::Cell;
 
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{
-    Tensor, TensorOpsExt, TensorSessionOpsExt, TypedTensor, TypedTensorOpsExt,
-    TypedTensorSessionOpsExt,
-};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::{
     BackendCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot,
     TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
@@ -84,28 +81,18 @@ fn assert_rank_mismatch_error(error: Error) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_in_dynamic_equal_shape_matches_one_shot() {
+fn session_dynamic_equal_shape_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.5_f64; 8];
     let b_values = vec![2.25_f64; 8];
     let a = Tensor::from_vec_col_major(vec![8], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&b, &mut backend)
-        .unwrap()
-        .reduce_sum(&[0], &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        let x = a.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&b, s).unwrap();
-        x.reduce_sum_in(&[0], s).unwrap()
+        let x = a.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&b, s).unwrap();
+        x.reduce_sum(&[0], s).unwrap()
     });
 
     // Independent value check in plain scalar math: the chain computes
@@ -117,37 +104,21 @@ fn session_in_dynamic_equal_shape_matches_one_shot() {
         .map(|(&x, &y)| (x + y).exp() * y)
         .sum();
     assert_close(session.as_slice::<f64>().unwrap(), &[expected]);
-
-    assert_eq!(session.shape(), one_shot.shape());
-    assert_close(
-        session.as_slice::<f64>().unwrap(),
-        one_shot.as_slice::<f64>().unwrap(),
-    );
 }
 
 #[test]
-fn session_in_dynamic_broadcast_matches_one_shot() {
+fn session_dynamic_broadcast_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.0_f64];
     let b_values = vec![2.0_f64; 8];
     let a = Tensor::from_vec_col_major(vec![1], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&a, &mut backend)
-        .unwrap()
-        .reduce_sum(&[0], &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        let x = a.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&a, s).unwrap();
-        x.reduce_sum_in(&[0], s).unwrap()
+        let x = a.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&a, s).unwrap();
+        x.reduce_sum(&[0], s).unwrap()
     });
 
     // Independent value check: the broadcast chain computes
@@ -157,53 +128,38 @@ fn session_in_dynamic_broadcast_matches_one_shot() {
         .map(|&y| (a_values[0] + y).exp() * a_values[0])
         .sum();
     assert_close(session.as_slice::<f64>().unwrap(), &[expected]);
-
-    assert_eq!(session.shape(), one_shot.shape());
-    assert_close(
-        session.as_slice::<f64>().unwrap(),
-        one_shot.as_slice::<f64>().unwrap(),
-    );
 }
 
 #[test]
-fn session_in_dynamic_invalid_broadcast_matches_one_shot_error() {
+fn session_dynamic_invalid_broadcast_error() {
     let mut backend = CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
 
-    let one_shot_error = a.add(&b, &mut backend).unwrap_err();
-    let session_error = backend
-        .with_backend_session(|s| a.add_in(&b, s))
-        .unwrap_err();
+    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
 
-    assert_incompatible_shapes_error(one_shot_error);
     assert_incompatible_shapes_error(session_error);
 }
 
 #[test]
-fn session_in_dynamic_dtype_error_matches_one_shot() {
+fn session_dynamic_dtype_error() {
     let mut backend = CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![1_i32; 2]).unwrap();
 
-    let one_shot_error = a.add(&b, &mut backend).unwrap_err();
-    let session_error = backend
-        .with_backend_session(|s| a.add_in(&b, s))
-        .unwrap_err();
+    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
 
     // Assert the full payload (op name, source lhs dtype as expected, rhs
     // dtype as actual) for both paths, not just the error kind.
-    for error in [one_shot_error, session_error] {
-        let Error::Validation {
-            op: "add",
-            source: ValidationError::DTypeMismatch { expected, actual },
-        } = &error
-        else {
-            panic!("expected add DTypeMismatch, got {error:?}");
-        };
-        assert_eq!(*expected, tenferro_tensor::core::DType::F64);
-        assert_eq!(*actual, tenferro_tensor::core::DType::I32);
-    }
+    let Error::Validation {
+        op: "add",
+        source: ValidationError::DTypeMismatch { expected, actual },
+    } = &session_error
+    else {
+        panic!("expected add DTypeMismatch, got {session_error:?}");
+    };
+    assert_eq!(*expected, tenferro_tensor::core::DType::F64);
+    assert_eq!(*actual, tenferro_tensor::core::DType::I32);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,28 +167,18 @@ fn session_in_dynamic_dtype_error_matches_one_shot() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_in_typed_equal_shape_matches_one_shot() {
+fn session_typed_equal_shape_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.5_f64; 8];
     let b_values = vec![2.25_f64; 8];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![8], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&b, &mut backend)
-        .unwrap()
-        .reduce_sum(&[0], &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        let x = a.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&b, s).unwrap();
-        x.reduce_sum_in(&[0], s).unwrap()
+        let x = a.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&b, s).unwrap();
+        x.reduce_sum(&[0], s).unwrap()
     });
 
     // Independent value check in plain scalar math (see the dynamic twin).
@@ -242,34 +188,21 @@ fn session_in_typed_equal_shape_matches_one_shot() {
         .map(|(&x, &y)| (x + y).exp() * y)
         .sum();
     assert_close(session.host_data().unwrap(), &[expected]);
-
-    assert_eq!(session.shape(), one_shot.shape());
-    assert_close(session.host_data().unwrap(), one_shot.host_data().unwrap());
 }
 
 #[test]
-fn session_in_typed_broadcast_matches_one_shot() {
+fn session_typed_broadcast_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.0_f64];
     let b_values = vec![2.0_f64; 8];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![1], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&a, &mut backend)
-        .unwrap()
-        .reduce_sum(&[0], &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        let x = a.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&a, s).unwrap();
-        x.reduce_sum_in(&[0], s).unwrap()
+        let x = a.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&a, s).unwrap();
+        x.reduce_sum(&[0], s).unwrap()
     });
 
     // Independent value check: sum_i exp(a_0 + b_i) * a_0 in plain scalar math.
@@ -278,23 +211,16 @@ fn session_in_typed_broadcast_matches_one_shot() {
         .map(|&y| (a_values[0] + y).exp() * a_values[0])
         .sum();
     assert_close(session.host_data().unwrap(), &[expected]);
-
-    assert_eq!(session.shape(), one_shot.shape());
-    assert_close(session.host_data().unwrap(), one_shot.host_data().unwrap());
 }
 
 #[test]
-fn session_in_typed_invalid_broadcast_matches_one_shot_error() {
+fn session_typed_invalid_broadcast_error() {
     let mut backend = CpuBackend::new();
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0; 2]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0; 3]).unwrap();
 
-    let one_shot_error = a.add(&b, &mut backend).unwrap_err();
-    let session_error = backend
-        .with_backend_session(|s| a.add_in(&b, s))
-        .unwrap_err();
+    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
 
-    assert_incompatible_shapes_error(one_shot_error);
     assert_incompatible_shapes_error(session_error);
 }
 
@@ -309,100 +235,90 @@ fn session_in_typed_validates_output_dtype() {
     let errors = [
         (
             "add",
-            backend
-                .with_backend_session(|s| a.add_in(&a, s))
-                .unwrap_err(),
+            backend.with_backend_session(|s| a.add(&a, s)).unwrap_err(),
         ),
         (
             "mul",
-            backend
-                .with_backend_session(|s| a.mul_in(&a, s))
-                .unwrap_err(),
+            backend.with_backend_session(|s| a.mul(&a, s)).unwrap_err(),
         ),
         (
             "exp",
-            backend.with_backend_session(|s| a.exp_in(s)).unwrap_err(),
+            backend.with_backend_session(|s| a.exp(s)).unwrap_err(),
         ),
         (
             "reduce_sum",
             backend
-                .with_backend_session(|s| a.reduce_sum_in(&[0], s))
+                .with_backend_session(|s| a.reduce_sum(&[0], s))
                 .unwrap_err(),
         ),
         (
             "sub",
-            backend
-                .with_backend_session(|s| a.sub_in(&a, s))
-                .unwrap_err(),
+            backend.with_backend_session(|s| a.sub(&a, s)).unwrap_err(),
         ),
         (
             "div",
-            backend
-                .with_backend_session(|s| a.div_in(&a, s))
-                .unwrap_err(),
+            backend.with_backend_session(|s| a.div(&a, s)).unwrap_err(),
         ),
         (
             "pow",
-            backend
-                .with_backend_session(|s| a.pow_in(&a, s))
-                .unwrap_err(),
+            backend.with_backend_session(|s| a.pow(&a, s)).unwrap_err(),
         ),
         (
             "maximum",
             backend
-                .with_backend_session(|s| a.maximum_in(&a, s))
+                .with_backend_session(|s| a.maximum(&a, s))
                 .unwrap_err(),
         ),
         (
             "neg",
-            backend.with_backend_session(|s| a.neg_in(s)).unwrap_err(),
+            backend.with_backend_session(|s| a.neg(s)).unwrap_err(),
         ),
         (
             "abs",
-            backend.with_backend_session(|s| a.abs_in(s)).unwrap_err(),
+            backend.with_backend_session(|s| a.abs(s)).unwrap_err(),
         ),
         (
             "log",
-            backend.with_backend_session(|s| a.log_in(s)).unwrap_err(),
+            backend.with_backend_session(|s| a.log(s)).unwrap_err(),
         ),
         (
             "sqrt",
-            backend.with_backend_session(|s| a.sqrt_in(s)).unwrap_err(),
+            backend.with_backend_session(|s| a.sqrt(s)).unwrap_err(),
         ),
         (
             "clamp",
             backend
-                .with_backend_session(|s| a.clamp_in(&lower, &upper, s))
+                .with_backend_session(|s| a.clamp(&lower, &upper, s))
                 .unwrap_err(),
         ),
         (
             "matmul",
             backend
-                .with_backend_session(|s| matrix.matmul_in(&matrix, s))
+                .with_backend_session(|s| matrix.matmul(&matrix, s))
                 .unwrap_err(),
         ),
         (
             "reshape",
             backend
-                .with_backend_session(|s| matrix.reshape_in(&[4], s))
+                .with_backend_session(|s| matrix.reshape(&[4], s))
                 .unwrap_err(),
         ),
         (
             "transpose",
             backend
-                .with_backend_session(|s| matrix.transpose_in(&[1, 0], s))
+                .with_backend_session(|s| matrix.transpose(&[1, 0], s))
                 .unwrap_err(),
         ),
         (
             "broadcast_in_dim",
             backend
-                .with_backend_session(|s| matrix.broadcast_in_dim_in(&[2, 2], &[0, 1], s))
+                .with_backend_session(|s| matrix.broadcast_in_dim(&[2, 2], &[0, 1], s))
                 .unwrap_err(),
         ),
         (
             "compare",
             backend
-                .with_backend_session(|s| a.compare_in(&a, CompareDir::Gt, s))
+                .with_backend_session(|s| a.compare(&a, CompareDir::Gt, s))
                 .unwrap_err(),
         ),
     ];
@@ -432,52 +348,25 @@ fn session_in_typed_validates_output_dtype() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_in_chain_enters_one_session_one_shot_enters_ten() {
+fn session_chain_enters_one_session() {
     let mut backend = SessionCountingBackend::new();
     let a = Tensor::from_vec_col_major(vec![1], vec![0.5_f64]).unwrap();
     let b = Tensor::from_vec_col_major(vec![8], vec![1.0_f64; 8]).unwrap();
 
-    // 10 one-shot ops (3x add->exp->mul + final reduce_sum): one session entry
-    // per op.
-    let one_shot = a
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&a, &mut backend)
-        .unwrap()
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&a, &mut backend)
-        .unwrap()
-        .add(&b, &mut backend)
-        .unwrap()
-        .exp(&mut backend)
-        .unwrap()
-        .mul(&a, &mut backend)
-        .unwrap()
-        .reduce_sum(&[0], &mut backend)
-        .unwrap();
-    assert_eq!(
-        backend.entries.get(),
-        10,
-        "one-shot chain must enter one session per op"
-    );
-
+    // A 10-op session chain (3x add->exp->mul + final reduce_sum) must
+    // execute inside exactly one backend session entry.
     backend.entries.set(0);
     let session = backend.with_backend_session(|s| {
-        let x = a.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&a, s).unwrap();
-        let x = x.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&a, s).unwrap();
-        let x = x.add_in(&b, s).unwrap();
-        let x = x.exp_in(s).unwrap();
-        let x = x.mul_in(&a, s).unwrap();
-        x.reduce_sum_in(&[0], s).unwrap()
+        let x = a.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&a, s).unwrap();
+        let x = x.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&a, s).unwrap();
+        let x = x.add(&b, s).unwrap();
+        let x = x.exp(s).unwrap();
+        let x = x.mul(&a, s).unwrap();
+        x.reduce_sum(&[0], s).unwrap()
     });
     assert_eq!(
         backend.entries.get(),
@@ -485,18 +374,27 @@ fn session_in_chain_enters_one_session_one_shot_enters_ten() {
         "session chain must enter exactly one session"
     );
 
-    assert_close(
-        session.as_slice::<f64>().unwrap(),
-        one_shot.as_slice::<f64>().unwrap(),
+    // Independent scalar math: every element follows v_{n+1} = exp(v_n + 1) * 0.5
+    // starting from v_0 = exp(1.5) * 0.5, and the final reduce_sum adds the 8
+    // identical elements. The chain magnitude is ~4e6, so the check is
+    // relative (repeated `exp` amplifies 1-ULP rounding differences).
+    let mut value = (0.5_f64 + 1.0).exp() * 0.5;
+    value = (value + 1.0).exp() * 0.5;
+    value = (value + 1.0).exp() * 0.5;
+    let expected = 8.0 * value;
+    let actual = session.as_slice::<f64>().unwrap()[0];
+    assert!(
+        (actual - expected).abs() / expected < 1.0e-12,
+        "chain result {actual} diverges from independent math {expected}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1 (issue #1680): full `_in` surface parity
+// Phase 1 (issue #1680) full-surface direct session tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn session_in_dynamic_binary_matches_one_shot() {
+fn session_dynamic_binary_chain() {
     let mut backend = CpuBackend::new();
 
     // Equal-shape arm: sub -> div -> pow -> maximum -> minimum.
@@ -505,28 +403,16 @@ fn session_in_dynamic_binary_matches_one_shot() {
     let a = Tensor::from_vec_col_major(vec![2, 2], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .sub(&b, &mut backend)
-        .unwrap()
-        .div(&b, &mut backend)
-        .unwrap()
-        .pow(&b, &mut backend)
-        .unwrap()
-        .maximum(&b, &mut backend)
-        .unwrap()
-        .minimum(&b, &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        a.sub_in(&b, s)
+        a.sub(&b, s)
             .unwrap()
-            .div_in(&b, s)
+            .div(&b, s)
             .unwrap()
-            .pow_in(&b, s)
+            .pow(&b, s)
             .unwrap()
-            .maximum_in(&b, s)
+            .maximum(&b, s)
             .unwrap()
-            .minimum_in(&b, s)
+            .minimum(&b, s)
             .unwrap()
     });
 
@@ -542,96 +428,57 @@ fn session_in_dynamic_binary_matches_one_shot() {
         })
         .collect();
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
-    assert_eq!(session.shape(), one_shot.shape());
 
     // Real broadcast arm: [1] vs [4].
     let a = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     let b = Tensor::from_vec_col_major(vec![4], vec![2.0_f64; 4]).unwrap();
-    let one_shot = a
-        .sub(&b, &mut backend)
-        .unwrap()
-        .div(&b, &mut backend)
-        .unwrap()
-        .pow(&b, &mut backend)
-        .unwrap()
-        .maximum(&b, &mut backend)
-        .unwrap()
-        .minimum(&b, &mut backend)
-        .unwrap();
+
     let session = backend.with_backend_session(|s| {
-        a.sub_in(&b, s)
+        a.sub(&b, s)
             .unwrap()
-            .div_in(&b, s)
+            .div(&b, s)
             .unwrap()
-            .pow_in(&b, s)
+            .pow(&b, s)
             .unwrap()
-            .maximum_in(&b, s)
+            .maximum(&b, s)
             .unwrap()
-            .minimum_in(&b, s)
+            .minimum(&b, s)
             .unwrap()
     });
     let expected = [2.0_f64; 4];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_dynamic_unary_matches_one_shot() {
+fn session_dynamic_unary_chain() {
     let mut backend = CpuBackend::new();
     let x_values = vec![2.0_f64, 3.0, 4.0, 5.0];
     let x = Tensor::from_vec_col_major(vec![4], x_values.clone()).unwrap();
 
-    let one_shot = x
-        .neg(&mut backend)
-        .unwrap()
-        .abs(&mut backend)
-        .unwrap()
-        .sqrt(&mut backend)
-        .unwrap()
-        .rsqrt(&mut backend)
-        .unwrap()
-        .sign(&mut backend)
-        .unwrap()
-        .conj(&mut backend)
-        .unwrap()
-        .log(&mut backend)
-        .unwrap()
-        .expm1(&mut backend)
-        .unwrap()
-        .log1p(&mut backend)
-        .unwrap()
-        .sin(&mut backend)
-        .unwrap()
-        .cos(&mut backend)
-        .unwrap()
-        .tanh(&mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        x.neg_in(s)
+        x.neg(s)
             .unwrap()
-            .abs_in(s)
+            .abs(s)
             .unwrap()
-            .sqrt_in(s)
+            .sqrt(s)
             .unwrap()
-            .rsqrt_in(s)
+            .rsqrt(s)
             .unwrap()
-            .sign_in(s)
+            .sign(s)
             .unwrap()
-            .conj_in(s)
+            .conj(s)
             .unwrap()
-            .log_in(s)
+            .log(s)
             .unwrap()
-            .expm1_in(s)
+            .expm1(s)
             .unwrap()
-            .log1p_in(s)
+            .log1p(s)
             .unwrap()
-            .sin_in(s)
+            .sin(s)
             .unwrap()
-            .cos_in(s)
+            .cos(s)
             .unwrap()
-            .tanh_in(s)
+            .tanh(s)
             .unwrap()
     });
 
@@ -649,11 +496,10 @@ fn session_in_dynamic_unary_matches_one_shot() {
     expected = expected.iter().map(|&v| v.cos()).collect();
     expected = expected.iter().map(|&v| v.tanh()).collect();
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_dynamic_ternary_matches_one_shot() {
+fn session_dynamic_ternary_chain() {
     let mut backend = CpuBackend::new();
     let on_true = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let on_false = Tensor::from_vec_col_major(vec![4], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
@@ -663,69 +509,47 @@ fn session_in_dynamic_ternary_matches_one_shot() {
     let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
     let upper = Tensor::from_vec_col_major(vec![], vec![5.0_f64]).unwrap();
 
-    let one_shot = condition
-        .where_select(&on_true, &on_false, &mut backend)
-        .unwrap()
-        .clamp(&lower, &upper, &mut backend)
-        .unwrap();
     let session = backend.with_backend_session(|s| {
         condition
-            .where_select_in(&on_true, &on_false, s)
+            .where_select(&on_true, &on_false, s)
             .unwrap()
-            .clamp_in(&lower, &upper, s)
+            .clamp(&lower, &upper, s)
             .unwrap()
     });
     // select -> [1, 6, 3, 8], then clamp(0, 5).
     let expected = [1.0_f64, 5.0, 3.0, 5.0];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 
     // Broadcast arm: singleton condition and bounds.
     let condition = Tensor::from_vec_col_major(vec![1], vec![true]).unwrap();
     let lower = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let upper = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
 
-    let one_shot = condition
-        .where_select(&on_true, &on_false, &mut backend)
-        .unwrap()
-        .clamp(&lower, &upper, &mut backend)
-        .unwrap();
     let session = backend.with_backend_session(|s| {
         condition
-            .where_select_in(&on_true, &on_false, s)
+            .where_select(&on_true, &on_false, s)
             .unwrap()
-            .clamp_in(&lower, &upper, s)
+            .clamp(&lower, &upper, s)
             .unwrap()
     });
     // select broadcasts the condition -> [1, 2, 3, 4], then clamp(2, 3).
     let expected = [2.0_f64, 2.0, 3.0, 3.0];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_dynamic_structural_matches_one_shot() {
+fn session_dynamic_structural_chain() {
     let mut backend = CpuBackend::new();
     let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
-    let one_shot = x
-        .transpose(&[1, 0], &mut backend)
-        .unwrap()
-        .reshape(&[6], &mut backend)
-        .unwrap()
-        .reshape(&[2, 3], &mut backend)
-        .unwrap()
-        .transpose(&[1, 0], &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        x.transpose_in(&[1, 0], s)
+        x.transpose(&[1, 0], s)
             .unwrap()
-            .reshape_in(&[6], s)
+            .reshape(&[6], s)
             .unwrap()
-            .reshape_in(&[2, 3], s)
+            .reshape(&[2, 3], s)
             .unwrap()
-            .transpose_in(&[1, 0], s)
+            .transpose(&[1, 0], s)
             .unwrap()
     });
 
@@ -737,49 +561,43 @@ fn session_in_dynamic_structural_matches_one_shot() {
     assert_eq!(expected, vec![1.0, 5.0, 4.0, 3.0, 2.0, 6.0]);
     assert_eq!(session.shape(), &[3, 2]);
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_dynamic_dtype_matches_one_shot() {
+fn session_dynamic_dtype_chain() {
     let mut backend = CpuBackend::new();
     let x = Tensor::from_vec_col_major(vec![4], vec![1.2_f64, -2.8, 3.5, 0.4]).unwrap();
 
-    let one_shot = x.cast(DType::I32, &mut backend).unwrap();
     let session = backend
-        .with_backend_session(|s| x.cast_in(DType::I32, s))
+        .with_backend_session(|s| x.cast(DType::I32, s))
         .unwrap();
     let expected = [1_i32, -2, 3, 0];
     assert_eq!(session.as_slice::<i32>().unwrap(), &expected);
-    assert_eq!(one_shot.as_slice::<i32>().unwrap(), &expected);
 
     // convert uses the checked lattice: f64 -> C64 preserves values, and the
     // round trip back through cast reproduces them.
     let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let one_shot = y.convert(DType::C64, &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| y.convert_in(DType::C64, s))
+        .with_backend_session(|s| y.convert(DType::C64, s))
         .unwrap();
     assert_eq!(session.dtype(), DType::C64);
-    assert_eq!(one_shot.dtype(), DType::C64);
+
     let back = backend
-        .with_backend_session(|s| session.cast_in(DType::F64, s))
+        .with_backend_session(|s| session.cast(DType::F64, s))
         .unwrap();
     assert_close(back.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 }
 
 #[test]
-fn session_in_dynamic_matmul_matches_one_shot() {
+fn session_dynamic_matmul_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0];
     let b_values = vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0];
     let a = Tensor::from_vec_col_major(vec![2, 3], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], b_values.clone()).unwrap();
 
-    let one_shot = a.matmul(&b, &mut backend).unwrap();
-    let session = backend
-        .with_backend_session(|s| a.matmul_in(&b, s))
-        .unwrap();
+    let session = backend.with_backend_session(|s| a.matmul(&b, s)).unwrap();
 
     // Independent value check with plain triple loops over col-major indices.
     let mut expected = vec![0.0_f64; 4];
@@ -792,62 +610,55 @@ fn session_in_dynamic_matmul_matches_one_shot() {
     }
     assert_eq!(session.shape(), &[2, 2]);
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(one_shot.as_slice::<f64>().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_dynamic_errors_match_one_shot() {
+fn session_dynamic_errors() {
     let mut backend = CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
 
     // Binary broadcast error.
-    let one_shot_error = a.sub(&b, &mut backend).unwrap_err();
-    let session_error = backend
-        .with_backend_session(|s| a.sub_in(&b, s))
-        .unwrap_err();
-    assert_incompatible_shapes_error(one_shot_error);
+
+    let session_error = backend.with_backend_session(|s| a.sub(&b, s)).unwrap_err();
+
     assert_incompatible_shapes_error(session_error);
 
     // Ternary broadcast error through clamp ([2] vs [3] bounds).
     let lower = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
     let upper = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
-    let one_shot_error = a.clamp(&lower, &upper, &mut backend).unwrap_err();
+
     let session_error = backend
-        .with_backend_session(|s| a.clamp_in(&lower, &upper, s))
+        .with_backend_session(|s| a.clamp(&lower, &upper, s))
         .unwrap_err();
-    assert_incompatible_shapes_error(one_shot_error);
+
     assert_incompatible_shapes_error(session_error);
 
     // Matmul rank error for rank-1 operands.
-    let one_shot_error = a.matmul(&b, &mut backend).unwrap_err();
+
     let session_error = backend
-        .with_backend_session(|s| a.matmul_in(&b, s))
+        .with_backend_session(|s| a.matmul(&b, s))
         .unwrap_err();
-    assert_rank_mismatch_error(one_shot_error);
+
     assert_rank_mismatch_error(session_error);
 
     // Dtype mismatch error for sub.
     let c = Tensor::from_vec_col_major(vec![2], vec![1_i32; 2]).unwrap();
-    let one_shot_error = a.sub(&c, &mut backend).unwrap_err();
-    let session_error = backend
-        .with_backend_session(|s| a.sub_in(&c, s))
-        .unwrap_err();
-    for error in [one_shot_error, session_error] {
-        let Error::Validation {
-            op: "sub",
-            source: ValidationError::DTypeMismatch { expected, actual },
-        } = &error
-        else {
-            panic!("expected sub DTypeMismatch, got {error:?}");
-        };
-        assert_eq!(*expected, tenferro_tensor::core::DType::F64);
-        assert_eq!(*actual, tenferro_tensor::core::DType::I32);
-    }
+
+    let session_error = backend.with_backend_session(|s| a.sub(&c, s)).unwrap_err();
+    let Error::Validation {
+        op: "sub",
+        source: ValidationError::DTypeMismatch { expected, actual },
+    } = &session_error
+    else {
+        panic!("expected sub DTypeMismatch, got {session_error:?}");
+    };
+    assert_eq!(*expected, tenferro_tensor::core::DType::F64);
+    assert_eq!(*actual, tenferro_tensor::core::DType::I32);
 }
 
 #[test]
-fn session_in_typed_binary_matches_one_shot() {
+fn session_typed_binary_chain() {
     let mut backend = CpuBackend::new();
 
     // Equal-shape arm: sub -> div -> pow -> maximum -> minimum.
@@ -856,28 +667,16 @@ fn session_in_typed_binary_matches_one_shot() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], b_values.clone()).unwrap();
 
-    let one_shot = a
-        .sub(&b, &mut backend)
-        .unwrap()
-        .div(&b, &mut backend)
-        .unwrap()
-        .pow(&b, &mut backend)
-        .unwrap()
-        .maximum(&b, &mut backend)
-        .unwrap()
-        .minimum(&b, &mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        a.sub_in(&b, s)
+        a.sub(&b, s)
             .unwrap()
-            .div_in(&b, s)
+            .div(&b, s)
             .unwrap()
-            .pow_in(&b, s)
+            .pow(&b, s)
             .unwrap()
-            .maximum_in(&b, s)
+            .maximum(&b, s)
             .unwrap()
-            .minimum_in(&b, s)
+            .minimum(&b, s)
             .unwrap()
     });
 
@@ -892,96 +691,57 @@ fn session_in_typed_binary_matches_one_shot() {
         })
         .collect();
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
-    assert_eq!(session.shape(), one_shot.shape());
 
     // Real broadcast arm: [1] vs [4].
     let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![2.0; 4]).unwrap();
-    let one_shot = a
-        .sub(&b, &mut backend)
-        .unwrap()
-        .div(&b, &mut backend)
-        .unwrap()
-        .pow(&b, &mut backend)
-        .unwrap()
-        .maximum(&b, &mut backend)
-        .unwrap()
-        .minimum(&b, &mut backend)
-        .unwrap();
+
     let session = backend.with_backend_session(|s| {
-        a.sub_in(&b, s)
+        a.sub(&b, s)
             .unwrap()
-            .div_in(&b, s)
+            .div(&b, s)
             .unwrap()
-            .pow_in(&b, s)
+            .pow(&b, s)
             .unwrap()
-            .maximum_in(&b, s)
+            .maximum(&b, s)
             .unwrap()
-            .minimum_in(&b, s)
+            .minimum(&b, s)
             .unwrap()
     });
     let expected = [2.0_f64; 4];
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_typed_unary_matches_one_shot() {
+fn session_typed_unary_chain() {
     let mut backend = CpuBackend::new();
     let x_values = vec![2.0_f64, 3.0, 4.0, 5.0];
     let x = TypedTensor::<f64>::from_vec_col_major(vec![4], x_values.clone()).unwrap();
 
-    let one_shot = x
-        .neg(&mut backend)
-        .unwrap()
-        .abs(&mut backend)
-        .unwrap()
-        .sqrt(&mut backend)
-        .unwrap()
-        .rsqrt(&mut backend)
-        .unwrap()
-        .sign(&mut backend)
-        .unwrap()
-        .conj(&mut backend)
-        .unwrap()
-        .log(&mut backend)
-        .unwrap()
-        .expm1(&mut backend)
-        .unwrap()
-        .log1p(&mut backend)
-        .unwrap()
-        .sin(&mut backend)
-        .unwrap()
-        .cos(&mut backend)
-        .unwrap()
-        .tanh(&mut backend)
-        .unwrap();
-
     let session = backend.with_backend_session(|s| {
-        x.neg_in(s)
+        x.neg(s)
             .unwrap()
-            .abs_in(s)
+            .abs(s)
             .unwrap()
-            .sqrt_in(s)
+            .sqrt(s)
             .unwrap()
-            .rsqrt_in(s)
+            .rsqrt(s)
             .unwrap()
-            .sign_in(s)
+            .sign(s)
             .unwrap()
-            .conj_in(s)
+            .conj(s)
             .unwrap()
-            .log_in(s)
+            .log(s)
             .unwrap()
-            .expm1_in(s)
+            .expm1(s)
             .unwrap()
-            .log1p_in(s)
+            .log1p(s)
             .unwrap()
-            .sin_in(s)
+            .sin(s)
             .unwrap()
-            .cos_in(s)
+            .cos(s)
             .unwrap()
-            .tanh_in(s)
+            .tanh(s)
             .unwrap()
     });
 
@@ -997,114 +757,103 @@ fn session_in_typed_unary_matches_one_shot() {
     expected = expected.iter().map(|&v| v.cos()).collect();
     expected = expected.iter().map(|&v| v.tanh()).collect();
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_typed_clamp_matches_one_shot() {
+fn session_typed_clamp_chain() {
     let mut backend = CpuBackend::new();
 
     // Equal-shape arm.
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![-2.0, 4.0, 1.0, 5.0]).unwrap();
     let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]).unwrap();
     let upper = TypedTensor::<f64>::from_vec_col_major(vec![], vec![3.0]).unwrap();
-    let one_shot = x.clamp(&lower, &upper, &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| x.clamp_in(&lower, &upper, s))
+        .with_backend_session(|s| x.clamp(&lower, &upper, s))
         .unwrap();
     assert_close(session.host_data().unwrap(), &[0.0, 3.0, 1.0, 3.0]);
-    assert_close(one_shot.host_data().unwrap(), &[0.0, 3.0, 1.0, 3.0]);
 
     // Broadcast arm: singleton bounds.
     let x = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![-1.0, 0.0, 2.0, 5.0]).unwrap();
     let lower = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
     let upper = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![2.0]).unwrap();
-    let one_shot = x.clamp(&lower, &upper, &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| x.clamp_in(&lower, &upper, s))
+        .with_backend_session(|s| x.clamp(&lower, &upper, s))
         .unwrap();
     assert_close(session.host_data().unwrap(), &[1.0, 1.0, 2.0, 2.0]);
-    assert_close(one_shot.host_data().unwrap(), &[1.0, 1.0, 2.0, 2.0]);
 }
 
 #[test]
-fn session_in_typed_compare_matches_one_shot() {
+fn session_typed_compare_chain() {
     let mut backend = CpuBackend::new();
 
     // Equal-shape arm: the result is a bool typed tensor.
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 5.0, 3.0, 8.0]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 6.0, 4.0, 7.0]).unwrap();
-    let one_shot = a.compare(&b, CompareDir::Gt, &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| a.compare_in(&b, CompareDir::Gt, s))
+        .with_backend_session(|s| a.compare(&b, CompareDir::Gt, s))
         .unwrap();
     let expected = [true, false, false, true];
     assert_eq!(session.host_data().unwrap(), &expected);
-    assert_eq!(one_shot.host_data().unwrap(), &expected);
 
     // Broadcast arm.
     let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![1.0, 4.0, 2.0, 6.0]).unwrap();
-    let one_shot = a.compare(&b, CompareDir::Gt, &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| a.compare_in(&b, CompareDir::Gt, s))
+        .with_backend_session(|s| a.compare(&b, CompareDir::Gt, s))
         .unwrap();
     let expected = [true, false, true, false];
     assert_eq!(session.host_data().unwrap(), &expected);
-    assert_eq!(one_shot.host_data().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_typed_structural_matches_one_shot() {
+fn session_typed_structural_chain() {
     let mut backend = CpuBackend::new();
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         .unwrap();
 
     // Reshape preserves element order.
-    let one_shot = x.reshape(&[6], &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| x.reshape_in(&[6], s))
+        .with_backend_session(|s| x.reshape(&[6], s))
         .unwrap();
     let expected = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     assert_eq!(session.shape(), &[6]);
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 
     // Transpose permutes the col-major layout.
-    let one_shot = x.transpose(&[1, 0], &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| x.transpose_in(&[1, 0], s))
+        .with_backend_session(|s| x.transpose(&[1, 0], s))
         .unwrap();
     let expected = [1.0_f64, 3.0, 5.0, 2.0, 4.0, 6.0];
     assert_eq!(session.shape(), &[3, 2]);
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 
     // broadcast_in_dim duplicates the row: [[1,2,3],[1,2,3]] in col-major
     // storage.
     let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
-    let one_shot = row.broadcast_in_dim(&[2, 3], &[1], &mut backend).unwrap();
+
     let session = backend
-        .with_backend_session(|s| row.broadcast_in_dim_in(&[2, 3], &[1], s))
+        .with_backend_session(|s| row.broadcast_in_dim(&[2, 3], &[1], s))
         .unwrap();
     let expected = [1.0_f64, 1.0, 2.0, 2.0, 3.0, 3.0];
     assert_eq!(session.shape(), &[2, 3]);
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_typed_matmul_matches_one_shot() {
+fn session_typed_matmul_chain() {
     let mut backend = CpuBackend::new();
     let a_values = vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0];
     let b_values = vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], b_values.clone()).unwrap();
 
-    let one_shot = a.matmul(&b, &mut backend).unwrap();
-    let session = backend
-        .with_backend_session(|s| a.matmul_in(&b, s))
-        .unwrap();
+    let session = backend.with_backend_session(|s| a.matmul(&b, s)).unwrap();
 
     let mut expected = vec![0.0_f64; 4];
     for i in 0..2 {
@@ -1116,70 +865,52 @@ fn session_in_typed_matmul_matches_one_shot() {
     }
     assert_eq!(session.shape(), &[2, 2]);
     assert_close(session.host_data().unwrap(), &expected);
-    assert_close(one_shot.host_data().unwrap(), &expected);
 }
 
 #[test]
-fn session_in_typed_errors_match_one_shot() {
+fn session_typed_errors() {
     let mut backend = CpuBackend::new();
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0; 2]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0; 3]).unwrap();
 
     // Ternary broadcast error through clamp ([2] vs [3] bounds).
-    let one_shot_error = a.clamp(&b, &a, &mut backend).unwrap_err();
+
     let session_error = backend
-        .with_backend_session(|s| a.clamp_in(&b, &a, s))
+        .with_backend_session(|s| a.clamp(&b, &a, s))
         .unwrap_err();
-    assert_incompatible_shapes_error(one_shot_error);
+
     assert_incompatible_shapes_error(session_error);
 
     // Matmul rank error for rank-1 operands.
-    let one_shot_error = a.matmul(&b, &mut backend).unwrap_err();
+
     let session_error = backend
-        .with_backend_session(|s| a.matmul_in(&b, s))
+        .with_backend_session(|s| a.matmul(&b, s))
         .unwrap_err();
-    assert_rank_mismatch_error(one_shot_error);
+
     assert_rank_mismatch_error(session_error);
 }
 
 #[test]
-fn session_in_new_ops_chain_enters_one_session_one_shot_enters_five() {
+fn session_new_ops_chain_enters_one_session() {
     let mut backend = SessionCountingBackend::new();
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 5.0, 4.0, 6.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 1.0, 2.0]).unwrap();
     let m = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 3], vec![1.0_f64; 3]).unwrap();
 
-    // 5 one-shot ops (sub, log, maximum, reshape, matmul): one session entry
-    // per op.
-    let one_shot = a
-        .sub(&b, &mut backend)
-        .unwrap()
-        .log(&mut backend)
-        .unwrap()
-        .maximum(&m, &mut backend)
-        .unwrap()
-        .reshape(&[4, 1], &mut backend)
-        .unwrap()
-        .matmul(&rhs, &mut backend)
-        .unwrap();
-    assert_eq!(
-        backend.entries.get(),
-        5,
-        "one-shot chain must enter one session per op"
-    );
-
+    // A 5-op session chain (sub, log, maximum, reshape, matmul) must execute
+    // inside exactly one backend session entry.
     backend.entries.set(0);
     let session = backend.with_backend_session(|s| {
-        a.sub_in(&b, s)
+        a.sub(&b, s)
             .unwrap()
-            .log_in(s)
+            .log(s)
             .unwrap()
-            .maximum_in(&m, s)
+            .maximum(&m, s)
             .unwrap()
-            .reshape_in(&[4, 1], s)
+            .reshape(&[4, 1], s)
             .unwrap()
-            .matmul_in(&rhs, s)
+            .matmul(&rhs, s)
             .unwrap()
     });
     assert_eq!(
@@ -1197,10 +928,6 @@ fn session_in_new_ops_chain_enters_one_session_one_shot_enters_five() {
         .collect();
     let expected: Vec<f64> = (0..3).flat_map(|_| values.iter().copied()).collect();
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
-    assert_close(
-        session.as_slice::<f64>().unwrap(),
-        one_shot.as_slice::<f64>().unwrap(),
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,7 +952,7 @@ impl SessionCountingBackend {
 }
 
 /// Test backend whose session ops return an `F64` tensor regardless of the
-/// requested dtype, so the typed `_in` surface must reject the output through
+/// requested dtype, so the typed session surface must reject the output through
 /// `into_typed_result`.
 struct WrongDTypeSessionBackend;
 
@@ -1413,7 +1140,7 @@ impl BackendSessionHost for SessionCountingBackend {
 }
 
 // WrongDTypeSessionBackend hand-writes the structural, dot, elementwise, and
-// analytic impls so every op family the typed `_in` surface routes through can
+// analytic impls so every op family the typed session surface routes through can
 // return an F64 tensor regardless of the requested dtype.
 
 impl BackendRuntimeCache for WrongDTypeSessionBackend {

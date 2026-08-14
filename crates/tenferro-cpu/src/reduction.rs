@@ -25,8 +25,8 @@ fn unsupported_dtype_with_supported(
 }
 
 fn unsupported_sum_squares_dtype(op: &'static str, dtype: DType) -> crate::Error {
-    let remedy = matches!(dtype, DType::I32 | DType::I64)
-        .then_some("; convert to F64 with TensorOpsExt::convert before reduction");
+    let remedy =
+        matches!(dtype, DType::I32 | DType::I64).then_some("; convert to F64 before reduction");
     crate::Error::unsupported(
         op,
         format!(

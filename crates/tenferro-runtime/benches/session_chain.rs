@@ -1,17 +1,16 @@
-//! Session-entry cost benchmark for the `_in` concrete-ops surface.
+//! Session-entry cost benchmark for the session-explicit concrete-ops surface.
 //!
 //! Exact 10-op chain: three repetitions of `add -> exp -> mul` (9 ops)
 //! followed by a final `reduce_sum([0])` (10th). Two shape arms (no-broadcast
-//! 1x8 duplicate path vs 1x1/1x8 real reshape+broadcast) and two execution
-//! arms (one-shot `TensorOpsExt`, one session entry per op = 10 entries, vs
-//! `TensorSessionOpsExt` inside one `with_backend_session` = 1 entry).
+//! 1x8 duplicate path vs 1x1/1x8 real reshape+broadcast), each executing the
+//! chain inside ONE `with_backend_session` entry.
 //!
 //! Constants are chosen so the chain does not overflow (`exp` of large
 //! values); the result is validated outside the timed region.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 use tenferro_tensor::BackendSessionHost;
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
@@ -29,33 +28,19 @@ fn operand_b() -> Tensor {
     Tensor::from_vec_col_major(vec![8], vec![1.0_f64; 8]).expect("benchmark tensor")
 }
 
-/// 10 ops, each entering its own backend session.
-fn run_chain_one_shot(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Tensor {
-    let x = a.add(b, backend).expect("add 1");
-    let x = x.exp(backend).expect("exp 1");
-    let x = x.mul(a, backend).expect("mul 1");
-    let x = x.add(b, backend).expect("add 2");
-    let x = x.exp(backend).expect("exp 2");
-    let x = x.mul(a, backend).expect("mul 2");
-    let x = x.add(b, backend).expect("add 3");
-    let x = x.exp(backend).expect("exp 3");
-    let x = x.mul(a, backend).expect("mul 3");
-    x.reduce_sum(&[0], backend).expect("reduce_sum")
-}
-
-/// The same 10 ops inside one backend session (1 entry).
+/// 10 ops inside one backend session (1 entry).
 fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Tensor {
     backend.with_backend_session(|session| {
-        let x = a.add_in(b, session).expect("add 1");
-        let x = x.exp_in(session).expect("exp 1");
-        let x = x.mul_in(a, session).expect("mul 1");
-        let x = x.add_in(b, session).expect("add 2");
-        let x = x.exp_in(session).expect("exp 2");
-        let x = x.mul_in(a, session).expect("mul 2");
-        let x = x.add_in(b, session).expect("add 3");
-        let x = x.exp_in(session).expect("exp 3");
-        let x = x.mul_in(a, session).expect("mul 3");
-        x.reduce_sum_in(&[0], session).expect("reduce_sum")
+        let x = a.add(b, session).expect("add 1");
+        let x = x.exp(session).expect("exp 1");
+        let x = x.mul(a, session).expect("mul 1");
+        let x = x.add(b, session).expect("add 2");
+        let x = x.exp(session).expect("exp 2");
+        let x = x.mul(a, session).expect("mul 2");
+        let x = x.add(b, session).expect("add 3");
+        let x = x.exp(session).expect("exp 3");
+        let x = x.mul(a, session).expect("mul 3");
+        x.reduce_sum(&[0], session).expect("reduce_sum")
     })
 }
 
@@ -66,24 +51,15 @@ fn bench_session_chain(c: &mut Criterion) {
         let b = operand_b();
         let mut backend = CpuBackend::new();
 
-        // Validation outside the timed region: finite scalar result, and the
-        // two execution arms agree.
-        let one_shot = run_chain_one_shot(&a, &b, &mut backend);
-        assert!(one_shot.shape().is_empty(), "chain must reduce to a scalar");
-        assert!(one_shot.as_slice::<f64>().unwrap()[0].is_finite());
+        // Validation outside the timed region: the chain must reduce to a
+        // finite scalar.
         let one_session = run_chain_one_session(&a, &b, &mut backend);
-        assert!(one_session.as_slice::<f64>().unwrap()[0].is_finite());
-        assert_eq!(
-            one_shot.as_slice::<f64>().unwrap(),
-            one_session.as_slice::<f64>().unwrap()
+        assert!(
+            one_session.shape().is_empty(),
+            "chain must reduce to a scalar"
         );
+        assert!(one_session.as_slice::<f64>().unwrap()[0].is_finite());
 
-        group.bench_function("one_shot", |bench| {
-            bench.iter(|| {
-                let out = run_chain_one_shot(black_box(&a), black_box(&b), &mut backend);
-                black_box(out);
-            });
-        });
         group.bench_function("one_session", |bench| {
             bench.iter(|| {
                 let out = run_chain_one_session(black_box(&a), black_box(&b), &mut backend);
@@ -157,34 +133,19 @@ impl Phase1Operands {
     }
 }
 
-/// 10 ops, each entering its own backend session.
-fn run_phase1_chain_one_shot(ops: &Phase1Operands, backend: &mut CpuBackend) -> Tensor {
-    let x = ops.a.sub(&ops.b, backend).expect("sub");
-    let x = x.log(backend).expect("log");
-    let x = x.pow(&ops.power, backend).expect("pow");
-    let x = x.maximum(&ops.max, backend).expect("maximum");
-    let x = x.neg(backend).expect("neg");
-    let x = x.reshape(&[4, 1], backend).expect("reshape");
-    let x = x.transpose(&[1, 0], backend).expect("transpose");
-    let x = x.clamp(&ops.lower, &ops.upper, backend).expect("clamp");
-    let x = x.matmul(&ops.rhs, backend).expect("matmul");
-    x.cast(tenferro_runtime::DType::F32, backend).expect("cast")
-}
-
-/// The same 10 ops inside one backend session (1 entry).
+/// 10 ops inside one backend session (1 entry).
 fn run_phase1_chain_one_session(ops: &Phase1Operands, backend: &mut CpuBackend) -> Tensor {
     backend.with_backend_session(|session| {
-        let x = ops.a.sub_in(&ops.b, session).expect("sub");
-        let x = x.log_in(session).expect("log");
-        let x = x.pow_in(&ops.power, session).expect("pow");
-        let x = x.maximum_in(&ops.max, session).expect("maximum");
-        let x = x.neg_in(session).expect("neg");
-        let x = x.reshape_in(&[4, 1], session).expect("reshape");
-        let x = x.transpose_in(&[1, 0], session).expect("transpose");
-        let x = x.clamp_in(&ops.lower, &ops.upper, session).expect("clamp");
-        let x = x.matmul_in(&ops.rhs, session).expect("matmul");
-        x.cast_in(tenferro_runtime::DType::F32, session)
-            .expect("cast")
+        let x = ops.a.sub(&ops.b, session).expect("sub");
+        let x = x.log(session).expect("log");
+        let x = x.pow(&ops.power, session).expect("pow");
+        let x = x.maximum(&ops.max, session).expect("maximum");
+        let x = x.neg(session).expect("neg");
+        let x = x.reshape(&[4, 1], session).expect("reshape");
+        let x = x.transpose(&[1, 0], session).expect("transpose");
+        let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
+        let x = x.matmul(&ops.rhs, session).expect("matmul");
+        x.cast(tenferro_runtime::DType::F32, session).expect("cast")
     })
 }
 
@@ -194,19 +155,11 @@ fn bench_session_chain_phase1(c: &mut Criterion) {
     let mut backend = CpuBackend::new();
 
     // Validation outside the timed region: the known scalar result -8.0
-    // (see the chain comment above), and the two execution arms agree.
-    let one_shot = run_phase1_chain_one_shot(&ops, &mut backend);
-    assert_eq!(one_shot.shape(), &[1, 1], "chain must reduce to [1,1]");
-    assert_eq!(one_shot.as_slice::<f32>().unwrap(), &[-8.0]);
+    // (see the chain comment above).
     let one_session = run_phase1_chain_one_session(&ops, &mut backend);
+    assert_eq!(one_session.shape(), &[1, 1], "chain must reduce to [1,1]");
     assert_eq!(one_session.as_slice::<f32>().unwrap(), &[-8.0]);
 
-    group.bench_function("one_shot", |bench| {
-        bench.iter(|| {
-            let out = run_phase1_chain_one_shot(black_box(&ops), &mut backend);
-            black_box(out);
-        });
-    });
     group.bench_function("one_session", |bench| {
         bench.iter(|| {
             let out = run_phase1_chain_one_session(black_box(&ops), &mut backend);

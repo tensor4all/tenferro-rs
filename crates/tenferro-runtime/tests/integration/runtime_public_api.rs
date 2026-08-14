@@ -2,9 +2,9 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
     CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
-    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TracedTensor,
+    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorSessionOpsExt, TracedTensor,
 };
-use tenferro_tensor::{Error as TensorError, ValidationError};
+use tenferro_tensor::{BackendSessionHost, Error as TensorError, ValidationError};
 
 fn cpu_runtime() -> Runtime {
     let backend = CpuBackend::new();
@@ -109,23 +109,26 @@ fn tensor_extension_trait_covers_eager_runtime_paths() {
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 
-    let converted = f32_input.convert(DType::F64, &mut backend).unwrap();
+    let (converted, casted, reshaped, transposed, summed) = backend
+        .with_backend_session(
+            |session| -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+                let converted = f32_input.convert(DType::F64, session)?;
+                let casted = input.cast(DType::F32, session)?;
+                let reshaped = input.reshape(&[4], session)?;
+                let transposed = input.transpose(&[1, 0], session)?;
+                let summed = input.reduce_sum(&[0], session)?;
+                Ok((converted, casted, reshaped, transposed, summed))
+            },
+        )
+        .unwrap();
     assert_eq!(converted.dtype(), DType::F64);
     assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-
-    let casted = input.cast(DType::F32, &mut backend).unwrap();
     assert_eq!(casted.dtype(), DType::F32);
     assert_eq!(casted.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
-
-    let reshaped = input.reshape(&[4], &mut backend).unwrap();
     assert_eq!(reshaped.shape(), &[4]);
     assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
-
-    let transposed = input.transpose(&[1, 0], &mut backend).unwrap();
     assert_eq!(transposed.shape(), &[2, 2]);
     assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
-
-    let summed = input.reduce_sum(&[0], &mut backend).unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(summed.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
 }
@@ -136,7 +139,9 @@ fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
     let scalar = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let vector = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 
-    let err = scalar.matmul(&vector, &mut backend).unwrap_err();
+    let err = backend
+        .with_backend_session(|session| scalar.matmul(&vector, session))
+        .unwrap_err();
 
     assert!(matches!(
         err,

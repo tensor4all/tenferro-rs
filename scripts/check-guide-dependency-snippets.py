@@ -75,7 +75,7 @@ LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorOpsExt};
+use tenferro_runtime::{BackendSessionHost, Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -108,10 +108,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let q = &outputs[3];
     let parity = &outputs[4];
 
-    let pt = p.transpose(&[1, 0], &mut backend)?;
-    let pt_l = pt.matmul(l, &mut backend)?;
-    let pt_lu = pt_l.matmul(u, &mut backend)?;
-    let reconstructed = pt_lu.matmul(q, &mut backend)?;
+    let reconstructed = backend.with_backend_session(|session| {
+        let pt = p.transpose(&[1, 0], session)?;
+        let pt_l = pt.matmul(l, session)?;
+        let pt_lu = pt_l.matmul(u, session)?;
+        pt_lu.matmul(q, session)
+    })?;
     assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 
     assert_eq!(parity.shape(), &[] as &[usize]);
@@ -135,8 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 TENSOR_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{CompareDir, TypedTensorOpsExt};
-use tenferro_tensor::{Rank, TypedTensor};
+use tenferro_runtime::{CompareDir, TypedTensorSessionOpsExt};
+use tenferro_tensor::{BackendSessionHost, Rank, TypedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut x = TypedTensor::<f64>::from_vec_col_major(
@@ -155,9 +157,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0])?;
-    let sum = lhs.add(&rhs, &mut backend)?;
-    let product = lhs.mul(&rhs, &mut backend)?;
-    let mask = sum.compare(&product, CompareDir::Lt, &mut backend)?;
+    let mask = backend.with_backend_session(|session| {
+        let sum = lhs.add(&rhs, session)?;
+        let product = lhs.mul(&rhs, session)?;
+        sum.compare(&product, CompareDir::Lt, session)
+    })?;
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new()?;

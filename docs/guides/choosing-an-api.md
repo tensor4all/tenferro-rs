@@ -27,7 +27,7 @@ Quick reference:
 ## Import Style
 
 Use direct imports when a small module should make its dependencies explicit:
-`use tenferro_runtime::{Tensor, TensorOpsExt};` and
+`use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
 `use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. For tutorials or
 modules using several operation traits, the equivalent crate-local preludes are
 `use tenferro_runtime::prelude::*;` and `use tenferro_linalg::prelude::*;`.
@@ -99,7 +99,7 @@ operations.
 
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | `TensorOpsExt` / `TypedTensorOpsExt` backend-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
+| Everyday tensor ops | `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` session-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
 | Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `x.fft(...)` via `EagerTensorFftExt` with `autodiff` | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |

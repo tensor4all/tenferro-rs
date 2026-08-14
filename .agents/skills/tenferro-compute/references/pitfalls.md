@@ -51,8 +51,8 @@ Same traps, keyed by the priors you arrived with.
   `TypedTensorView::from_slice` (see the [API cheatsheet](api-cheatsheet.md#borrowing-external-memory)).
 - `cargo add tenferro` fails: there is no facade crate. Add
   `tenferro-runtime` + `tenferro-cpu` (plus operation crates).
-- `Array2::dot` is a free-standing habit; tenferro direct ops take an explicit
-  `&mut CpuBackend` argument: `a.matmul(&b, &mut backend)`.
+- `Array2::dot` is a free-standing habit; tenferro direct ops run inside an
+  explicit session: `backend.with_backend_session(|s| a.matmul(&b, s))`.
 - Your priors do not include a dtype-erased tensor; `Tensor` (runtime dtype)
   has no ndarray counterpart — use `TypedTensor<T>`.
 
@@ -61,7 +61,7 @@ Same traps, keyed by the priors you arrived with.
 - nalgebra is column-major like tenferro, so `.data` / `as_slice()` buffers map
   directly to `from_vec_col_major`.
 - `Matrix::dot` / `gemm` are methods without an execution context; tenferro
-  direct ops need the explicit backend argument. Eager and traced tiers drop
+  direct ops need the explicit backend session. Eager and traced tiers drop
   it: `EagerTensor` methods run through the `EagerRuntime`, traced methods
   build a graph.
 - A single `DMatrix<T>` maps to `TypedTensor<T>`; there is no separate runtime

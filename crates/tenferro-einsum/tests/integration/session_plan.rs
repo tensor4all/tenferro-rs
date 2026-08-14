@@ -1,17 +1,16 @@
-//! Single-session-entry and typed-result parity tests for the
-//! `ConcreteEinsumPlan::execute*_in_session` surfaces.
+//! Single-session-entry and typed-result tests for the
+//! `ConcreteEinsumPlan::execute*` session surfaces.
 //!
-//! A mixed chain (`plan.execute_in_session` + runtime `exp_in` +
-//! `reduce_sum_in`) must execute inside exactly one backend session entry,
-//! while the one-shot counterpart enters one session per op. The typed
-//! `_in_session` surface must reject a backend-returned wrong dtype through
-//! `into_typed_result` exactly like the one-shot path.
+//! A mixed chain (`plan.execute` + runtime `exp` + `reduce_sum`) must execute
+//! inside exactly one backend session entry, matching an independent scalar
+//! expected value. The typed session surface must reject a backend-returned
+//! wrong dtype through `into_typed_result`.
 
 use std::cell::Cell;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{ConcreteEinsumPlan, Error};
-use tenferro_runtime::{Tensor, TensorOpsExt, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 use tenferro_tensor::backend::{
     BackendCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot,
     TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
@@ -357,23 +356,12 @@ panic_analytic!(WrongDTypeSessionBackend);
 panic_reduction!(WrongDTypeSessionBackend);
 impl BackendSessionHost for WrongDTypeSessionBackend {}
 
-fn assert_close(actual: &[f64], expected: &[f64]) {
-    assert_eq!(actual.len(), expected.len());
-    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-        let error = (actual - expected).abs();
-        assert!(
-            error < 1.0e-12,
-            "value {index}: actual={actual}, expected={expected}, error={error}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Single-session-entry proof
 // ---------------------------------------------------------------------------
 
 #[test]
-fn einsum_plan_mixed_chain_enters_one_session_one_shot_enters_thirty() {
+fn einsum_plan_mixed_chain_enters_one_session() {
     let mut backend = SessionCountingBackend::new();
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
@@ -381,28 +369,16 @@ fn einsum_plan_mixed_chain_enters_one_session_one_shot_enters_thirty() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
 
-    // One-shot: 10 iterations of (einsum + exp + reduce_sum) = one session
-    // entry per op.
-    let mut one_shot = lhs.duplicate().unwrap();
-    for _ in 0..10 {
-        one_shot = plan.execute([&lhs, &rhs], &mut backend).unwrap();
-        one_shot = one_shot.exp(&mut backend).unwrap();
-        one_shot = one_shot.reduce_sum(&[1], &mut backend).unwrap();
-    }
-    assert_eq!(
-        backend.entries.get(),
-        30,
-        "one-shot chain must enter one session per op"
-    );
-
+    // 10 iterations of (einsum + exp + reduce_sum) must execute inside
+    // exactly one backend session entry.
     backend.entries.set(0);
     let session = backend
         .with_backend_session(|session| -> tenferro_einsum::Result<Tensor> {
             let mut x = lhs.duplicate().unwrap();
             for _ in 0..10 {
-                x = plan.execute_in_session([&lhs, &rhs], session)?;
-                x = x.exp_in(session)?;
-                x = x.reduce_sum_in(&[1], session)?;
+                x = plan.execute([&lhs, &rhs], session)?;
+                x = x.exp(session)?;
+                x = x.reduce_sum(&[1], session)?;
             }
             Ok(x)
         })
@@ -410,13 +386,26 @@ fn einsum_plan_mixed_chain_enters_one_session_one_shot_enters_thirty() {
     assert_eq!(
         backend.entries.get(),
         1,
-        "mixed einsum plan + _in chain must enter exactly one session"
+        "mixed einsum plan + session chain must enter exactly one session"
     );
 
-    assert_close(
-        session.as_slice::<f64>().unwrap(),
-        one_shot.as_slice::<f64>().unwrap(),
-    );
+    // Independent scalar math: each iteration is
+    // einsum(lhs, rhs) -> exp -> reduce_sum(axis 1). The einsum over the
+    // [2,3] x [3,2] inputs (values 1..6 each) is [[22, 28], [49, 64]] in
+    // col-major storage, so the final value is
+    // [exp(22) + exp(49), exp(28) + exp(64)].
+    let expected = [
+        22.0_f64.exp() + 49.0_f64.exp(),
+        28.0_f64.exp() + 64.0_f64.exp(),
+    ];
+    let actual = session.as_slice::<f64>().unwrap();
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = (actual - expected).abs() / expected;
+        assert!(
+            error < 1.0e-12,
+            "value {index}: actual={actual}, expected={expected}, rel error={error}"
+        );
+    }
 }
 
 #[test]
@@ -429,24 +418,24 @@ fn einsum_plan_execute_in_session_adds_no_nested_entry_to_caller_session() {
     backend.entries.set(0);
     let result = backend.with_backend_session(|session| {
         let x = plan
-            .execute_in_session([&lhs, &rhs], session)
+            .execute([&lhs, &rhs], session)
             .expect("einsum plan should execute inside the session");
-        x.exp_in(session).expect("exp should run in the session")
+        x.exp(session).expect("exp should run in the session")
     });
     assert_eq!(
         backend.entries.get(),
         1,
-        "execute_in_session must not add a nested session entry"
+        "execute must not add a nested session entry"
     );
     assert_eq!(result.shape(), &[2, 2]);
 }
 
 // ---------------------------------------------------------------------------
-// Typed-result parity through into_typed_result
+// Typed-result validation through into_typed_result
 // ---------------------------------------------------------------------------
 
 #[test]
-fn einsum_plan_typed_in_session_rejects_wrong_backend_dtype_like_one_shot() {
+fn einsum_plan_typed_execute_rejects_wrong_backend_dtype() {
     let typed_lhs =
         tenferro_tensor::TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32; 4])
             .unwrap();
@@ -456,21 +445,11 @@ fn einsum_plan_typed_in_session_rejects_wrong_backend_dtype_like_one_shot() {
     let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
     let mut backend = WrongDTypeSessionBackend;
 
-    // The backend returns an F64 tensor; both surfaces must reject it through
-    // into_typed_result with the identical structured error.
-    let one_shot = plan
-        .execute_typed([&typed_lhs, &typed_rhs], &mut backend)
-        .unwrap_err();
+    // The backend returns an F64 tensor regardless of the requested dtype, so
+    // the typed session surface must reject it through into_typed_result.
     let in_session = backend
-        .with_backend_session(|session| {
-            plan.execute_typed_in_session([&typed_lhs, &typed_rhs], session)
-        })
+        .with_backend_session(|session| plan.execute_typed([&typed_lhs, &typed_rhs], session))
         .unwrap_err();
-    assert_eq!(
-        format!("{in_session:?}"),
-        format!("{one_shot:?}"),
-        "in-session typed error must match the one-shot typed error"
-    );
     assert!(matches!(
         in_session,
         Error::Tensor(tenferro_tensor::Error::Validation {

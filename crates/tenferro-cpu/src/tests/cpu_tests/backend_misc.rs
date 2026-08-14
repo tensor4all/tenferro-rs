@@ -2091,7 +2091,7 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             op: "exp",
             dtype: DType::I64,
             message,
-        }) if message == "CPU backend does not support this operation for I64; supported dtypes: F32/F64/C32/C64; convert to F64 with TensorOpsExt::convert before this operation"
+        }) if message == "CPU backend does not support this operation for I64; supported dtypes: F32/F64/C32/C64; convert to F64 before this operation"
     ));
     assert!(matches!(
         crate::analytic::exp_read_with_pool(
@@ -2102,7 +2102,7 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             op: "exp",
             dtype: DType::I64,
             message,
-        }) if message == "CPU backend does not support this operation for I64; supported dtypes: F32/F64/C32/C64; convert to F64 with TensorOpsExt::convert before this operation"
+        }) if message == "CPU backend does not support this operation for I64; supported dtypes: F32/F64/C32/C64; convert to F64 before this operation"
     ));
     assert!(crate::analytic::pow(&real, &base).is_err());
 }
@@ -2111,7 +2111,7 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
 fn contraction_unsupported_dtype_message_lists_recovery() {
     assert_eq!(
         crate::cpu_contraction_unsupported_dtype_message(DType::I64),
-        "CPU contraction providers support F32/F64/C32/C64; convert I64 to F64 with TensorOpsExt::convert before contraction"
+        "CPU contraction providers support F32/F64/C32/C64; convert I64 to F64 before contraction"
     );
     assert_eq!(
         crate::cpu_contraction_unsupported_dtype_message(DType::Bool),

@@ -7,7 +7,7 @@ use tenferro_tensor::{
 };
 
 use super::{
-    binary_contract, eager_einsum_exec_read, try_eager_einsum_binary_read_fast, LabeledTensor,
+    binary_contract, eager_einsum_exec_read, eager_einsum_read_subscripts, LabeledTensor,
     TensorValue,
 };
 use crate::{ContractionTree, Subscripts};
@@ -463,23 +463,30 @@ fn generic_read_exec_reduces_single_view_input() {
 }
 
 #[test]
-fn binary_read_fast_path_rejects_non_fast_shapes_and_labels() {
-    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+fn read_subscripts_routes_non_fast_cases_through_plan() {
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let mut ctx = CpuBackend::new();
 
+    // Single-input call against a two-input contract: clean plan validation error.
     let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
     let one_input = [TensorRead::from_tensor(&lhs)];
-    assert!(try_eager_einsum_binary_read_fast(&mut ctx, &one_input, &subscripts).is_none());
+    assert!(eager_einsum_read_subscripts(&mut ctx, &one_input, &subscripts).is_err());
 
+    // Rank-mismatched labels: clean plan validation error.
     let flat_rhs = Tensor::from_vec_col_major(vec![6], vec![1.0_f64; 6]).unwrap();
     let rank_mismatch = [
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&flat_rhs),
     ];
-    assert!(try_eager_einsum_binary_read_fast(&mut ctx, &rank_mismatch, &subscripts).is_none());
+    assert!(eager_einsum_read_subscripts(&mut ctx, &rank_mismatch, &subscripts).is_err());
 
+    // Duplicate labels decline the internal binary dot plan and execute through
+    // the plan's generic path: diag(ii) * sum_j(rhs[jk]).
     let duplicate_labels = Subscripts::parse("ii,jk->ik").unwrap();
     let inputs = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    assert!(try_eager_einsum_binary_read_fast(&mut ctx, &inputs, &duplicate_labels).is_none());
+    let result = eager_einsum_read_subscripts(&mut ctx, &inputs, &duplicate_labels).unwrap();
+    assert_eq!(result.shape(), &[2, 2]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0, 24.0, 15.0, 60.0]);
 }

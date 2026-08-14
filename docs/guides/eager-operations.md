@@ -64,8 +64,8 @@ tracked eager tensors. Untracked eager tensors are forward-only. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most broad non-AD concrete operations are available as `TensorOpsExt` /
-`TypedTensorOpsExt` methods with an explicit backend. AD workflows use the
+Most broad non-AD concrete operations are available as `TensorSessionOpsExt` /
+`TypedTensorSessionOpsExt` methods inside an explicit backend session. AD workflows use the
 `EagerTensor` method surface instead. `TypedTensor<T, R>` is the first layer to
 consider when you want compile-time dtype safety, optional rank typing, or typed
 data that may live on the host or in backend-owned storage. Einsum is provided
@@ -163,15 +163,19 @@ canonicalization never performs a hidden CPU/GPU transfer.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_4 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let sum = a.add(&b, &mut backend).unwrap();
-let product = a.mul(&b, &mut backend).unwrap();
-let negated = a.neg(&mut backend).unwrap();
+let (sum, product, negated) = backend.with_backend_session(|session| {
+    let sum = a.add(&b, session).unwrap();
+    let product = a.mul(&b, session).unwrap();
+    let negated = a.neg(session).unwrap();
+    (sum, product, negated)
+});
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -217,21 +221,21 @@ backend.with_backend_session(|session| {
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_6 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 
-// Transpose
-let at = a.transpose(&[1, 0], &mut backend).unwrap();
+// Transpose / Reshape / Reduce in one backend session.
+let (at, flat, col_sum) = backend.with_backend_session(|session| {
+    let at = a.transpose(&[1, 0], session).unwrap();
+    let flat = a.reshape(&[6], session).unwrap();
+    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    (at, flat, col_sum)
+});
 assert_eq!(at.shape(), &[3, 2]);
-
-// Reshape
-let flat = a.reshape(&[6], &mut backend).unwrap();
 assert_eq!(flat.shape(), &[6]);
-
-// Reduce
-let col_sum = a.reduce_sum(&[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
 <!-- end-snippet-source -->

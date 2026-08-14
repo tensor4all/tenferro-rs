@@ -1,17 +1,19 @@
 # API cheatsheet
 
-Choose the tier before choosing the method. Direct operations receive an
-explicit mutable backend; eager operations run through an `EagerRuntime`; traced
-operations build a graph and execute it later.
+Choose the tier before choosing the method. Direct operations run inside an explicit
+`with_backend_session` entry; eager operations run through an `EagerRuntime`;
+traced operations build a graph and execute it later.
 
 ## Direct concrete tensors
 
-Import the backend and the extension trait that owns the method:
+Import the backend, `BackendSessionHost`, and the extension trait that owns
+the session method:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
+use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 // The leftmost dimension varies fastest: this is a 2 x 3 column-major tensor.
@@ -23,14 +25,16 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = x.matmul(&weights, &mut backend)?;
+let projected = backend.with_backend_session(|session| x.matmul(&weights, session))?;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```
 <!-- end-snippet-source -->
 
-The important shape is `x.matmul(&weights, &mut backend)`. For dynamic dtypes
-use `TensorOpsExt`; for static scalar types use `TypedTensorOpsExt`.
+The important shape is
+`backend.with_backend_session(|session| x.matmul(&weights, session))`. For
+dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
+`TypedTensorSessionOpsExt`.
 
 ## Eager tensors
 

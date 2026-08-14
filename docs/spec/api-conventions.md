@@ -49,8 +49,9 @@ The default stratum is internal.
    trait methods, not public module free functions. Core AD operations in
    `tenferro-runtime` and `tenferro-ad` use inherent `TracedTensor` /
    `EagerTensor` methods or associated functions. Concrete non-AD operations
-   use crate-root `TensorOpsExt` / `TypedTensorOpsExt` extension traits because
-   `Tensor` and `TypedTensor` are owned by `tenferro-tensor`. Extension-family
+   use crate-root `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` session
+   extension traits because `Tensor` and `TypedTensor` are owned by
+   `tenferro-tensor`. Extension-family
    crates use crate-root extension traits because they cannot add inherent
    methods to external tensor types.
 8. User-facing backend features use concrete backend family names such as

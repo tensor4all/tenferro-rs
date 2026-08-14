@@ -743,7 +743,7 @@ fn unsupported_reduction_dtype_messages_prescribe_known_recovery() {
         crate::Error::Unsupported {
             op: "reduce_sum_squares",
             message,
-        } if message == "unsupported dtype I64; supported dtypes: F32/F64; convert to F64 with TensorOpsExt::convert before reduction"
+        } if message == "unsupported dtype I64; supported dtypes: F32/F64; convert to F64 before reduction"
     ));
 
     let complex = Tensor::C64(

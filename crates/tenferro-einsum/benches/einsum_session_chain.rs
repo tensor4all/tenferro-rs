@@ -1,7 +1,6 @@
-//! Session-entry cost comparison for a prepared [`ConcreteEinsumPlan`]:
-//! one-shot executes (one session entry per call) vs `_in_session` executes
-//! inside a single borrowed session, and a mixed chain
-//! (einsum + exp + reduce_sum) in both spellings.
+//! Session-entry cost benchmark for a prepared [`ConcreteEinsumPlan`]:
+//! repeated executes inside a single borrowed session, and a mixed chain
+//! (einsum + exp + reduce_sum) in the same session.
 //!
 //! Workload (design doc "Prototype specification (PR C)"): a prepared plan
 //! for `"ij,jk->ik"` on 8×8 f64 column-major inputs, executed 10 times per
@@ -10,7 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::ConcreteEinsumPlan;
-use tenferro_runtime::{Tensor, TensorOpsExt, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 use tenferro_tensor::BackendSessionHost;
 
 const N: usize = 8;
@@ -31,7 +30,7 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
 
     // Correctness validation outside the timed region: shape [8, 8], finite.
     let check = backend
-        .with_backend_session(|session| plan.execute_in_session([&lhs, &rhs], session))
+        .with_backend_session(|session| plan.execute([&lhs, &rhs], session))
         .unwrap();
     assert_eq!(check.shape(), &[8, 8]);
     assert!(check
@@ -42,51 +41,29 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("einsum_session_chain/f64_8x8_10calls/threads1");
 
-    group.bench_function("A_one_shot", |b| {
-        b.iter(|| {
-            let inputs = black_box([&lhs, &rhs]);
-            for _ in 0..CALLS {
-                let out = plan.execute(inputs, &mut backend).unwrap();
-                black_box(out);
-            }
-        });
-    });
-
-    group.bench_function("B_in_session", |b| {
+    group.bench_function("B_one_session", |b| {
         b.iter(|| {
             backend.with_backend_session(|session| {
                 let inputs = black_box([&lhs, &rhs]);
                 for _ in 0..CALLS {
-                    let out = plan.execute_in_session(inputs, session).unwrap();
+                    let out = plan.execute(inputs, session).unwrap();
                     black_box(out);
                 }
             });
         });
     });
 
-    group.bench_function("C_mixed_in_session", |b| {
+    group.bench_function("C_mixed_one_session", |b| {
         b.iter(|| {
             backend.with_backend_session(|session| {
                 let inputs = black_box([&lhs, &rhs]);
                 for _ in 0..CALLS {
-                    let x = plan.execute_in_session(inputs, session).unwrap();
-                    let x = x.exp_in(session).unwrap();
-                    let out = x.reduce_sum_in(&[0], session).unwrap();
+                    let x = plan.execute(inputs, session).unwrap();
+                    let x = x.exp(session).unwrap();
+                    let out = x.reduce_sum(&[0], session).unwrap();
                     black_box(out);
                 }
             });
-        });
-    });
-
-    group.bench_function("C_mixed_one_shot", |b| {
-        b.iter(|| {
-            let inputs = black_box([&lhs, &rhs]);
-            for _ in 0..CALLS {
-                let x = plan.execute(inputs, &mut backend).unwrap();
-                let x = x.exp(&mut backend).unwrap();
-                let out = x.reduce_sum(&[0], &mut backend).unwrap();
-                black_box(out);
-            }
         });
     });
 

@@ -141,7 +141,7 @@ fn unary_dtype_error(
     recommend_f64: bool,
 ) -> crate::Error {
     let remedy = (recommend_f64 && matches!(dtype, DType::I32 | DType::I64))
-        .then_some("; convert to F64 with TensorOpsExt::convert before this operation");
+        .then_some("; convert to F64 before this operation");
     crate::Error::unsupported(
         op,
         format!(

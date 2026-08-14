@@ -77,15 +77,19 @@ assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     fn snippet_eager_operations_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_4
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let sum = a.add(&b, &mut backend).unwrap();
-let product = a.mul(&b, &mut backend).unwrap();
-let negated = a.neg(&mut backend).unwrap();
+let (sum, product, negated) = backend.with_backend_session(|session| {
+    let sum = a.add(&b, session).unwrap();
+    let product = a.mul(&b, session).unwrap();
+    let negated = a.neg(session).unwrap();
+    (sum, product, negated)
+});
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -135,21 +139,21 @@ backend.with_backend_session(|session| {
     fn snippet_eager_operations_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_6
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 
-// Transpose
-let at = a.transpose(&[1, 0], &mut backend).unwrap();
+// Transpose / Reshape / Reduce in one backend session.
+let (at, flat, col_sum) = backend.with_backend_session(|session| {
+    let at = a.transpose(&[1, 0], session).unwrap();
+    let flat = a.reshape(&[6], session).unwrap();
+    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    (at, flat, col_sum)
+});
 assert_eq!(at.shape(), &[3, 2]);
-
-// Reshape
-let flat = a.reshape(&[6], &mut backend).unwrap();
 assert_eq!(flat.shape(), &[6]);
-
-// Reduce
-let col_sum = a.reduce_sum(&[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
         // snippet-end:eager_operations_6
         Ok(())
@@ -401,17 +405,23 @@ assert_eq!(static_rank.rank(), 2);
     fn snippet_tensor_operations_15() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_15
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
+use tenferro_runtime::{
+    CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
+};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
 let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap();
 
-let sum = x.add(&y, &mut backend).unwrap();
-let product = x.mul(&y, &mut backend).unwrap();
-let total = product.reduce_sum(&[0], &mut backend).unwrap();
-let mask = sum.compare(&product, CompareDir::Lt, &mut backend).unwrap();
-let selected = mask.where_select(&sum, &product, &mut backend).unwrap();
+let (sum, product, total, mask, selected) = backend.with_backend_session(|session| {
+    let sum = x.add(&y, session).unwrap();
+    let product = x.mul(&y, session).unwrap();
+    let total = product.reduce_sum(&[0], session).unwrap();
+    let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
+    let selected = mask.where_select(&sum, &product, session).unwrap();
+    (sum, product, total, mask, selected)
+});
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -444,14 +454,18 @@ assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
     fn snippet_tensor_operations_17() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_17
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let sum = a.add(&b, &mut backend).unwrap();
-let product = a.mul(&b, &mut backend).unwrap();
+let (sum, product) = backend.with_backend_session(|session| {
+    let sum = a.add(&b, session).unwrap();
+    let product = a.mul(&b, session).unwrap();
+    (sum, product)
+});
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -559,15 +573,19 @@ Ok(())
     fn snippet_tensor_operations_22() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_22
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let reshaped = a.reshape(&[6], &mut backend).unwrap();
-let transposed = a.transpose(&[1, 0], &mut backend).unwrap();
+let (reshaped, transposed) = backend.with_backend_session(|session| {
+    let reshaped = a.reshape(&[6], session).unwrap();
+    let transposed = a.transpose(&[1, 0], session).unwrap();
+    (reshaped, transposed)
+});
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -603,7 +621,8 @@ Ok(())
     fn snippet_tensor_operations_24() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_24
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
@@ -613,8 +632,11 @@ let a = Tensor::from_vec_col_major(
 // Logical matrix:
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
-let row_sums = a.reduce_sum(&[1], &mut backend).unwrap();
-let total = a.reduce_sum(&[0, 1], &mut backend).unwrap();
+let (row_sums, total) = backend.with_backend_session(|session| {
+    let row_sums = a.reduce_sum(&[1], session).unwrap();
+    let total = a.reduce_sum(&[0, 1], session).unwrap();
+    (row_sums, total)
+});
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

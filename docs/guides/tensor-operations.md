@@ -22,8 +22,8 @@ Choose the tensor API first, then choose the operation entry point.
 
 | Layer | Start here when | Operation entry point | AD |
 | --- | --- | --- | --- |
-| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `TypedTensorOpsExt` backend-explicit methods for dynamic-rank `TypedTensor<T>` | No |
-| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `TensorOpsExt` backend-explicit methods | No |
+| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `TypedTensorSessionOpsExt` session-explicit methods for dynamic-rank `TypedTensor<T>` | No |
+| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `TensorSessionOpsExt` session-explicit methods | No |
 | `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` methods and associated functions | Yes, for tracked values |
 | `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `TracedTensor` methods and associated functions | Yes, through graph transforms |
 
@@ -105,24 +105,30 @@ and they do not configure CPU parallelism.
 
 ## TypedTensor Backend Operations
 
-For common typed math without autodiff, `TypedTensorOpsExt` provides selected
-backend-explicit methods that accept dynamic-rank `TypedTensor<T>` values and
-return typed results.
+For common typed math without autodiff, `TypedTensorSessionOpsExt` provides
+selected session-explicit methods that accept dynamic-rank `TypedTensor<T>`
+values and return typed results.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_15 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{CompareDir, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt};
+use tenferro_runtime::{
+    CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
+};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
 let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap();
 
-let sum = x.add(&y, &mut backend).unwrap();
-let product = x.mul(&y, &mut backend).unwrap();
-let total = product.reduce_sum(&[0], &mut backend).unwrap();
-let mask = sum.compare(&product, CompareDir::Lt, &mut backend).unwrap();
-let selected = mask.where_select(&sum, &product, &mut backend).unwrap();
+let (sum, product, total, mask, selected) = backend.with_backend_session(|session| {
+    let sum = x.add(&y, session).unwrap();
+    let product = x.mul(&y, session).unwrap();
+    let total = product.reduce_sum(&[0], session).unwrap();
+    let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
+    let selected = mask.where_select(&sum, &product, session).unwrap();
+    (sum, product, total, mask, selected)
+});
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -213,14 +219,18 @@ should remain dynamic.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_17 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let sum = a.add(&b, &mut backend).unwrap();
-let product = a.mul(&b, &mut backend).unwrap();
+let (sum, product) = backend.with_backend_session(|session| {
+    let sum = a.add(&b, session).unwrap();
+    let product = a.mul(&b, session).unwrap();
+    (sum, product)
+});
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -335,15 +345,19 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_22 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let reshaped = a.reshape(&[6], &mut backend).unwrap();
-let transposed = a.transpose(&[1, 0], &mut backend).unwrap();
+let (reshaped, transposed) = backend.with_backend_session(|session| {
+    let reshaped = a.reshape(&[6], session).unwrap();
+    let transposed = a.transpose(&[1, 0], session).unwrap();
+    (reshaped, transposed)
+});
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -375,7 +389,8 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_24 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{Tensor, TensorOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
@@ -385,8 +400,11 @@ let a = Tensor::from_vec_col_major(
 // Logical matrix:
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
-let row_sums = a.reduce_sum(&[1], &mut backend).unwrap();
-let total = a.reduce_sum(&[0, 1], &mut backend).unwrap();
+let (row_sums, total) = backend.with_backend_session(|session| {
+    let row_sums = a.reduce_sum(&[1], session).unwrap();
+    let total = a.reduce_sum(&[0, 1], session).unwrap();
+    (row_sums, total)
+});
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

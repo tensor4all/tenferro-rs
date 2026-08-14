@@ -273,7 +273,7 @@ where
 
 fn unsupported_analytic_dtype_message(dtype: DType) -> String {
     let remedy = matches!(dtype, DType::I32 | DType::I64)
-        .then_some("; convert to F64 with TensorOpsExt::convert before this operation");
+        .then_some("; convert to F64 before this operation");
     format!(
         "CPU backend does not support this operation for {dtype:?}; supported dtypes: F32/F64/C32/C64{}",
         remedy.unwrap_or("")
