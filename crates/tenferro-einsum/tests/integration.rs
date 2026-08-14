@@ -6,6 +6,8 @@ mod error_public;
 mod public_surface_contract;
 #[path = "integration/runtime_buffer_pool.rs"]
 mod runtime_buffer_pool;
+#[path = "integration/session_in_plan.rs"]
+mod session_in_plan;
 #[path = "integration/shape_constraints.rs"]
 mod shape_constraints;
 #[path = "integration/support.rs"]

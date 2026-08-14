@@ -98,6 +98,10 @@ name = "mps_inner_product"
 harness = false
 
 [[bench]]
+name = "einsum_session_chain"
+harness = false
+
+[[bench]]
 name = "mps_inner_product_compile"
 harness = false
 
