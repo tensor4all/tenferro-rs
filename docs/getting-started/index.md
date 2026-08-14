@@ -209,32 +209,13 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runtime::Error> {
+fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
     let backend = CpuBackend::new();
     let mut builder = Runtime::builder();
-    let registration = tenferro_cpu::runtime_engine_registration(&backend).map_err(|source| {
-        tenferro_runtime::Error::runtime_state_source(
-            "tutorial_runtime",
-            tenferro_runtime::ErrorPhase::Execution,
-            source,
-        )
-    })?;
-    builder.register_engine(registration).map_err(|source| {
-        tenferro_runtime::Error::runtime_state_source(
-            "tutorial_runtime",
-            tenferro_runtime::ErrorPhase::Execution,
-            source,
-        )
-    })?;
-    let runtime = builder.build().map_err(|source| {
-        tenferro_runtime::Error::runtime_state_source(
-            "tutorial_runtime",
-            tenferro_runtime::ErrorPhase::Execution,
-            source,
-        )
-    })?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    let runtime = builder.build()?;
     let mut outputs = runtime.run_compiled(&program, &[])?;
     assert_eq!(outputs.len(), 1);
     Ok(outputs.remove(0))
