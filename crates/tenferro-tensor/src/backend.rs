@@ -4168,9 +4168,9 @@ pub trait TensorBackend:
 impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
 
 thread_local! {
-    /// Tracks whether a [`default_backend_session`] closure is currently
-    /// running on this thread, so nested session entry is caught in debug
-    /// builds even for backends that do not override
+    /// Tracks whether a session-entry closure is currently running on this
+    /// thread, so nested session entry is caught in debug builds even for
+    /// backends that do not override
     /// [`BackendSessionHost::with_backend_session`].
     static IN_SESSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -4197,6 +4197,20 @@ impl Drop for InSessionGuard {
     }
 }
 
+/// Run `f` with the thread-local in-session flag set, restoring it on exit
+/// including on panic, and asserting (in debug builds) that the caller is not
+/// already inside a session closure.
+///
+/// This is the portable nested-entry guard shared by every backend-session
+/// entry point: [`default_backend_session`] and the GPU
+/// `BackendSessionHost::with_backend_session` overrides. CPU keeps its own
+/// release-mode `EXECUTION_OWNER` panic on top of this debug check.
+#[doc(hidden)]
+pub fn with_session_entry_guard<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = InSessionGuard::enter();
+    f()
+}
+
 /// Run a closure using the backend itself as a default execution session.
 ///
 /// This is suitable for backends whose individual ops already manage their own
@@ -4215,6 +4229,5 @@ pub fn default_backend_session<B: TensorBackend, R: Send>(
     backend: &mut B,
     f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
 ) -> R {
-    let _guard = InSessionGuard::enter();
-    f(backend)
+    with_session_entry_guard(|| f(backend))
 }

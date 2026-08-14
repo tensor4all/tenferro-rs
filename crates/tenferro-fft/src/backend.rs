@@ -82,32 +82,37 @@ impl<'a> FftExecutionCache<'a> {
 /// transfer the tensor or select a different backend.
 ///
 /// # Examples
+/// Backend surface required by the FFT extension runtime and the built-in
+/// concrete FFT dispatch.
+///
+/// This is a backend SPI: third-party backend implementers implement this
+/// trait on their execution sessions to provide FFT capability. The concrete
+/// [`TensorFftExt`]/[`TensorReadFftExt`] methods and [`FftExecutor`] take an
+/// erased `&mut dyn BackendSession` and dispatch **internally** to the
+/// built-in CPU/CUDA/WebGPU execution sessions; a session without this
+/// capability returns a typed `Error::Unsupported` instead of being accepted
+/// as an arbitrary third-party backend (issue #1680 Phase 3).
+///
+/// # Examples
 ///
 /// ```
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuExecSession;
 /// use tenferro_fft::FftBackend;
-/// use tenferro_tensor::BackendSessionHost;
 ///
-/// fn accepts_fft_backend<B: FftBackend>(_backend: &mut B) {}
+/// fn accepts_fft_backend<B: FftBackend>() {}
 ///
-/// let mut backend = CpuBackend::new();
-/// backend.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |exec_session| accepts_fft_backend(exec_session))
-///         .expect("CpuBackend must expose a CPU execution session");
-/// });
+/// accepts_fft_backend::<CpuExecSession<'static>>();
 /// ```
 ///
-/// A generic tensor backend without this explicit capability cannot build
-/// the FFT extension module:
+/// A generic tensor backend does not expose the FFT capability at the SPI
+/// level:
 ///
 /// ```compile_fail
 /// use tenferro_tensor::{Tensor, TensorBackend};
-/// use tenferro_fft::{FftNorm, TensorFftExt};
+/// use tenferro_fft::FftBackend;
 ///
-/// fn use_without_fft_capability<B: TensorBackend + 'static>(backend: &mut B, input: &Tensor) {
-///     let _module =
-///         tenferro_fft::extension_module::<B>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap();
-///     let _ = input.fft(None, -1, FftNorm::Backward, backend);
+/// fn requires_fft_backend<B: TensorBackend>(backend: &mut B) {
+///     let _: &mut dyn FftBackend = backend;
 /// }
 /// ```
 pub trait FftBackend: BackendSession {

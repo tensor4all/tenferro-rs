@@ -24,14 +24,11 @@ impl Operation {
         axis: isize,
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.with_backend_session(|session| {
-            with_cpu_exec_session(session, |exec_session| match self {
-                Self::Fft => input.fft(n, axis, norm, exec_session),
-                Self::Ifft => input.ifft(n, axis, norm, exec_session),
-                Self::Rfft => input.rfft(n, axis, norm, exec_session),
-                Self::Irfft => input.irfft(n, axis, norm, exec_session),
-            })
-            .expect("CPU backend session should be available")
+        backend.with_backend_session(|session| match self {
+            Self::Fft => input.fft(n, axis, norm, session),
+            Self::Ifft => input.ifft(n, axis, norm, session),
+            Self::Rfft => input.rfft(n, axis, norm, session),
+            Self::Irfft => input.irfft(n, axis, norm, session),
         })
     }
 

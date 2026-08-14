@@ -187,8 +187,8 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_5 -->
 ```rust
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-use tenferro_linalg::LinalgBackend;
+use tenferro_cpu::CpuBackend;
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{BackendSessionHost, Tensor};
 
 let mut backend = CpuBackend::new();
@@ -199,19 +199,17 @@ let a = Tensor::from_vec_col_major(vec![3, 3], vec![
 ])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |exec| {
-        let svd = LinalgBackend::svd(exec, &a).unwrap();
-        let qr = LinalgBackend::qr(exec, &a).unwrap();
-        let chol = LinalgBackend::cholesky(exec, &a).unwrap();
-        let eigh = LinalgBackend::eigh(exec, &a).unwrap();
-        let x = LinalgBackend::solve(exec, &a, &b).unwrap();
-        assert_eq!(svd[1].shape(), &[3]);
-        assert_eq!(qr[0].shape(), &[3, 3]);
-        assert_eq!(chol.shape(), &[3, 3]);
-        assert_eq!(eigh[0].shape(), &[3]);
-        assert_eq!(eigh[1].shape(), &[3, 3]);
-        assert_eq!(x.shape(), &[3]);
-    }).expect("CPU execution session is available")
+    let svd = a.svd(session).unwrap();
+    let qr = a.qr(session).unwrap();
+    let chol = a.cholesky(session).unwrap();
+    let eigh = a.eigh(session).unwrap();
+    let x = a.solve(&b, session).unwrap();
+    assert_eq!(svd.1.shape(), &[3]);
+    assert_eq!(qr.0.shape(), &[3, 3]);
+    assert_eq!(chol.shape(), &[3, 3]);
+    assert_eq!(eigh.0.shape(), &[3]);
+    assert_eq!(eigh.1.shape(), &[3, 3]);
+    assert_eq!(x.shape(), &[3]);
 });
 ```
 <!-- end-snippet-source -->

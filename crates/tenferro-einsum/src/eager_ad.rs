@@ -248,9 +248,10 @@ fn try_direct_binary_dot_general(
 ///
 /// Prototype gate (issue #1060 follow-up): when set, untracked N-ary eager
 /// einsum runs the whole contraction in one backend session via
-/// [`crate::eager::eager_einsum_subscripts`] instead of executing the expanded
-/// program one standard op at a time. Tracked (`requires_grad`) inputs keep the
-/// existing per-op path so eager AD recording semantics are unchanged.
+/// [`crate::eager::eager_einsum_subscripts_on_session`] instead of executing
+/// the expanded program one standard op at a time. Tracked (`requires_grad`)
+/// inputs keep the existing per-op path so eager AD recording semantics are
+/// unchanged.
 fn whole_program_untracked_enabled() -> bool {
     std::env::var_os("TENFERRO_EAGER_WHOLE_PROGRAM").is_some()
 }

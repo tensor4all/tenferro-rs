@@ -956,7 +956,9 @@ fn tensor_index_select_trailing_axis_returns_expected_values() {
     let input =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
-    let out = input.index_select(-1, &[2, 0, 2], &mut backend).unwrap();
+    let out = backend
+        .with_backend_session(|session| input.index_select(-1, &[2, 0, 2], session))
+        .unwrap();
 
     assert_eq!(out.shape(), &[2, 3]);
     assert_f64_close(get_f64(&out, &[0, 0]), 5.0);
@@ -972,11 +974,15 @@ fn tensor_index_select_rejects_invalid_axis_and_position() {
     let mut backend = CpuBackend::new();
     let input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
 
-    let axis_err = input.index_select(-2, &[0], &mut backend).unwrap_err();
+    let axis_err = backend
+        .with_backend_session(|session| input.index_select(-2, &[0], session))
+        .unwrap_err();
     assert!(axis_err.to_string().contains("index_select"));
     assert!(axis_err.to_string().contains("axis"));
 
-    let position_err = input.index_select(0, &[3], &mut backend).unwrap_err();
+    let position_err = backend
+        .with_backend_session(|session| input.index_select(0, &[3], session))
+        .unwrap_err();
     assert!(position_err.to_string().contains("index_select"));
     assert!(position_err.to_string().contains("position"));
 }
@@ -987,13 +993,17 @@ fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
 
     let a = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let b = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    let scalars = Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
+    let scalars = backend
+        .with_backend_session(|session| Tensor::stack(&[&a, &b], -1, session))
+        .unwrap();
     assert_eq!(scalars.shape(), &[2]);
     assert_eq!(scalars.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 
     let v0 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let v1 = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let vectors = Tensor::stack(&[&v0, &v1], -1, &mut backend).unwrap();
+    let vectors = backend
+        .with_backend_session(|session| Tensor::stack(&[&v0, &v1], -1, session))
+        .unwrap();
     assert_eq!(vectors.shape(), &[2, 2]);
     assert_f64_close(get_f64(&vectors, &[0, 0]), 1.0);
     assert_f64_close(get_f64(&vectors, &[1, 0]), 2.0);
@@ -1002,7 +1012,9 @@ fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
 
     let m0 = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
     let m1 = Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).unwrap();
-    let matrices = Tensor::stack(&[&m0, &m1], -1, &mut backend).unwrap();
+    let matrices = backend
+        .with_backend_session(|session| Tensor::stack(&[&m0, &m1], -1, session))
+        .unwrap();
     assert_eq!(matrices.shape(), &[2, 1, 2]);
     assert_f64_close(get_f64(&matrices, &[0, 0, 0]), 1.0);
     assert_f64_close(get_f64(&matrices, &[1, 0, 0]), 2.0);
@@ -1019,7 +1031,9 @@ fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
 
     let input =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let out = input.index_select(-1, &[2, 0, 1], &mut backend).unwrap();
+    let out = backend
+        .with_backend_session(|session| input.index_select(-1, &[2, 0, 1], session))
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
 }
@@ -1033,7 +1047,9 @@ fn tensor_stack_reuses_reclaimed_cpu_buffer() {
 
     let x0 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let x1 = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let out = Tensor::stack(&[&x0, &x1], -1, &mut backend).unwrap();
+    let out = backend
+        .with_backend_session(|session| Tensor::stack(&[&x0, &x1], -1, session))
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
 }

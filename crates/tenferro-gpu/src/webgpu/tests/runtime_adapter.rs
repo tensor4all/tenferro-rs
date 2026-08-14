@@ -15,7 +15,8 @@ use tenferro_runtime::{
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::TensorStructural;
 use tenferro_tensor::{
-    AllocationId, BackendAllocation, BackendStorage, DeviceId, StorageBuffer, Tensor, TypedTensor,
+    AllocationId, BackendAllocation, BackendSessionHost, BackendStorage, DeviceId, StorageBuffer,
+    Tensor, TypedTensor,
 };
 
 use super::super::WebGpuBuffer;
@@ -411,4 +412,37 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         output.as_slice().expect("host slice"),
         &[1.0, 2.0, 3.0, 4.0]
     );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "nested backend session entry")]
+fn webgpu_with_backend_session_rejects_nested_entry_in_debug_builds() {
+    if !webgpu_available() {
+        return;
+    }
+    let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
+    backend.with_backend_session(|_session| {
+        // The WebGPU override wraps its closure in the portable in-session
+        // guard, so re-entering any session-entry point on this thread
+        // (here the shared helper directly) trips the debug assert
+        // (issue #1680 Phase 3).
+        tenferro_tensor::with_session_entry_guard(|| ())
+    });
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn webgpu_with_backend_session_restores_the_in_session_flag_after_panic() {
+    if !webgpu_available() {
+        return;
+    }
+    let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_session| panic!("boom"))
+    }));
+    assert!(outcome.is_err());
+    // The flag is usable again on the same thread.
+    let value = backend.with_backend_session(|_session| 7usize);
+    assert_eq!(value, 7);
 }

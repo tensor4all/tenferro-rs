@@ -43,9 +43,10 @@ fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
     let source = std::fs::read_to_string(root).expect("read concrete einsum source");
 
     assert!(source.contains("pub trait TypedTensorReadEinsumExt"));
-    assert!(source.contains("fn einsum_read<B: TensorBackend>"));
+    assert!(source.contains("fn einsum_read("));
+    assert!(source.contains("session: &mut dyn BackendSession,"));
     assert!(source.contains("pub trait TypedTensorReadEinsumIntoExt"));
-    assert!(source.contains("fn einsum_read_into<'out, B, O>"));
+    assert!(source.contains("fn einsum_read_into<'out, O>"));
     assert!(source.contains("O: Into<TypedTensorWrite<'out, T>>"));
 
     assert!(
@@ -59,6 +60,16 @@ fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
             "impl<'a, T: TensorScalar> TypedTensorEinsumIntoExt<T> for [TypedTensorView<'a, T>]"
         ),
         "borrowed typed inputs must not implement the unsuffixed einsum_into surface"
+    );
+    // The concrete einsum traits are backend-session explicit: no
+    // backend-taking `B: TensorBackend` surface remains on the public traits.
+    assert!(
+        !source.contains("fn einsum_read<B: TensorBackend>"),
+        "concrete einsum traits must not take a generic TensorBackend"
+    );
+    assert!(
+        !source.contains("fn einsum_read_into<'out, B, O>"),
+        "concrete einsum traits must not take a generic TensorBackend"
     );
 }
 

@@ -3,8 +3,7 @@
 use num_complex::Complex32;
 use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session,
-    CudaBackend,
+    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
 };
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
@@ -64,15 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, |exec_session| {
-            gpu_input.rfft(None, 0, FftNorm::Backward, exec_session)
-        })
-        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
-            op: "cuda_fft_tutorial",
-            message: "CUDA backend session is unavailable".to_owned(),
-        })?
-    })?;
+    let spectrum = backend
+        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);

@@ -3,7 +3,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
 use tenferro_gpu::{apple::AppleContext, webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
-use tenferro_tensor::{HostAccessError, StorageBuffer, Tensor};
+use tenferro_tensor::{BackendSessionHost, HostAccessError, StorageBuffer, Tensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -32,14 +32,14 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
 
     let host_f32 = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
     let mut reference_cpu = tenferro_cpu::CpuBackend::new();
-    let reference = host_f32
-        .rfft(Some(4), 1, FftNorm::Ortho, &mut reference_cpu)
+    let reference = reference_cpu
+        .with_backend_session(|session| host_f32.rfft(Some(4), 1, FftNorm::Ortho, session))
         .unwrap();
     let managed_f32 = context.upload_tensor(&host_f32).unwrap();
     let before = context.transfer_stats();
     let mut apple_cpu = context.cpu_backend().clone();
-    let output = managed_f32
-        .rfft(Some(4), 1, FftNorm::Ortho, &mut apple_cpu)
+    let output = apple_cpu
+        .with_backend_session(|session| managed_f32.rfft(Some(4), 1, FftNorm::Ortho, session))
         .unwrap();
 
     let Tensor::C32(output) = output else {
@@ -54,20 +54,27 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     assert_eq!(context.transfer_stats(), before);
 
     let host_f64 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, -2.0, 0.5]).unwrap();
-    let reference_spectrum = host_f64
-        .rfft(Some(4), 0, FftNorm::Forward, &mut reference_cpu)
-        .unwrap();
-    let reference_round_trip = reference_spectrum
-        .irfft(Some(4), 0, FftNorm::Forward, &mut reference_cpu)
-        .unwrap();
+    let (reference_spectrum, reference_round_trip) =
+        reference_cpu.with_backend_session(|session| {
+            let spectrum = host_f64
+                .rfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap();
+            let round_trip = spectrum
+                .irfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap();
+            (spectrum, round_trip)
+        });
     let managed_f64 = context.upload_tensor(&host_f64).unwrap();
     let before = context.transfer_stats();
-    let spectrum = managed_f64
-        .rfft(Some(4), 0, FftNorm::Forward, &mut apple_cpu)
-        .unwrap();
-    let round_trip = spectrum
-        .irfft(Some(4), 0, FftNorm::Forward, &mut apple_cpu)
-        .unwrap();
+    let (spectrum, round_trip) = apple_cpu.with_backend_session(|session| {
+        let spectrum = managed_f64
+            .rfft(Some(4), 0, FftNorm::Forward, session)
+            .unwrap();
+        let round_trip = spectrum
+            .irfft(Some(4), 0, FftNorm::Forward, session)
+            .unwrap();
+        (spectrum, round_trip)
+    });
     let Tensor::F64(round_trip) = round_trip else {
         panic!("expected F64 output")
     };
@@ -87,13 +94,13 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
         ],
     )
     .unwrap();
-    let reference = host_c32
-        .fft(Some(2), 0, FftNorm::Forward, &mut reference_cpu)
+    let reference = reference_cpu
+        .with_backend_session(|session| host_c32.fft(Some(2), 0, FftNorm::Forward, session))
         .unwrap();
     let managed_c32 = context.upload_tensor(&host_c32).unwrap();
     let before = context.transfer_stats();
-    let output = managed_c32
-        .fft(Some(2), 0, FftNorm::Forward, &mut apple_cpu)
+    let output = apple_cpu
+        .with_backend_session(|session| managed_c32.fft(Some(2), 0, FftNorm::Forward, session))
         .unwrap();
     let Tensor::C32(output) = output else {
         panic!("expected C32 output")
@@ -110,20 +117,23 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
         vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, 0.5)],
     )
     .unwrap();
-    let reference = host_c64
-        .fft(None, -1, FftNorm::Backward, &mut reference_cpu)
+    let reference = reference_cpu
+        .with_backend_session(|session| host_c64.fft(None, -1, FftNorm::Backward, session))
         .unwrap();
     let managed_c64 = context.upload_tensor(&host_c64).unwrap();
     let before = context.transfer_stats();
     let mut executor = FftExecutor::default();
-    let output = executor
-        .fft(&managed_c64, None, -1, FftNorm::Backward, &mut apple_cpu)
-        .unwrap();
+    let (output, repeated) = apple_cpu.with_backend_session(|session| {
+        let output = executor
+            .fft(&managed_c64, None, -1, FftNorm::Backward, session)
+            .unwrap();
+        let repeated = executor
+            .fft(&managed_c64, None, -1, FftNorm::Backward, session)
+            .unwrap();
+        (output, repeated)
+    });
     let cached_entries = executor.cache_stats().entries;
     assert!(cached_entries > 0);
-    let repeated = executor
-        .fft(&managed_c64, None, -1, FftNorm::Backward, &mut apple_cpu)
-        .unwrap();
     assert_eq!(executor.cache_stats().entries, cached_entries);
     let Tensor::C64(output) = output else {
         panic!("expected C64 output")

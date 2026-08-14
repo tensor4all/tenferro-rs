@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use tenferro_tensor::TensorBackend;
 use tenferro_tensor::{
-    BackendSession, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorBackend,
-    TensorRank, TensorRead, TensorView, TensorWrite, TypedTensorView,
+    BackendSession, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorRank,
+    TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
 use crate::binary_dot::{try_build_binary_dot_plan, BinaryDotPlan};
@@ -770,9 +772,9 @@ fn eager_einsum_exec_values<'a>(
 
 /// Run a whole einsum contraction tree in one backend session.
 ///
-/// Unlike [`eager_einsum_subscripts`], the caller supplies the contraction
-/// `tree`, so a known-good external path (e.g. cotengra `opt_flops`) can be
-/// executed whole-program without re-planning.
+/// Unlike [`eager_einsum_subscripts_on_session`], the caller supplies the
+/// contraction `tree`, so a known-good external path (e.g. cotengra
+/// `opt_flops`) can be executed whole-program without re-planning.
 #[cfg(all(feature = "autodiff", test))]
 pub(crate) fn eager_einsum_with_tree(
     exec: &mut dyn BackendSession,
@@ -911,8 +913,24 @@ fn into_tensor_error(error: crate::Error) -> tenferro_tensor::Error {
 }
 
 /// Eager N-ary einsum on concrete [`Tensor`] values using integer labels.
+#[cfg(test)]
 pub(crate) fn eager_einsum_subscripts(
     ctx: &mut impl TensorBackend,
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+) -> Result<Tensor> {
+    ctx.with_backend_session(|session| {
+        eager_einsum_subscripts_on_session(session, inputs, subscripts)
+    })
+}
+
+/// Eager N-ary einsum on concrete [`Tensor`] values inside an existing
+/// backend session.
+///
+/// The session-taking variant used by the concrete einsum traits: the caller
+/// already holds a session, so no nested session entry happens here.
+pub(crate) fn eager_einsum_subscripts_on_session(
+    session: &mut dyn BackendSession,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
@@ -923,9 +941,7 @@ pub(crate) fn eager_einsum_subscripts(
         })
         .map_err(into_tensor_error)?;
         let result = profile_eager_einsum_section("with_backend_session", || {
-            ctx.with_backend_session(|session| {
-                plan.execute(inputs, session).map_err(into_tensor_error)
-            })
+            plan.execute(inputs, session).map_err(into_tensor_error)
         });
         record_eager_einsum_profile("total", total_started.elapsed());
         maybe_print_eager_einsum_profile();
@@ -945,9 +961,7 @@ pub(crate) fn eager_einsum_subscripts(
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let result = ctx.with_backend_session(|session| {
-            plan.execute(inputs, session).map_err(into_tensor_error)
-        });
+        let result = plan.execute(inputs, session).map_err(into_tensor_error);
         let exec_us = started.elapsed().as_secs_f64() * 1.0e6;
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
@@ -962,7 +976,7 @@ pub(crate) fn eager_einsum_subscripts(
 
     let plan = ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
         .map_err(into_tensor_error)?;
-    ctx.with_backend_session(|session| plan.execute(inputs, session).map_err(into_tensor_error))
+    plan.execute(inputs, session).map_err(into_tensor_error)
 }
 
 #[cfg(feature = "autodiff")]
@@ -981,18 +995,33 @@ pub(crate) fn eager_einsum_subscripts_with_session(
 /// Owned tensors and borrowed host views share this entry point. Backends may
 /// consume views directly when their execution model supports it, or
 /// canonicalize them within the existing placement inside the execution session.
+#[cfg(test)]
 pub(crate) fn eager_einsum_read_subscripts(
     ctx: &mut impl TensorBackend,
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+) -> Result<Tensor> {
+    ctx.with_backend_session(|session| {
+        eager_einsum_read_subscripts_on_session(session, inputs, subscripts)
+    })
+}
+
+/// Eager N-ary einsum on read-only tensor inputs inside an existing backend
+/// session.
+///
+/// Owned tensors and borrowed host views share this entry point. Backends may
+/// consume views directly when their execution model supports it, or
+/// canonicalize them within the existing placement inside the execution session.
+pub(crate) fn eager_einsum_read_subscripts_on_session(
+    session: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
     let plan =
         ConcreteEinsumPlan::prepare_read_subscripts(inputs, &EinsumSubscripts::from(subscripts))
             .map_err(into_tensor_error)?;
-    ctx.with_backend_session(|session| {
-        plan.execute_read(inputs, session)
-            .map_err(into_tensor_error)
-    })
+    plan.execute_read(inputs, session)
+        .map_err(into_tensor_error)
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.

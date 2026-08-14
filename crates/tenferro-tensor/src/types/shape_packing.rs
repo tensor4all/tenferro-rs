@@ -1,4 +1,4 @@
-use crate::{GatherConfig, ShapeMismatch, TensorBackend, ValidationError};
+use crate::{GatherConfig, ShapeMismatch, ValidationError};
 
 use super::{Tensor, TypedTensor};
 
@@ -122,13 +122,13 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Tensor, TensorBackend};
+    /// use tenferro_tensor::{BackendSession, Tensor};
     ///
-    /// fn select_last_axis<B: TensorBackend>(
-    ///     backend: &mut B,
+    /// fn select_last_axis(
+    ///     session: &mut dyn BackendSession,
     ///     x: &Tensor,
     /// ) -> tenferro_tensor::Result<Tensor> {
-    ///     x.index_select(-1, &[2, 0], backend)
+    ///     x.index_select(-1, &[2, 0], session)
     /// }
     /// ```
     /// # Errors
@@ -139,10 +139,10 @@ impl Tensor {
         &self,
         axis: isize,
         positions: &[usize],
-        ctx: &mut impl TensorBackend,
+        session: &mut dyn crate::BackendSession,
     ) -> crate::Result<Self> {
         let (indices, config) = index_select_parts(self.shape(), axis, positions)?;
-        ctx.with_backend_session(|exec| exec.gather(self, &indices, &config))
+        session.gather(self, &indices, &config)
     }
 
     /// Stack tensors along a newly inserted axis.
@@ -150,14 +150,14 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Tensor, TensorBackend};
+    /// use tenferro_tensor::{BackendSession, Tensor};
     ///
-    /// fn stack_scalars<B: TensorBackend>(
-    ///     backend: &mut B,
+    /// fn stack_scalars(
+    ///     session: &mut dyn BackendSession,
     ///     a: &Tensor,
     ///     b: &Tensor,
     /// ) -> tenferro_tensor::Result<Tensor> {
-    ///     Tensor::stack(&[a, b], -1, backend)
+    ///     Tensor::stack(&[a, b], -1, session)
     /// }
     /// ```
     /// # Errors
@@ -167,7 +167,7 @@ impl Tensor {
     pub fn stack(
         tensors: &[&Self],
         dim: isize,
-        ctx: &mut impl TensorBackend,
+        session: &mut dyn crate::BackendSession,
     ) -> crate::Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
             crate::Error::invalid_argument("stack", "tensors", "requires at least one input")
@@ -190,14 +190,12 @@ impl Tensor {
         let mut expanded_shape = first.shape().to_vec();
         expanded_shape.insert(axis, 1);
 
-        ctx.with_backend_session(|exec| {
-            let mut expanded = Vec::with_capacity(tensors.len());
-            for tensor in tensors {
-                expanded.push(exec.reshape(tensor, &expanded_shape)?);
-            }
-            let refs = expanded.iter().collect::<Vec<_>>();
-            exec.concatenate(&refs, axis)
-        })
+        let mut expanded = Vec::with_capacity(tensors.len());
+        for tensor in tensors {
+            expanded.push(session.reshape(tensor, &expanded_shape)?);
+        }
+        let refs = expanded.iter().collect::<Vec<_>>();
+        session.concatenate(&refs, axis)
     }
 }
 

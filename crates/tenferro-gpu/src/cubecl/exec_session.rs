@@ -11,9 +11,11 @@ use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::{
+    with_session_entry_guard, TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView,
+};
+use tenferro_tensor::{
     DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite, TypedTensor,
 };
-use tenferro_tensor::{TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView};
 
 use super::identity::GpuExtensionCapability;
 use super::runtime::RawContextRestore;
@@ -608,6 +610,8 @@ impl BackendSessionHost for CudaBackend {
             backend: self,
             _not_send_sync: PhantomData,
         };
-        f(&mut session)
+        // Nested entry is caught by the portable in-session guard in debug
+        // builds; the CUDA runtime must never re-enter a session closure.
+        with_session_entry_guard(|| f(&mut session))
     }
 }

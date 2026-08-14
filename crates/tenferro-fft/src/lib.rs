@@ -61,9 +61,9 @@
 //! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
 //! # {
 //! use num_complex::Complex32;
-//! use tenferro_cpu::with_cpu_exec_session;
+//! use tenferro_cpu::CpuBackend;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_gpu::{webgpu::with_webgpu_exec_session, apple::AppleContext};
+//! use tenferro_gpu::apple::AppleContext;
 //! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! if let Ok(context) = AppleContext::new() {
@@ -75,30 +75,13 @@
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
 //!     let cpu_output = cpu
-//!         .with_backend_session(|session| {
-//!             with_cpu_exec_session(session, |exec_session| {
-//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
-//!             })
-//!             .expect("CpuBackend must expose a CPU execution session")
-//!         })
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
 //!         .unwrap();
 //!     let mut metal = context.metal_backend().clone();
 //!     let output = metal
-//!         .with_backend_session(|session| {
-//!             with_webgpu_exec_session(session, |exec_session| {
-//!                 input.fft(None, 0, FftNorm::Backward, exec_session)
-//!             })
-//!             .expect("WebGpuBackend must expose a WebGPU execution session")
-//!         })
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
 //!         .unwrap();
-//!     metal
-//!         .with_backend_session(|session| {
-//!             with_webgpu_exec_session(session, |exec_session| {
-//!                 exec_session.runtime().synchronize()
-//!             })
-//!             .expect("WebGpuBackend must expose a WebGPU execution session")
-//!         })
-//!         .unwrap();
+//!     metal.synchronize().unwrap();
 //!     assert_eq!(output.shape(), &[4]);
 //!     assert_eq!(cpu_output.shape(), output.shape());
 //!     assert_eq!(context.transfer_stats(), after_creation);
@@ -108,19 +91,14 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+//! use tenferro_cpu::CpuBackend;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
 //! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let mut backend = CpuBackend::new();
 //! let out = backend
-//!     .with_backend_session(|session| {
-//!         with_cpu_exec_session(session, |exec_session| {
-//!             x.fft(None, -1, FftNorm::Backward, exec_session)
-//!         })
-//!         .expect("CpuBackend must expose a CPU execution session")
-//!     })
+//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))
 //!     .unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
@@ -232,14 +210,16 @@ impl FftExecutor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for unsupported dtypes, or a typed backend source for execution.
-    pub fn fft<B: FftBackend>(
+    /// for unsupported dtypes, a typed capability error when the session does
+    /// not expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    pub fn fft(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -248,7 +228,7 @@ impl FftExecutor {
             n,
             axis,
             norm,
-            backend,
+            session,
         )
     }
 
@@ -259,14 +239,16 @@ impl FftExecutor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-complex input, or a typed backend source for execution.
-    pub fn ifft<B: FftBackend>(
+    /// for a non-complex input, a typed capability error when the session does
+    /// not expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    pub fn ifft(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -275,7 +257,7 @@ impl FftExecutor {
             n,
             axis,
             norm,
-            backend,
+            session,
         )
     }
 
@@ -286,14 +268,16 @@ impl FftExecutor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-real input, or a typed backend source for execution.
-    pub fn rfft<B: FftBackend>(
+    /// for a non-real input, a typed capability error when the session does not
+    /// expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    pub fn rfft(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -302,7 +286,7 @@ impl FftExecutor {
             n,
             axis,
             norm,
-            backend,
+            session,
         )
     }
 
@@ -313,14 +297,16 @@ impl FftExecutor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`,
     /// `InvalidArgument`, or spectrum-length details,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-complex input, or a typed backend source for execution.
-    pub fn irfft<B: FftBackend>(
+    /// for a non-complex input, a typed capability error when the session does
+    /// not expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    pub fn irfft(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -329,12 +315,12 @@ impl FftExecutor {
             n,
             axis,
             norm,
-            backend,
+            session,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn execute<B: FftBackend>(
+    fn execute(
         &mut self,
         input: &Tensor,
         operation: FftOperation,
@@ -342,7 +328,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             op_name,
@@ -353,11 +339,16 @@ impl FftExecutor {
             axis,
             norm,
         )?;
-        backend.execute_fft(
-            input,
-            &spec,
-            FftExecutionCache::caller_owned(&mut self.plans),
-        )
+        // The executor calls the concrete backend directly (no internal
+        // session entry); the built-in dispatch only bridges the borrowed
+        // session to its FFT execution capability.
+        with_fft_exec_session(session, op_name, |backend| {
+            backend.execute_fft(
+                input,
+                &spec,
+                FftExecutionCache::caller_owned(&mut self.plans),
+            )
+        })
     }
 }
 
@@ -454,19 +445,15 @@ impl TracedTensorFftExt for TracedTensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_fft::{FftNorm, TensorFftExt};
 /// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = backend.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |exec_session| {
-///         input.fft(None, -1, FftNorm::Backward, exec_session)
-///     })
-///     .expect("CpuBackend must expose a CPU execution session")
-/// })?;
+/// let spectrum = backend
+///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))?;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -478,13 +465,15 @@ pub trait TensorFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// integer or boolean input, or a typed backend source for execution.
-    fn fft<B: FftBackend>(
+    /// integer or boolean input, a typed capability error when the session
+    /// does not expose an FFT execution capability, or a typed backend source
+    /// for execution.
+    fn fft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse FFT along `axis`.
@@ -493,13 +482,15 @@ pub trait TensorFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-complex input, or a typed backend source for execution.
-    fn ifft<B: FftBackend>(
+    /// non-complex input, a typed capability error when the session does not
+    /// expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    fn ifft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional real FFT along `axis`.
@@ -508,13 +499,15 @@ pub trait TensorFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-`F32`/`F64` input, or a typed backend source for execution.
-    fn rfft<B: FftBackend>(
+    /// non-`F32`/`F64` input, a typed capability error when the session does
+    /// not expose an FFT execution capability, or a typed backend source for
+    /// execution.
+    fn rfft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse real FFT along `axis`.
@@ -523,24 +516,25 @@ pub trait TensorFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds`, `InvalidArgument`,
     /// or spectrum-length details, `Error::Extension` with
-    /// `ErrorKind::Unsupported` for a non-complex input, or a typed backend
-    /// source for execution.
-    fn irfft<B: FftBackend>(
+    /// `ErrorKind::Unsupported` for a non-complex input, a typed capability
+    /// error when the session does not expose an FFT execution capability, or
+    /// a typed backend source for execution.
+    fn irfft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
 impl TensorFftExt for Tensor {
-    fn fft<B: FftBackend>(
+    fn fft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::fft",
@@ -551,15 +545,17 @@ impl TensorFftExt for Tensor {
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &spec, backend)
+        with_fft_exec_session(session, "TensorFftExt::fft", |backend| {
+            execute_concrete_fft_op(self, &spec, backend)
+        })
     }
 
-    fn ifft<B: FftBackend>(
+    fn ifft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::ifft",
@@ -570,15 +566,17 @@ impl TensorFftExt for Tensor {
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &spec, backend)
+        with_fft_exec_session(session, "TensorFftExt::ifft", |backend| {
+            execute_concrete_fft_op(self, &spec, backend)
+        })
     }
 
-    fn rfft<B: FftBackend>(
+    fn rfft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::rfft",
@@ -589,15 +587,17 @@ impl TensorFftExt for Tensor {
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &spec, backend)
+        with_fft_exec_session(session, "TensorFftExt::rfft", |backend| {
+            execute_concrete_fft_op(self, &spec, backend)
+        })
     }
 
-    fn irfft<B: FftBackend>(
+    fn irfft(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::irfft",
@@ -608,7 +608,9 @@ impl TensorFftExt for Tensor {
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &spec, backend)
+        with_fft_exec_session(session, "TensorFftExt::irfft", |backend| {
+            execute_concrete_fft_op(self, &spec, backend)
+        })
     }
 }
 
@@ -625,7 +627,7 @@ impl TensorFftExt for Tensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_fft::{FftNorm, TensorReadFftExt};
 /// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 ///
@@ -634,12 +636,8 @@ impl TensorFftExt for Tensor {
 /// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
 /// let mut backend = CpuBackend::new();
 ///
-/// let spectrum = backend.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |exec_session| {
-///         input.fft_read(None, -1, FftNorm::Backward, exec_session)
-///     })
-///     .expect("CpuBackend must expose a CPU execution session")
-/// })?;
+/// let spectrum = backend
+///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))?;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -650,14 +648,15 @@ pub trait TensorReadFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// integer or boolean input, or a typed backend source for materialization
-    /// or execution.
-    fn fft_read<B: FftBackend>(
+    /// integer or boolean input, a typed capability error when the session
+    /// does not expose an FFT execution capability, or a typed backend source
+    /// for materialization or execution.
+    fn fft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse FFT along `axis`.
@@ -666,13 +665,15 @@ pub trait TensorReadFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-complex input, or a typed backend source for materialization.
-    fn ifft_read<B: FftBackend>(
+    /// non-complex input, a typed capability error when the session does not
+    /// expose an FFT execution capability, or a typed backend source for
+    /// materialization.
+    fn ifft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional real FFT along `axis`.
@@ -681,13 +682,15 @@ pub trait TensorReadFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-`F32`/`F64` input, or a typed backend source for materialization.
-    fn rfft_read<B: FftBackend>(
+    /// non-`F32`/`F64` input, a typed capability error when the session does
+    /// not expose an FFT execution capability, or a typed backend source for
+    /// materialization.
+    fn rfft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse real FFT along `axis`.
@@ -696,88 +699,97 @@ pub trait TensorReadFftExt {
     ///
     /// Returns `Error::Validation` with `AxisOutOfBounds`, `InvalidArgument`,
     /// or spectrum-length details, `Error::Extension` with
-    /// `ErrorKind::Unsupported` for a non-complex input, or a typed backend
-    /// source for materialization.
-    fn irfft_read<B: FftBackend>(
+    /// `ErrorKind::Unsupported` for a non-complex input, a typed capability
+    /// error when the session does not expose an FFT execution capability, or
+    /// a typed backend source for materialization.
+    fn irfft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
 impl TensorReadFftExt for TensorRead<'_> {
-    fn fft_read<B: FftBackend>(
+    fn fft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        execute_concrete_fft_read_op(
-            self,
-            concrete_fft_operation("TensorReadFftExt::fft_read", self.dtype())?,
-            "TensorReadFftExt::fft_read",
-            n,
-            axis,
-            norm,
-            backend,
-        )
+        with_fft_exec_session(session, "TensorReadFftExt::fft_read", |backend| {
+            execute_concrete_fft_read_op(
+                self,
+                concrete_fft_operation("TensorReadFftExt::fft_read", self.dtype())?,
+                "TensorReadFftExt::fft_read",
+                n,
+                axis,
+                norm,
+                backend,
+            )
+        })
     }
 
-    fn ifft_read<B: FftBackend>(
+    fn ifft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        execute_concrete_fft_read_op(
-            self,
-            concrete_ifft_operation("TensorReadFftExt::ifft_read", self.dtype())?,
-            "TensorReadFftExt::ifft_read",
-            n,
-            axis,
-            norm,
-            backend,
-        )
+        with_fft_exec_session(session, "TensorReadFftExt::ifft_read", |backend| {
+            execute_concrete_fft_read_op(
+                self,
+                concrete_ifft_operation("TensorReadFftExt::ifft_read", self.dtype())?,
+                "TensorReadFftExt::ifft_read",
+                n,
+                axis,
+                norm,
+                backend,
+            )
+        })
     }
 
-    fn rfft_read<B: FftBackend>(
+    fn rfft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        execute_concrete_fft_read_op(
-            self,
-            concrete_rfft_operation("TensorReadFftExt::rfft_read", self.dtype())?,
-            "TensorReadFftExt::rfft_read",
-            n,
-            axis,
-            norm,
-            backend,
-        )
+        with_fft_exec_session(session, "TensorReadFftExt::rfft_read", |backend| {
+            execute_concrete_fft_read_op(
+                self,
+                concrete_rfft_operation("TensorReadFftExt::rfft_read", self.dtype())?,
+                "TensorReadFftExt::rfft_read",
+                n,
+                axis,
+                norm,
+                backend,
+            )
+        })
     }
 
-    fn irfft_read<B: FftBackend>(
+    fn irfft_read(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        execute_concrete_fft_read_op(
-            self,
-            concrete_irfft_operation("TensorReadFftExt::irfft_read", self.dtype())?,
-            "TensorReadFftExt::irfft_read",
-            n,
-            axis,
-            norm,
-            backend,
-        )
+        with_fft_exec_session(session, "TensorReadFftExt::irfft_read", |backend| {
+            execute_concrete_fft_read_op(
+                self,
+                concrete_irfft_operation("TensorReadFftExt::irfft_read", self.dtype())?,
+                "TensorReadFftExt::irfft_read",
+                n,
+                axis,
+                norm,
+                backend,
+            )
+        })
     }
 }
 
@@ -959,24 +971,61 @@ impl ExtensionOp for FftOp {
     }
 }
 
-fn execute_concrete_fft_op<B: FftBackend>(
+/// Run a concrete FFT body against the built-in FFT execution sessions
+/// carried by `session` (CPU/CUDA/WebGPU), returning a typed capability error
+/// when the session does not expose an FFT execution capability.
+///
+/// This is the built-in dispatch shared by the concrete FFT surface; callers
+/// never downcast themselves (issue #1680 Phase 3). Third-party
+/// [`FftBackend`] implementations remain supported through the SPI trait, but
+/// the concrete op path is built-in-session only.
+fn with_fft_exec_session<X>(
+    session: &mut dyn BackendSession,
+    op: &'static str,
+    f: impl FnOnce(&mut dyn FftBackend) -> tenferro_tensor::Result<X>,
+) -> tenferro_tensor::Result<X> {
+    // The capability branches are mutually exclusive, so `f` runs exactly
+    // once. Probe the marker first, then re-extract the same exec session and
+    // run the concrete body on it (FnOnce cannot be captured by several
+    // branch closures).
+    if with_cpu_exec_session(session, |_| ()).is_some() {
+        return with_cpu_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
+            .expect("marker probe matched a CPU execution session");
+    }
+    #[cfg(feature = "cuda")]
+    if with_cuda_exec_session(session, |_| ()).is_some() {
+        return with_cuda_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
+            .expect("marker probe matched a CUDA execution session");
+    }
+    #[cfg(feature = "webgpu")]
+    if with_webgpu_exec_session(session, |_| ()).is_some() {
+        return with_webgpu_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
+            .expect("marker probe matched a WebGPU execution session");
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        op,
+        "selected backend session does not expose an FFT execution capability",
+    ))
+}
+
+fn execute_concrete_fft_op(
     input: &Tensor,
     spec: &FftPlanSpec,
-    backend: &mut B,
+    backend: &mut dyn FftBackend,
 ) -> tenferro_tensor::Result<Tensor> {
     let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
     backend.execute_fft(input, spec, FftExecutionCache::caller_owned(&mut plans))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_concrete_fft_read_op<B: FftBackend>(
+fn execute_concrete_fft_read_op(
     input: &TensorRead<'_>,
     operation: FftOperation,
     op_name: &'static str,
     n: Option<usize>,
     axis: isize,
     norm: FftNorm,
-    backend: &mut B,
+    backend: &mut dyn FftBackend,
 ) -> tenferro_tensor::Result<Tensor> {
     let spec = concrete_fft_spec(
         op_name,

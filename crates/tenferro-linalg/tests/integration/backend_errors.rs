@@ -281,26 +281,26 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     let input =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]).unwrap();
-    let expected_eig_values = Tensor::C64(
-        TypedTensor::from_vec_col_major(
-            vec![2],
-            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-        )
-        .unwrap(),
-    );
     let mut backend = DefaultOnlyLinalgBackend {
-        eig_values_result: Some(expected_eig_values),
+        eig_values_result: None,
         eig_values_calls: 0,
     };
 
-    let eig_values = Tensor::F64(input.duplicate().unwrap())
+    // The concrete linalg traits dispatch internally to the built-in
+    // CPU/CUDA execution sessions; a session without a linalg capability
+    // returns a typed capability error instead of accepting the arbitrary
+    // backend (issue #1680 Phase 3). The custom backend here is SPI-only.
+    let error = Tensor::F64(input.duplicate().unwrap())
         .eigvals(&mut backend)
-        .unwrap();
-    assert_eq!(backend.eig_values_calls, 1);
-    assert_eq!(
-        c64_values(&eig_values),
-        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
-    );
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Unsupported {
+            op: "eigvals",
+            ref message,
+        } if message.contains("does not expose a linalg execution capability")
+    ));
+    assert_eq!(backend.eig_values_calls, 0);
 
     let err = backend
         .lu_factor(&Tensor::F64(input.duplicate().unwrap()))

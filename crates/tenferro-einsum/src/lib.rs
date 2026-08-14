@@ -35,13 +35,15 @@
 //! ```
 //! use tenferro_cpu::CpuBackend;
 //! use tenferro_einsum::TensorEinsumExt;
-//! use tenferro_tensor::Tensor;
+//! use tenferro_tensor::{BackendSessionHost, Tensor};
 //!
 //! let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 //! let b = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
 //! let mut backend = CpuBackend::new();
 //!
-//! let out = [&a, &b].einsum("ij,jk->ik", &mut backend)?;
+//! let out = backend.with_backend_session(|session| {
+//!     [&a, &b].einsum("ij,jk->ik", session)
+//! })?;
 //! assert_eq!(out.shape(), &[2, 4]);
 //! # Ok::<(), tenferro_einsum::Error>(())
 //! ```

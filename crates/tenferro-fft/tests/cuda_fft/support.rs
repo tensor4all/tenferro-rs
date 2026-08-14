@@ -1,19 +1,15 @@
-use tenferro_gpu::cuda::{
-    download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaExecSession,
-};
+use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_runtime::Tensor;
-use tenferro_tensor::{BackendSessionHost, TensorRead};
+use tenferro_tensor::{BackendSession, BackendSessionHost, TensorRead};
 
 pub fn with_cuda_fft_session<R>(
     backend: &mut CudaBackend,
-    f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R + Send,
+    f: impl for<'a> FnOnce(&'a mut (dyn BackendSession + 'a)) -> R + Send,
 ) -> R
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, f).expect("CUDA backend session should be available")
-    })
+    backend.with_backend_session(f)
 }
 
 pub fn cuda_backend() -> CudaBackend {

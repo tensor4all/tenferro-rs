@@ -26,7 +26,9 @@ fn public_tensor_einsum_ext_executes_dtype_erased_inputs() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
-    let result = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,jk->ik", session))
+        .unwrap();
 
     assert_f64_tensor(&result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
 }
@@ -36,15 +38,19 @@ fn concrete_tensordot_matches_einsum_for_erased_and_typed_tensors() {
     let mut backend = CpuBackend::new();
     let lhs = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0]).unwrap();
-    let erased = lhs
-        .tensordot(&rhs, crate::TensorDotAxes::Count(1), &mut backend)
+    let erased = backend
+        .with_backend_session(|session| {
+            lhs.tensordot(&rhs, crate::TensorDotAxes::Count(1), session)
+        })
         .unwrap();
     assert_eq!(erased.as_slice::<f64>().unwrap(), &[11.0]);
 
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
-    let typed = lhs
-        .tensordot(&rhs, crate::TensorDotAxes::Count(1), &mut backend)
+    let typed = backend
+        .with_backend_session(|session| {
+            lhs.tensordot(&rhs, crate::TensorDotAxes::Count(1), session)
+        })
         .unwrap();
     assert_eq!(typed.as_slice().unwrap(), &[11.0]);
 }
@@ -59,12 +65,11 @@ fn public_tensor_einsum_ext_accepts_slice_and_integer_subscripts() {
     let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
     let inputs = vec![&lhs, &rhs];
 
-    let slice_result = inputs
-        .as_slice()
-        .einsum_subscripts(&subscripts, &mut backend)
+    let slice_result = backend
+        .with_backend_session(|session| inputs.as_slice().einsum_subscripts(&subscripts, session))
         .unwrap();
-    let array_result = [&lhs, &rhs]
-        .einsum_subscripts(&subscripts, &mut backend)
+    let array_result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum_subscripts(&subscripts, session))
         .unwrap();
 
     assert_f64_tensor(&slice_result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
@@ -90,10 +95,12 @@ fn public_typed_tensor_einsum_ext_preserves_complex_dtype() {
     )
     .unwrap();
 
-    let result = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,jk->ik", session))
+        .unwrap();
     let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
-    let integer_result = [&lhs, &rhs]
-        .einsum_subscripts(&subscripts, &mut backend)
+    let integer_result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum_subscripts(&subscripts, session))
         .unwrap();
     let plan = ConcreteEinsumPlan::prepare_typed_subscripts([&lhs, &rhs], &subscripts).unwrap();
     let planned_result = backend
@@ -127,12 +134,11 @@ fn public_typed_tensor_einsum_ext_accepts_slice_and_integer_subscripts() {
     let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
     let inputs = vec![&lhs, &rhs];
 
-    let slice_result = inputs
-        .as_slice()
-        .einsum_subscripts(&subscripts, &mut backend)
+    let slice_result = backend
+        .with_backend_session(|session| inputs.as_slice().einsum_subscripts(&subscripts, session))
         .unwrap();
-    let array_result = [&lhs, &rhs]
-        .einsum_subscripts(&subscripts, &mut backend)
+    let array_result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum_subscripts(&subscripts, session))
         .unwrap();
 
     assert_eq!(slice_result.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -161,11 +167,15 @@ fn public_typed_tensor_read_einsum_ext_accepts_borrowed_strided_complex_views() 
         TypedTensor::<Complex64>::from_vec_col_major(vec![2], vec![Complex64::new(0.0, 0.0); 2])
             .unwrap();
 
-    let result = [matrix_view.clone(), vector_view.clone()]
-        .einsum_read("ij,j->i", &mut backend)
+    let result = backend
+        .with_backend_session(|session| {
+            [matrix_view.clone(), vector_view.clone()].einsum_read("ij,j->i", session)
+        })
         .unwrap();
-    [matrix_view, vector_view]
-        .einsum_read_into("ij,j->i", &mut backend, &mut out)
+    backend
+        .with_backend_session(|session| {
+            [matrix_view, vector_view].einsum_read_into("ij,j->i", session, &mut out)
+        })
         .unwrap();
 
     assert_eq!(
@@ -189,7 +199,9 @@ fn public_tensor_read_einsum_ext_accepts_strided_views() {
         TensorRead::from_tensor(&vector),
     ];
 
-    let result = inputs.einsum_read("ij,j->i", &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| inputs.einsum_read("ij,j->i", session))
+        .unwrap();
 
     assert_f64_tensor(&result, &[2], &[140.0, 320.0]);
 }
@@ -206,12 +218,15 @@ fn public_tensor_read_einsum_ext_accepts_slice_and_integer_subscripts() {
     ];
     let subscripts = parse_einsum_subscripts("ij,j->i").unwrap();
 
-    let slice_result = inputs
-        .as_slice()
-        .einsum_read_subscripts(&subscripts, &mut backend)
+    let slice_result = backend
+        .with_backend_session(|session| {
+            inputs
+                .as_slice()
+                .einsum_read_subscripts(&subscripts, session)
+        })
         .unwrap();
-    let array_result = inputs
-        .einsum_read_subscripts(&subscripts, &mut backend)
+    let array_result = backend
+        .with_backend_session(|session| inputs.einsum_read_subscripts(&subscripts, session))
         .unwrap();
 
     assert_f64_tensor(&slice_result, &[2], &[140.0, 320.0]);
@@ -227,12 +242,14 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
     let mut dynamic_out = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
-    [&lhs, &rhs]
-        .einsum_into(
-            "ij,jk->ik",
-            &mut backend,
-            TensorWrite::from_tensor(&mut dynamic_out),
-        )
+    backend
+        .with_backend_session(|session| {
+            [&lhs, &rhs].einsum_into(
+                "ij,jk->ik",
+                session,
+                TensorWrite::from_tensor(&mut dynamic_out),
+            )
+        })
         .unwrap();
     assert_f64_tensor(&dynamic_out, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
 
@@ -243,8 +260,10 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
     let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![-1.0; 4]).unwrap();
-    [&typed_lhs, &typed_rhs]
-        .einsum_into("ij,jk->ik", &mut backend, &mut typed_out)
+    backend
+        .with_backend_session(|session| {
+            [&typed_lhs, &typed_rhs].einsum_into("ij,jk->ik", session, &mut typed_out)
+        })
         .unwrap();
     assert_eq!(typed_out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
@@ -252,12 +271,14 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
     {
         let out_view =
             TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut typed_strided_data).unwrap();
-        [&typed_lhs, &typed_rhs]
-            .einsum_into(
-                "ij,jk->ik",
-                &mut backend,
-                TypedTensorWrite::from_view(out_view),
-            )
+        backend
+            .with_backend_session(|session| {
+                [&typed_lhs, &typed_rhs].einsum_into(
+                    "ij,jk->ik",
+                    session,
+                    TypedTensorWrite::from_view(out_view),
+                )
+            })
             .unwrap();
     }
     assert_eq!(
@@ -271,8 +292,10 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
             TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
         );
         let inputs = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-        inputs
-            .einsum_read_into("ij,jk->ik", &mut backend, TensorWrite::from_view(out_view))
+        backend
+            .with_backend_session(|session| {
+                inputs.einsum_read_into("ij,jk->ik", session, TensorWrite::from_view(out_view))
+            })
             .unwrap();
     }
     assert_eq!(
@@ -303,8 +326,8 @@ fn public_einsum_into_preserves_complex_dtype() {
         TypedTensor::<Complex64>::from_vec_col_major(vec![2, 1], vec![Complex64::new(0.0, 0.0); 2])
             .unwrap();
 
-    [&lhs, &rhs]
-        .einsum_into("ij,jk->ik", &mut backend, &mut out)
+    backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum_into("ij,jk->ik", session, &mut out))
         .unwrap();
 
     assert_eq!(
@@ -321,12 +344,14 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
-    let shape_err = [&lhs, &rhs]
-        .einsum_into(
-            "ij,jk->ik",
-            &mut backend,
-            TensorWrite::from_tensor(&mut wrong_shape),
-        )
+    let shape_err = backend
+        .with_backend_session(|session| {
+            [&lhs, &rhs].einsum_into(
+                "ij,jk->ik",
+                session,
+                TensorWrite::from_tensor(&mut wrong_shape),
+            )
+        })
         .unwrap_err();
     assert!(matches!(
         shape_err,
@@ -337,12 +362,14 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
     ));
 
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
-    let dtype_err = [&lhs, &rhs]
-        .einsum_into(
-            "ij,jk->ik",
-            &mut backend,
-            TensorWrite::from_tensor(&mut wrong_dtype),
-        )
+    let dtype_err = backend
+        .with_backend_session(|session| {
+            [&lhs, &rhs].einsum_into(
+                "ij,jk->ik",
+                session,
+                TensorWrite::from_tensor(&mut wrong_dtype),
+            )
+        })
         .unwrap_err();
     assert!(matches!(
         dtype_err,
@@ -662,8 +689,8 @@ fn concrete_einsum_public_api_reports_parse_and_input_count_errors() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let mut backend = CpuBackend::new();
 
-    let parse_err = [&lhs, &rhs]
-        .einsum("ij,(jk)->ik", &mut backend)
+    let parse_err = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,(jk)->ik", session))
         .unwrap_err();
     let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
     let count_err = backend

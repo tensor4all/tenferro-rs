@@ -28,7 +28,7 @@ Quick reference:
 
 Use direct imports when a small module should make its dependencies explicit:
 `use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
-`use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. For tutorials or
+`use tenferro_linalg::TensorLinalgExt;`. For tutorials or
 modules using several operation traits, the equivalent crate-local preludes are
 `use tenferro_runtime::prelude::*;` and `use tenferro_linalg::prelude::*;`.
 There is no facade prelude: keep each operation family imported from its own
@@ -103,7 +103,7 @@ operations.
 | Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `x.fft(...)` via `EagerTensorFftExt` with `autodiff` | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
-| Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
+| Linear algebra | `TensorLinalgExt` session methods via `with_backend_session` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 

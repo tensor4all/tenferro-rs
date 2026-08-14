@@ -70,8 +70,8 @@ use tenferro_einsum::{
     TypedTensorEinsumIntoExt, TypedTensorReadEinsumIntoExt,
 };
 use tenferro_tensor::{
-    Tensor, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
-    TypedTensorWrite,
+    BackendSessionHost, Tensor, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, TypedTensorWrite,
 };
 
 let lhs = Tensor::from_vec_col_major(
@@ -83,15 +83,19 @@ let rhs = Tensor::from_vec_col_major(
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 let mut backend = CpuBackend::new();
-let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
+let product = backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum("ij,jk->ik", session)
+})?;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
-[&lhs, &rhs].einsum_into(
-    "ij,jk->ik",
-    &mut backend,
-    TensorWrite::from_tensor(&mut product_out),
-)?;
+backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum_into(
+        "ij,jk->ik",
+        session,
+        TensorWrite::from_tensor(&mut product_out),
+    )
+})?;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -107,7 +111,9 @@ let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
     vec![2, 1],
     vec![Complex64::new(5.0, 0.0), Complex64::new(6.0, -1.0)],
 )?;
-let complex = [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", &mut backend)?;
+let complex = backend.with_backend_session(|session| {
+    [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", session)
+})?;
 assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -118,11 +124,13 @@ let borrowed_rhs = complex_rhs.as_view();
 let mut borrowed_storage = [Complex64::new(0.0, 0.0); 4];
 let borrowed_out =
     TypedTensorViewMut::from_slice([2, 1], [2, 4], 1, &mut borrowed_storage)?;
-[borrowed, borrowed_rhs].einsum_read_into(
-    "ij,jk->ik",
-    &mut backend,
-    TypedTensorWrite::from_view(borrowed_out),
-)?;
+backend.with_backend_session(|session| {
+    [borrowed, borrowed_rhs].einsum_read_into(
+        "ij,jk->ik",
+        session,
+        TypedTensorWrite::from_view(borrowed_out),
+    )
+})?;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -159,7 +167,9 @@ let inputs = [
 ];
 
 let mut backend = CpuBackend::new();
-let result = inputs.einsum_read("ij,j->i", &mut backend)?;
+let result = backend.with_backend_session(|session| {
+    inputs.einsum_read("ij,j->i", session)
+})?;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
@@ -173,11 +183,13 @@ let inputs = [
     TensorRead::from_view(TensorView::F64(matrix)),
     TensorRead::from_tensor(&vector),
 ];
-plan.execute_read_into(
-    inputs,
-    &mut backend,
-    TensorWrite::from_tensor(&mut planned_out),
-)?;
+backend.with_backend_session(|session| {
+    plan.execute_read_into(
+        inputs,
+        session,
+        TensorWrite::from_tensor(&mut planned_out),
+    )
+})?;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ```
 <!-- end-snippet-source -->

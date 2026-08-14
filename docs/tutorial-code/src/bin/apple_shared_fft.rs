@@ -8,7 +8,7 @@ use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, Error, StorageBuffer, Tensor, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, Error, StorageBuffer, Tensor, TypedTensor,
 };
 
 #[cfg(target_os = "macos")]
@@ -42,16 +42,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let after_creation = context.transfer_stats();
 
     let mut cpu = context.cpu_backend().clone();
-    let cpu_first = unified.rfft(None, 0, FftNorm::Backward, &mut cpu)?;
+    let cpu_first =
+        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let mut metal = context.metal_backend().clone();
-    let metal_result = unified.rfft(None, 0, FftNorm::Backward, &mut metal)?;
+    let metal_result =
+        metal.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
     metal.synchronize()?;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let mut cpu = context.cpu_backend().clone();
-    let cpu_again = unified.rfft(None, 0, FftNorm::Backward, &mut cpu)?;
+    let cpu_again =
+        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let (Tensor::C32(cpu_first), Tensor::C32(metal_result), Tensor::C32(cpu_again)) =
@@ -96,15 +99,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let c64 = context.upload_tensor(&c64_host)?;
     let after_c64_creation = context.transfer_stats();
     let mut cpu = context.cpu_backend().clone();
-    let cpu_c64 = c64.fft(None, 0, FftNorm::Backward, &mut cpu)?;
+    let cpu_c64 =
+        cpu.with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))?;
     let Tensor::C64(cpu_c64) = cpu_c64 else {
         panic!("C64 FFT must return C64")
     };
     assert_eq!(cpu_c64.allocation_domain(), Some(context.domain_id()));
 
     let mut metal = context.metal_backend().clone();
-    let error = c64
-        .fft(None, 0, FftNorm::Backward, &mut metal)
+    let error = metal
+        .with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))
         .expect_err("Metal must reject C64");
     assert!(matches!(error, Error::Unsupported { .. }));
     assert_eq!(context.transfer_stats(), after_c64_creation);

@@ -1,7 +1,6 @@
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::prelude::*;
 use tenferro_runtime::prelude::*;
-use tenferro_runtime::{TensorRead, TensorView};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -24,17 +23,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    let svd = backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, |exec_session| {
-            exec_session.svd_read(TensorRead::from_view(TensorView::F64(product.as_view())))
-        })
-        .expect("CpuBackend must expose a CPU execution session")
-    })?;
-    assert_eq!(svd.len(), 3);
-    assert_eq!(svd[0].shape(), &[2, 2]);
-    assert_eq!(svd[1].shape(), &[2]);
-    assert_eq!(svd[2].shape(), &[2, 2]);
-    assert_close(svd[1].as_slice::<f64>().unwrap(), &[3.0, 1.0]);
+    let (u, s, vt) = backend.with_backend_session(|session| product.svd(session))?;
+    assert_eq!(u.shape(), &[2, 2]);
+    assert_eq!(s.shape(), &[2]);
+    assert_eq!(vt.shape(), &[2, 2]);
+    assert_close(s.as_slice()?, &[3.0, 1.0]);
 
     Ok(())
 }
