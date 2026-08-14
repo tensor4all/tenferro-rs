@@ -99,12 +99,12 @@ fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
     let concrete_source = crate_source("src/tensor_ext.rs");
     let concrete_frobenius = source_section(
         &concrete_source,
-        "fn frobenius_norm<B: LinalgBackend>",
-        "fn p_norm<B: LinalgBackend>",
+        "fn frobenius_norm<B: LinalgBackend + ?Sized>",
+        "fn p_norm<B: LinalgBackend + ?Sized>",
     );
     let concrete_p_norm = source_section(
         &concrete_source,
-        "fn p_norm<B: LinalgBackend>",
+        "fn p_norm<B: LinalgBackend + ?Sized>",
         "fn count_nonzero<B: LinalgBackend>",
     );
     assert!(
@@ -156,7 +156,7 @@ fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
     let concrete_source = crate_source("src/tensor_ext.rs");
     let concrete_norm = source_section(
         &concrete_source,
-        "fn norm_from_read<B: LinalgBackend>",
+        "fn norm_from_read<B: LinalgBackend + ?Sized>",
         "fn scalar_real(dtype: DType",
     );
     assert!(
@@ -501,5 +501,62 @@ fn traced_lstsq_validates_once_without_symbolic_shape_probe_allocation() {
             && validation.contains("ensure_float_or_complex(op, dtype)?")
             && validation.contains("ensure_min_rank(op, a_rank, 2)?"),
         "shared lstsq validation must keep dtype/rank checks ahead of lazy shape extraction"
+    );
+}
+
+#[test]
+fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
+    // The public solve_read_into surface must dispatch eligible calls to the
+    // direct in-place write (`solve_read_into_entered`) and reserve the
+    // allocate-then-copy fallback (`solve_read_into_default`) for ineligible
+    // destinations. `concrete_surface.rs` exercises the eligible runtime path
+    // (contiguous host output, matching shape/dtype/placement), so this source
+    // contract closes the gap: the direct path is provably taken, not just
+    // value-identical.
+    let source = crate_source("src/cpu/backend.rs");
+    let solve_read_into = source_section(
+        &source,
+        "fn solve_read_into(",
+        "fn solve_read_into_direct_eligible",
+    );
+
+    assert!(
+        solve_read_into.contains("solve_read_into_entered(provider, context, buffers, a, b, out)"),
+        "eligible solve_read_into should reach the direct in-place solver"
+    );
+    assert_eq!(
+        solve_read_into.matches("solve_read_into_default").count(),
+        1,
+        "the allocate+copy fallback should appear exactly once, behind the eligibility guard"
+    );
+    let guarded_fallback = source_section(
+        solve_read_into,
+        "if has_zero_dim(a.shape())",
+        "}\n\n        let a = a.tensor_view();",
+    );
+    assert!(
+        guarded_fallback.contains("solve_read_into_default(self, a, b, out)"),
+        "the allocate+copy fallback must be the guarded ineligible branch, not the main path"
+    );
+}
+
+#[test]
+fn cpu_solve_read_into_entered_writes_into_the_caller_buffer() {
+    // The direct path must solve into the caller's destination buffer without
+    // an allocate-then-copy round trip.
+    let source = crate_source("src/cpu/backend.rs");
+    let entered = source_section(
+        &source,
+        "fn solve_read_into_entered(",
+        "fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {",
+    );
+
+    assert!(
+        entered.contains("&mut out") && entered.contains("solve_into("),
+        "the direct path should solve straight into the caller's out buffer"
+    );
+    assert!(
+        !entered.contains("copy_read_into"),
+        "the direct path should not allocate-then-copy"
     );
 }

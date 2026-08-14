@@ -2,11 +2,19 @@
 //!
 //! Owned tensors use [`TensorLinalgExt`], borrowed tensors and views use the
 //! `_read` methods on [`TensorReadLinalgExt`], and typed tensors use
-//! [`TypedTensorLinalgExt`]. All methods reuse a caller-owned backend.
+//! [`TypedTensorLinalgExt`]. All methods dispatch internally to the built-in
+//! CPU/CUDA execution sessions through an erased `&mut dyn BackendSession`
+//! (issue #1680 Phase 3); third-party [`LinalgBackend`] implementations
+//! remain supported through the SPI trait, but the concrete op path is
+//! built-in-session only.
 
 use num_complex::{Complex32, Complex64};
+use tenferro_cpu::with_cpu_exec_session;
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cuda::with_cuda_exec_session;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite, TypedTensor,
+    BackendSession, CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar,
+    TensorWrite, TypedTensor,
 };
 
 use crate::extension::{
@@ -107,16 +115,13 @@ pub type TypedEig<T> = (
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_linalg::TensorLinalgExt;
 /// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
 /// let mut host = CpuBackend::new();
-/// let (_u, singular_values, _vt) = host.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |backend| a.svd(backend))
-///         .expect("CpuBackend must expose a CpuExecSession")
-/// })?;
+/// let (_u, singular_values, _vt) = host.with_backend_session(|session| a.svd(session))?;
 /// assert_eq!(singular_values.as_slice::<f64>()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -127,21 +132,18 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.svd(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_u, s, _vt) = host.with_backend_session(|session| a.svd(session))?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd<B: LinalgBackend>(
+    fn svd(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -149,24 +151,19 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{SvdOptions, TensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.svd_with_options(SvdOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_u, s, _vt) = host.with_backend_session(|session| { a.svd_with_options(SvdOptions::default(), session) })?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_with_options<B: LinalgBackend>(
+    fn svd_with_options(
         &self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -174,45 +171,37 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.qr(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (q, r) = host.with_backend_session(|session| a.qr(session))?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn qr(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for matrix metadata or options, plus QR backend errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{QrOptions, TensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.qr_with_options(QrOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (q, r) = host.with_backend_session(|session| { a.qr_with_options(QrOptions::default(), session) })?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_with_options<B: LinalgBackend>(
+    fn qr_with_options(
         &self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -220,23 +209,20 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.lu(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_p, l, u, parity) = host.with_backend_session(|session| a.lu(session))?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn lu<B: LinalgBackend>(
+    fn lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -244,23 +230,20 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.full_piv_lu(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (p, _l, _u, q, parity) = host.with_backend_session(|session| a.full_piv_lu(session))?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu<B: LinalgBackend>(
+    fn full_piv_lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -268,23 +251,20 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.full_piv_lu_solve(&b, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| a.full_piv_lu_solve(&b, session))?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu_solve<B: LinalgBackend>(
+    fn full_piv_lu_solve(
         &self,
         b: &Tensor,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -292,23 +272,20 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.solve(&b, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| a.solve(&b, session))?;
     /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn solve<B: LinalgBackend>(
+    fn solve(
         &self,
         b: &Tensor,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -316,64 +293,53 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.cholesky(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let l = host.with_backend_session(|session| a.cholesky(session))?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn cholesky<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn cholesky(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, convergence, or output-contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigh(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| a.eigh(session))?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn eigh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for matrix metadata or options, plus Eigh backend errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{EighOptions, TensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.eigh_with_options(EighOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| { a.eigh_with_options(EighOptions::default(), session) })?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh_with_options<B: LinalgBackend>(
+    fn eigh_with_options(
         &self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -381,20 +347,17 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eig(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| a.eig(session))?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for incompatible inputs/flags or backend/numerical errors.
@@ -402,29 +365,24 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.triangular_solve(&b, true, false, false, false, backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| { a.triangular_solve(&b, true, false, false, false, session) })?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn triangular_solve<B: LinalgBackend>(
+    fn triangular_solve(
         &self,
         b: &Tensor,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -432,22 +390,19 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.slogdet(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))?;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn slogdet<B: LinalgBackend>(
+    fn slogdet(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -455,117 +410,99 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.det(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let determinant = host.with_backend_session(|session| a.det(session))?;
     /// assert!((determinant.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn det(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, or singular-solve numerical errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.inv(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let inverse = host.with_backend_session(|session| a.inv(session))?;
     /// assert_eq!(inverse.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn inv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns the validation, backend, convergence, or contract errors from [`Self::eigh`].
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigvalsh(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| a.eigvalsh(session))?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvalsh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn eigvalsh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns the validation, backend, convergence, or contract errors from [`Self::eig`].
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigvals(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| a.eigvals(session))?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvals<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, unsupported-backend, numerical, or SVD contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.pinv(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| a.pinv(session))?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn pinv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv`].
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.pinv_with_rtol(1.0e-12, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| a.pinv_with_rtol(1.0e-12, session))?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv_with_rtol<B: LinalgBackend>(
+    fn pinv_with_rtol(
         &self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -573,24 +510,21 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.norm(None, None, false, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))?;
     /// assert_eq!(frobenius.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn norm<B: LinalgBackend>(
+    fn norm(
         &self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
@@ -599,17 +533,14 @@ pub trait TensorLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_linalg::TensorReadLinalgExt;
 /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 ///
 /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
 /// let mut host = CpuBackend::new();
 /// let (_q, r) = host.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |backend| {
-///         TensorRead::from_tensor(&input).qr_read(backend)
-///     })
-///     .expect("CpuBackend must expose a CpuExecSession")
+///     TensorRead::from_tensor(&input).qr_read(session)
 /// })?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -621,23 +552,20 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
     /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).svd_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).svd_read(session)
     /// })?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_read<B: LinalgBackend>(
+    fn svd_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -645,25 +573,21 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{SvdOptions, TensorReadLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
     /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a)
-    ///             .svd_with_options_read(SvdOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).svd_with_options_read(SvdOptions::default(), session)
     /// })?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_with_options_read<B: LinalgBackend>(
+    fn svd_with_options_read(
         self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -671,51 +595,40 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).qr_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (q, r) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).qr_read(session) })?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_read<B: LinalgBackend>(
-        self,
-        backend: &mut B,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn qr_read(self, session: &mut dyn BackendSession)
+        -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for metadata/options, plus read/materialization or QR errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{QrOptions, TensorReadLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
     /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a)
-    ///             .qr_with_options_read(QrOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).qr_with_options_read(QrOptions::default(), session)
     /// })?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_with_options_read<B: LinalgBackend>(
+    fn qr_with_options_read(
         self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -723,24 +636,19 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, _parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).lu_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_p, l, u, _parity) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).lu_read(session) })?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn lu_read<B: LinalgBackend>(
+    fn lu_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -748,24 +656,19 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).full_piv_lu_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).full_piv_lu_read(session) })?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu_read<B: LinalgBackend>(
+    fn full_piv_lu_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -773,26 +676,22 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
     /// # let mut host = CpuBackend::new();
     /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a)
-    ///             .full_piv_lu_solve_read(TensorRead::from_tensor(&b), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).full_piv_lu_solve_read(TensorRead::from_tensor(&b), session)
     /// })?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu_solve_read<B: LinalgBackend>(
+    fn full_piv_lu_solve_read(
         self,
         b: TensorRead<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -800,25 +699,20 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).solve_read(TensorRead::from_tensor(&b), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| { TensorRead::from_tensor(&a).solve_read(TensorRead::from_tensor(&b), session) })?;
     /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn solve_read<B: LinalgBackend>(
+    fn solve_read(
         self,
         b: TensorRead<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Solve into a caller-owned destination without allocating the result at
     /// the public API boundary.
@@ -836,7 +730,7 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorWrite};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
@@ -844,28 +738,25 @@ pub trait TensorReadLinalgExt {
     /// # let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
     /// # let mut host = CpuBackend::new();
     /// host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
     ///         TensorRead::from_tensor(&a).solve_read_into(
     ///             TensorRead::from_tensor(&b),
     ///             TensorWrite::from_tensor(&mut out),
-    ///             backend,
+    ///             session,
     ///         )
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    ///     })?;
     /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn solve_read_into<B: LinalgBackend>(
+    fn solve_read_into(
         self,
         b: TensorRead<'_>,
         out: TensorWrite<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<()>
     where
         Self: Sized,
     {
-        let _ = (self, b, out, backend);
+        let _ = (self, b, out, session);
         Err(tenferro_tensor::Error::unsupported(
             "solve_read_into",
             "this tensor-read extension implementation does not accept borrowed solve targets",
@@ -877,45 +768,35 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).cholesky_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let l = host.with_backend_session(|session| { TensorRead::from_tensor(&a).cholesky_read(session) })?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn cholesky_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn cholesky_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, convergence, or contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).eigh_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigh_read(session) })?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh_read<B: LinalgBackend>(
+    fn eigh_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -923,26 +804,22 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{EighOptions, TensorReadLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
     /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a)
-    ///             .eigh_with_options_read(EighOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).eigh_with_options_read(EighOptions::default(), session)
     /// })?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh_with_options_read<B: LinalgBackend>(
+    fn eigh_with_options_read(
         self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -950,24 +827,19 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).eig_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eig_read(session) })?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eig_read<B: LinalgBackend>(
+    fn eig_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -976,36 +848,33 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
     /// # let mut host = CpuBackend::new();
     /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).triangular_solve_read(
-    ///             TensorRead::from_tensor(&b),
-    ///             true,
-    ///             false,
-    ///             false,
-    ///             false,
-    ///             backend,
-    ///         )
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
+    ///     TensorRead::from_tensor(&a).triangular_solve_read(
+    ///         TensorRead::from_tensor(&b),
+    ///         true,
+    ///         false,
+    ///         false,
+    ///         false,
+    ///         session,
+    ///     )
     /// })?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn triangular_solve_read<B: LinalgBackend>(
+    fn triangular_solve_read(
         self,
         b: TensorRead<'_>,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1013,24 +882,19 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).slogdet_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (sign, logabsdet) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).slogdet_read(session) })?;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn slogdet_read<B: LinalgBackend>(
+    fn slogdet_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1038,129 +902,99 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).det_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let determinant = host.with_backend_session(|session| { TensorRead::from_tensor(&a).det_read(session) })?;
     /// assert!((determinant.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn det_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn det_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, or singular-solve errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).inv_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let inverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).inv_read(session) })?;
     /// assert_eq!(inverse.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn inv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn inv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, convergence, or contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).eigvalsh_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigvalsh_read(session) })?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvalsh_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, convergence, or contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).eigvals_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigvals_read(session) })?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvals_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, read/materialization, backend, numerical, or SVD contract errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).pinv_read(backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).pinv_read(session) })?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    fn pinv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv_read`].
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).pinv_with_rtol_read(1.0e-12, backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).pinv_with_rtol_read(1.0e-12, session) })?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv_with_rtol_read<B: LinalgBackend>(
+    fn pinv_with_rtol_read(
         self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1168,26 +1002,21 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TensorReadLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         TensorRead::from_tensor(&a).norm_read(None, None, false, backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let frobenius = host.with_backend_session(|session| { TensorRead::from_tensor(&a).norm_read(None, None, false, session) })?;
     /// assert_eq!(frobenius.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn norm_read<B: LinalgBackend>(
+    fn norm_read(
         self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
@@ -1199,7 +1028,7 @@ pub trait TensorReadLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_linalg::TypedTensorLinalgExt;
 /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
 ///
@@ -1208,10 +1037,7 @@ pub trait TensorReadLinalgExt {
 ///     vec![2.0, 0.0, 0.0, 4.0],
 /// )?;
 /// let mut host = CpuBackend::new();
-/// let (_u, singular_values, _vt) = host.with_backend_session(|session| {
-///     with_cpu_exec_session(session, |backend| input.svd(backend))
-///         .expect("CpuBackend must expose a CpuExecSession")
-/// })?;
+/// let (_u, singular_values, _vt) = host.with_backend_session(|session| input.svd(session))?;
 /// assert_eq!(singular_values.as_slice()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -1222,43 +1048,35 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.svd(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_u, s, _vt) = host.with_backend_session(|session| a.svd(session))?;
     /// assert_eq!(s.as_slice()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedSvd<T>>;
+    fn svd(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for metadata/options, plus backend or typed-output errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{SvdOptions, TypedTensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.svd_with_options(SvdOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_u, s, _vt) = host.with_backend_session(|session| { a.svd_with_options(SvdOptions::default(), session) })?;
     /// assert_eq!(s.as_slice()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_with_options<B: LinalgBackend>(
+    fn svd_with_options(
         &self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedSvd<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1266,22 +1084,19 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.qr(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (q, r) = host.with_backend_session(|session| a.qr(session))?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr<B: LinalgBackend>(
+    fn qr(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1289,25 +1104,20 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{QrOptions, TypedTensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.qr_with_options(QrOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (q, r) = host.with_backend_session(|session| { a.qr_with_options(QrOptions::default(), session) })?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_with_options<B: LinalgBackend>(
+    fn qr_with_options(
         &self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1315,42 +1125,36 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, _parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.lu(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (_p, l, u, _parity) = host.with_backend_session(|session| a.lu(session))?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn lu<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedLu<T>>;
+    fn lu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedLu<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.full_piv_lu(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| a.full_piv_lu(session))?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu<B: LinalgBackend>(
+    fn full_piv_lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedFullPivLu<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1358,23 +1162,20 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![-1.0, 5.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.full_piv_lu_solve(&b, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| a.full_piv_lu_solve(&b, session))?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu_solve<B: LinalgBackend>(
+    fn full_piv_lu_solve(
         &self,
         b: &TypedTensor<T>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1382,23 +1183,20 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 8.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.solve(&b, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| a.solve(&b, session))?;
     /// assert_eq!(x.as_slice()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn solve<B: LinalgBackend>(
+    fn solve(
         &self,
         b: &TypedTensor<T>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1406,44 +1204,36 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.cholesky(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let l = host.with_backend_session(|session| a.cholesky(session))?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn cholesky<B: LinalgBackend>(
-        &self,
-        backend: &mut B,
-    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn cholesky(&self, session: &mut dyn BackendSession)
+        -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigh(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| a.eigh(session))?;
     /// assert_eq!(values.as_slice()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh<B: LinalgBackend>(
+    fn eigh(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1451,25 +1241,20 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::{EighOptions, TypedTensorLinalgExt};
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.eigh_with_options(EighOptions::default(), backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| { a.eigh_with_options(EighOptions::default(), session) })?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh_with_options<B: LinalgBackend>(
+    fn eigh_with_options(
         &self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1477,20 +1262,17 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eig(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (values, vectors) = host.with_backend_session(|session| a.eig(session))?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedEig<T>>;
+    fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedEig<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns incompatible-input/flag validation, backend, singular, or typed-output errors.
@@ -1498,29 +1280,24 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 1.0, 3.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 9.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.triangular_solve(&b, true, false, false, false, backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let x = host.with_backend_session(|session| { a.triangular_solve(&b, true, false, false, false, session) })?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn triangular_solve<B: LinalgBackend>(
+    fn triangular_solve(
         &self,
         b: &TypedTensor<T>,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1528,22 +1305,19 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.slogdet(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))?;
     /// assert_eq!(sign.as_slice()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn slogdet<B: LinalgBackend>(
+    fn slogdet(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<<T as TensorScalar>::Real>)>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1551,59 +1325,50 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.det(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let determinant = host.with_backend_session(|session| a.det(session))?;
     /// assert!((determinant.as_slice()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn det(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, singular-solve, or typed-downcast errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.inv(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let inverse = host.with_backend_session(|session| a.inv(session))?;
     /// assert_eq!(inverse.as_slice()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn inv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigvalsh(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| a.eigvalsh(session))?;
     /// assert_eq!(values.as_slice()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvalsh<B: LinalgBackend>(
+    fn eigvalsh(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1611,21 +1376,18 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.eigvals(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let values = host.with_backend_session(|session| a.eigvals(session))?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigvals<B: LinalgBackend>(
+    fn eigvals(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T::Complex>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1633,43 +1395,35 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.pinv(backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| a.pinv(session))?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn pinv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns a validation error for invalid `rtol`, plus backend or typed-output errors.
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| {
-    ///         a.pinv_with_rtol(1.0e-12, backend)
-    ///     })
-    ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let pseudoinverse = host.with_backend_session(|session| { a.pinv_with_rtol(1.0e-12, session) })?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn pinv_with_rtol<B: LinalgBackend>(
+    fn pinv_with_rtol(
         &self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
@@ -1677,495 +1431,596 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// # use tenferro_cpu::CpuBackend;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
     /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |backend| a.norm(None, None, false, backend))
-    ///         .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))?;
     /// assert_eq!(frobenius.shape(), &[]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn norm<B: LinalgBackend>(
+    fn norm(
         &self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>>;
 }
 
 impl TensorLinalgExt for Tensor {
-    fn svd<B: LinalgBackend>(
+    fn svd(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        three(backend.svd(self)?, "svd")
+        with_linalg_backend(session, "svd", |backend| three(backend.svd(self)?, "svd"))
     }
-    fn svd_with_options<B: LinalgBackend>(
+    fn svd_with_options(
         &self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        three(backend.svd_with_options(self, options)?, "svd_with_options")
+        with_linalg_backend(session, "svd_with_options", |backend| {
+            three(backend.svd_with_options(self, options)?, "svd_with_options")
+        })
     }
-    fn qr<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.qr(self)?, "qr")
+    fn qr(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        with_linalg_backend(session, "qr", |backend| two(backend.qr(self)?, "qr"))
     }
-    fn qr_with_options<B: LinalgBackend>(
+    fn qr_with_options(
         &self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.qr_with_options(self, options)?, "qr_with_options")
+        with_linalg_backend(session, "qr_with_options", |backend| {
+            two(backend.qr_with_options(self, options)?, "qr_with_options")
+        })
     }
-    fn lu<B: LinalgBackend>(
+    fn lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)> {
-        four(backend.lu(self)?, "lu")
+        with_linalg_backend(session, "lu", |backend| four(backend.lu(self)?, "lu"))
     }
-    fn full_piv_lu<B: LinalgBackend>(
+    fn full_piv_lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-        five(backend.full_piv_lu(self)?, "full_piv_lu")
+        with_linalg_backend(session, "full_piv_lu", |backend| {
+            five(backend.full_piv_lu(self)?, "full_piv_lu")
+        })
     }
-    fn full_piv_lu_solve<B: LinalgBackend>(
+    fn full_piv_lu_solve(
         &self,
         b: &Tensor,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.full_piv_lu_solve(self, b, false)
+        with_linalg_backend(session, "full_piv_lu_solve", |backend| {
+            backend.full_piv_lu_solve(self, b, false)
+        })
     }
-    fn solve<B: LinalgBackend>(
+    fn solve(
         &self,
         b: &Tensor,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.solve(self, b)
+        with_linalg_backend(session, "solve", |backend| backend.solve(self, b))
     }
-    fn cholesky<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        backend.cholesky(self)
+    fn cholesky(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "cholesky", |backend| backend.cholesky(self))
     }
-    fn eigh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.eigh(self)?, "eigh")
+    fn eigh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        with_linalg_backend(session, "eigh", |backend| two(backend.eigh(self)?, "eigh"))
     }
-    fn eigh_with_options<B: LinalgBackend>(
+    fn eigh_with_options(
         &self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(
-            backend.eigh_with_options(self, options)?,
-            "eigh_with_options",
-        )
+        with_linalg_backend(session, "eigh_with_options", |backend| {
+            two(
+                backend.eigh_with_options(self, options)?,
+                "eigh_with_options",
+            )
+        })
     }
-    fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.eig(self)?, "eig")
+    fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        with_linalg_backend(session, "eig", |backend| two(backend.eig(self)?, "eig"))
     }
-    fn triangular_solve<B: LinalgBackend>(
+    fn triangular_solve(
         &self,
         b: &Tensor,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+        with_linalg_backend(session, "triangular_solve", |backend| {
+            backend.triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+        })
     }
-    fn slogdet<B: LinalgBackend>(
+    fn slogdet(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
+        with_linalg_backend(session, "slogdet", |backend| {
+            slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
+        })
     }
-    fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        det_impl(self.slogdet(backend)?, backend)
+    fn det(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "det", |backend| {
+            det_impl(self.slogdet(backend)?, backend)
+        })
     }
-    fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        inv_owned(self, backend)
+    fn inv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "inv", |backend| inv_owned(self, backend))
     }
-    fn eigvalsh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        Ok(self.eigh(backend)?.0)
+    fn eigvalsh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "eigvalsh", |backend| Ok(self.eigh(backend)?.0))
     }
-    fn eigvals<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        backend.eig_values(self)
+    fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "eigvals", |backend| backend.eig_values(self))
     }
-    fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        pinv_owned(self, None, backend)
+    fn pinv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "pinv", |backend| pinv_owned(self, None, backend))
     }
-    fn pinv_with_rtol<B: LinalgBackend>(
+    fn pinv_with_rtol(
         &self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        pinv_owned(self, Some(rtol), backend)
+        with_linalg_backend(session, "pinv_with_rtol", |backend| {
+            pinv_owned(self, Some(rtol), backend)
+        })
     }
-    fn norm<B: LinalgBackend>(
+    fn norm(
         &self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        norm_from_read(TensorRead::from_tensor(self), ord, dim, keepdim, backend)
+        with_linalg_backend(session, "norm", |backend| {
+            norm_from_read(TensorRead::from_tensor(self), ord, dim, keepdim, backend)
+        })
     }
 }
 
 impl TensorReadLinalgExt for TensorRead<'_> {
-    fn svd_read<B: LinalgBackend>(
+    fn svd_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        three(backend.svd_read(self)?, "svd_read")
+        with_linalg_backend(session, "svd_read", |backend| {
+            three(backend.svd_read(self)?, "svd_read")
+        })
     }
-    fn svd_with_options_read<B: LinalgBackend>(
+    fn svd_with_options_read(
         self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        validate_derivative_eps("svd_with_options_read", options.derivative_eps)?;
-        let mut out = backend.svd_read(self)?;
-        apply_svd_gauge(options.gauge, &mut out)?;
-        three(out, "svd_with_options_read")
+        with_linalg_backend(session, "svd_with_options_read", |backend| {
+            validate_derivative_eps("svd_with_options_read", options.derivative_eps)?;
+            let mut out = backend.svd_read(self)?;
+            apply_svd_gauge(options.gauge, &mut out)?;
+            three(out, "svd_with_options_read")
+        })
     }
-    fn qr_read<B: LinalgBackend>(
+    fn qr_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.qr_read(self)?, "qr_read")
+        with_linalg_backend(session, "qr_read", |backend| {
+            two(backend.qr_read(self)?, "qr_read")
+        })
     }
-    fn qr_with_options_read<B: LinalgBackend>(
+    fn qr_with_options_read(
         self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        let mut out = backend.qr_read(self)?;
-        apply_qr_gauge(options.gauge, &mut out)?;
-        two(out, "qr_with_options_read")
+        with_linalg_backend(session, "qr_with_options_read", |backend| {
+            let mut out = backend.qr_read(self)?;
+            apply_qr_gauge(options.gauge, &mut out)?;
+            two(out, "qr_with_options_read")
+        })
     }
-    fn lu_read<B: LinalgBackend>(
+    fn lu_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)> {
-        four(backend.lu_read(self)?, "lu_read")
+        with_linalg_backend(session, "lu_read", |backend| {
+            four(backend.lu_read(self)?, "lu_read")
+        })
     }
-    fn full_piv_lu_read<B: LinalgBackend>(
+    fn full_piv_lu_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-        five(backend.full_piv_lu_read(self)?, "full_piv_lu_read")
+        with_linalg_backend(session, "full_piv_lu_read", |backend| {
+            five(backend.full_piv_lu_read(self)?, "full_piv_lu_read")
+        })
     }
-    fn full_piv_lu_solve_read<B: LinalgBackend>(
+    fn full_piv_lu_solve_read(
         self,
         b: TensorRead<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        let b_is_vector = b.shape().len() + 1 == self.shape().len();
-        let original_b_shape = b.shape().to_vec();
-        let vector_as_matrix = if b_is_vector {
-            let mut shape = vec![b.shape()[0], 1];
-            shape.extend_from_slice(&b.shape()[1..]);
-            Some(backend.reshape_read(b.clone(), &shape)?)
-        } else {
-            None
-        };
-        let b = vector_as_matrix.as_ref().map_or(b, TensorRead::from_tensor);
-        let (p, l, u, q, _parity) = self.full_piv_lu_read(backend)?;
-        let pb = linalg_matmul_read(&p, b, false, backend)?;
-        let z = backend.triangular_solve_read(
-            TensorRead::from_tensor(&l),
-            TensorRead::from_tensor(&pb),
-            true,
-            true,
-            false,
-            true,
-        )?;
-        let w = backend.triangular_solve_read(
-            TensorRead::from_tensor(&u),
-            TensorRead::from_tensor(&z),
-            true,
-            false,
-            false,
-            false,
-        )?;
-        let mut perm: Vec<usize> = (0..q.shape().len()).collect();
-        perm.swap(0, 1);
-        let qt = transpose(&q, &perm, backend)?;
-        let solution = linalg_matmul_read(&qt, TensorRead::from_tensor(&w), false, backend)?;
-        if b_is_vector {
-            reshape(&solution, &original_b_shape, backend)
-        } else {
-            Ok(solution)
-        }
+        with_linalg_backend(session, "full_piv_lu_solve_read", |backend| {
+            let b_is_vector = b.shape().len() + 1 == self.shape().len();
+            let original_b_shape = b.shape().to_vec();
+            let vector_as_matrix = if b_is_vector {
+                let mut shape = vec![b.shape()[0], 1];
+                shape.extend_from_slice(&b.shape()[1..]);
+                Some(backend.reshape_read(b.clone(), &shape)?)
+            } else {
+                None
+            };
+            let b = vector_as_matrix.as_ref().map_or(b, TensorRead::from_tensor);
+            let (p, l, u, q, _parity) = self.full_piv_lu_read(backend)?;
+            let pb = linalg_matmul_read(&p, b, false, backend)?;
+            let z = backend.triangular_solve_read(
+                TensorRead::from_tensor(&l),
+                TensorRead::from_tensor(&pb),
+                true,
+                true,
+                false,
+                true,
+            )?;
+            let w = backend.triangular_solve_read(
+                TensorRead::from_tensor(&u),
+                TensorRead::from_tensor(&z),
+                true,
+                false,
+                false,
+                false,
+            )?;
+            let mut perm: Vec<usize> = (0..q.shape().len()).collect();
+            perm.swap(0, 1);
+            let qt = transpose(&q, &perm, backend)?;
+            let solution = linalg_matmul_read(&qt, TensorRead::from_tensor(&w), false, backend)?;
+            if b_is_vector {
+                reshape(&solution, &original_b_shape, backend)
+            } else {
+                Ok(solution)
+            }
+        })
     }
-    fn solve_read<B: LinalgBackend>(
+    fn solve_read(
         self,
         b: TensorRead<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.solve_read(self, b)
+        with_linalg_backend(session, "solve_read", |backend| backend.solve_read(self, b))
     }
-    fn solve_read_into<B: LinalgBackend>(
+    fn solve_read_into(
         self,
         b: TensorRead<'_>,
         out: TensorWrite<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<()> {
-        backend.solve_read_into(self, b, out)
+        with_linalg_backend(session, "solve_read_into", |backend| {
+            backend.solve_read_into(self, b, out)
+        })
     }
-    fn cholesky_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        backend.cholesky_read(self)
+    fn cholesky_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "cholesky_read", |backend| {
+            backend.cholesky_read(self)
+        })
     }
-    fn eigh_read<B: LinalgBackend>(
+    fn eigh_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.eigh_read(self)?, "eigh_read")
+        with_linalg_backend(session, "eigh_read", |backend| {
+            two(backend.eigh_read(self)?, "eigh_read")
+        })
     }
-    fn eigh_with_options_read<B: LinalgBackend>(
+    fn eigh_with_options_read(
         self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
-        let mut out = backend.eigh_read(self)?;
-        apply_eigh_gauge(options.gauge, &mut out)?;
-        two(out, "eigh_with_options_read")
+        with_linalg_backend(session, "eigh_with_options_read", |backend| {
+            validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
+            let mut out = backend.eigh_read(self)?;
+            apply_eigh_gauge(options.gauge, &mut out)?;
+            two(out, "eigh_with_options_read")
+        })
     }
-    fn eig_read<B: LinalgBackend>(
+    fn eig_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        two(backend.eig_read(self)?, "eig_read")
+        with_linalg_backend(session, "eig_read", |backend| {
+            two(backend.eig_read(self)?, "eig_read")
+        })
     }
-    fn triangular_solve_read<B: LinalgBackend>(
+    fn triangular_solve_read(
         self,
         b: TensorRead<'_>,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.triangular_solve_read(self, b, left_side, lower, transpose_a, unit_diagonal)
+        with_linalg_backend(session, "triangular_solve_read", |backend| {
+            backend.triangular_solve_read(self, b, left_side, lower, transpose_a, unit_diagonal)
+        })
     }
-    fn slogdet_read<B: LinalgBackend>(
+    fn slogdet_read(
         self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        slogdet_from_lu(four(backend.lu_read(self)?, "slogdet_read")?, backend)
+        with_linalg_backend(session, "slogdet_read", |backend| {
+            slogdet_from_lu(four(backend.lu_read(self)?, "slogdet_read")?, backend)
+        })
     }
-    fn det_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        det_impl(self.slogdet_read(backend)?, backend)
+    fn det_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "det_read", |backend| {
+            det_impl(self.slogdet_read(backend)?, backend)
+        })
     }
-    fn inv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        inv_read(self, backend)
+    fn inv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "inv_read", |backend| inv_read(self, backend))
     }
-    fn eigvalsh_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        Ok(self.eigh_read(backend)?.0)
+    fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "eigvalsh_read", |backend| {
+            Ok(self.eigh_read(backend)?.0)
+        })
     }
-    fn eigvals_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        Ok(self.eig_read(backend)?.0)
+    fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "eigvals_read", |backend| {
+            Ok(self.eig_read(backend)?.0)
+        })
     }
-    fn pinv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
-        pinv_read(self, None, backend)
+    fn pinv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "pinv_read", |backend| {
+            pinv_read(self, None, backend)
+        })
     }
-    fn pinv_with_rtol_read<B: LinalgBackend>(
+    fn pinv_with_rtol_read(
         self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        pinv_read(self, Some(rtol), backend)
+        with_linalg_backend(session, "pinv_with_rtol_read", |backend| {
+            pinv_read(self, Some(rtol), backend)
+        })
     }
-    fn norm_read<B: LinalgBackend>(
+    fn norm_read(
         self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor> {
-        norm_from_read(self, ord, dim, keepdim, backend)
+        with_linalg_backend(session, "norm_read", |backend| {
+            norm_from_read(self, ord, dim, keepdim, backend)
+        })
     }
 }
 
 impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
-    fn svd<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedSvd<T>> {
-        typed_svd(T::tensor_read(self).svd_read(backend)?)
+    fn svd(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>> {
+        with_linalg_backend(session, "svd", |backend| {
+            typed_svd(T::tensor_read(self).svd_read(backend)?)
+        })
     }
 
-    fn svd_with_options<B: LinalgBackend>(
+    fn svd_with_options(
         &self,
         options: SvdOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedSvd<T>> {
-        typed_svd(T::tensor_read(self).svd_with_options_read(options, backend)?)
+        with_linalg_backend(session, "svd_with_options", |backend| {
+            typed_svd(T::tensor_read(self).svd_with_options_read(options, backend)?)
+        })
     }
 
-    fn qr<B: LinalgBackend>(
+    fn qr(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-        typed_pair_same(T::tensor_read(self).qr_read(backend)?)
+        with_linalg_backend(session, "qr", |backend| {
+            typed_pair_same(T::tensor_read(self).qr_read(backend)?)
+        })
     }
 
-    fn qr_with_options<B: LinalgBackend>(
+    fn qr_with_options(
         &self,
         options: QrOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-        typed_pair_same(T::tensor_read(self).qr_with_options_read(options, backend)?)
+        with_linalg_backend(session, "qr_with_options", |backend| {
+            typed_pair_same(T::tensor_read(self).qr_with_options_read(options, backend)?)
+        })
     }
 
-    fn lu<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedLu<T>> {
-        let (p, l, u, parity) = T::tensor_read(self).lu_read(backend)?;
-        Ok((
-            typed_output::<T>(p)?,
-            typed_output::<T>(l)?,
-            typed_output::<T>(u)?,
-            typed_output::<<T as TensorScalar>::Real>(parity)?,
-        ))
+    fn lu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedLu<T>> {
+        with_linalg_backend(session, "lu", |backend| {
+            let (p, l, u, parity) = T::tensor_read(self).lu_read(backend)?;
+            Ok((
+                typed_output::<T>(p)?,
+                typed_output::<T>(l)?,
+                typed_output::<T>(u)?,
+                typed_output::<<T as TensorScalar>::Real>(parity)?,
+            ))
+        })
     }
 
-    fn full_piv_lu_solve<B: LinalgBackend>(
+    fn full_piv_lu_solve(
         &self,
         b: &TypedTensor<T>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).full_piv_lu_solve_read(T::tensor_read(b), backend)?)
+        with_linalg_backend(session, "full_piv_lu_solve", |backend| {
+            typed_output::<T>(
+                T::tensor_read(self).full_piv_lu_solve_read(T::tensor_read(b), backend)?,
+            )
+        })
     }
 
-    fn full_piv_lu<B: LinalgBackend>(
+    fn full_piv_lu(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedFullPivLu<T>> {
-        let (p, l, u, q, parity) = T::tensor_read(self).full_piv_lu_read(backend)?;
-        Ok((
-            typed_output::<T>(p)?,
-            typed_output::<T>(l)?,
-            typed_output::<T>(u)?,
-            typed_output::<T>(q)?,
-            typed_output::<<T as TensorScalar>::Real>(parity)?,
-        ))
+        with_linalg_backend(session, "full_piv_lu", |backend| {
+            let (p, l, u, q, parity) = T::tensor_read(self).full_piv_lu_read(backend)?;
+            Ok((
+                typed_output::<T>(p)?,
+                typed_output::<T>(l)?,
+                typed_output::<T>(u)?,
+                typed_output::<T>(q)?,
+                typed_output::<<T as TensorScalar>::Real>(parity)?,
+            ))
+        })
     }
 
-    fn solve<B: LinalgBackend>(
+    fn solve(
         &self,
         b: &TypedTensor<T>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).solve_read(T::tensor_read(b), backend)?)
+        with_linalg_backend(session, "solve", |backend| {
+            typed_output::<T>(T::tensor_read(self).solve_read(T::tensor_read(b), backend)?)
+        })
     }
 
-    fn cholesky<B: LinalgBackend>(
+    fn cholesky(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).cholesky_read(backend)?)
+        with_linalg_backend(session, "cholesky", |backend| {
+            typed_output::<T>(T::tensor_read(self).cholesky_read(backend)?)
+        })
     }
 
-    fn eigh<B: LinalgBackend>(
+    fn eigh(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)> {
-        typed_eigh(T::tensor_read(self).eigh_read(backend)?)
+        with_linalg_backend(session, "eigh", |backend| {
+            typed_eigh(T::tensor_read(self).eigh_read(backend)?)
+        })
     }
 
-    fn eigh_with_options<B: LinalgBackend>(
+    fn eigh_with_options(
         &self,
         options: EighOptions,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)> {
-        typed_eigh(T::tensor_read(self).eigh_with_options_read(options, backend)?)
+        with_linalg_backend(session, "eigh_with_options", |backend| {
+            typed_eigh(T::tensor_read(self).eigh_with_options_read(options, backend)?)
+        })
     }
 
-    fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedEig<T>> {
-        let (values, vectors) = T::tensor_read(self).eig_read(backend)?;
-        Ok((
-            typed_output::<T::Complex>(values)?,
-            typed_output::<T::Complex>(vectors)?,
-        ))
+    fn eig(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedEig<T>> {
+        with_linalg_backend(session, "eig", |backend| {
+            let (values, vectors) = T::tensor_read(self).eig_read(backend)?;
+            Ok((
+                typed_output::<T::Complex>(values)?,
+                typed_output::<T::Complex>(vectors)?,
+            ))
+        })
     }
 
-    fn triangular_solve<B: LinalgBackend>(
+    fn triangular_solve(
         &self,
         b: &TypedTensor<T>,
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).triangular_solve_read(
-            T::tensor_read(b),
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-            backend,
-        )?)
+        with_linalg_backend(session, "triangular_solve", |backend| {
+            typed_output::<T>(T::tensor_read(self).triangular_solve_read(
+                T::tensor_read(b),
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+                backend,
+            )?)
+        })
     }
 
-    fn slogdet<B: LinalgBackend>(
+    fn slogdet(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<<T as TensorScalar>::Real>)> {
-        let (sign, logabsdet) = T::tensor_read(self).slogdet_read(backend)?;
-        Ok((
-            typed_output::<T>(sign)?,
-            typed_output::<<T as TensorScalar>::Real>(logabsdet)?,
-        ))
+        with_linalg_backend(session, "slogdet", |backend| {
+            let (sign, logabsdet) = T::tensor_read(self).slogdet_read(backend)?;
+            Ok((
+                typed_output::<T>(sign)?,
+                typed_output::<<T as TensorScalar>::Real>(logabsdet)?,
+            ))
+        })
     }
 
-    fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).det_read(backend)?)
+    fn det(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>> {
+        with_linalg_backend(session, "det", |backend| {
+            typed_output::<T>(T::tensor_read(self).det_read(backend)?)
+        })
     }
 
-    fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).inv_read(backend)?)
+    fn inv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>> {
+        with_linalg_backend(session, "inv", |backend| {
+            typed_output::<T>(T::tensor_read(self).inv_read(backend)?)
+        })
     }
 
-    fn eigvalsh<B: LinalgBackend>(
+    fn eigvalsh(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>> {
-        typed_output::<<T as TensorScalar>::Real>(T::tensor_read(self).eigvalsh_read(backend)?)
+        with_linalg_backend(session, "eigvalsh", |backend| {
+            typed_output::<<T as TensorScalar>::Real>(T::tensor_read(self).eigvalsh_read(backend)?)
+        })
     }
 
-    fn eigvals<B: LinalgBackend>(
+    fn eigvals(
         &self,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T::Complex>> {
-        typed_output::<T::Complex>(T::tensor_read(self).eigvals_read(backend)?)
+        with_linalg_backend(session, "eigvals", |backend| {
+            typed_output::<T::Complex>(T::tensor_read(self).eigvals_read(backend)?)
+        })
     }
 
-    fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).pinv_read(backend)?)
+    fn pinv(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>> {
+        with_linalg_backend(session, "pinv", |backend| {
+            typed_output::<T>(T::tensor_read(self).pinv_read(backend)?)
+        })
     }
 
-    fn pinv_with_rtol<B: LinalgBackend>(
+    fn pinv_with_rtol(
         &self,
         rtol: f64,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>> {
-        typed_output::<T>(T::tensor_read(self).pinv_with_rtol_read(rtol, backend)?)
+        with_linalg_backend(session, "pinv_with_rtol", |backend| {
+            typed_output::<T>(T::tensor_read(self).pinv_with_rtol_read(rtol, backend)?)
+        })
     }
 
-    fn norm<B: LinalgBackend>(
+    fn norm(
         &self,
         ord: Option<f64>,
         dim: Option<&[usize]>,
         keepdim: bool,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>> {
-        typed_output::<<T as TensorScalar>::Real>(
-            T::tensor_read(self).norm_read(ord, dim, keepdim, backend)?,
-        )
+        with_linalg_backend(session, "norm", |backend| {
+            typed_output::<<T as TensorScalar>::Real>(
+                T::tensor_read(self).norm_read(ord, dim, keepdim, backend)?,
+            )
+        })
     }
 }
 
@@ -2191,6 +2046,39 @@ fn typed_eigh<T: LinalgScalar>(
     Ok((
         typed_output::<<T as TensorScalar>::Real>(values)?,
         typed_output::<T>(vectors)?,
+    ))
+}
+
+/// Run a concrete linalg body against the built-in linalg execution sessions
+/// (CPU/CUDA) carried by `session`, returning a typed capability error when
+/// the session does not expose a linalg execution capability.
+///
+/// This is the built-in dispatch shared by the concrete linalg surface;
+/// callers never downcast themselves (issue #1680 Phase 3). Third-party
+/// [`LinalgBackend`] implementations remain supported through the SPI trait,
+/// but the concrete op path is built-in-session only. The composite bodies
+/// run on the borrowed `&mut dyn LinalgBackend` exactly as before.
+fn with_linalg_backend<X>(
+    session: &mut dyn BackendSession,
+    op: &'static str,
+    f: impl FnOnce(&mut dyn LinalgBackend) -> tenferro_tensor::Result<X>,
+) -> tenferro_tensor::Result<X> {
+    // The capability branches are mutually exclusive, so `f` runs exactly
+    // once. Probe the marker first, then re-extract the same exec session and
+    // run the composite body on it (FnOnce cannot be captured by several
+    // branch closures).
+    if with_cpu_exec_session(session, |_| ()).is_some() {
+        return with_cpu_exec_session(session, |exec| f(exec as &mut dyn LinalgBackend))
+            .expect("marker probe matched a CPU execution session");
+    }
+    #[cfg(feature = "cuda")]
+    if with_cuda_exec_session(session, |_| ()).is_some() {
+        return with_cuda_exec_session(session, |exec| f(exec as &mut dyn LinalgBackend))
+            .expect("marker probe matched a CUDA execution session");
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        op,
+        "selected backend session does not expose a linalg execution capability",
     ))
 }
 
@@ -2260,7 +2148,7 @@ fn five(
 
 // Composite implementations are kept below the surface adapters so every
 // backend-visible operation remains explicit and testable.
-fn slogdet_from_lu<B: LinalgBackend>(
+fn slogdet_from_lu<B: LinalgBackend + ?Sized>(
     (_p, _l, u, parity): (Tensor, Tensor, Tensor, Tensor),
     backend: &mut B,
 ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
@@ -2276,7 +2164,7 @@ fn slogdet_from_lu<B: LinalgBackend>(
     let logabsdet = backend.reduce_sum_read(TensorRead::from_tensor(&log), &[0])?;
     Ok((sign, logabsdet))
 }
-fn det_impl<B: LinalgBackend>(
+fn det_impl<B: LinalgBackend + ?Sized>(
     (sign, logabsdet): (Tensor, Tensor),
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -2286,18 +2174,21 @@ fn det_impl<B: LinalgBackend>(
         TensorRead::from_tensor(&magnitude),
     )
 }
-fn inv_owned<B: LinalgBackend>(a: &Tensor, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
+fn inv_owned<B: LinalgBackend + ?Sized>(
+    a: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
     let eye = eye_like(a.dtype(), a.shape(), backend)?;
     backend.solve(a, &eye)
 }
-fn inv_read<B: LinalgBackend>(
+fn inv_read<B: LinalgBackend + ?Sized>(
     a: TensorRead<'_>,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let eye = eye_like(a.dtype(), a.shape(), backend)?;
     backend.solve_read(a, TensorRead::from_tensor(&eye))
 }
-fn pinv_owned<B: LinalgBackend>(
+fn pinv_owned<B: LinalgBackend + ?Sized>(
     a: &Tensor,
     rtol: Option<f64>,
     backend: &mut B,
@@ -2310,7 +2201,7 @@ fn pinv_owned<B: LinalgBackend>(
         backend,
     )
 }
-fn pinv_read<B: LinalgBackend>(
+fn pinv_read<B: LinalgBackend + ?Sized>(
     a: TensorRead<'_>,
     rtol: Option<f64>,
     backend: &mut B,
@@ -2320,7 +2211,7 @@ fn pinv_read<B: LinalgBackend>(
     let outputs = three(backend.svd_read(a)?, "pinv_read")?;
     pinv_from_svd(outputs, rtol.unwrap_or(default_rtol), backend)
 }
-fn norm_from_read<B: LinalgBackend>(
+fn norm_from_read<B: LinalgBackend + ?Sized>(
     input: TensorRead<'_>,
     ord: Option<f64>,
     dim: Option<&[usize]>,
@@ -2367,7 +2258,7 @@ fn scalar_real(dtype: DType, value: f64) -> tenferro_tensor::Result<Tensor> {
     }
 }
 
-fn broadcast<B: LinalgBackend>(
+fn broadcast<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     shape: &[usize],
     dims: &[usize],
@@ -2379,7 +2270,7 @@ fn broadcast<B: LinalgBackend>(
     backend.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
 }
 
-fn eye_like<B: LinalgBackend>(
+fn eye_like<B: LinalgBackend + ?Sized>(
     dtype: DType,
     shape: &[usize],
     backend: &mut B,
@@ -2434,7 +2325,7 @@ fn default_pinv_rtol(dtype: DType, shape: &[usize]) -> f64 {
     eps * max_dim as f64
 }
 
-fn pinv_from_svd<B: LinalgBackend>(
+fn pinv_from_svd<B: LinalgBackend + ?Sized>(
     (u, s, vt): (Tensor, Tensor, Tensor),
     rtol: f64,
     backend: &mut B,
@@ -2466,12 +2357,15 @@ fn pinv_from_svd<B: LinalgBackend>(
     matmul_preserve_trailing_batch(&vs, &uh, backend)
 }
 
-fn ones_like<B: LinalgBackend>(input: &Tensor, backend: &mut B) -> tenferro_tensor::Result<Tensor> {
+fn ones_like<B: LinalgBackend + ?Sized>(
+    input: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
     let one = scalar_real(input.dtype(), 1.0)?;
     broadcast(&one, input.shape(), &[], backend)
 }
 
-fn binary_add<B: LinalgBackend>(
+fn binary_add<B: LinalgBackend + ?Sized>(
     lhs: &Tensor,
     rhs: &Tensor,
     backend: &mut B,
@@ -2479,7 +2373,7 @@ fn binary_add<B: LinalgBackend>(
     backend.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
 }
 
-fn binary_mul<B: LinalgBackend>(
+fn binary_mul<B: LinalgBackend + ?Sized>(
     lhs: &Tensor,
     rhs: &Tensor,
     backend: &mut B,
@@ -2487,7 +2381,7 @@ fn binary_mul<B: LinalgBackend>(
     backend.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
 }
 
-fn reduce_max<B: LinalgBackend>(
+fn reduce_max<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     axes: &[usize],
     backend: &mut B,
@@ -2495,7 +2389,7 @@ fn reduce_max<B: LinalgBackend>(
     backend.reduce_max_read(TensorRead::from_tensor(input), axes)
 }
 
-fn reduce_sum<B: LinalgBackend>(
+fn reduce_sum<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     axes: &[usize],
     backend: &mut B,
@@ -2503,7 +2397,7 @@ fn reduce_sum<B: LinalgBackend>(
     backend.reduce_sum_read(TensorRead::from_tensor(input), axes)
 }
 
-fn reduce_min<B: LinalgBackend>(
+fn reduce_min<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     axes: &[usize],
     backend: &mut B,
@@ -2511,7 +2405,7 @@ fn reduce_min<B: LinalgBackend>(
     backend.reduce_min_read(TensorRead::from_tensor(input), axes)
 }
 
-fn reshape<B: LinalgBackend>(
+fn reshape<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     shape: &[usize],
     backend: &mut B,
@@ -2519,7 +2413,7 @@ fn reshape<B: LinalgBackend>(
     backend.reshape_read(TensorRead::from_tensor(input), shape)
 }
 
-fn transpose<B: LinalgBackend>(
+fn transpose<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     perm: &[usize],
     backend: &mut B,
@@ -2527,7 +2421,7 @@ fn transpose<B: LinalgBackend>(
     backend.transpose_read(TensorRead::from_tensor(input), perm)
 }
 
-fn broadcast_batch_scalar_to_leading_axis<B: LinalgBackend>(
+fn broadcast_batch_scalar_to_leading_axis<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     shape: &[usize],
     backend: &mut B,
@@ -2536,7 +2430,7 @@ fn broadcast_batch_scalar_to_leading_axis<B: LinalgBackend>(
     broadcast(input, shape, &dims, backend)
 }
 
-fn conjugate_transpose<B: LinalgBackend>(
+fn conjugate_transpose<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -2546,7 +2440,7 @@ fn conjugate_transpose<B: LinalgBackend>(
     transpose(&conj, &perm, backend)
 }
 
-fn scale_matrix_columns<B: LinalgBackend>(
+fn scale_matrix_columns<B: LinalgBackend + ?Sized>(
     matrix: &Tensor,
     scale: &Tensor,
     backend: &mut B,
@@ -2559,7 +2453,7 @@ fn scale_matrix_columns<B: LinalgBackend>(
     binary_mul(matrix, &expanded, backend)
 }
 
-fn matmul_preserve_trailing_batch<B: LinalgBackend>(
+fn matmul_preserve_trailing_batch<B: LinalgBackend + ?Sized>(
     lhs: &Tensor,
     rhs: &Tensor,
     backend: &mut B,
@@ -2578,7 +2472,7 @@ fn matmul_preserve_trailing_batch<B: LinalgBackend>(
     )
 }
 
-fn linalg_matmul_read<B: LinalgBackend>(
+fn linalg_matmul_read<B: LinalgBackend + ?Sized>(
     lhs: &Tensor,
     rhs: TensorRead<'_>,
     rhs_is_vector: bool,
@@ -2596,7 +2490,7 @@ fn linalg_matmul_read<B: LinalgBackend>(
     backend.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }
 
-fn frobenius_norm<B: LinalgBackend>(
+fn frobenius_norm<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
     backend: &mut B,
@@ -2605,7 +2499,7 @@ fn frobenius_norm<B: LinalgBackend>(
     backend.sqrt_read(TensorRead::from_tensor(&sum))
 }
 
-fn frobenius_norm_read<B: LinalgBackend>(
+fn frobenius_norm_read<B: LinalgBackend + ?Sized>(
     input: TensorRead<'_>,
     axes: &[usize],
     backend: &mut B,
@@ -2614,7 +2508,7 @@ fn frobenius_norm_read<B: LinalgBackend>(
     backend.sqrt_read(TensorRead::from_tensor(&sum))
 }
 
-fn p_norm<B: LinalgBackend>(
+fn p_norm<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
     p: f64,
@@ -2643,7 +2537,7 @@ fn p_norm<B: LinalgBackend>(
     )
 }
 
-fn count_nonzero<B: LinalgBackend>(
+fn count_nonzero<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
     backend: &mut B,
@@ -2659,7 +2553,7 @@ fn count_nonzero<B: LinalgBackend>(
     reduce_sum(&mask, axes, backend)
 }
 
-fn norm_over_axes<B: LinalgBackend>(
+fn norm_over_axes<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
     ord: Option<f64>,
@@ -2674,7 +2568,7 @@ fn norm_over_axes<B: LinalgBackend>(
     }
 }
 
-fn matrix_norm<B: LinalgBackend>(
+fn matrix_norm<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
     ord: Option<f64>,
@@ -2700,7 +2594,7 @@ fn matrix_norm<B: LinalgBackend>(
     }
 }
 
-fn row_sum_norm<B: LinalgBackend>(
+fn row_sum_norm<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     take_max: bool,
     backend: &mut B,
@@ -2713,7 +2607,7 @@ fn row_sum_norm<B: LinalgBackend>(
     }
 }
 
-fn col_sum_norm<B: LinalgBackend>(
+fn col_sum_norm<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     take_max: bool,
     backend: &mut B,
@@ -2726,7 +2620,7 @@ fn col_sum_norm<B: LinalgBackend>(
     }
 }
 
-fn move_axes_to_front<B: LinalgBackend>(
+fn move_axes_to_front<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     axes: &[usize],
     backend: &mut B,

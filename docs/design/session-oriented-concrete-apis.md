@@ -576,3 +576,111 @@ expected values (drops the one-shot comparison arm).
 - Einsum top-level traits, FFT, linalg, shape-packing one-shot surfaces.
 - GPU (CUDA/WebGPU) nested-entry enforcement.
 - Behavioral changes to any op (rename/removal only).
+
+## Migration specification (issue #1680, Phase 3: extension surfaces + GPU guard)
+
+Completes the single-API end state for the remaining backend-taking concrete
+surfaces and wires the GPU nested-entry guard. All five areas in ONE
+designed-and-gated PR.
+
+**Capability decision (option b — built-in session dispatch)**: the concrete
+op methods take `&mut dyn BackendSession` and dispatch **internally** to the
+built-in exec sessions (the existing `execute_linalg_extension_reads_on_session`
+/ `execute_fft_extension_reads_session` downcast patterns). This removes the
+caller's manual `with_cpu_exec_session`/`with_cuda_exec_session` wrappers
+(the current linalg/fft doctests require them). A session that cannot run the
+op returns a typed capability error; callers never downcast themselves.
+**Documented breaking restriction**: the concrete op traits no longer accept
+arbitrary third-party `LinalgBackend`/`FftBackend` implementations — the
+public SPI traits stay (backend implementers still implement them), but the
+concrete op path is built-in-session only. The test-only custom backends
+(tenferro-linalg backend_errors.rs, tenferro-fft backend_capability.rs)
+migrate to the built-in sessions or are removed, and the extensibility
+claims in their docs are updated to the SPI-only scope.
+
+### 1. einsum top-level traits (10 traits) + tensordot
+
+Methods take `&mut dyn BackendSession`. Einsum-family internals already route
+through `ConcreteEinsumPlan::execute*` (Phase-2 finding-3 fix); **tensordot**
+is not a plan path — `TensorTensordotExt`/`TypedTensorTensordotExt` call
+`session.dot_general`/`dot_general_read` directly (concrete.rs:47-57, 79-91),
+the correct session form. Remove the backend-taking forms. Call sites (6
+files) migrate per the Phase-2 rule.
+
+### 2. FFT (TensorFftExt / TensorReadFftExt)
+
+Methods take `&mut dyn BackendSession`; internal dispatch to the built-in
+FFT exec sessions (CPU/CUDA/WebGPU — all implement FftBackend); typed
+capability error otherwise. Inventory: 4 executor methods (fft/ifft/rfft/
+irfft, lib.rs:236-333) + the 8 trait methods. The executor calls
+`backend.execute_fft` directly (no internal session entry); the manual
+external downcasts in callers/tests/benches (backend_capability.rs:335-345,
+fft_plan_cache.rs:51-70) are removed. Plan cache stays executor-owned. Call
+sites: 5 files + the test/bench downcast sites.
+
+### 3. linalg concrete traits (TensorLinalgExt / TensorReadLinalgExt / TypedTensorLinalgExt — 64 methods)
+
+Methods take `&mut dyn BackendSession`; internal dispatch downcasts once to
+the concrete exec session and runs the EXISTING generic composite bodies on
+it (they already operate on the borrowed LinalgBackend — tensor_ext.rs
+1702-1817; base session ops via reshape_read/transpose_read/dot_general_read
+at 2514-2589). **Preserve the direct `solve_read_into` write path**
+(tensor_ext.rs:1914-1920 → cpu/backend.rs:718-741; do NOT replace with
+allocate+copy). Typed contract via `typed_output` (tensor_ext.rs:2197-2205),
+not `into_typed_result`. The caller's `with_cpu_exec_session` wrappers are
+removed (internal dispatch replaces them). Validation, dtype promotion,
+error payloads unchanged. Call sites: 5 files.
+
+### 4. shape_packing (Tensor::index_select / Tensor::stack)
+
+Methods take `&mut dyn BackendSession`. Both already run inside a session
+closure (shape_packing.rs:138-145, 167-193) — replace the host parameter and
+remove the closure. Migration gate: scoped grep for `.index_select(`/
+`.stack(` on the concrete surface; traced/eager APIs and historical
+docs/plans are explicitly excluded.
+
+### 5. GPU nested-entry guard (CUDA / WebGPU)
+
+Extract the portable guard (thread-local in-session flag + panic-safe
+restore + debug assert) into a **`#[doc(hidden)] pub` shared helper** in
+tenferro-tensor (e.g. `with_session_entry_guard`). CUDA
+(cubecl/exec_session.rs:603) and WebGPU (webgpu/exec_session.rs:263)
+`with_backend_session` overrides wrap their closure in it — nested entry is
+detected in debug builds on every backend family. CPU keeps its release
+`EXECUTION_OWNER` panic; `Send` bounds untouched. **Verification**:
+package-targeted checks (`cargo check -p tenferro-gpu --features cuda`,
+`--features webgpu`) + new cfg-gated nested-entry tests for BOTH overrides;
+the shared helper's own tests cover the flag semantics.
+
+### Baselines (recorded BEFORE implementation — required for the gate)
+
+Pre-change pinned baselines recorded in the worklog:
+- FFT: `crates/tenferro-fft/benches/fft_plan_cache.rs` arms
+  (direct_one_shot / executor_warm_cache, 1024 f64, 1 thread, pinned core 40)
+  — measured: ~15.0/11.3 µs (small) and ~88.3/73.1 µs (large) pre-change.
+- Linalg: representative ops via the current caller pattern
+  (`with_backend_session` + `with_cpu_exec_session`), 8×8 f64 diagonal
+  (diag 2..=9), 1 thread, pinned core 40 — measured pre-change:
+  **solve 14.4 µs** (incl. the direct `solve_read_into` path) and
+  **svd 18.6 µs** (2000 iters, release). matmul shares the same session
+  path as solve and is not a separate baseline.
+- Post-migration: same arms re-run; no-regression threshold = within the
+  machine's interleaved noise band (±1% on interleaved runs); recorded in
+  the Phase-3 worklog.
+
+### Migration rules (reuse Phase-2), tests, doctests
+
+Phase-2 rule (single-op wrap / group / session-typed helpers / already-in-
+session direct / closure result types; docs/spec/tutorials/skills/snippet
+generators migrate). Runnable doctests on every changed public method.
+Parity/error tests per area (values + structured errors; linalg typed
+conversion via typed_output; solve_read_into direct-path test). The runtime/
+einsum chain benches are untouched (core API unchanged).
+
+### Out of scope
+
+- Low-level backend SPI traits (TensorBackend capability traits, the
+  LinalgBackend/FftBackend trait definitions) — backend contracts, not
+  concrete op surfaces; third-party backend implementers still implement
+  them, but the concrete op path is built-in-session only (documented above).
+- GPU runtime execution (needs a CUDA host; CI gate item).

@@ -120,3 +120,26 @@ fn default_backend_session_clears_the_in_session_flag_after_panic() {
     assert_eq!(again, 3);
     assert!(!IN_SESSION.get());
 }
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "nested backend session entry")]
+fn with_session_entry_guard_rejects_nested_entry_in_debug_builds() {
+    with_session_entry_guard(|| with_session_entry_guard(|| ()))
+}
+
+#[test]
+fn with_session_entry_guard_sets_and_restores_the_flag() {
+    let value = with_session_entry_guard(|| 1usize);
+    assert_eq!(value, 1);
+    assert!(!IN_SESSION.get());
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_session_entry_guard(|| panic!("boom"))
+    }));
+    assert!(outcome.is_err());
+    assert!(!IN_SESSION.get());
+
+    let again = with_session_entry_guard(|| 2usize);
+    assert_eq!(again, 2);
+}

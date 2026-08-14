@@ -1,14 +1,14 @@
 //! Public concrete tensor einsum extension API.
 
 use tenferro_tensor::{
-    BackendSession, DType, DotGeneralAccumulation, Tensor, TensorBackend, TensorRead, TensorScalar,
-    TensorWrite, TypedTensor, TypedTensorView, TypedTensorWrite,
+    BackendSession, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorScalar, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorWrite,
 };
 
 use crate::eager::{
     eager_einsum_exec, eager_einsum_exec_read, eager_einsum_exec_read_into,
-    eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts, eager_einsum_subscripts,
-    plan_subscripts,
+    eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts_on_session,
+    eager_einsum_subscripts_on_session, plan_subscripts,
 };
 use crate::TensorDotAxes;
 use crate::{ContractionTree, EinsumSubscripts, Error, Result, Subscripts};
@@ -35,25 +35,25 @@ pub trait TensorTensordotExt {
     /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
     /// contracting dimensions, or [`Error::Tensor`] when backend execution
     /// fails.
-    fn tensordot<B: TensorBackend>(
+    fn tensordot(
         &self,
         rhs: &Tensor,
         axes: TensorDotAxes<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor>;
 }
 
 impl TensorTensordotExt for Tensor {
-    fn tensordot<B: TensorBackend>(
+    fn tensordot(
         &self,
         rhs: &Tensor,
         axes: TensorDotAxes<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
         let config =
             crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
         crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        backend.dot_general(self, rhs, &config).map_err(Error::from)
+        session.dot_general(self, rhs, &config).map_err(Error::from)
     }
 }
 
@@ -67,25 +67,25 @@ pub trait TypedTensorTensordotExt<T: TensorScalar> {
     /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
     /// contracting dimensions, or [`Error::Tensor`] when backend execution
     /// fails.
-    fn tensordot<B: TensorBackend>(
+    fn tensordot(
         &self,
         rhs: &TypedTensor<T>,
         axes: TensorDotAxes<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>>;
 }
 
 impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
-    fn tensordot<B: TensorBackend>(
+    fn tensordot(
         &self,
         rhs: &TypedTensor<T>,
         axes: TensorDotAxes<'_>,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
         let config =
             crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
         crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        let result = backend
+        let result = session
             .dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)
             .map_err(Error::from)?;
         into_typed_result(result, TYPED_TENSOR_TENSORDOT_OP)
@@ -103,13 +103,15 @@ impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::TensorEinsumExt;
-/// use tenferro_tensor::Tensor;
+/// use tenferro_tensor::{BackendSessionHost, Tensor};
 ///
 /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
 /// let mut backend = CpuBackend::new();
 ///
-/// let out = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
+/// let out = backend.with_backend_session(|session| {
+///     [&lhs, &rhs].einsum("ij,jk->ik", session)
+/// })?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -121,7 +123,7 @@ pub trait TensorEinsumExt {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor>;
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor>;
 
     /// Execute an einsum from parsed integer-label subscripts.
     ///
@@ -129,40 +131,40 @@ pub trait TensorEinsumExt {
     ///
     /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
     /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor>;
 }
 
 impl TensorEinsumExt for [&Tensor] {
-    fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
         let subscripts = parse_subscripts(subscripts, TENSOR_EINSUM_OP)?;
-        eager_einsum_subscripts(backend, self, &subscripts).map_err(Error::from)
+        eager_einsum_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
         let subscripts = Subscripts::from(subscripts);
-        eager_einsum_subscripts(backend, self, &subscripts).map_err(Error::from)
+        eager_einsum_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 }
 
 impl<const N: usize> TensorEinsumExt for [&Tensor; N] {
-    fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
-        self.as_slice().einsum(subscripts, backend)
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
+        self.as_slice().einsum(subscripts, session)
     }
 
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
-        self.as_slice().einsum_subscripts(subscripts, backend)
+        self.as_slice().einsum_subscripts(subscripts, session)
     }
 }
 
@@ -175,10 +177,10 @@ pub trait TensorEinsumIntoExt {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
     /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_into<B: TensorBackend>(
+    fn einsum_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
@@ -189,54 +191,54 @@ pub trait TensorEinsumIntoExt {
     /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
     /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
     /// failure.
-    fn einsum_into_subscripts<B: TensorBackend>(
+    fn einsum_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()>;
 }
 
 impl TensorEinsumIntoExt for [&Tensor] {
-    fn einsum_into<B: TensorBackend>(
+    fn einsum_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         let subscripts = parse_subscripts(subscripts, TENSOR_EINSUM_INTO_OP)?;
-        tensor_einsum_into_subscripts(backend, self, &subscripts, out, TENSOR_EINSUM_INTO_OP)
+        tensor_einsum_into_subscripts(session, self, &subscripts, out, TENSOR_EINSUM_INTO_OP)
     }
 
-    fn einsum_into_subscripts<B: TensorBackend>(
+    fn einsum_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         let subscripts = Subscripts::from(subscripts);
-        tensor_einsum_into_subscripts(backend, self, &subscripts, out, TENSOR_EINSUM_INTO_OP)
+        tensor_einsum_into_subscripts(session, self, &subscripts, out, TENSOR_EINSUM_INTO_OP)
     }
 }
 
 impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
-    fn einsum_into<B: TensorBackend>(
+    fn einsum_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
-        self.as_slice().einsum_into(subscripts, backend, out)
+        self.as_slice().einsum_into(subscripts, session, out)
     }
 
-    fn einsum_into_subscripts<B: TensorBackend>(
+    fn einsum_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         self.as_slice()
-            .einsum_into_subscripts(subscripts, backend, out)
+            .einsum_into_subscripts(subscripts, session, out)
     }
 }
 
@@ -250,13 +252,15 @@ impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::TypedTensorEinsumExt;
-/// use tenferro_tensor::TypedTensor;
+/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
 /// let mut backend = CpuBackend::new();
 ///
-/// let out = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
+/// let out = backend.with_backend_session(|session| {
+///     [&lhs, &rhs].einsum("ij,jk->ik", session)
+/// })?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -268,8 +272,7 @@ pub trait TypedTensorEinsumExt<T: TensorScalar> {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with shape or rank payloads for an invalid
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B)
-        -> Result<TypedTensor<T>>;
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>>;
 
     /// Execute an einsum from parsed integer-label subscripts.
     ///
@@ -277,48 +280,40 @@ pub trait TypedTensorEinsumExt<T: TensorScalar> {
     ///
     /// Returns [`Error::Validation`] with shape or rank payloads for an invalid
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>>;
 }
 
 impl<T: TensorScalar> TypedTensorEinsumExt<T> for [&TypedTensor<T>] {
-    fn einsum<B: TensorBackend>(
-        &self,
-        subscripts: &str,
-        backend: &mut B,
-    ) -> Result<TypedTensor<T>> {
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
         let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_EINSUM_OP)?;
-        typed_einsum_subscripts(backend, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
+        typed_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
     }
 
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
         let subscripts = Subscripts::from(subscripts);
-        typed_einsum_subscripts(backend, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
+        typed_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
     }
 }
 
 impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<T>; N] {
-    fn einsum<B: TensorBackend>(
-        &self,
-        subscripts: &str,
-        backend: &mut B,
-    ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum(subscripts, backend)
+    fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        self.as_slice().einsum(subscripts, session)
     }
 
-    fn einsum_subscripts<B: TensorBackend>(
+    fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_subscripts(subscripts, backend)
+        self.as_slice().einsum_subscripts(subscripts, session)
     }
 }
 
@@ -333,12 +328,14 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::TypedTensorReadEinsumExt;
-/// use tenferro_tensor::TypedTensor;
+/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
 /// let mut backend = CpuBackend::new();
-/// let result = [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", &mut backend)?;
+/// let result = backend.with_backend_session(|session| {
+///     [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", session)
+/// })?;
 /// assert_eq!(result.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -350,11 +347,13 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_einsum::TypedTensorReadEinsumExt;
-    /// use tenferro_tensor::TypedTensor;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let mut backend = CpuBackend::new();
-    /// let result = [input.as_view()].einsum_read("i->i", &mut backend)?;
+    /// let result = backend.with_backend_session(|session| {
+    ///     [input.as_view()].einsum_read("i->i", session)
+    /// })?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -364,10 +363,10 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with shape or rank payloads for incompatible
     /// views, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read<B: TensorBackend>(
+    fn einsum_read(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>>;
 
     /// Execute an einsum from parsed integer-label subscripts over typed
@@ -378,12 +377,14 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumExt};
-    /// use tenferro_tensor::TypedTensor;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
     /// let mut backend = CpuBackend::new();
-    /// let result = [input.as_view()].einsum_read_subscripts(&subscripts, &mut backend)?;
+    /// let result = backend.with_backend_session(|session| {
+    ///     [input.as_view()].einsum_read_subscripts(&subscripts, session)
+    /// })?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -392,50 +393,50 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     ///
     /// Returns [`Error::Validation`] with shape or rank payloads for
     /// incompatible views, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>>;
 }
 
 impl<'a, T: TensorScalar> TypedTensorReadEinsumExt<T> for [TypedTensorView<'a, T>] {
-    fn einsum_read<B: TensorBackend>(
+    fn einsum_read(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
         let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_READ_EINSUM_OP)?;
-        typed_view_einsum_subscripts(backend, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
+        typed_view_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
     }
 
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
         let subscripts = Subscripts::from(subscripts);
-        typed_view_einsum_subscripts(backend, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
+        typed_view_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
     }
 }
 
 impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumExt<T>
     for [TypedTensorView<'a, T>; N]
 {
-    fn einsum_read<B: TensorBackend>(
+    fn einsum_read(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_read(subscripts, backend)
+        self.as_slice().einsum_read(subscripts, session)
     }
 
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_read_subscripts(subscripts, backend)
+        self.as_slice().einsum_read_subscripts(subscripts, session)
     }
 }
 
@@ -448,9 +449,13 @@ pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
     /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
+    fn einsum_into<'out, O>(
+        &self,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>;
 
     /// Execute an einsum from parsed integer-label subscripts into caller-provided typed output.
@@ -460,26 +465,29 @@ pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
     /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
     /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
     /// failure.
-    fn einsum_into_subscripts<'out, B, O>(
+    fn einsum_into_subscripts<'out, O>(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>;
 }
 
 impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
-    fn einsum_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
+    fn einsum_into<'out, O>(
+        &self,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_EINSUM_INTO_OP)?;
         typed_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out.into(),
@@ -487,19 +495,18 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
         )
     }
 
-    fn einsum_into_subscripts<'out, B, O>(
+    fn einsum_into_subscripts<'out, O>(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let subscripts = Subscripts::from(subscripts);
         typed_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out.into(),
@@ -509,26 +516,29 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
 }
 
 impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>; N] {
-    fn einsum_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
-    where
-        B: TensorBackend,
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice().einsum_into(subscripts, backend, out)
-    }
-
-    fn einsum_into_subscripts<'out, B, O>(
+    fn einsum_into<'out, O>(
         &self,
-        subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        self.as_slice().einsum_into(subscripts, session, out)
+    }
+
+    fn einsum_into_subscripts<'out, O>(
+        &self,
+        subscripts: &EinsumSubscripts,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
         O: Into<TypedTensorWrite<'out, T>>,
     {
         self.as_slice()
-            .einsum_into_subscripts(subscripts, backend, out)
+            .einsum_into_subscripts(subscripts, session, out)
     }
 }
 
@@ -539,13 +549,15 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTen
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-/// use tenferro_tensor::TypedTensor;
+/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
 /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0])?;
 /// let mut backend = CpuBackend::new();
-/// [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", &mut backend, &mut output)?;
+/// backend.with_backend_session(|session| {
+///     [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", session, &mut output)
+/// })?;
 /// assert_eq!(output.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -558,12 +570,14 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-    /// use tenferro_tensor::TypedTensor;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
     /// let mut backend = CpuBackend::new();
-    /// [input.as_view()].einsum_read_into("i->i", &mut backend, &mut output)?;
+    /// backend.with_backend_session(|session| {
+    ///     [input.as_view()].einsum_read_into("i->i", session, &mut output)
+    /// })?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -573,9 +587,13 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
     /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
+    fn einsum_read_into<'out, O>(
+        &self,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>;
 
     /// Execute an einsum from parsed integer-label subscripts over typed
@@ -586,13 +604,15 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumIntoExt};
-    /// use tenferro_tensor::TypedTensor;
+    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
     /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
     /// let mut backend = CpuBackend::new();
-    /// [input.as_view()].einsum_read_into_subscripts(&subscripts, &mut backend, &mut output)?;
+    /// backend.with_backend_session(|session| {
+    ///     [input.as_view()].einsum_read_into_subscripts(&subscripts, session, &mut output)
+    /// })?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -602,26 +622,29 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
     /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
     /// failure.
-    fn einsum_read_into_subscripts<'out, B, O>(
+    fn einsum_read_into_subscripts<'out, O>(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>;
 }
 
 impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'a, T>] {
-    fn einsum_read_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
+    fn einsum_read_into<'out, O>(
+        &self,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_READ_EINSUM_INTO_OP)?;
         typed_view_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out.into(),
@@ -629,19 +652,18 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
         )
     }
 
-    fn einsum_read_into_subscripts<'out, B, O>(
+    fn einsum_read_into_subscripts<'out, O>(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>,
     {
         let subscripts = Subscripts::from(subscripts);
         typed_view_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out.into(),
@@ -653,26 +675,29 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
 impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
     for [TypedTensorView<'a, T>; N]
 {
-    fn einsum_read_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
-    where
-        B: TensorBackend,
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice().einsum_read_into(subscripts, backend, out)
-    }
-
-    fn einsum_read_into_subscripts<'out, B, O>(
+    fn einsum_read_into<'out, O>(
         &self,
-        subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        subscripts: &str,
+        session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
     where
-        B: TensorBackend,
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        self.as_slice().einsum_read_into(subscripts, session, out)
+    }
+
+    fn einsum_read_into_subscripts<'out, O>(
+        &self,
+        subscripts: &EinsumSubscripts,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
         O: Into<TypedTensorWrite<'out, T>>,
     {
         self.as_slice()
-            .einsum_read_into_subscripts(subscripts, backend, out)
+            .einsum_read_into_subscripts(subscripts, session, out)
     }
 }
 
@@ -687,7 +712,7 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 /// ```
 /// use tenferro_cpu::CpuBackend;
 /// use tenferro_einsum::TensorReadEinsumExt;
-/// use tenferro_tensor::{Tensor, TensorRead, TensorView};
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView};
 ///
 /// let shape = [2, 3];
 /// let data = [1.0_f64; 6];
@@ -698,7 +723,7 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 /// ];
 /// let mut backend = CpuBackend::new();
 ///
-/// let out = inputs.einsum_read("ij,j->i", &mut backend)?;
+/// let out = backend.with_backend_session(|session| inputs.einsum_read("ij,j->i", session))?;
 /// assert_eq!(out.shape(), &[2]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -710,7 +735,7 @@ pub trait TensorReadEinsumExt {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor>;
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor>;
 
     /// Execute an einsum from parsed integer-label subscripts over read-only
     /// tensor inputs.
@@ -719,40 +744,40 @@ pub trait TensorReadEinsumExt {
     ///
     /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
     /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor>;
 }
 
 impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
-    fn einsum_read<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
         let subscripts = parse_subscripts(subscripts, TENSOR_READ_EINSUM_OP)?;
-        eager_einsum_read_subscripts(backend, self, &subscripts).map_err(Error::from)
+        eager_einsum_read_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
         let subscripts = Subscripts::from(subscripts);
-        eager_einsum_read_subscripts(backend, self, &subscripts).map_err(Error::from)
+        eager_einsum_read_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 }
 
 impl<'a, const N: usize> TensorReadEinsumExt for [TensorRead<'a>; N] {
-    fn einsum_read<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
-        self.as_slice().einsum_read(subscripts, backend)
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
+        self.as_slice().einsum_read(subscripts, session)
     }
 
-    fn einsum_read_subscripts<B: TensorBackend>(
+    fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
     ) -> Result<Tensor> {
-        self.as_slice().einsum_read_subscripts(subscripts, backend)
+        self.as_slice().einsum_read_subscripts(subscripts, session)
     }
 }
 
@@ -765,10 +790,10 @@ pub trait TensorReadEinsumIntoExt {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
     /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_into<B: TensorBackend>(
+    fn einsum_read_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
@@ -779,24 +804,24 @@ pub trait TensorReadEinsumIntoExt {
     /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
     /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
     /// failure.
-    fn einsum_read_into_subscripts<B: TensorBackend>(
+    fn einsum_read_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()>;
 }
 
 impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
-    fn einsum_read_into<B: TensorBackend>(
+    fn einsum_read_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         let subscripts = parse_subscripts(subscripts, TENSOR_READ_EINSUM_INTO_OP)?;
         tensor_read_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out,
@@ -804,15 +829,15 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
         )
     }
 
-    fn einsum_read_into_subscripts<B: TensorBackend>(
+    fn einsum_read_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         let subscripts = Subscripts::from(subscripts);
         tensor_read_einsum_into_subscripts(
-            backend,
+            session,
             self,
             &subscripts,
             out,
@@ -822,23 +847,23 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
 }
 
 impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
-    fn einsum_read_into<B: TensorBackend>(
+    fn einsum_read_into(
         &self,
         subscripts: &str,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
-        self.as_slice().einsum_read_into(subscripts, backend, out)
+        self.as_slice().einsum_read_into(subscripts, session, out)
     }
 
-    fn einsum_read_into_subscripts<B: TensorBackend>(
+    fn einsum_read_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
-        backend: &mut B,
+        session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
         self.as_slice()
-            .einsum_read_into_subscripts(subscripts, backend, out)
+            .einsum_read_into_subscripts(subscripts, session, out)
     }
 }
 
@@ -1405,7 +1430,7 @@ fn read_input_specs(inputs: &[TensorRead<'_>]) -> Vec<ConcreteEinsumInputSpec> {
 }
 
 fn typed_view_einsum_subscripts<T: TensorScalar>(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[TypedTensorView<'_, T>],
     subscripts: &Subscripts,
     op: &'static str,
@@ -1417,12 +1442,12 @@ fn typed_view_einsum_subscripts<T: TensorScalar>(
         .collect();
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let result = backend.with_backend_session(|session| plan.execute_read(&reads, session))?;
+    let result = plan.execute_read(&reads, session)?;
     into_typed_result(result, op)
 }
 
 fn tensor_einsum_into_subscripts(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
     out: TensorWrite<'_>,
@@ -1430,11 +1455,11 @@ fn tensor_einsum_into_subscripts(
 ) -> Result<()> {
     let plan = ConcreteEinsumPlan::prepare_subscripts_internal(input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    backend.with_backend_session(|session| plan.execute_into(inputs, session, out))
+    plan.execute_into(inputs, session, out)
 }
 
 fn typed_view_einsum_into_subscripts<T: TensorScalar>(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[TypedTensorView<'_, T>],
     subscripts: &Subscripts,
     out: TypedTensorWrite<'_, T>,
@@ -1449,11 +1474,11 @@ fn typed_view_einsum_into_subscripts<T: TensorScalar>(
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     let out = out.into_tensor_write();
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    backend.with_backend_session(|session| plan.execute_read_into(&reads, session, out))
+    plan.execute_read_into(&reads, session, out)
 }
 
 fn typed_einsum_into_subscripts<T: TensorScalar>(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[&TypedTensor<T>],
     subscripts: &Subscripts,
     out: TypedTensorWrite<'_, T>,
@@ -1464,11 +1489,11 @@ fn typed_einsum_into_subscripts<T: TensorScalar>(
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     let out = out.into_tensor_write();
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    backend.with_backend_session(|session| plan.execute_read_into(&reads, session, out))
+    plan.execute_read_into(&reads, session, out)
 }
 
 fn tensor_read_einsum_into_subscripts(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
     out: TensorWrite<'_>,
@@ -1477,7 +1502,7 @@ fn tensor_read_einsum_into_subscripts(
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    backend.with_backend_session(|session| plan.execute_read_into(inputs, session, out))
+    plan.execute_read_into(inputs, session, out)
 }
 
 fn validate_output(
@@ -1545,7 +1570,7 @@ fn output_spec(
 }
 
 fn typed_einsum_subscripts<T: TensorScalar>(
-    backend: &mut impl TensorBackend,
+    session: &mut dyn BackendSession,
     inputs: &[&TypedTensor<T>],
     subscripts: &Subscripts,
     op: &'static str,
@@ -1553,7 +1578,7 @@ fn typed_einsum_subscripts<T: TensorScalar>(
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let result = backend.with_backend_session(|session| plan.execute_read(&reads, session))?;
+    let result = plan.execute_read(&reads, session)?;
     into_typed_result(result, op)
 }
 

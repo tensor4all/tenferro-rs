@@ -190,3 +190,43 @@ fn cubecl_session_flushes_after_error_callback() {
             .unwrap();
     });
 }
+
+#[cfg(debug_assertions)]
+#[test]
+fn cuda_with_backend_session_rejects_nested_entry_in_debug_builds() {
+    if !gpu_available() {
+        // Skipped on hosts without a CUDA device: the nested-entry contract
+        // is exercised on the shared helper + default adapter here.
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_session| {
+            // The CUDA override wraps its closure in the portable in-session
+            // guard, so re-entering any session-entry point on this thread
+            // (here the shared helper directly) trips the debug assert
+            // (issue #1680 Phase 3).
+            tenferro_tensor::with_session_entry_guard(|| ())
+        })
+    }));
+    assert!(
+        outcome.is_err(),
+        "nested session entry must panic in debug builds"
+    );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn cuda_with_backend_session_restores_the_in_session_flag_after_panic() {
+    if !gpu_available() {
+        return;
+    }
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_session| panic!("boom"))
+    }));
+    assert!(outcome.is_err());
+    // The flag is usable again on the same thread.
+    let value = backend.with_backend_session(|_session| 7usize);
+    assert_eq!(value, 7);
+}

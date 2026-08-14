@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod metal {
     use num_complex::{Complex32, Complex64};
-    use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+    use tenferro_cpu::CpuBackend;
     use tenferro_fft::{FftNorm, TensorFftExt};
     use tenferro_gpu::{
         apple::AppleContext, webgpu::interop as webgpu_interop, webgpu::upload_webgpu_tensor,
@@ -10,19 +10,9 @@ mod metal {
     };
     use tenferro_tensor::{BackendSessionHost, Error, StorageBuffer, Tensor};
 
-    fn with_cpu_fft<R>(
-        backend: &mut CpuBackend,
-        f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
-    ) -> R
-    where
-        R: Send,
-    {
-        backend.with_backend_session(|session| {
-            with_cpu_exec_session(session, f)
-                .expect("CpuBackend must expose a CPU execution session")
-        })
-    }
-
+    /// Visit the concrete WebGPU session for SPI-level behavior only: stream
+    /// synchronization and backend-interop limits. Concrete FFT trait calls
+    /// take `&mut dyn BackendSession` and use `with_backend_session` directly.
     fn with_webgpu_fft<R>(
         backend: &mut WebGpuBackend,
         f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R + Send,
@@ -107,17 +97,21 @@ mod metal {
 
         for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
             let mut cpu = tenferro_cpu::CpuBackend::new();
-            let reference =
-                with_cpu_fft(&mut cpu, |session| input.fft(None, 0, norm, session)).unwrap();
-            let output =
-                with_webgpu_fft(&mut metal, |session| managed.fft(None, 0, norm, session)).unwrap();
+            let reference = cpu
+                .with_backend_session(|session| input.fft(None, 0, norm, session))
+                .unwrap();
+            let output = metal
+                .with_backend_session(|session| managed.fft(None, 0, norm, session))
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_c32_close(&c32_values(&output), reference.as_slice().unwrap(), 2.0e-5);
 
-            let round_trip =
-                with_webgpu_fft(&mut metal, |session| output.ifft(None, 0, norm, session)).unwrap();
-            let reference_round_trip =
-                with_cpu_fft(&mut cpu, |session| reference.ifft(None, 0, norm, session)).unwrap();
+            let round_trip = metal
+                .with_backend_session(|session| output.ifft(None, 0, norm, session))
+                .unwrap();
+            let reference_round_trip = cpu
+                .with_backend_session(|session| reference.ifft(None, 0, norm, session))
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_c32_close(
                 &c32_values(&round_trip),
@@ -140,14 +134,12 @@ mod metal {
         .unwrap();
         let managed = context.upload_tensor(&axis_one_input).unwrap();
         let mut cpu = tenferro_cpu::CpuBackend::new();
-        let reference = with_cpu_fft(&mut cpu, |session| {
-            axis_one_input.fft(None, 1, FftNorm::Backward, session)
-        })
-        .unwrap();
-        let output = with_webgpu_fft(&mut metal, |session| {
-            managed.fft(None, 1, FftNorm::Backward, session)
-        })
-        .unwrap();
+        let reference = cpu
+            .with_backend_session(|session| axis_one_input.fft(None, 1, FftNorm::Backward, session))
+            .unwrap();
+        let output = metal
+            .with_backend_session(|session| managed.fft(None, 1, FftNorm::Backward, session))
+            .unwrap();
         with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
         assert_c32_close(&c32_values(&output), reference.as_slice().unwrap(), 2.0e-5);
         assert_eq!(
@@ -172,28 +164,32 @@ mod metal {
             let managed = context.upload_tensor(&input).unwrap();
             let before = context.transfer_stats();
             let mut cpu = tenferro_cpu::CpuBackend::new();
-            let reference = with_cpu_fft(&mut cpu, |session| {
-                input.rfft(Some(n_fft), axis, FftNorm::Ortho, session)
-            })
-            .unwrap();
-            let spectrum = with_webgpu_fft(&mut metal, |session| {
-                managed.rfft(Some(n_fft), axis, FftNorm::Ortho, session)
-            })
-            .unwrap();
+            let reference = cpu
+                .with_backend_session(|session| {
+                    input.rfft(Some(n_fft), axis, FftNorm::Ortho, session)
+                })
+                .unwrap();
+            let spectrum = metal
+                .with_backend_session(|session| {
+                    managed.rfft(Some(n_fft), axis, FftNorm::Ortho, session)
+                })
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_c32_close(
                 &c32_values(&spectrum),
                 reference.as_slice().unwrap(),
                 2.0e-5,
             );
-            let round_trip = with_webgpu_fft(&mut metal, |session| {
-                spectrum.irfft(Some(n_fft), axis, FftNorm::Ortho, session)
-            })
-            .unwrap();
-            let reference_round_trip = with_cpu_fft(&mut cpu, |session| {
-                reference.irfft(Some(n_fft), axis, FftNorm::Ortho, session)
-            })
-            .unwrap();
+            let round_trip = metal
+                .with_backend_session(|session| {
+                    spectrum.irfft(Some(n_fft), axis, FftNorm::Ortho, session)
+                })
+                .unwrap();
+            let reference_round_trip = cpu
+                .with_backend_session(|session| {
+                    reference.irfft(Some(n_fft), axis, FftNorm::Ortho, session)
+                })
+                .unwrap();
             metal.synchronize().unwrap();
             assert_f32_close(
                 &f32_values(&round_trip),
@@ -228,14 +224,12 @@ mod metal {
             let complex = Tensor::from_vec_col_major(vec![n_fft], complex_values).unwrap();
             let managed = context.upload_tensor(&complex).unwrap();
             let mut cpu = tenferro_cpu::CpuBackend::new();
-            let reference = with_cpu_fft(&mut cpu, |session| {
-                complex.fft(None, 0, FftNorm::Backward, session)
-            })
-            .unwrap();
-            let output = with_webgpu_fft(&mut metal, |session| {
-                managed.fft(None, 0, FftNorm::Backward, session)
-            })
-            .unwrap();
+            let reference = cpu
+                .with_backend_session(|session| complex.fft(None, 0, FftNorm::Backward, session))
+                .unwrap();
+            let output = metal
+                .with_backend_session(|session| managed.fft(None, 0, FftNorm::Backward, session))
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_c32_close(&c32_values(&output), reference.as_slice().unwrap(), 2.0e-3);
 
@@ -244,20 +238,19 @@ mod metal {
                 .collect::<Vec<_>>();
             let real = Tensor::from_vec_col_major(vec![n_fft], real_values).unwrap();
             let managed = context.upload_tensor(&real).unwrap();
-            let reference = with_cpu_fft(&mut cpu, |session| {
-                real.rfft(None, 0, FftNorm::Backward, session)
-            })
-            .unwrap();
-            let output = with_webgpu_fft(&mut metal, |session| {
-                managed.rfft(None, 0, FftNorm::Backward, session)
-            })
-            .unwrap();
+            let reference = cpu
+                .with_backend_session(|session| real.rfft(None, 0, FftNorm::Backward, session))
+                .unwrap();
+            let output = metal
+                .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_c32_close(&c32_values(&output), reference.as_slice().unwrap(), 2.0e-3);
-            let round_trip = with_webgpu_fft(&mut metal, |session| {
-                output.irfft(Some(n_fft), 0, FftNorm::Backward, session)
-            })
-            .unwrap();
+            let round_trip = metal
+                .with_backend_session(|session| {
+                    output.irfft(Some(n_fft), 0, FftNorm::Backward, session)
+                })
+                .unwrap();
             with_webgpu_fft(&mut metal, |session| session.runtime().synchronize()).unwrap();
             assert_f32_close(&f32_values(&round_trip), real.as_slice().unwrap(), 2.0e-3);
         }
@@ -279,54 +272,50 @@ mod metal {
             (context.upload_tensor(&c64_input).unwrap(), "fft"),
         ] {
             let error = if transform == "rfft" {
-                with_webgpu_fft(&mut metal, |session| {
-                    input.rfft(None, 0, FftNorm::Backward, session)
-                })
+                metal
+                    .with_backend_session(|session| input.rfft(None, 0, FftNorm::Backward, session))
             } else {
-                with_webgpu_fft(&mut metal, |session| {
-                    input.fft(None, 0, FftNorm::Backward, session)
-                })
+                metal.with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
             }
             .unwrap_err();
             assert!(matches!(error, Error::Unsupported { .. }));
         }
 
         let managed_real = context.upload_tensor(&f32_input).unwrap();
-        let error = with_webgpu_fft(&mut metal, |session| {
-            managed_real.fft(None, 0, FftNorm::Backward, session)
-        })
-        .unwrap_err();
+        let error = metal
+            .with_backend_session(|session| managed_real.fft(None, 0, FftNorm::Backward, session))
+            .unwrap_err();
         assert!(matches!(error, Error::Unsupported { .. }));
         for invalid_n in [1usize, 3usize, 1usize << 40] {
-            let error = with_webgpu_fft(&mut metal, |session| {
-                managed_real.rfft(Some(invalid_n), 0, FftNorm::Backward, session)
-            })
-            .unwrap_err();
+            let error = metal
+                .with_backend_session(|session| {
+                    managed_real.rfft(Some(invalid_n), 0, FftNorm::Backward, session)
+                })
+                .unwrap_err();
             assert!(matches!(error, Error::Unsupported { .. }));
         }
         let managed_complex = context.upload_tensor(&c32_input).unwrap();
-        let error = with_webgpu_fft(&mut metal, |session| {
-            managed_complex.fft(Some(8), 0, FftNorm::Backward, session)
-        })
-        .unwrap_err();
+        let error = metal
+            .with_backend_session(|session| {
+                managed_complex.fft(Some(8), 0, FftNorm::Backward, session)
+            })
+            .unwrap_err();
         assert!(matches!(error, Error::Unsupported { .. }));
 
         let other = AppleContext::new().unwrap();
         let foreign = other.upload_tensor(&c32_input).unwrap();
         let before = context.transfer_stats();
-        let error = with_webgpu_fft(&mut metal, |session| {
-            foreign.fft(None, 0, FftNorm::Backward, session)
-        })
-        .unwrap_err();
+        let error = metal
+            .with_backend_session(|session| foreign.fft(None, 0, FftNorm::Backward, session))
+            .unwrap_err();
         assert!(matches!(error, Error::HostAccess { .. }));
         assert_eq!(context.transfer_stats(), before);
 
         let runtime = WebGpuRuntime::new_default().unwrap();
         let device_local = upload_webgpu_tensor(&runtime, &c32_input).unwrap();
-        let error = with_webgpu_fft(&mut metal, |session| {
-            device_local.fft(None, 0, FftNorm::Backward, session)
-        })
-        .unwrap_err();
+        let error = metal
+            .with_backend_session(|session| device_local.fft(None, 0, FftNorm::Backward, session))
+            .unwrap_err();
         assert!(matches!(error, Error::RuntimeState { .. }));
         assert_eq!(context.transfer_stats(), before);
     }

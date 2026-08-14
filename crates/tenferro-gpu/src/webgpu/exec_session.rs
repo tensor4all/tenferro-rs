@@ -7,7 +7,9 @@ use tenferro_tensor::backend::{
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite};
+use tenferro_tensor::{
+    with_session_entry_guard, DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite,
+};
 
 use super::{WebGpuBackend, WebGpuRuntime, WebGpuRuntimeIdentity};
 
@@ -265,6 +267,8 @@ impl BackendSessionHost for WebGpuBackend {
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         let mut session = WebGpuExecSession { backend: self };
-        f(&mut session)
+        // Nested entry is caught by the portable in-session guard in debug
+        // builds; the WebGPU runtime must never re-enter a session closure.
+        with_session_entry_guard(|| f(&mut session))
     }
 }

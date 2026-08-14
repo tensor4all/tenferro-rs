@@ -1,12 +1,15 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::prelude::*;
+use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn prelude_calls_concrete_einsum() {
     let lhs = Tensor::from_vec_col_major([2, 3], vec![1.0_f64; 6]).unwrap();
     let rhs = Tensor::from_vec_col_major([3, 2], vec![1.0_f64; 6]).unwrap();
     let mut backend = CpuBackend::new();
-    let result = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| [&lhs, &rhs].einsum("ij,jk->ik", session))
+        .unwrap();
     assert_eq!(result.shape(), &[2, 2]);
 }
 

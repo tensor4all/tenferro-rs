@@ -1548,7 +1548,9 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
     let input = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
     let mut backend = DefaultReadBackend::default();
 
-    input.index_select(-1, &[2, 0], &mut backend).unwrap();
+    backend
+        .with_backend_session(|session| input.index_select(-1, &[2, 0], session))
+        .unwrap();
 
     let indices = backend.gather_indices.as_ref().unwrap();
     assert_eq!(indices.shape(), &[2, 1]);
@@ -1561,10 +1563,14 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
     assert_eq!(config.index_vector_dim, 1);
     assert_eq!(config.slice_sizes, vec![2, 1]);
 
-    let axis_err = input.index_select(2, &[0], &mut backend).unwrap_err();
+    let axis_err = backend
+        .with_backend_session(|session| input.index_select(2, &[0], session))
+        .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 
-    let position_err = input.index_select(1, &[3], &mut backend).unwrap_err();
+    let position_err = backend
+        .with_backend_session(|session| input.index_select(1, &[3], session))
+        .unwrap_err();
     assert!(position_err
         .to_string()
         .contains("position 3 out of bounds"));
@@ -1576,17 +1582,23 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
     let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let mut backend = DefaultReadBackend::default();
 
-    Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
+    backend
+        .with_backend_session(|session| Tensor::stack(&[&a, &b], -1, session))
+        .unwrap();
 
     assert_eq!(backend.reshape_shapes, vec![vec![2, 1], vec![2, 1]]);
     assert_eq!(backend.concatenate_axis, Some(1));
 
     let empty: [&Tensor; 0] = [];
-    let empty_err = Tensor::stack(&empty, 0, &mut backend).unwrap_err();
+    let empty_err = backend
+        .with_backend_session(|session| Tensor::stack(&empty, 0, session))
+        .unwrap_err();
     assert!(empty_err.to_string().contains("at least one input"));
 
     let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
-    let shape_err = Tensor::stack(&[&a, &c], 0, &mut backend).unwrap_err();
+    let shape_err = backend
+        .with_backend_session(|session| Tensor::stack(&[&a, &c], 0, session))
+        .unwrap_err();
     assert!(matches!(
         shape_err,
         crate::Error::Validation {
@@ -1595,7 +1607,9 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
         }
     ));
 
-    let axis_err = Tensor::stack(&[&a], 2, &mut backend).unwrap_err();
+    let axis_err = backend
+        .with_backend_session(|session| Tensor::stack(&[&a], 2, session))
+        .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 }
 

@@ -6,7 +6,7 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 
 A focused module can keep its dependencies explicit with direct imports such as
 `use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
-`use tenferro_linalg::{LinalgBackend, TensorLinalgExt};`. A tutorial or a
+`use tenferro_linalg::TensorLinalgExt;`. A tutorial or a
 module that uses several operation families can use the equivalent crate-local
 preludes: `use tenferro_runtime::prelude::*;` and
 `use tenferro_linalg::prelude::*;`. These imports only affect name lookup;
@@ -39,10 +39,10 @@ backend and device choices remain explicit.
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `ctx.with_backend_session(\|s\| x.reduce_sum(&axes, s))` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
-| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `x.svd()?` via `TracedTensorLinalgExt` |
-| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `x.qr()?` via `TracedTensorLinalgExt` |
-| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `tenferro_linalg::LinalgBackend::cholesky(&mut ctx, &x)?` | `x.cholesky()?` via `TracedTensorLinalgExt` |
-| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `tenferro_linalg::LinalgBackend::solve(&mut ctx, &a, &b)?` | `a.solve(&b)?` via `TracedTensorLinalgExt` |
+| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `ctx.with_backend_session(\|s\| x.svd(s))` via `TensorLinalgExt` | `x.svd()?` via `TracedTensorLinalgExt` |
+| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `ctx.with_backend_session(\|s\| x.qr(s))` via `TensorLinalgExt` | `x.qr()?` via `TracedTensorLinalgExt` |
+| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `ctx.with_backend_session(\|s\| x.cholesky(s))` via `TensorLinalgExt` | `x.cholesky()?` via `TracedTensorLinalgExt` |
+| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `ctx.with_backend_session(\|s\| a.solve(&b, s))` via `TensorLinalgExt` | `a.solve(&b)?` via `TracedTensorLinalgExt` |
 | Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | `ctx.grad(&loss, &x)?` | `loss.grad(&x)` |
 | VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | `ctx.vjp(&y, &x, &cotangent)?` | `y.vjp(&x, &cotangent)?` |

@@ -128,8 +128,7 @@ example is the source of truth for this guide:
 use num_complex::Complex32;
 use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, with_cuda_exec_session,
-    CudaBackend,
+    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
 };
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
@@ -189,15 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, |exec_session| {
-            gpu_input.rfft(None, 0, FftNorm::Backward, exec_session)
-        })
-        .ok_or_else(|| tenferro_tensor::Error::Unsupported {
-            op: "cuda_fft_tutorial",
-            message: "CUDA backend session is unavailable".to_owned(),
-        })?
-    })?;
+    let spectrum = backend
+        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -297,34 +289,28 @@ names.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| {
-    with_cpu_exec_session(session, |backend| -> Result<(), tenferro_tensor::Error> {
-        let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-        let full = x.fft(None, -1, FftNorm::Backward, backend)?;
-        let one_sided = x.rfft(None, -1, FftNorm::Backward, backend)?;
-        assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-        assert_eq!(one_sided.shape(), &[3]);
+backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
+    let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    let full = x.fft(None, -1, FftNorm::Backward, session)?;
+    let one_sided = x.rfft(None, -1, FftNorm::Backward, session)?;
+    assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+    assert_eq!(one_sided.shape(), &[3]);
 
-        let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
-        let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
-        let read = TensorRead::from_view(TensorView::F64(view));
-        let read_full = read.fft_read(None, -1, FftNorm::Backward, backend)?;
-        assert_eq!(
-            read_full.as_slice::<Complex64>()?[0],
-            Complex64::new(10.0, 0.0),
-        );
-        Ok(())
-    })
-    .ok_or_else(|| tenferro_tensor::Error::Unsupported {
-        op: "documentation",
-        message: "CPU execution session is unavailable".to_owned(),
-    })?
+    let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+    let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+    let read = TensorRead::from_view(TensorView::F64(view));
+    let read_full = read.fft_read(None, -1, FftNorm::Backward, session)?;
+    assert_eq!(
+        read_full.as_slice::<Complex64>()?[0],
+        Complex64::new(10.0, 0.0),
+    );
+    Ok(())
 })?;
 ```
 <!-- end-snippet-source -->
@@ -366,12 +352,9 @@ each FFT call:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::{
-    apple::AppleContext,
-    webgpu::with_webgpu_exec_session,
-};
+use tenferro_gpu::apple::AppleContext;
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::Tensor;
 
@@ -383,27 +366,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_spectrum = cpu
-        .with_backend_session(|session| {
-            with_cpu_exec_session(session, |exec_session| {
-                managed.rfft(None, 0, FftNorm::Backward, exec_session)
-            })
-            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
-                op: "documentation",
-                message: "CPU execution session is unavailable".to_owned(),
-            })?
-        })?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
 
     let mut metal = context.metal_backend().clone();
     let metal_spectrum = metal
-        .with_backend_session(|session| {
-            with_webgpu_exec_session(session, |exec_session| {
-                managed.rfft(None, 0, FftNorm::Backward, exec_session)
-            })
-            .ok_or_else(|| tenferro_tensor::Error::Unsupported {
-                op: "documentation",
-                message: "WebGPU execution session is unavailable".to_owned(),
-            })?
-        })?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
