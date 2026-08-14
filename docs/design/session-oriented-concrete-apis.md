@@ -189,14 +189,20 @@ returning `TypedTensor<T>`. Exact op set is deliberately small:
 `add_in`/`mul_in` (binary + broadcast, the multi-session flagship),
 `exp_in` (unary), `reduce_sum_in` (reduction).
 
-**Naming is transitional**: the `_in` suffix exists only because the
-session-explicit form coexists with the one-shot `TensorOpsExt` during the
-migration — same receiver type (`Tensor`) + same method name on two in-scope
-traits is an ambiguous-method-resolution error in Rust (and a prelude glob
-would break every call site). The **final** canonical names drop the suffix:
-once the one-shot API is migrated away (a release-boundary breaking change),
-the session-explicit methods become the plain `add`/`exp`/`reduce_sum`. The
-`_in` names must not be treated as the permanent public spelling.
+**Naming is transitional; the end state deletes the one-shot API**: the
+`_in` suffix exists only because the session-explicit form coexists with the
+one-shot `TensorOpsExt` during the migration — same receiver type (`Tensor`)
++ same method name on two in-scope traits is an ambiguous-method-resolution
+error in Rust (and a prelude glob would break every call site). The **final
+state (decided 2026-08-14) is a single canonical API**: the one-shot
+`TensorOpsExt`/`TypedTensorOpsExt` backend-taking methods are **removed** at
+the migration break (a release-boundary breaking change), and the
+session-explicit methods become the plain `add`/`exp`/`reduce_sum` — the
+`_in`/`_in_session` suffix disappears. Rationale: keeping two API families
+makes user-side AI agents (and humans) choose between equivalent surfaces;
+a single session-explicit vocabulary is the long-term API. The `_in` names
+are explicitly transitional and must not be treated as the permanent public
+spelling.
 
 ### Validation and broadcast sharing
 
