@@ -111,4 +111,4 @@ pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

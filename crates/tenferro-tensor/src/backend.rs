@@ -4043,6 +4043,10 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 
 /// Backend execution-session entry points.
 ///
+/// `with_backend_session` is the canonical user entry; one-shot concrete ops
+/// delegate to the session form. `with_backend_session_cached` is the
+/// runtime-cache-aware entry used by the runtime layer.
+///
 /// # Examples
 ///
 /// ```rust
@@ -4163,6 +4167,36 @@ pub trait TensorBackend:
 
 impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
 
+thread_local! {
+    /// Tracks whether a [`default_backend_session`] closure is currently
+    /// running on this thread, so nested session entry is caught in debug
+    /// builds even for backends that do not override
+    /// [`BackendSessionHost::with_backend_session`].
+    static IN_SESSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets the in-session flag for the duration of a session closure and restores
+/// it on exit, including on panic.
+struct InSessionGuard;
+
+impl InSessionGuard {
+    fn enter() -> Self {
+        debug_assert!(
+            !IN_SESSION.get(),
+            "nested backend session entry: a session closure called \
+             with_backend_session / default_backend_session again on this thread"
+        );
+        IN_SESSION.set(true);
+        InSessionGuard
+    }
+}
+
+impl Drop for InSessionGuard {
+    fn drop(&mut self) {
+        IN_SESSION.set(false);
+    }
+}
+
 /// Run a closure using the backend itself as a default execution session.
 ///
 /// This is suitable for backends whose individual ops already manage their own
@@ -4181,5 +4215,6 @@ pub fn default_backend_session<B: TensorBackend, R: Send>(
     backend: &mut B,
     f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
 ) -> R {
+    let _guard = InSessionGuard::enter();
     f(backend)
 }

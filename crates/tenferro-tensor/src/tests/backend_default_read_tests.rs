@@ -14,7 +14,7 @@ use num_complex::{Complex32, Complex64};
 #[doc(hidden)]
 struct DefaultReadBackendSessionMarker;
 
-struct DefaultReadBackend {
+pub(crate) struct DefaultReadBackend {
     calls: Vec<&'static str>,
     dot_result: Option<Tensor>,
     gather_indices: Option<Tensor>,
