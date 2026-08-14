@@ -147,3 +147,130 @@ session API:  &mut dyn BackendSession ──────────────
 - `Send` bounds preserved and documented as a soundness requirement.
 - The 10-op trivial-chain gate passes (≥2x, predicted ~6x).
 - No material regression for large operations.
+
+## Prototype specification (PR B: the `_in` surface)
+
+Scope decision for the first implementation PR. The design-review gate rules
+apply: this section is the pre-implementation design document; the
+implementation must not start until it has a reviewer-gpt verdict.
+
+### Measured current state of the one-shot path
+
+A binary op already pays more than one session entry today
+(`crates/tenferro-runtime/src/tensor.rs`):
+
+- `add` → `broadcast_binary` → `broadcast_to` per operand (each
+  `broadcast_to` can enter 0-2 sessions: `reshape` + `broadcast_in_dim`, or
+  zero when shapes already match via `duplicate`) → then
+  `with_backend_session(|exec| exec.add(...))` for the op itself.
+  Worst case: **5 sessions per binary op** (both operands need
+  reshape+broadcast = 2 each + 1 final add, e.g. `[1,2] + [2,1]` → `[2,2]`);
+  the common one-sided reshape+broadcast case is 3; equal-shape case is 1.
+- `unary_fn` (exp etc.) and `reduce_sum`: 1 session each.
+
+So the session-explicit surface must own the broadcast step too, or a binary
+op still pays 2 entries inside one session.
+
+### Surface (prototype op set)
+
+`crates/tenferro-runtime/src/lib.rs`, next to `TensorOpsExt`:
+
+```rust
+pub trait TensorSessionOpsExt {
+    fn add_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor>;
+    fn mul_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor>;
+    fn exp_in(&self, session: &mut dyn BackendSession) -> Result<Tensor>;
+    fn reduce_sum_in(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor>;
+}
+```
+
+and `TypedTensorSessionOpsExt<T: TensorScalar>` with the same four methods
+returning `TypedTensor<T>`. Exact op set is deliberately small:
+`add_in`/`mul_in` (binary + broadcast, the multi-session flagship),
+`exp_in` (unary), `reduce_sum_in` (reduction).
+
+**Naming is transitional**: the `_in` suffix exists only because the
+session-explicit form coexists with the one-shot `TensorOpsExt` during the
+migration — same receiver type (`Tensor`) + same method name on two in-scope
+traits is an ambiguous-method-resolution error in Rust (and a prelude glob
+would break every call site). The **final** canonical names drop the suffix:
+once the one-shot API is migrated away (a release-boundary breaking change),
+the session-explicit methods become the plain `add`/`exp`/`reduce_sum`. The
+`_in` names must not be treated as the permanent public spelling.
+
+### Validation and broadcast sharing
+
+- Broadcast plan computation (`broadcast_shapes`, `broadcast_input_plan`) is
+  pure and shared. The error mapping (`broadcast_error`) is **not** shared:
+  the dynamic surface uses `broadcast_error_to_validation`
+  (`crates/tenferro-runtime/src/tensor.rs`) and the typed surface has its own
+  manual mapping (`typed_tensor.rs`). Each `_in` surface reuses its existing
+  local mapping; no third mapping is added.
+- **Dynamic `Tensor` helper (owned)**: session-level
+  `broadcast_to_in(input, target_shape, session)` using
+  `session.reshape` + `session.broadcast_in_dim` with the same plan logic as
+  the existing `broadcast_to`, **preserving the `duplicate()` path** for
+  equal shapes and broadcast sources (owned copy semantics unchanged).
+  `add_in`/`mul_in` = `broadcast_to_in` both operands + `session.add`/
+  `session.mul`, all inside the one borrowed session.
+- **Typed `TypedTensor<T>` helper (borrowed, read-based)**: the typed one-shot
+  path keeps inputs borrowed and dispatches to the `*_read` methods
+  (`typed_tensor.rs`); the typed `_in` surface mirrors that with
+  `reshape_read`/`broadcast_in_dim_read`/`add_read`/`mul_read` on the session
+  and `into_typed_result` for the output (dtype fixed by `T`, no promotion
+  logic). Do NOT funnel the typed path through the owned dynamic helper —
+  that would introduce copies or change allocation semantics.
+- No second validation vocabulary; no new error kinds. One-shot/session
+  parity tests cover values and structured errors for both surfaces.
+
+### One-shot delegation
+
+One-shot `add`/`mul`/`exp`/`reduce_sum` become
+`backend.with_backend_session(|s| ..._in(...))` where practical. This drops
+the worst-case binary-op session count from 5 to 1 — a side benefit that must
+be measured as a no-regression check, not assumed. `dot_general`/`matmul`
+are excluded from this PR (cache-ownership decision pending) and keep their
+current path.
+
+### Explicitly out of scope for PR B
+
+- `dot_general`/`matmul` (deferred until cache ownership/parity with
+  `with_backend_session_cached` / `SessionCachedDot` is decided; the current
+  one-shot matmul already uses the plain entry, so this is purely a
+  cache-ownership decision).
+- `convert`/`cast` and the rest of the op vocabulary (follow-up PRs).
+- `EinsumPlan::execute_in_session` and all extension-crate tiers (PR C).
+- GPU session surfaces; CUDA/WebGPU nested-entry enforcement.
+- Removing `Send` bounds (soundness requirement, see above).
+
+### Public API and tests (explicit before merge)
+
+Both public traits (`TensorSessionOpsExt`, `TypedTensorSessionOpsExt`) get
+runnable doc examples (AGENTS.md requirement — compile and run, no `ignore`).
+Integration tests cover, per surface: equal-shape op, real broadcast, invalid
+broadcast (structured error parity with the one-shot path), dtype/error
+parity, typed output dtype validation (`into_typed_result`), and a test that
+an `_in` chain executes inside exactly one session entry.
+
+### Performance gate (measured, not assumed)
+
+New criterion bench in `crates/tenferro-runtime/benches/` (criterion is
+already a workspace dependency), with an explicit `[[bench]]` target and
+`harness = false` in `Cargo.toml` (mirroring `elementwise_fusion.rs`):
+
+- **Exact chain (10 ops)**: three repetitions of `add → exp → mul` (9 ops)
+  followed by a final `reduce_sum([0])` (10th). `reduce_sum` is final so no
+  intermediate op changes shape.
+- **No-broadcast arm**: 1×8 f64 constant-filled operands (broadcast is the
+  `duplicate` path).
+- **Broadcast arm**: 1×1 f64 operands against 1×8 (real reshape+broadcast).
+- **One-shot arm**: the chain via `TensorOpsExt` (each op enters its own
+  session — 10 entries). **Session arm**: the same chain via
+  `TensorSessionOpsExt` inside one `with_backend_session` (1 entry).
+- Validate one result outside the timed region (finite, correct shape);
+  `black_box` inputs and outputs inside the iter.
+- **Protocol**: record base-commit (pre-delegation) and post-change medians;
+  gate `T_one_shot / T_one_session >= 2` (predicted ~6); also a
+  representative large-op one-shot before/after pair for the no-regression
+  criterion. Report pinned (idle core), matching the session floor
+  methodology; the gate is evaluated on the pinned numbers.

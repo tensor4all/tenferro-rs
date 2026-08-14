@@ -2,6 +2,6 @@
 
 pub use crate::{
     CompareDir, DType, GraphCompiler, Runtime, Tensor, TensorBackend, TensorOpsExt, TensorScalar,
-    TraceContext, TraceValue, TracedGraph, TracedTensor, TypedTensor, TypedTensorMaskOpsExt,
-    TypedTensorOpsExt,
+    TensorSessionOpsExt, TraceContext, TraceValue, TracedGraph, TracedTensor, TypedTensor,
+    TypedTensorMaskOpsExt, TypedTensorOpsExt, TypedTensorSessionOpsExt,
 };

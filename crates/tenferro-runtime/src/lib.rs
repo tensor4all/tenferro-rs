@@ -111,9 +111,9 @@ pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
-    BackendSessionHost, CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, MemoryKind,
-    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar,
-    TensorValue, TensorView, TypedTensor, TypedTensorView,
+    BackendSession, BackendSessionHost, CacheStats, CompareDir, DType, DotGeneralConfig,
+    GatherConfig, MemoryKind, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend,
+    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
 
@@ -466,6 +466,141 @@ pub trait TensorOpsExt {
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
+/// Backend-explicit session operations for concrete [`Tensor`] values.
+///
+/// These operations run inside a caller-provided [`BackendSession`], so a
+/// chain of `_in` operations executes in a single backend session entry and
+/// never enters a session of its own. Each one-shot [`TensorOpsExt`]
+/// counterpart performs its broadcast and execution inside a single session
+/// entry of its own.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+/// use tenferro_tensor::BackendSessionHost;
+///
+/// let mut backend = CpuBackend::new();
+/// let a = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+/// let b = Tensor::from_vec_col_major(vec![8], vec![2.0_f64; 8]).unwrap();
+/// let total = backend.with_backend_session(|session| {
+///     let sum = a.add_in(&b, session).unwrap();
+///     let grown = sum.exp_in(session).unwrap();
+///     grown.mul_in(&a, session).unwrap().reduce_sum_in(&[0], session).unwrap()
+/// });
+/// assert!(total.as_slice::<f64>().unwrap()[0].is_finite());
+/// ```
+pub trait TensorSessionOpsExt {
+    /// Elementwise addition with NumPy-style broadcasting inside a session.
+    ///
+    /// The broadcast (reshape + `broadcast_in_dim`, or a copy when shapes
+    /// already match) and the add itself all run in the caller's `session`;
+    /// this op never enters a session of its own.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    /// let sum = backend.with_backend_session(|session| a.add_in(&b, session)).unwrap();
+    /// assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with a
+    /// [`ShapeMismatch`](tenferro_tensor::ValidationError::ShapeMismatch) or
+    /// `DTypeMismatch` payload when operands are incompatible, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn add_in(
+        &self,
+        rhs: &Tensor,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Elementwise multiplication with NumPy-style broadcasting inside a session.
+    ///
+    /// Like [`Self::add_in`], broadcast and multiply run in the one `session`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let a = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let b = Tensor::from_vec_col_major(vec![4], vec![3.0_f64; 4]).unwrap();
+    /// let product = backend.with_backend_session(|session| a.mul_in(&b, session)).unwrap();
+    /// assert_eq!(product.as_slice::<f64>().unwrap(), &[6.0; 4]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` or
+    /// `DTypeMismatch` for incompatible operands, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn mul_in(
+        &self,
+        rhs: &Tensor,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Elementwise exponential inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
+    /// let y = backend.with_backend_session(|session| x.exp_in(session)).unwrap();
+    /// let y = y.as_slice::<f64>().unwrap();
+    /// assert!((y[0] - 1.0).abs() < 1.0e-12);
+    /// assert!((y[1] - std::f64::consts::E).abs() < 1.0e-12);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn exp_in(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Sum over one or more axes inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum_in(&[1], session)).unwrap();
+    /// assert_eq!(sums.as_slice::<f64>().unwrap(), &[3.0, 3.0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`
+    /// or `DuplicateAxis` for invalid reductions, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn reduce_sum_in(
+        &self,
+        axes: &[usize],
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+}
+
 /// Backend-explicit operations for dynamic-rank typed tensors.
 ///
 /// `TypedTensor` is owned by `tenferro-tensor`, so `tenferro-runtime` exposes
@@ -792,6 +927,133 @@ pub trait TypedTensorOpsExt<T: TensorScalar> {
         shape: &[usize],
         dims: &[usize],
         backend: &mut B,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+}
+
+/// Backend-explicit session operations for dynamic-rank typed tensors.
+///
+/// Like [`TensorSessionOpsExt`] but for [`TypedTensor`] with a statically
+/// known scalar type `T`. The typed surface keeps inputs borrowed (read-based
+/// session ops) and validates the output dtype through
+/// `into_typed_result`-style conversion before returning.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+/// use tenferro_tensor::BackendSessionHost;
+///
+/// let mut backend = CpuBackend::new();
+/// let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
+/// let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![2.0; 4]).unwrap();
+/// let total = backend.with_backend_session(|session| {
+///     let sum = a.add_in(&b, session).unwrap();
+///     sum.exp_in(session).unwrap().reduce_sum_in(&[0], session).unwrap()
+/// });
+/// assert!(total.host_data().unwrap()[0].is_finite());
+/// ```
+pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
+    /// Elementwise addition with NumPy-style broadcasting inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
+    /// let sum = backend.with_backend_session(|session| a.add_in(&b, session)).unwrap();
+    /// assert_eq!(sum.host_data().unwrap(), &[4.0, 6.0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` for
+    /// incompatible operands, or [`tenferro_tensor::Error::BackendSource`] for
+    /// a typed backend failure.
+    fn add_in(
+        &self,
+        rhs: &TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Elementwise multiplication with NumPy-style broadcasting inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![2.0]).unwrap();
+    /// let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![3.0; 4]).unwrap();
+    /// let product = backend.with_backend_session(|session| a.mul_in(&b, session)).unwrap();
+    /// assert_eq!(product.host_data().unwrap(), &[6.0; 4]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` for
+    /// incompatible operands, or [`tenferro_tensor::Error::BackendSource`] for
+    /// a typed backend failure.
+    fn mul_in(
+        &self,
+        rhs: &TypedTensor<T>,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Elementwise exponential inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap();
+    /// let y = backend.with_backend_session(|session| x.exp_in(session)).unwrap();
+    /// let y = y.host_data().unwrap();
+    /// assert!((y[0] - 1.0).abs() < 1.0e-12);
+    /// assert!((y[1] - std::f64::consts::E).abs() < 1.0e-12);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn exp_in(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Sum over one or more axes inside a session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum_in(&[1], session)).unwrap();
+    /// assert_eq!(sums.host_data().unwrap(), &[3.0, 3.0]);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`
+    /// for an axis outside the input rank or `DuplicateAxis` when `axes`
+    /// repeats an axis, or [`tenferro_tensor::Error::BackendSource`] for a
+    /// typed backend failure.
+    fn reduce_sum_in(
+        &self,
+        axes: &[usize],
+        session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
 }
 

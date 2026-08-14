@@ -53,6 +53,10 @@ tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 name = "elementwise_fusion"
 harness = false
 
+[[bench]]
+name = "session_chain"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
