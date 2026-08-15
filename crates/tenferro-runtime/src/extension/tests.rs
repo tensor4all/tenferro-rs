@@ -550,6 +550,34 @@ fn append_raw_op_builds_carrier_without_analysis() {
 }
 
 #[test]
+fn raw_eager_outputs_share_and_retain_helper_metadata_scopes() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let helper = x.cast(DType::C64).unwrap();
+    let helper_key = helper.graph.values()[helper.val].key.clone();
+    let op: Arc<dyn ExtensionOp> = Arc::new(TestExtension {
+        input_count: 1,
+        output_count: 2,
+        inferred_outputs: 2,
+    });
+    let output_metadata = vec![
+        TensorMeta::exact(DType::C64, vec![SymDim::from(2)]),
+        TensorMeta::exact(DType::C64, vec![SymDim::from(2)]),
+    ];
+
+    let outputs =
+        append_raw_eager_outputs(StdTensorOp::Extension(op), &[&helper], &output_metadata).unwrap();
+    assert_eq!(outputs.len(), 2);
+    assert!(outputs[0]
+        .metadata_scopes
+        .shares_root(&outputs[1].metadata_scopes));
+
+    drop(helper);
+    assert_eq!(registered_meta(&helper_key).unwrap().dtype, DType::C64);
+    drop(outputs);
+    assert!(registered_meta(&helper_key).is_err());
+}
+
+#[test]
 fn append_then_analyze_registers_output_metadata() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();

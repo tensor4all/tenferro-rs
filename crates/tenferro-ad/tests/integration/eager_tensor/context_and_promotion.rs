@@ -427,6 +427,68 @@ fn mixed_add_semantic_jvp_vjp_promotes_f64_c64_and_f32_c32_in_both_orders() {
     );
 }
 
+fn temporary_mixed_promotion_graph(ctx: &Arc<EagerRuntime>) -> (EagerTensor, EagerTensor) {
+    let x = eager_input(ctx, &[-4.0_f64], true);
+    let output = {
+        let magnitude_input = x.neg().unwrap();
+        let magnitude = {
+            let exponent = eager_input(ctx, &[0.5_f64], false);
+            magnitude_input.pow(&exponent).unwrap()
+        };
+        let factor = eager_input(ctx, &[Complex64::new(0.0, 1.0)], false);
+        magnitude.mul(&factor).unwrap()
+    };
+    (x, output)
+}
+
+#[test]
+fn temporary_constants_before_mixed_promotion_retain_metadata_for_derivatives() {
+    let ctx = test_ctx();
+    let (x, output) = temporary_mixed_promotion_graph(&ctx);
+    output.reduce_sum(Some(&[0])).unwrap().backward().unwrap();
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[0.0_f64]
+    );
+
+    let ctx = test_ctx();
+    let (x, output) = temporary_mixed_promotion_graph(&ctx);
+    let cotangent = eager_input(&ctx, &[Complex64::new(0.0, 1.0)], false);
+    assert_exact_values(&ctx.vjp(&output, &x, &cotangent).unwrap(), &[-0.25_f64]);
+
+    let ctx = test_ctx();
+    let (x, output) = temporary_mixed_promotion_graph(&ctx);
+    let tangent = eager_input(&ctx, &[1.0_f64], false);
+    assert_exact_values(
+        &ctx.jvp(&output, &x, &tangent).unwrap(),
+        &[Complex64::new(0.0, -0.25)],
+    );
+}
+
+fn concatenate_with_temporary_exactified_input(
+    ctx: &Arc<EagerRuntime>,
+    tracked: &EagerTensor,
+) -> EagerTensor {
+    let temporary = eager_input(ctx, &[3.0_f64, 4.0], false).neg().unwrap();
+    EagerTensor::concatenate(&[tracked, &temporary], 0)
+        .unwrap()
+        .neg()
+        .unwrap()
+}
+
+#[test]
+fn temporary_exactified_concatenate_input_retains_metadata_for_vjp() {
+    let ctx = test_ctx();
+    let x = eager_input(&ctx, &[1.0_f64, 2.0], true);
+    let output = concatenate_with_temporary_exactified_input(&ctx, &x);
+    let cotangent = eager_input(&ctx, &[1.0_f64, 2.0, 3.0, 4.0], false);
+
+    assert_exact_values(
+        &ctx.vjp(&output, &x, &cotangent).unwrap(),
+        &[-1.0_f64, -2.0],
+    );
+}
+
 #[test]
 fn mixed_concatenate_semantic_replay_promotes_inputs() {
     let ctx = test_ctx();
