@@ -1,0 +1,17 @@
+# Bug batch 2026-08-14 — classification ledger (issues #1685, #1659, #1666, #1664, #1690)
+
+Branch: fix/bug-batch-aug14. Base: origin/main (b7b4cbcf).
+
+## Ledger
+
+| Issue | Classification | Evidence (working hash) | Plan | Status |
+|---|---|---|---|---|
+| #1685 | Auto Fix | `scalar_semantics.rs:25-36`: `rounded > i64::MAX as f64` — `i64::MAX as f64 == 2^63`, so exactly 2^63 passes and `as i64` saturates. Reachable via `TracedTensor::scale_real` on I64 (traced.rs:1472). | Reject `rounded >= 9_223_372_036_854_775_808.0` (2^63); regression test via scale_real with exactly 2^63. | Fix |
+| #1659 | Auto Fix | `gpu/kernels/reduce/cpu_reference.rs:18`: `reduce_sum_i64_keepdims` bare `acc + value` on i64 (REPOSITORY_RULES.md:102-111 wrapping parity). Same-class search: this is the ONLY CPU-reference site (no i8/i16/i32/bool sum variants in this family; CUDA int kernels already use wrapping helpers; max/min use comparisons). | `wrapping_add`; regression test. | Fix |
+| #1666 | Auto Fix (expanded per gate) | compute-and-discard surfaces: owned `eigvalsh` (tensor_ext.rs:1560 `eigh(...).0`), `eigvals_read` (1776 `eig_read(...).0`), `eigvalsh_read` (1771 `eigh_read(...).0`), eager `eigvals`/`eigvalsh` (eager_composites.rs:52/47 `eig()?.0`/`eigh()?.0`). Owned `eigvals` already values-only (`backend.eig_values`, faer `ComputeEigenvectors::No`). `EighVals`/`EigVals` ops exist for eager. | owned eigvalsh → `backend.eigh_values`; read surfaces → existing read materialization + values-only hooks (record eigvalsh_read view-copy tradeoff); eager → `LinalgOp::EigVals`/`EighVals` via apply_linalg_eager; regression/source-contract coverage for owned/read/typed/eager/traced. No new public API. | Fix |
+| #1664 | Stale | `apply_eager` (tenferro-ad/src/extension.rs:144-198) has the immediate prepared path before exec_outputs_read; `runtime/preparation.rs:39-50` confirms it bypasses semantic staging/dispatch/cache. Fallback fires when: no exact eager target, prepare returns Unsupported, or the prepared plan lacks an executor (a present non-session executor uses the native-context path). Checked-in evidence: ~41-45 µs 1-thread solve (conclusion.md:33-44) vs #1664's 169 µs 4-thread report. | Close as stale (fixed by #1665/#1668 unification); corrected wording per the gate (41-45 µs, enumerated fallbacks). No code change. | Close |
+| #1690 | Deferred (needs-design) | `dot_runtime.rs:903` + `exec_session.rs:52` zeroed acquires. `PooledUninitOutput` (pooled_uninit_output.rs:96-119,184-225) exposes MaybeUninit and needs a proven full write before TypedTensor; provider seams require initialized `TensorWrite` (provider.rs:760,959,1129); injectable general providers run before built-in GEMM (dot_runtime.rs:568-580); provider tests read previous output (dot_runtime/tests.rs:681-686). Guard incompatible without a new provider output contract. | Reclassify needs-design; retain zeroed acquire; record required future design (explicit uninitialized full-overwrite provider destination + success contract) on the issue + here. No code change. | Defer |
+
+## Gate record
+
+- Pre-implementation gate (reviewer-gpt): round 1 → 3 blocking (owned eigvalsh missing from #1666; #1690 guard incompatible with provider APIs → defer; #1664 fallback wording) + 1 minor (#1664 evidence wording). Round 2 (ledger updated) → 1 blocking wording (#1664 "lacks an executor"). Round 3 → **batch approved for implementation**. Post-implementation gate (reviewer-gpt): → **Correct-to-merge** (1 nit: this gate record).
