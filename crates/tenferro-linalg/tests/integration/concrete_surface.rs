@@ -205,8 +205,16 @@ fn read_surface_covers_factorizations_and_composites() {
         TensorRead::from_tensor(&a).slogdet_read(session).unwrap();
         TensorRead::from_tensor(&a).det_read(session).unwrap();
         TensorRead::from_tensor(&a).inv_read(session).unwrap();
-        TensorRead::from_tensor(&a).eigvalsh_read(session).unwrap();
-        TensorRead::from_tensor(&a).eigvals_read(session).unwrap();
+        let eigvalsh = TensorRead::from_tensor(&a).eigvalsh_read(session).unwrap();
+        let eigvals = TensorRead::from_tensor(&a).eigvals_read(session).unwrap();
+        // Values-only reads must still produce the same eigenvalues as the
+        // full decomposition surfaces (issue #1666). A = [[4, 1], [1, 3]] has
+        // eigenvalues (7 ± √5) / 2.
+        let eigvalsh_values = eigvalsh.as_slice::<f64>().unwrap();
+        assert!((eigvalsh_values[0] - (7.0 - 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
+        assert!((eigvalsh_values[1] - (7.0 + 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
+        assert_eq!(eigvals.dtype(), tenferro_tensor::DType::C64);
+        assert_eq!(eigvals.shape(), &[2]);
         TensorRead::from_tensor(&a).pinv_read(session).unwrap();
         TensorRead::from_tensor(&a)
             .pinv_with_rtol_read(1.0e-12, session)

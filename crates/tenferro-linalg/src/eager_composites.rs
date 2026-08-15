@@ -2,7 +2,8 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Result, Tensor};
 use tenferro_runtime::ErrorPhase;
 
-use crate::eager_ext::{eig, eigh, lu, qr, solve, svd, triangular_solve};
+use crate::eager_ext::{apply_linalg_eager, lu, one_output, qr, solve, svd, triangular_solve};
+use crate::extension::{LinalgOp, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
 use crate::validation::{ensure_float_or_complex, validate_lstsq};
 
 pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
@@ -45,13 +46,27 @@ pub(crate) fn lstsq(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 }
 
 pub(crate) fn eigvalsh(a: &EagerTensor) -> Result<EagerTensor> {
-    let (values, _vectors) = eigh(a)?;
-    Ok(values)
+    one_output(
+        apply_linalg_eager(
+            LinalgOp::EighVals {
+                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+            },
+            &[a],
+        )?,
+        "eigvalsh",
+    )
 }
 
 pub(crate) fn eigvals(a: &EagerTensor) -> Result<EagerTensor> {
-    let (values, _vectors) = eig(a)?;
-    Ok(values)
+    one_output(
+        apply_linalg_eager(
+            LinalgOp::EigVals {
+                input_dtype: a.dtype(),
+            },
+            &[a],
+        )?,
+        "eigvals",
+    )
 }
 
 pub(crate) fn pinv(a: &EagerTensor) -> Result<EagerTensor> {

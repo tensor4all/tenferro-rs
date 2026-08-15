@@ -1558,7 +1558,7 @@ impl TensorLinalgExt for Tensor {
         with_linalg_backend(session, "inv", |backend| inv_owned(self, backend))
     }
     fn eigvalsh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "eigvalsh", |backend| Ok(self.eigh(backend)?.0))
+        with_linalg_backend(session, "eigvalsh", |backend| backend.eigh_values(self))
     }
     fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "eigvals", |backend| backend.eig_values(self))
@@ -1770,12 +1770,21 @@ impl TensorReadLinalgExt for TensorRead<'_> {
     }
     fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "eigvalsh_read", |backend| {
-            Ok(self.eigh_read(backend)?.0)
+            // The Hermitian values-only hook owns its input, so the read must
+            // materialize first (same materialization the extension session
+            // path uses for linalg reads). Tradeoff: the previous
+            // `eigh_read(...).0` could run faer directly on an eligible
+            // strided view without copying; `eigvalsh_read` now always
+            // materializes, while the full `eigh_read` surface keeps the
+            // strided-view path.
+            let materialized = backend.to_contiguous_read(self)?;
+            backend.eigh_values(&materialized)
         })
     }
     fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "eigvals_read", |backend| {
-            Ok(self.eig_read(backend)?.0)
+            let materialized = backend.to_contiguous_read(self)?;
+            backend.eig_values(&materialized)
         })
     }
     fn pinv_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {

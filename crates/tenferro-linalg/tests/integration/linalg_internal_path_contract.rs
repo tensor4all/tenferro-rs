@@ -247,6 +247,89 @@ fn traced_eigvals_uses_general_values_only_path() {
 }
 
 #[test]
+fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
+    let source = crate_source("src/tensor_ext.rs");
+
+    // Owned eigvalsh: values-only hook, not compute-and-discard via eigh.
+    let owned_eigvalsh = source_section(
+        &source,
+        "fn eigvalsh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+    );
+    assert!(
+        owned_eigvalsh.contains("backend.eigh_values(self)"),
+        "owned eigvalsh should call the Hermitian values-only backend hook"
+    );
+    assert!(
+        !owned_eigvalsh.contains("eigh(backend)?.0"),
+        "owned eigvalsh should not compute eigenvectors and discard them"
+    );
+
+    // Owned eigvals already uses the general values-only hook (kept).
+    let owned_eigvals = source_section(
+        &source,
+        "fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn pinv(",
+    );
+    assert!(
+        owned_eigvals.contains("backend.eig_values(self)"),
+        "owned eigvals should call the general values-only backend hook"
+    );
+    assert!(
+        !owned_eigvals.contains("eig(backend)?.0"),
+        "owned eigvals should not compute eigenvectors and discard them"
+    );
+
+    // Read surfaces: materialize the read, then run the values-only hook.
+    let read_eigvalsh = source_section(
+        &source,
+        "fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+    );
+    assert!(
+        read_eigvalsh.contains("to_contiguous_read") && read_eigvalsh.contains("eigh_values("),
+        "eigvalsh_read should materialize the read then call eigh_values"
+    );
+    assert!(
+        !read_eigvalsh.contains("eigh_read(backend)?.0"),
+        "eigvalsh_read should not compute eigenvectors and discard them"
+    );
+
+    let read_eigvals = source_section(
+        &source,
+        "fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn pinv_read",
+    );
+    assert!(
+        read_eigvals.contains("to_contiguous_read") && read_eigvals.contains("eig_values("),
+        "eigvals_read should materialize the read then call eig_values"
+    );
+    assert!(
+        !read_eigvals.contains("eig_read(backend)?.0"),
+        "eigvals_read should not compute eigenvectors and discard them"
+    );
+}
+
+#[test]
+fn eager_values_only_composites_emit_values_only_ops() {
+    let source = crate_source("src/eager_composites.rs");
+    let values_only = source_section(&source, "pub(crate) fn eigvalsh", "pub(crate) fn pinv");
+
+    assert!(
+        values_only.contains("LinalgOp::EighVals") && values_only.contains("LinalgOp::EigVals"),
+        "eager eigvalsh/eigvals should emit the values-only EighVals/EigVals ops"
+    );
+    assert!(
+        values_only.contains("one_output(") && values_only.contains("apply_linalg_eager("),
+        "eager eigvalsh/eigvals should use the apply_linalg_eager + one_output pattern"
+    );
+    assert!(
+        !values_only.contains("eigh(a)?.0") && !values_only.contains("eig(a)?.0"),
+        "eager eigvalsh/eigvals should not compute eigenvectors and discard them"
+    );
+}
+
+#[test]
 fn traced_pinv_scales_svd_vectors_without_dense_diagonal_materialization() {
     let source = crate_source("src/traced.rs");
     let pinv_source = source_section(
