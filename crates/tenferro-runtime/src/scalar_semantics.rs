@@ -24,7 +24,14 @@ pub(crate) fn round_real_to_i64(value: f64) -> Result<i64> {
 
 pub(crate) fn round_real_to_i64_for_op(op: &'static str, value: f64) -> Result<i64> {
     let rounded = finite_real_scalar(op, value)?.round();
-    if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+    // `i64::MAX as f64` rounds up to 2^63, so `rounded > i64::MAX as f64`
+    // lets exactly 2^63 pass and `as i64` silently saturates to i64::MAX.
+    // Reject `rounded >= 2^63` instead. f64 spacing at 2^63 is 1024, so no
+    // value in (2^63 - 1024, 2^63) is representable except 2^63 - 1024,
+    // which is the largest valid f64 below 2^63; -2^63 == i64::MIN stays
+    // valid (exactly representable, in range).
+    const I64_EXCLUSIVE_UPPER_F64: f64 = 9_223_372_036_854_775_808.0; // 2^63
+    if rounded < i64::MIN as f64 || rounded >= I64_EXCLUSIVE_UPPER_F64 {
         return Err(Error::invalid_argument(
             op,
             ErrorPhase::GraphBuild,
@@ -149,6 +156,24 @@ mod tests {
         assert!(
             err.to_string().contains("out of i64 range"),
             "expected i64 range error, got {err:?}"
+        );
+
+        // Issue #1685: exactly 2^63 passes the old `> i64::MAX as f64`
+        // guard (since `i64::MAX as f64 == 2^63`) and `as i64` saturated.
+        let err = round_real_to_i64_for_op("test", 9_223_372_036_854_775_808.0).unwrap_err();
+        assert!(
+            err.to_string().contains("out of i64 range"),
+            "exactly 2^63 must be rejected, got {err:?}"
+        );
+        assert_eq!(
+            round_real_to_i64_for_op("test", 9_223_372_036_854_774_784.0).unwrap(),
+            i64::MAX - 1023,
+            "2^63 - 1024 (largest f64 below 2^63) must convert exactly"
+        );
+        assert_eq!(
+            round_real_to_i64_for_op("test", -9_223_372_036_854_775_808.0).unwrap(),
+            i64::MIN,
+            "-2^63 == i64::MIN must remain valid"
         );
 
         let err = round_real_to_i32_for_op("test", i32::MAX as f64 + 1024.0).unwrap_err();
