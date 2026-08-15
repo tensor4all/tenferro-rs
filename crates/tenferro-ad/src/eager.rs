@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -55,7 +56,10 @@ use crate::eager_backend::{
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
-use crate::eager_exec::{exec_op_on_tensor_reads_with_runtime, exec_op_on_tensors_with_runtime};
+use crate::eager_exec::{
+    eager_input_promotion_plan, exec_op_on_tensor_reads_with_runtime,
+    exec_op_on_tensors_with_runtime,
+};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
@@ -4100,6 +4104,34 @@ fn record_semantic_eager_outputs(
                 .unwrap_or_else(|| constants.next().expect("materialized constant"))
         })
         .collect();
+    let promotion_plan =
+        eager_input_promotion_plan(op, inputs.len(), |index| inputs[index].dtype());
+    // Mirror eager execution in the deferred carrier only. The concrete
+    // tensors have already been promoted at the execution boundary, so these
+    // casts add semantic graph nodes without an eager copy or backend kernel.
+    let promoted_semantic_inputs = if semantic_inputs.iter().enumerate().any(|(index, semantic)| {
+        semantic.dtype != promotion_plan.target_dtype(index, semantic.dtype)
+    }) {
+        Some(
+            semantic_inputs
+                .iter()
+                .enumerate()
+                .map(|(index, &semantic)| {
+                    let target = promotion_plan.target_dtype(index, semantic.dtype);
+                    if semantic.dtype == target {
+                        Ok(Cow::Borrowed(semantic))
+                    } else {
+                        semantic.cast(target).map(Cow::Owned)
+                    }
+                })
+                .collect::<Result<Vec<Cow<'_, TracedTensor>>>>()?,
+        )
+    } else {
+        None
+    };
+    if let Some(promoted_semantic_inputs) = &promoted_semantic_inputs {
+        semantic_inputs = promoted_semantic_inputs.iter().map(Cow::as_ref).collect();
+    }
     let exact_semantic_inputs = if matches!(op, StdTensorOp::Concatenate { .. }) {
         Some(
             semantic_inputs
