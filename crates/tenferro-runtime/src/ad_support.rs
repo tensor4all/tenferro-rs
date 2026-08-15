@@ -356,7 +356,8 @@ pub fn merge_traced_leaf_metas<'a>(
 /// feeding tracked ops) stay analyzable even after their leaf scopes are
 /// dropped. Seeding from the retained symbolic leaf metas keeps the compiled
 /// program's semantic fingerprint symbolic-consistent with the traced path
-/// (concrete extents are binding data, not part of the fingerprint). The
+/// (concrete leaf extents are binding data, not part of the fingerprint;
+/// explicit operation parameters remain part of semantic identity). The
 /// seeded registrations live in the scopes attached to the returned trace,
 /// keeping them alive through `compile_ad_source`.
 ///
@@ -378,8 +379,9 @@ pub fn analyze_deferred_semantic_trace(raw: &TracedTensor) -> Result<TracedTenso
     // Canonical symbolic leaves: seed each bound input key from the leaf's
     // retained construction-time metadata (the same `symbolic_input_meta`
     // registered at leaf construction), not from concrete extents derived from
-    // the bound value. Concrete extents are binding data and must not leak
-    // into the semantic fingerprint.
+    // the bound value. Concrete leaf extents remain binding data, while explicit
+    // operation parameters such as eager shape-specializing reshapes are part of
+    // semantic identity.
     let mut leaf_keys = HashSet::new();
     for graph in &graphs {
         if !graph.operations().is_empty() {

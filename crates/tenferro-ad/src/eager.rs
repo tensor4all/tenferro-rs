@@ -4091,7 +4091,7 @@ fn record_semantic_eager_outputs(
         }
     }
     let mut constants = owned_constants.iter();
-    let semantic_inputs: Vec<&TracedTensor> = inputs
+    let mut semantic_inputs: Vec<&TracedTensor> = inputs
         .iter()
         .map(|input| {
             input
@@ -4100,6 +4100,26 @@ fn record_semantic_eager_outputs(
                 .unwrap_or_else(|| constants.next().expect("materialized constant"))
         })
         .collect();
+    let exact_semantic_inputs = if matches!(op, StdTensorOp::Concatenate { .. }) {
+        Some(
+            semantic_inputs
+                .iter()
+                .zip(inputs)
+                .map(|(&semantic, input)| {
+                    if semantic.is_concrete_shape() {
+                        Ok(semantic.clone())
+                    } else {
+                        semantic.reshape(input.shape())
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
+    } else {
+        None
+    };
+    if let Some(exact_semantic_inputs) = &exact_semantic_inputs {
+        semantic_inputs = exact_semantic_inputs.iter().collect();
+    }
     // Deferred materialization (issue #1665 steps 6-7): append the op to the
     // raw `Graph<StdTensorOp>` carrier only. Metadata inference, registry
     // registration, and constraint discovery run once at the first AD request
