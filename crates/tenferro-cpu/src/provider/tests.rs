@@ -1,14 +1,13 @@
-#[cfg(any(
-    not(feature = "cpu-blas"),
-    all(feature = "cpu-blas", not(feature = "provider-inject"))
-))]
 use super::BlasGemmProvider;
 #[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]
 use super::CpuOperand;
+#[cfg(feature = "cpu-faer")]
+use super::CpuUninitGemmProvider;
 use super::{
     CpuBatchedMatrixLayout, CpuExecutionContext, CpuGemmProvider, CpuGemmRequest,
     CpuGeneralContractionProvider, CpuLayoutTransformProvider, CpuOperationEntry,
-    CpuProviderOutcome, CpuProviderUnsupported, ParallelMode, StridedLayoutTransformProvider,
+    CpuProviderOutcome, CpuProviderUnsupported, CpuUninitLayoutTransformProvider, ParallelMode,
+    StridedLayoutTransformProvider,
 };
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
@@ -171,11 +170,15 @@ fn parallel_mode_exposes_the_complete_execution_contract() {
 #[cfg(feature = "cpu-faer")]
 use super::{CpuGroupedGemmRequest, FaerGemmProvider};
 #[cfg(feature = "cpu-faer")]
-use num_complex::{Complex32, Complex64};
+use num_complex::Complex32;
+// `Complex64` and `TensorView` are also used by the feature-neutral
+// `materialize_into_uninit` layout test, so they are imported ungated.
+use num_complex::Complex64;
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::backend::GroupedGemmJob;
+use tenferro_tensor::TensorView;
 #[cfg(feature = "cpu-faer")]
-use tenferro_tensor::{ContractionScalar, TensorView, TypedTensorView};
+use tenferro_tensor::{ContractionScalar, TypedTensorView};
 use tenferro_tensor::{DType, DotGeneralAccumulation, Tensor, TensorRead, TensorWrite};
 #[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 use tenferro_tensor::{TensorViewMut, TypedTensorViewMut};
@@ -1293,4 +1296,392 @@ fn layout_provider_fuses_conjugation_into_materialization() {
         output.as_slice::<Complex64>().unwrap(),
         &[Complex64::new(2.0, -3.0), Complex64::new(-1.0, -4.0)],
     );
+}
+
+#[derive(Debug)]
+struct OptOutProvider;
+
+impl CpuGemmProvider for OptOutProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        unreachable!("opt-out witness test never executes GEMM")
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        unreachable!("opt-out witness test never executes GEMM")
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: super::CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        unreachable!("opt-out witness test never executes grouped GEMM")
+    }
+}
+
+impl CpuLayoutTransformProvider for OptOutProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn materialize(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: super::CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        unreachable!("opt-out witness test never executes materialization")
+    }
+}
+
+#[test]
+fn uninit_witness_is_exposed_only_by_the_builtin_providers() {
+    // SAFETY assertions are structural: only a type that implements the
+    // unsafe trait via `unsafe impl` can return `Some(self)`.
+    #[cfg(feature = "cpu-faer")]
+    assert!(FaerGemmProvider.uninit_provider().is_some());
+    assert!(StridedLayoutTransformProvider.uninit_provider().is_some());
+    assert!(BlasGemmProvider.uninit_provider().is_none());
+    let opt_out_gemm: &dyn CpuGemmProvider = &OptOutProvider;
+    assert!(opt_out_gemm.uninit_provider().is_none());
+    let opt_out_layout: &dyn CpuLayoutTransformProvider = &OptOutProvider;
+    assert!(opt_out_layout.uninit_provider().is_none());
+}
+
+/// `f64`-aligned uninitialized destination mirroring
+/// `PooledUninitOutput::as_uninit_bytes_mut` provenance (the caller's contract
+/// for the built-in providers).
+struct UninitF64(Vec<std::mem::MaybeUninit<f64>>);
+
+impl UninitF64 {
+    fn new(slots: usize) -> Self {
+        Self(vec![std::mem::MaybeUninit::<f64>::uninit(); slots])
+    }
+
+    fn bytes_mut(&mut self) -> &mut [std::mem::MaybeUninit<u8>] {
+        // SAFETY: `Vec<MaybeUninit<f64>>` is `f64`-aligned; the byte view
+        // reuses the same allocation, matching the real caller's provenance.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.0.as_mut_ptr().cast::<std::mem::MaybeUninit<u8>>(),
+                self.0.len() * 8,
+            )
+        }
+    }
+
+    fn values(&self) -> &[f64] {
+        // SAFETY: the provider wrote every element before `Executed`.
+        unsafe { std::slice::from_raw_parts(self.0.as_ptr().cast::<f64>(), self.0.len()) }
+    }
+}
+
+/// `Complex64`-aligned uninitialized destination (see [`UninitF64`]).
+struct UninitC64(Vec<std::mem::MaybeUninit<num_complex::Complex64>>);
+
+impl UninitC64 {
+    fn new(slots: usize) -> Self {
+        Self(vec![
+            std::mem::MaybeUninit::<num_complex::Complex64>::uninit(
+            );
+            slots
+        ])
+    }
+
+    fn bytes_mut(&mut self) -> &mut [std::mem::MaybeUninit<u8>] {
+        // SAFETY: `Vec<MaybeUninit<Complex64>>` is `Complex64`-aligned.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.0.as_mut_ptr().cast::<std::mem::MaybeUninit<u8>>(),
+                self.0.len() * 16,
+            )
+        }
+    }
+
+    fn values(&self) -> &[num_complex::Complex64] {
+        // SAFETY: the provider wrote every element before `Executed`.
+        unsafe {
+            std::slice::from_raw_parts(
+                self.0.as_ptr().cast::<num_complex::Complex64>(),
+                self.0.len(),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_gemm_into_uninit_matches_initialized_gemm() {
+    use super::{CpuBatchedMatrixLayout as Layout, CpuGemmUninitRequest};
+    use tenferro_tensor::DotGeneralAccumulation;
+
+    let fixture = execution_context_fixture(1);
+    fixture.with_context(ParallelMode::Sequential, |context| {
+        let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+        let lhs_read = TensorRead::from_tensor(&lhs);
+        let rhs_read = TensorRead::from_tensor(&rhs);
+
+        // Single GEMM: 2x2 x 2x2.
+        let mut output = UninitF64::new(4);
+        let request = CpuGemmUninitRequest::new(
+            &lhs_read,
+            &rhs_read,
+            2,
+            2,
+            2,
+            1,
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        );
+        // SAFETY: FaerGemmProvider's unsafe impl writes every destination
+        // element before `Executed` (faer Accum::Replace, beta == 0).
+        let outcome =
+            unsafe { FaerGemmProvider.gemm_into_uninit(context, request, output.bytes_mut()) }
+                .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+        assert_eq!(output.values(), &[19.0, 43.0, 22.0, 50.0]);
+
+        // Strided batch of two 2x2 GEMMs.
+        let lhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![2.0_f64; 8]).unwrap();
+        let lhs_read = TensorRead::from_tensor(&lhs);
+        let rhs_read = TensorRead::from_tensor(&rhs);
+        let mut output = UninitF64::new(8);
+        let request = CpuGemmUninitRequest::new(
+            &lhs_read,
+            &rhs_read,
+            2,
+            2,
+            2,
+            2,
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        );
+        // SAFETY: same full-overwrite contract; the uninit GEMM covers all
+        // batches internally.
+        let outcome =
+            unsafe { FaerGemmProvider.gemm_into_uninit(context, request, output.bytes_mut()) }
+                .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+        assert_eq!(output.values(), &[4.0; 8]);
+
+        // Empty contraction (k == 0) writes zeros without reading.
+        let mut output = UninitF64::new(4);
+        let request = CpuGemmUninitRequest::new(
+            &lhs_read,
+            &rhs_read,
+            2,
+            2,
+            0,
+            1,
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        );
+        let outcome =
+            unsafe { FaerGemmProvider.gemm_into_uninit(context, request, output.bytes_mut()) }
+                .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+        assert_eq!(output.values(), &[0.0; 4]);
+
+        // Empty output (zero rows) is trivially satisfied.
+        let mut output = UninitF64::new(0);
+        let request = CpuGemmUninitRequest::new(
+            &lhs_read,
+            &rhs_read,
+            0,
+            2,
+            2,
+            1,
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        );
+        let outcome =
+            unsafe { FaerGemmProvider.gemm_into_uninit(context, request, output.bytes_mut()) }
+                .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+
+        // A non-zero beta accumulation is refused rather than reading uninit.
+        let mut accumulation = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
+        accumulation.beta = tenferro_tensor::ContractionScalar::F64(1.0);
+        let mut output = UninitF64::new(4);
+        let request = CpuGemmUninitRequest::new(
+            &lhs_read,
+            &rhs_read,
+            2,
+            2,
+            2,
+            1,
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            Layout::new(0, 1, 2, 4),
+            accumulation,
+        );
+        let outcome =
+            unsafe { FaerGemmProvider.gemm_into_uninit(context, request, output.bytes_mut()) }
+                .unwrap();
+        assert_eq!(
+            outcome,
+            CpuProviderOutcome::Unsupported(CpuProviderUnsupported::Accumulation)
+        );
+    });
+}
+
+#[test]
+fn layout_materialize_into_uninit_matches_initialized_materialization() {
+    use super::CpuLayoutTransformIntent;
+
+    let fixture = execution_context_fixture(1);
+    fixture.with_context(ParallelMode::Sequential, |context| {
+        let input =
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+        let mut output = UninitF64::new(6);
+        let input_read = TensorRead::from_tensor(&input);
+        // SAFETY: StridedLayoutTransformProvider's unsafe impl writes every
+        // destination element before `Executed`.
+        let outcome = unsafe {
+            StridedLayoutTransformProvider.materialize_into_uninit(
+                context,
+                &input_read,
+                CpuLayoutTransformIntent::CanonicalColumnMajor,
+                false,
+                output.bytes_mut(),
+            )
+        }
+        .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+        assert_eq!(output.values(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+
+        // Conjugated materialization of a transposed view input.
+        let input = Tensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(1.0, 2.0),
+                Complex64::new(3.0, -1.0),
+                Complex64::new(-2.0, 0.5),
+                Complex64::new(4.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let transposed = match TensorRead::from_tensor(&input).tensor_view() {
+            TensorView::C64(view) => TensorView::C64(view.transpose_view([1, 0]).unwrap()),
+            other => panic!("expected C64 view, got {:?}", other.dtype()),
+        };
+        let mut output = UninitC64::new(4);
+        let input_view = TensorRead::from_view(transposed);
+        let outcome = unsafe {
+            StridedLayoutTransformProvider.materialize_into_uninit(
+                context,
+                &input_view,
+                CpuLayoutTransformIntent::CanonicalColumnMajor,
+                true,
+                output.bytes_mut(),
+            )
+        }
+        .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+        assert_eq!(
+            output.values(),
+            &[
+                Complex64::new(1.0, -2.0),
+                Complex64::new(-2.0, -0.5),
+                Complex64::new(3.0, 1.0),
+                Complex64::new(4.0, -1.0),
+            ]
+        );
+
+        // Zero-element destination is trivially satisfied.
+        let empty = Tensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap();
+        let empty_read = TensorRead::from_tensor(&empty);
+        let mut output = UninitF64::new(0);
+        let outcome = unsafe {
+            StridedLayoutTransformProvider.materialize_into_uninit(
+                context,
+                &empty_read,
+                CpuLayoutTransformIntent::CanonicalColumnMajor,
+                false,
+                output.bytes_mut(),
+            )
+        }
+        .unwrap();
+        assert_eq!(outcome, CpuProviderOutcome::Executed);
+    });
+}
+
+#[test]
+fn cpu_execution_context_debug_format_is_runnable() {
+    // Cover the CpuExecutionContext Debug impl (field formatting).
+    let fixture = execution_context_fixture(1);
+    fixture.with_context(ParallelMode::Inner, |provider_context| {
+        let rendered = format!("{provider_context:?}");
+        assert!(rendered.contains("CpuExecutionContext"));
+        assert!(rendered.contains("parallel_mode"));
+    });
+}
+
+#[test]
+fn cross_domain_enter_or_reuse_reports_scheduling_error() {
+    // Cover the domain-mismatch branch of CpuOperationEntry::enter_or_reuse.
+    let fixture_a = execution_context_fixture(1); // domain id 9
+    let cpus = crate::CpuSet::singleton(crate::CpuId::new(0));
+    let placement = crate::ResolvedCpuPlacement::AllAllowed { cpus: cpus.clone() };
+    let context = Arc::new(crate::CpuContext::with_threads(1).unwrap());
+    let engine = crate::engine::CpuEngine::from_context(CpuDomainId::new(8), placement, context, 0);
+    let permit = crate::arbiter::ResourceArbiter::new()
+        .acquire(cpus)
+        .unwrap();
+    let fixture_b = CpuExecutionContextFixture { engine, permit };
+
+    fixture_a.with_context(ParallelMode::Sequential, |entered| {
+        let error = fixture_b
+            .entry()
+            .enter_or_reuse(Some(entered), ParallelMode::Sequential, |_| ())
+            .unwrap_err();
+        assert!(matches!(error, CpuDomainExecutorError::Scheduling { .. }));
+    });
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn grouped_gemm_request_into_parts_is_covered() {
+    // Cover CpuGroupedGemmRequest::into_parts (tuple destructuring).
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
+    let lhs_read = TensorRead::from_tensor(&lhs);
+    let rhs_read = TensorRead::from_tensor(&rhs);
+    let mut output_write = TensorWrite::from_tensor(&mut output);
+    let request = CpuGroupedGemmRequest::new(
+        &lhs_read,
+        &rhs_read,
+        &mut output_write,
+        &jobs,
+        DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+    );
+    let (lhs_p, rhs_p, output_p, jobs_p, accumulation_p) = request.into_parts();
+    assert_eq!(lhs_p.shape(), &[2]);
+    assert_eq!(rhs_p.shape(), &[2]);
+    assert_eq!(output_p.as_read().shape(), &[2]);
+    assert_eq!(jobs_p.len(), 1);
+    // The accumulation config round-trips (overwrite alpha=1, beta=0).
+    let _ = accumulation_p;
 }

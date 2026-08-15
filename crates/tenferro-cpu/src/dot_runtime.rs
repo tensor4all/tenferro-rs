@@ -3,7 +3,9 @@ use tenferro_tensor::{
     TensorViewMut, TensorWrite, TypedTensor, ValidationError,
 };
 
+use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
+use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -13,11 +15,11 @@ use crate::provider::{
     builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
     CpuExecutionContext, CpuGemmProvider, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
     CpuLayoutTransformIntent, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
-    CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported,
+    CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported, CpuUninitGemmProvider,
 };
 use crate::{
     gemm::GemmAnalysisCache, CpuDomainExecutorError, CpuDomainId, CpuPlacementGuarantee,
-    CpuProviderDomainError, CpuSet, Error, ParallelMode, Result,
+    CpuProviderDomainError, CpuSet, Error, ParallelMode, PooledUninitOutput, Result,
 };
 
 const OP: &str = "dot_general";
@@ -696,6 +698,74 @@ impl DotGeneralRuntime {
         result
     }
 
+    /// Execute a `beta == 0` allocated dot into uninitialized pooled bytes.
+    ///
+    /// Returns [`CpuProviderOutcome::Executed`] after every destination
+    /// element is initialized, or [`CpuProviderOutcome::Unsupported`] when the
+    /// GEMM provider cannot execute the planned contraction into
+    /// uninitialized storage (the caller discards the checkout and retries on
+    /// the zeroed path). Errors propagate; a provider error may follow a
+    /// partial write, so it is never silently retried.
+    ///
+    /// Only the direct GEMM plan is attempted here: the uninit checkout holds
+    /// the scratch pool exclusively, so the canonical fallback (which
+    /// materializes operands from the pool) is left to the zeroed path.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_dot_into_uninit(
+        &self,
+        bundle_identity: &Arc<CpuProviderBundleInner>,
+        entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: &TensorRead<'_>,
+        rhs: &TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output_shape: &[usize],
+        output_bytes: &mut [MaybeUninit<u8>],
+    ) -> Result<CpuProviderOutcome> {
+        let Some(witness) = self.gemm.uninit_provider() else {
+            return Err(Error::unsupported(
+                OP,
+                "configured CPU GEMM provider does not expose the uninitialized-output contract",
+            ));
+        };
+        let mode = self
+            .dot_general_mode(entry)
+            .map_err(|error| Error::backend_source(OP, error))?;
+        cache.bind_provider_bundle(bundle_identity);
+        entry
+            .enter_or_reuse(entered, mode, |provider_context| {
+                let Some(plan) = crate::gemm::prepare_provider_gemm_into_uninit(
+                    cache,
+                    cache_slot,
+                    lhs,
+                    rhs,
+                    output_shape,
+                    config,
+                )?
+                else {
+                    // No direct plan; the canonical path needs the scratch
+                    // pool, which is exclusively held by the uninit checkout.
+                    // The caller falls back to the zeroed path.
+                    return Ok(CpuProviderOutcome::Unsupported(
+                        CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Output),
+                    ));
+                };
+                execute_gemm_plan_into_uninit(
+                    witness,
+                    provider_context,
+                    plan,
+                    lhs,
+                    rhs,
+                    accumulation,
+                    output_bytes,
+                )
+            })
+            .map_err(|error| Error::backend_source(OP, error))?
+    }
+
     #[allow(clippy::redundant_closure)]
     fn execute_grouped(
         &self,
@@ -870,6 +940,23 @@ fn execute_gemm_plan(
     Ok(outcome)
 }
 
+fn execute_gemm_plan_into_uninit(
+    witness: &dyn CpuUninitGemmProvider,
+    context: &CpuExecutionContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    accumulation: DotGeneralAccumulation,
+    output_bytes: &mut [MaybeUninit<u8>],
+) -> Result<CpuProviderOutcome> {
+    let request = plan.uninit_request(lhs, rhs, accumulation);
+    // SAFETY: the witness is structural proof the provider asserted the
+    // full-overwrite contract via `unsafe impl`; the caller guarantees
+    // beta == 0, so every destination element is written before `Executed`
+    // and never read.
+    unsafe { witness.gemm_into_uninit(context, request, output_bytes) }
+}
+
 fn canonical_gemm_fallback_supported(reason: CpuProviderUnsupported) -> bool {
     matches!(
         reason,
@@ -942,13 +1029,56 @@ fn materialize_canonical_operand(
     conjugate: bool,
 ) -> Result<Tensor> {
     let input_view = transposed_read_view(input, permutation)?;
-    let mut output =
-        allocate_canonical_operand(buffers, input_view.dtype(), input_view.shape().to_vec())?;
+    let dtype = input_view.dtype();
+    let shape = input_view.shape().to_vec();
     let input = TensorRead::from_view(input_view);
+    if let Some(witness) = provider.uninit_provider() {
+        let mut output = UninitTensor::acquire(buffers, dtype, shape.clone())?;
+        let outcome = {
+            let output_bytes = output.as_uninit_bytes_mut();
+            // SAFETY: `witness` is structural proof the provider asserted the
+            // full-overwrite contract via `unsafe impl`; `Executed` means
+            // every element of `output_bytes` was written by
+            // `materialize_into_uninit` (never read).
+            unsafe {
+                witness.materialize_into_uninit(
+                    context,
+                    &input,
+                    CpuLayoutTransformIntent::CanonicalColumnMajor,
+                    conjugate,
+                    output_bytes,
+                )
+            }
+        };
+        match outcome {
+            Ok(CpuProviderOutcome::Executed) => {
+                // SAFETY: the unsafe provider contract guarantees the
+                // destination is fully initialized before `Executed`.
+                return unsafe { output.assume_init() };
+            }
+            Ok(CpuProviderOutcome::Unsupported(_)) => {
+                // Discard the uninit checkout (drop frees via
+                // `pool_discard_uninit`) and fall back to the zeroed path.
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    materialize_canonical_operand_zeroed(provider, context, buffers, &input, shape, conjugate)
+}
+
+fn materialize_canonical_operand_zeroed(
+    provider: &dyn CpuLayoutTransformProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &TensorRead<'_>,
+    shape: Vec<usize>,
+    conjugate: bool,
+) -> Result<Tensor> {
+    let mut output = allocate_canonical_operand(buffers, input.dtype(), shape)?;
     let outcome = {
         let mut output_write = TensorWrite::from_tensor(&mut output);
         let request = CpuLayoutTransformRequest::new(
-            &input,
+            input,
             &mut output_write,
             CpuLayoutTransformIntent::CanonicalColumnMajor,
             conjugate,
@@ -964,6 +1094,66 @@ fn materialize_canonical_operand(
         Err(error) => {
             reclaim_temporary(buffers, output);
             Err(error)
+        }
+    }
+}
+
+/// Dtype-dispatched pooled full-overwrite destination for the uninitialized
+/// dot paths.
+///
+/// The destination travels only as `MaybeUninit` bytes until an unsafe
+/// `assume_init` completes the handoff; no `TensorWrite` is ever fabricated
+/// over uninitialized storage.
+pub(crate) enum UninitTensor<'pool> {
+    F32(PooledUninitOutput<'pool, f32>),
+    F64(PooledUninitOutput<'pool, f64>),
+    C32(PooledUninitOutput<'pool, Complex32>),
+    C64(PooledUninitOutput<'pool, Complex64>),
+}
+
+impl<'pool> UninitTensor<'pool> {
+    pub(crate) fn acquire(
+        buffers: &'pool mut BufferPool,
+        dtype: DType,
+        shape: Vec<usize>,
+    ) -> Result<Self> {
+        match dtype {
+            DType::F32 => Ok(Self::F32(PooledUninitOutput::new(buffers, shape)?)),
+            DType::F64 => Ok(Self::F64(PooledUninitOutput::new(buffers, shape)?)),
+            DType::C32 => Ok(Self::C32(PooledUninitOutput::new(buffers, shape)?)),
+            DType::C64 => Ok(Self::C64(PooledUninitOutput::new(buffers, shape)?)),
+            dtype => Err(Error::unsupported_dtype(
+                OP,
+                dtype,
+                crate::cpu_contraction_unsupported_dtype_message(dtype),
+            )),
+        }
+    }
+
+    pub(crate) fn as_uninit_bytes_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        match self {
+            Self::F32(output) => output.as_uninit_bytes_mut(),
+            Self::F64(output) => output.as_uninit_bytes_mut(),
+            Self::C32(output) => output.as_uninit_bytes_mut(),
+            Self::C64(output) => output.as_uninit_bytes_mut(),
+        }
+    }
+
+    /// # Safety
+    ///
+    /// Every logical destination element must have been initialized by the
+    /// completed unsafe provider call before this handoff; otherwise reading
+    /// or dropping the returned tensor is undefined behavior.
+    pub(crate) unsafe fn assume_init(self) -> Result<Tensor> {
+        // SAFETY: the caller proves every logical destination element was
+        // written before `Executed` by the unsafe provider impl.
+        unsafe {
+            match self {
+                Self::F32(output) => output.assume_init().map(Tensor::F32),
+                Self::F64(output) => output.assume_init().map(Tensor::F64),
+                Self::C32(output) => output.assume_init().map(Tensor::C32),
+                Self::C64(output) => output.assume_init().map(Tensor::C64),
+            }
         }
     }
 }

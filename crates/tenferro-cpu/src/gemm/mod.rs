@@ -2,6 +2,8 @@ use num_traits::Zero;
 use smallvec::{Array, SmallVec};
 use std::fmt;
 use std::mem::size_of;
+#[cfg(feature = "cpu-faer")]
+use std::mem::{align_of, MaybeUninit};
 use std::sync::{Arc, Weak};
 
 use crate::dot_runtime::CpuProviderBundleInner;
@@ -962,6 +964,26 @@ impl ProviderGemmPlan {
             accumulation,
         )
     }
+
+    pub(crate) fn uninit_request<'request, 'input>(
+        self,
+        lhs: &'request TensorRead<'input>,
+        rhs: &'request TensorRead<'input>,
+        accumulation: DotGeneralAccumulation,
+    ) -> crate::provider::CpuGemmUninitRequest<'request, 'input> {
+        crate::provider::CpuGemmUninitRequest::new(
+            lhs,
+            rhs,
+            self.rows,
+            self.columns,
+            self.contracted,
+            self.batch_count,
+            self.lhs_layout,
+            self.rhs_layout,
+            self.output_layout,
+            accumulation,
+        )
+    }
 }
 
 fn provider_output_strides(output: &TensorWrite<'_>) -> Result<SmallVec<[isize; 8]>> {
@@ -972,7 +994,7 @@ fn provider_output_strides(output: &TensorWrite<'_>) -> Result<SmallVec<[isize; 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_provider_gemm_typed<L, R, T>(
+fn prepare_provider_gemm_typed_with_output<L, R, T>(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
     cache_kind: GemmAnalysisCacheKind,
@@ -980,7 +1002,9 @@ fn prepare_provider_gemm_typed<L, R, T>(
     rhs: &R,
     lhs_offset: isize,
     rhs_offset: isize,
-    output: &TensorWrite<'_>,
+    output_shape: &[usize],
+    output_strides: &[isize],
+    output_offset: isize,
     config: &DotGeneralConfig,
 ) -> Result<Option<ProviderGemmPlan>>
 where
@@ -990,10 +1014,9 @@ where
     let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
         return Ok(None);
     };
-    let output_strides = provider_output_strides(output)?;
     let Some((output_row_stride, output_column_stride, output_batch_stride)) = output_gemm_strides(
-        output.shape(),
-        &output_strides,
+        output_shape,
+        output_strides,
         lhs.shape().len(),
         rhs.shape().len(),
         config,
@@ -1025,7 +1048,7 @@ where
             dims.b_bs,
         ),
         output_layout: crate::provider::CpuBatchedMatrixLayout::new(
-            output.offset(),
+            output_offset,
             output_row_stride,
             output_column_stride,
             output_batch_stride,
@@ -1051,6 +1074,32 @@ fn prepare_provider_gemm_kind(
     output: &TensorWrite<'_>,
     config: &DotGeneralConfig,
 ) -> Result<Option<ProviderGemmPlan>> {
+    let output_strides = provider_output_strides(output)?;
+    prepare_provider_gemm_kind_with_output(
+        cache,
+        cache_slot,
+        cache_kind,
+        lhs,
+        rhs,
+        output.shape(),
+        &output_strides,
+        output.offset(),
+        config,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_provider_gemm_kind_with_output(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    cache_kind: GemmAnalysisCacheKind,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output_shape: &[usize],
+    output_strides: &[isize],
+    output_offset: isize,
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident) => {
             match (lhs, rhs) {
@@ -1058,7 +1107,7 @@ fn prepare_provider_gemm_kind(
                     TensorRead::Tensor(crate::Tensor::$owned(lhs)),
                     TensorRead::Tensor(crate::Tensor::$owned(rhs)),
                 ) => {
-                    return prepare_provider_gemm_typed(
+                    return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
                         cache_kind,
@@ -1066,7 +1115,9 @@ fn prepare_provider_gemm_kind(
                         rhs,
                         lhs.offset(),
                         rhs.offset(),
-                        output,
+                        output_shape,
+                        output_strides,
+                        output_offset,
                         config,
                     );
                 }
@@ -1074,7 +1125,7 @@ fn prepare_provider_gemm_kind(
                     TensorRead::Tensor(crate::Tensor::$owned(lhs)),
                     TensorRead::View(TensorView::$view(rhs)),
                 ) => {
-                    return prepare_provider_gemm_typed(
+                    return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
                         cache_kind,
@@ -1082,7 +1133,9 @@ fn prepare_provider_gemm_kind(
                         rhs,
                         lhs.offset(),
                         rhs.offset(),
-                        output,
+                        output_shape,
+                        output_strides,
+                        output_offset,
                         config,
                     );
                 }
@@ -1090,7 +1143,7 @@ fn prepare_provider_gemm_kind(
                     TensorRead::View(TensorView::$view(lhs)),
                     TensorRead::Tensor(crate::Tensor::$owned(rhs)),
                 ) => {
-                    return prepare_provider_gemm_typed(
+                    return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
                         cache_kind,
@@ -1098,7 +1151,9 @@ fn prepare_provider_gemm_kind(
                         rhs,
                         lhs.offset(),
                         rhs.offset(),
-                        output,
+                        output_shape,
+                        output_strides,
+                        output_offset,
                         config,
                     );
                 }
@@ -1106,7 +1161,7 @@ fn prepare_provider_gemm_kind(
                     TensorRead::View(TensorView::$view(lhs)),
                     TensorRead::View(TensorView::$view(rhs)),
                 ) => {
-                    return prepare_provider_gemm_typed(
+                    return prepare_provider_gemm_typed_with_output(
                         cache,
                         cache_slot,
                         cache_kind,
@@ -1114,7 +1169,9 @@ fn prepare_provider_gemm_kind(
                         rhs,
                         lhs.offset(),
                         rhs.offset(),
-                        output,
+                        output_shape,
+                        output_strides,
+                        output_offset,
                         config,
                     );
                 }
@@ -1127,6 +1184,30 @@ fn prepare_provider_gemm_kind(
     dispatch!(C32, C32);
     dispatch!(C64, C64);
     Ok(None)
+}
+
+/// Plan a GEMM into a fresh compact column-major output of `output_shape` at
+/// element offset zero (an uninitialized pooled destination).
+pub(crate) fn prepare_provider_gemm_into_uninit(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output_shape: &[usize],
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    let output_strides = col_major_strides(output_shape)?;
+    prepare_provider_gemm_kind_with_output(
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        output_shape,
+        &output_strides,
+        0,
+        config,
+    )
 }
 
 pub(crate) fn prepare_provider_gemm(
@@ -1547,6 +1628,20 @@ impl ProviderGemmDescriptor {
             accumulation: parts.accumulation,
         }
     }
+
+    #[cfg(feature = "cpu-faer")]
+    fn from_uninit_parts(parts: &crate::provider::CpuGemmUninitRequestParts<'_, '_>) -> Self {
+        Self {
+            rows: parts.rows,
+            columns: parts.columns,
+            contracted: parts.contracted,
+            batch_count: parts.batch_count,
+            lhs_layout: parts.lhs_layout,
+            rhs_layout: parts.rhs_layout,
+            output_layout: parts.output_layout,
+            accumulation: parts.accumulation,
+        }
+    }
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -1571,13 +1666,33 @@ where
     {
         return scale_empty_contract_output(output, beta);
     }
+    let output_data = output.host_storage_mut()?.as_mut_ptr();
+    execute_faer_request_typed_with_output(context, descriptor, lhs, rhs, output_data, alpha, beta)
+}
+
+#[cfg(feature = "cpu-faer")]
+fn execute_faer_request_typed_with_output<L, R, T>(
+    context: &CpuExecutionContext<'_>,
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output_data: *mut T,
+    alpha: T,
+    beta: T,
+) -> Result<()>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: FaerGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    // INVARIANT: callers reach this helper only for non-empty GEMMs (rows,
+    // columns, contracted, and batch count are all non-zero).
     let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };
     let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };
-    let output_data = output.host_storage_mut()?.as_mut_ptr();
     let par = context.faer_parallelism();
     for batch in 0..descriptor.batch_count {
         checked_view_batch_offset(
@@ -1765,6 +1880,224 @@ pub(crate) fn execute_faer_gemm_request(
                             context, descriptor, lhs, rhs, output, alpha, beta,
                         )?;
                         return Ok(CpuProviderOutcome::Executed);
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(dtype),
+    ))
+}
+
+/// Validate that `output_bytes` is exactly the byte representation of
+/// `element_count` `T`-sized elements, aligned for `T`, and return the
+/// destination pointer.
+#[cfg(feature = "cpu-faer")]
+fn checked_uninit_output_ptr<T>(
+    output_bytes: &mut [MaybeUninit<u8>],
+    element_count: usize,
+    op: &'static str,
+) -> Result<*mut T> {
+    let byte_len = element_count.checked_mul(size_of::<T>()).ok_or_else(|| {
+        Error::invalid_argument(
+            op,
+            "output",
+            "uninitialized destination byte length overflow",
+        )
+    })?;
+    if output_bytes.len() != byte_len {
+        return Err(Error::invalid_argument(
+            op,
+            "output",
+            format!(
+                "uninitialized destination has {} bytes but requires {byte_len}",
+                output_bytes.len()
+            ),
+        ));
+    }
+    if !(output_bytes.as_mut_ptr() as usize).is_multiple_of(align_of::<T>()) {
+        return Err(Error::invalid_argument(
+            op,
+            "output",
+            format!(
+                "uninitialized destination is misaligned for {}",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+    Ok(output_bytes.as_mut_ptr().cast::<T>())
+}
+
+/// Write zero into every destination element for an empty-contraction GEMM
+/// (beta == 0 semantics overwrite without reading). Zero-element destinations
+/// (rows, columns, or batch count zero) write nothing and are satisfied.
+#[cfg(feature = "cpu-faer")]
+fn write_empty_contract_zeros_into_uninit<T>(
+    output_data: *mut T,
+    descriptor: &ProviderGemmDescriptor,
+) -> Result<()>
+where
+    T: Copy + Zero,
+{
+    if descriptor.rows == 0 || descriptor.columns == 0 || descriptor.batch_count == 0 {
+        return Ok(());
+    }
+    for batch in 0..descriptor.batch_count {
+        let output_offset = checked_view_batch_offset(
+            descriptor.output_layout.offset(),
+            batch,
+            descriptor.output_layout.batch_stride(),
+        )?;
+        let mut column_offset = 0isize;
+        for _ in 0..descriptor.columns {
+            let mut offset = column_offset;
+            for _ in 0..descriptor.rows {
+                // SAFETY: `output_data` points at the validated rows*columns*
+                // batch destination; every index lies inside the span described
+                // by the engine-validated output layout.
+                unsafe {
+                    output_data.offset(output_offset + offset).write(T::zero());
+                }
+                offset += descriptor.output_layout.row_stride();
+            }
+            column_offset += descriptor.output_layout.column_stride();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cpu-faer")]
+fn execute_faer_request_typed_into_uninit<L, R, T>(
+    context: &CpuExecutionContext<'_>,
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output_bytes: &mut [MaybeUninit<u8>],
+    alpha: T,
+    beta: T,
+) -> Result<CpuProviderOutcome>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: FaerGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if beta != T::zero() {
+        // The uninit destination contract only holds for full-overwrite
+        // (beta == 0) accumulations; refuse rather than read uninitialized C.
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Accumulation,
+        ));
+    }
+    let element_count = descriptor
+        .rows
+        .checked_mul(descriptor.columns)
+        .and_then(|count| count.checked_mul(descriptor.batch_count))
+        .ok_or_else(|| {
+            Error::invalid_argument(OP, "output", "uninitialized output element count overflow")
+        })?;
+    let output_data = checked_uninit_output_ptr::<T>(output_bytes, element_count, OP)?;
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        write_empty_contract_zeros_into_uninit(output_data, &descriptor)?;
+        return Ok(CpuProviderOutcome::Executed);
+    }
+    execute_faer_request_typed_with_output(
+        context,
+        descriptor,
+        lhs,
+        rhs,
+        output_data,
+        alpha,
+        beta,
+    )?;
+    Ok(CpuProviderOutcome::Executed)
+}
+
+/// Execute one validated full-overwrite GEMM (beta == 0) into uninitialized
+/// bytes. The destination is written through `MaybeUninit` storage only; every
+/// logical element is initialized before `Executed` (faer `Accum::Replace`;
+/// empty contractions write zeros).
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn execute_faer_gemm_request_into_uninit(
+    context: &CpuExecutionContext<'_>,
+    request: crate::provider::CpuGemmUninitRequest<'_, '_>,
+    output_bytes: &mut [MaybeUninit<u8>],
+) -> Result<CpuProviderOutcome> {
+    let parts = request.into_parts();
+    let descriptor = ProviderGemmDescriptor::from_uninit_parts(&parts);
+    let lhs = parts.lhs;
+    let rhs = parts.rhs;
+    let dtype = lhs.dtype();
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (descriptor.accumulation.alpha, descriptor.accumulation.beta)
+            {
+                match (lhs, rhs) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                    ) => {
+                        return execute_faer_request_typed_into_uninit(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            output_bytes,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                    ) => {
+                        return execute_faer_request_typed_into_uninit(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            output_bytes,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                    ) => {
+                        return execute_faer_request_typed_into_uninit(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            output_bytes,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                    ) => {
+                        return execute_faer_request_typed_into_uninit(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            output_bytes,
+                            alpha,
+                            beta,
+                        );
                     }
                     _ => {}
                 }
