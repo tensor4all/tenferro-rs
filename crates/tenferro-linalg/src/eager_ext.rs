@@ -718,7 +718,10 @@ impl EagerTensorLinalgExt for EagerTensor {
     }
 }
 
-fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
+pub(crate) fn apply_linalg_eager(
+    op: LinalgOp,
+    inputs: &[&EagerTensor],
+) -> Result<Vec<EagerTensor>> {
     let op = Arc::new(LinalgExtensionOp::new(op));
     apply_eager_with_extension_session(op, inputs, eager_cpu_extension_module()?)
 }
@@ -1316,7 +1319,7 @@ pub fn triangular_solve(
     )
 }
 
-fn one_output(outputs: Vec<EagerTensor>, name: &str) -> Result<EagerTensor> {
+pub(crate) fn one_output(outputs: Vec<EagerTensor>, name: &str) -> Result<EagerTensor> {
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next()) {
         (Some(output), None) => Ok(output),

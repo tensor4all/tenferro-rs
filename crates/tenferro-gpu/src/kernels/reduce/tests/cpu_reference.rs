@@ -23,6 +23,21 @@ fn cpu_reference_reduces_rank3_middle_axis_column_major() {
 
 #[test]
 #[cfg(feature = "cpu-reference")]
+fn cpu_reference_i64_sum_wraps_on_overflow() {
+    // Integer `reduce_sum` is a two's-complement wrapping parity contract
+    // (REPOSITORY_RULES.md), so [i64::MAX, 1] must wrap to i64::MIN.
+    assert_eq!(
+        reduce_sum_i64_keepdims(&[i64::MAX, 1], &[2, 1], 0),
+        vec![i64::MIN]
+    );
+    assert_eq!(
+        reduce_sum_i64_keepdims(&[i64::MIN, -1], &[2, 1], 0),
+        vec![i64::MAX]
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-reference")]
 #[should_panic(expected = "axis 2 is out of bounds for rank 2")]
 fn cpu_reference_panics_when_axis_exceeds_rank() {
     let input = vec![1, 2, 3, 4, 5, 6];

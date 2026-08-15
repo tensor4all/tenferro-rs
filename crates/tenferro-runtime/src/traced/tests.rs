@@ -104,6 +104,38 @@ fn integer_scale_real_rejects_non_finite_factors() {
 }
 
 #[test]
+fn i64_scale_real_rejects_exactly_two_power_63_instead_of_saturating() {
+    // `i64::MAX as f64` is 2^63, so the old `rounded > i64::MAX as f64`
+    // guard let exactly 2^63 through and `as i64` silently saturated to
+    // i64::MAX. The inclusive-upper fix must reject it (issue #1685).
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+
+    let err = x.scale_real(9_223_372_036_854_775_808.0).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            Error::Validation {
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::InvalidArgument { .. },
+                ..
+            }
+        ),
+        "2^63 should be rejected as out of i64 range, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("out of i64 range"),
+        "expected i64 range error, got {err:?}"
+    );
+
+    // Largest representable f64 below 2^63 (spacing at 2^63 is 1024) and
+    // -2^63 == i64::MIN must remain valid.
+    x.scale_real(9_223_372_036_854_774_784.0)
+        .expect("2^63 - 1024 is the largest valid f64 below 2^63");
+    x.scale_real(-9_223_372_036_854_775_808.0)
+        .expect("-2^63 == i64::MIN must remain valid");
+}
+
+#[test]
 fn dot_general_keeps_existing_success_metadata() {
     let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let rhs = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();

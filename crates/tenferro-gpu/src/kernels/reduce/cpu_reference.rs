@@ -15,7 +15,13 @@ pub(crate) fn reduce_sum_i64_keepdims(
     input_shape: &[usize],
     axis: usize,
 ) -> Vec<i64> {
-    reduce_keepdims(input, input_shape, axis, 0_i64, |acc, value| acc + value)
+    // Integer `reduce_sum` is a CPU/CUDA parity contract: use explicit
+    // two's-complement wrapping, never bare `+` on user data
+    // (REPOSITORY_RULES.md, integer arithmetic parity rule). The CUDA
+    // `reduce_sum_int` kernel uses the same `wrapping_add`.
+    reduce_keepdims(input, input_shape, axis, 0_i64, |acc, value| {
+        acc.wrapping_add(value)
+    })
 }
 
 fn reduce_keepdims<T, F>(
