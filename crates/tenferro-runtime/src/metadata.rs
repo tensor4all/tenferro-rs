@@ -67,6 +67,21 @@ impl MetadataScopeChain {
         }
     }
 
+    pub(crate) fn merge<'a>(inherited: impl IntoIterator<Item = &'a MetadataScopeChain>) -> Self {
+        let parents: Vec<_> = inherited.into_iter().cloned().collect();
+        match parents.as_slice() {
+            [] => Self::empty(),
+            [only] => only.clone(),
+            _ => Self {
+                node: Arc::new(MetadataScopeChainNode {
+                    scope: None,
+                    parents,
+                    materialized: OnceLock::new(),
+                }),
+            },
+        }
+    }
+
     pub(crate) fn from_materialized(scopes: Vec<Arc<GlobalMetadataScope>>) -> Self {
         let mut chain = Self::empty();
         for scope in scopes.into_iter().rev() {
@@ -84,23 +99,56 @@ impl MetadataScopeChain {
             .materialized
             .get_or_init(|| {
                 let mut scopes = Vec::new();
-                let mut seen = HashSet::new();
-                self.extend_materialized(&mut scopes, &mut seen);
+                let mut seen_scopes = HashSet::new();
+                let mut seen_nodes = HashSet::new();
+                let mut visited_nodes = 0;
+                self.extend_materialized(
+                    &mut scopes,
+                    &mut seen_scopes,
+                    &mut seen_nodes,
+                    &mut visited_nodes,
+                );
                 scopes
             })
             .as_slice()
     }
 
+    #[cfg(test)]
+    pub(crate) fn materialize_with_visit_count(&self) -> (Vec<Arc<GlobalMetadataScope>>, usize) {
+        let mut scopes = Vec::new();
+        let mut seen_scopes = HashSet::new();
+        let mut seen_nodes = HashSet::new();
+        let mut visited_nodes = 0;
+        self.extend_materialized(
+            &mut scopes,
+            &mut seen_scopes,
+            &mut seen_nodes,
+            &mut visited_nodes,
+        );
+        (scopes, visited_nodes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_root(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.node, &other.node)
+    }
+
     fn extend_materialized(
         &self,
         scopes: &mut Vec<Arc<GlobalMetadataScope>>,
-        seen: &mut HashSet<*const GlobalMetadataScope>,
+        seen_scopes: &mut HashSet<*const GlobalMetadataScope>,
+        seen_nodes: &mut HashSet<*const MetadataScopeChainNode>,
+        visited_nodes: &mut usize,
     ) {
+        if !seen_nodes.insert(Arc::as_ptr(&self.node)) {
+            return;
+        }
+        *visited_nodes += 1;
         if let Some(scope) = &self.node.scope {
-            push_metadata_scope_seen(scopes, seen, Arc::clone(scope));
+            push_metadata_scope_seen(scopes, seen_scopes, Arc::clone(scope));
         }
         for parent in &self.node.parents {
-            parent.extend_materialized(scopes, seen);
+            parent.extend_materialized(scopes, seen_scopes, seen_nodes, visited_nodes);
         }
     }
 }
@@ -603,3 +651,6 @@ where
 {
     Error::runtime_state_source("metadata", crate::ErrorPhase::Compile, error)
 }
+
+#[cfg(test)]
+mod tests;

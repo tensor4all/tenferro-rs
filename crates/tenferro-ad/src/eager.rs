@@ -32,8 +32,7 @@ use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
 use tenferro_runtime::ad_support::{
-    analyze_deferred_semantic_trace, compile_ad_source, ones_tensor, tensor_from_parts,
-    ConstraintScopeTransfer, RetainedValue, TracedTensorParts,
+    analyze_deferred_semantic_trace, compile_ad_source, ones_tensor, RetainedValue,
 };
 use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{
@@ -4152,50 +4151,14 @@ fn record_semantic_eager_outputs(
     if let Some(exact_semantic_inputs) = &exact_semantic_inputs {
         semantic_inputs = exact_semantic_inputs.iter().collect();
     }
-    // Deferred materialization (issue #1665 steps 6-7): append the op to the
-    // raw `Graph<StdTensorOp>` carrier only. Metadata inference, registry
-    // registration, and constraint discovery run once at the first AD request
-    // via `analyze_deferred_semantic_trace`, reusing the existing
-    // compile/AdTransformCache/prepared-derivative machinery.
-    let append = tenferro_runtime::extension::append_raw_op(op.clone(), &semantic_inputs)?;
-    if append.output_ids.len() != output_metadata.len() {
-        return Err(Error::Internal(format!(
-            "semantic eager recording expected {} outputs for {op:?}, got {}",
-            output_metadata.len(),
-            append.output_ids.len()
-        )));
-    }
-    let inputs_map =
-        tenferro_runtime::ad_support::merge_traced_inputs_map(semantic_inputs.iter().copied());
-    let leaf_metas =
-        tenferro_runtime::ad_support::merge_traced_leaf_metas(semantic_inputs.iter().copied());
-    let mut extra_roots = Vec::new();
-    for input in &semantic_inputs {
-        extra_roots.extend(tenferro_runtime::ad_support::extra_roots(input));
-    }
-    // ponytail: eager semantic traces never checkpoint, so the carrier keeps
-    // `checkpoint_chain = None` instead of merging input chains.
-    let outputs = append
-        .output_ids
-        .iter()
-        .zip(output_metadata)
-        .map(|(&val, meta)| {
-            tensor_from_parts(TracedTensorParts {
-                rank: meta.rank(),
-                dtype: meta.dtype,
-                graph: Arc::clone(&append.graph),
-                val,
-                data: None,
-                shape_hint: None,
-                inputs_map: Arc::clone(&inputs_map),
-                leaf_metas: Arc::clone(&leaf_metas),
-                extra_roots: extra_roots.clone(),
-                checkpoint_chain: None,
-                metadata_scopes: Vec::new(),
-                constraint_scope_transfer: ConstraintScopeTransfer::empty(),
-            })
-        })
-        .collect::<Vec<_>>();
+    // Deferred materialization (issue #1665 steps 6-7): append only a raw
+    // carrier. The runtime helper retains metadata scopes introduced by the
+    // promotion/exactification helpers without analyzing this operation.
+    let outputs = tenferro_runtime::extension::append_raw_eager_outputs(
+        op.clone(),
+        &semantic_inputs,
+        output_metadata,
+    )?;
     Ok(outputs.into_iter().map(Some).collect())
 }
 

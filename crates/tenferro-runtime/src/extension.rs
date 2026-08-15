@@ -23,7 +23,7 @@ use computegraph::types::{OperationRole, ValueRef};
 use computegraph::GraphOperation;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::SymDim;
+use tenferro_ops::{SymDim, TensorMeta};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, ErrorPhase, Result};
@@ -194,6 +194,53 @@ pub fn append_raw_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<RawApp
         graph: Arc::new(builder.build()),
         output_ids,
     })
+}
+
+/// Append an eager semantic op and retain its private runtime carrier state.
+#[doc(hidden)]
+pub fn append_raw_eager_outputs(
+    op: StdTensorOp,
+    inputs: &[&TracedTensor],
+    output_metadata: &[TensorMeta],
+) -> Result<Vec<TracedTensor>> {
+    let append = append_raw_op(op.clone(), inputs)?;
+    if append.output_ids.len() != output_metadata.len() {
+        return Err(Error::Internal(format!(
+            "semantic eager recording expected {} outputs for {op:?}, got {}",
+            output_metadata.len(),
+            append.output_ids.len()
+        )));
+    }
+
+    let inputs_map = merge_traced_inputs_map(inputs.iter().copied());
+    let leaf_metas = merge_traced_leaf_metas(inputs.iter().copied());
+    let mut extra_roots = Vec::new();
+    for input in inputs {
+        extra_roots.extend(input.extra_roots.iter().cloned());
+    }
+    let metadata_scopes =
+        MetadataScopeChain::merge(inputs.iter().map(|input| &input.metadata_scopes));
+
+    Ok(append
+        .output_ids
+        .into_iter()
+        .zip(output_metadata)
+        .map(|(val, meta)| TracedTensor {
+            id: next_traced_id(),
+            rank: meta.rank(),
+            dtype: meta.dtype,
+            graph: Arc::clone(&append.graph),
+            val,
+            data: None,
+            shape_hint: None,
+            inputs_map: Arc::clone(&inputs_map),
+            leaf_metas: Arc::clone(&leaf_metas),
+            extra_roots: extra_roots.clone(),
+            checkpoint_chain: None,
+            metadata_scopes: metadata_scopes.clone(),
+            constraint_scopes: ConstraintScopeChain::empty(),
+        })
+        .collect())
 }
 
 /// Run the deferred analysis half of an append once: register metadata and
