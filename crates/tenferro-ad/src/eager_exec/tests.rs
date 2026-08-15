@@ -4,7 +4,7 @@
 //! via EagerTensor AD tests. These tests target branches with real logic:
 //! edge-case handling, byte parsing, multi-output unpacking, etc.
 
-use super::exec_op_on_tensors;
+use super::{eager_input_promotion_plan, exec_op_on_tensors};
 use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -13,7 +13,10 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{DType, ErrorKind, Tensor, TypedTensor, ValidationKind};
+use tenferro_tensor::{
+    CompareDir, DType, DotGeneralConfig, ErrorKind, ScatterConfig, Tensor, TypedTensor,
+    ValidationKind,
+};
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -25,6 +28,90 @@ fn scalar(v: f64) -> Tensor {
 
 fn i64_scalar(v: i64) -> Tensor {
     Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![v]).unwrap())
+}
+
+fn planned_input_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Vec<DType> {
+    let plan = eager_input_promotion_plan(op, input_dtypes.len(), |index| input_dtypes[index]);
+    input_dtypes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, dtype)| plan.target_dtype(index, dtype))
+        .collect()
+}
+
+#[test]
+fn eager_input_promotion_plan_covers_all_promoted_families() {
+    let binary_ops = [
+        StdTensorOp::Add,
+        StdTensorOp::Sub,
+        StdTensorOp::Mul,
+        StdTensorOp::Div,
+        StdTensorOp::Rem,
+        StdTensorOp::Pow,
+        StdTensorOp::Maximum,
+        StdTensorOp::Minimum,
+        StdTensorOp::Compare(CompareDir::Eq),
+        StdTensorOp::DotGeneral {
+            config: DotGeneralConfig {
+                lhs_contracting_dims: vec![],
+                rhs_contracting_dims: vec![],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        },
+    ];
+    for op in binary_ops {
+        assert_eq!(
+            planned_input_dtypes(&op, &[DType::F64, DType::C32]),
+            vec![DType::C64, DType::C64],
+            "binary promotion plan for {op:?}"
+        );
+    }
+
+    let cases = [
+        (
+            StdTensorOp::Select,
+            vec![DType::Bool, DType::F64, DType::C32],
+            vec![DType::Bool, DType::C64, DType::C64],
+        ),
+        (
+            StdTensorOp::Clamp,
+            vec![DType::F32, DType::F64, DType::C32],
+            vec![DType::C64, DType::C64, DType::C64],
+        ),
+        (
+            StdTensorOp::Concatenate {
+                axis: 0,
+                input_count: 3,
+            },
+            vec![DType::F32, DType::F64, DType::C32],
+            vec![DType::C64, DType::C64, DType::C64],
+        ),
+        (
+            StdTensorOp::Scatter(ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![],
+                scatter_dims_to_operand_dims: vec![],
+                index_vector_dim: 0,
+            }),
+            vec![DType::F32, DType::I64, DType::C32],
+            vec![DType::C32, DType::I64, DType::C32],
+        ),
+        (
+            StdTensorOp::DynamicUpdateSlice,
+            vec![DType::F32, DType::C64, DType::I64],
+            vec![DType::C64, DType::C64, DType::I64],
+        ),
+        (StdTensorOp::Neg, vec![DType::C32], vec![DType::C32]),
+    ];
+    for (op, input_dtypes, expected) in cases {
+        assert_eq!(
+            planned_input_dtypes(&op, &input_dtypes),
+            expected,
+            "promotion plan for {op:?}"
+        );
+    }
 }
 
 fn data(t: &Tensor) -> Vec<f64> {

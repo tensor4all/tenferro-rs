@@ -1041,6 +1041,39 @@ fn eigh_vector_observable_backward_grad_is_finite() {
 }
 
 #[test]
+fn mixed_real_constant_and_tracked_complex_eigh_vector_backward() {
+    let ctx = ad_test_ctx();
+    let real = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let complex = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(0.5, 0.0),
+                Complex64::new(0.0, -0.25),
+                Complex64::new(0.0, 0.25),
+                Complex64::new(0.5, 0.0),
+            ],
+        )
+        .unwrap(),
+        ctx,
+    )
+    .unwrap();
+    let mixed = real.add(&complex).unwrap();
+    let (_values, vectors) = mixed.eigh().unwrap();
+
+    vectors
+        .reduce_sum(Some(&[0, 1]))
+        .unwrap()
+        .backward()
+        .unwrap();
+    assert!(complex.grad().unwrap().is_some());
+}
+
+#[test]
 fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap(),

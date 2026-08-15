@@ -13,7 +13,7 @@ use tenferro_tensor::{
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
-use crate::shape_infer::promote_dtype_for_binary_op;
+use crate::shape_infer::{promote_dtype, promote_dtype_for_binary_op, promote_dtypes};
 
 enum PromotedTensor<'a> {
     Borrowed(&'a Tensor),
@@ -28,6 +28,74 @@ enum PromotedTensorRead<'a> {
 enum ConcreteTensorRead<'a> {
     Borrowed(&'a Tensor),
     Owned(Box<Tensor>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EagerInputPromotionPlan {
+    Unchanged,
+    All(DType),
+    Pair {
+        first: usize,
+        second: usize,
+        dtype: DType,
+    },
+}
+
+impl EagerInputPromotionPlan {
+    pub(crate) fn target_dtype(self, index: usize, original: DType) -> DType {
+        match self {
+            Self::Unchanged => original,
+            Self::All(dtype) => dtype,
+            Self::Pair {
+                first,
+                second,
+                dtype,
+            } if index == first || index == second => dtype,
+            Self::Pair { .. } => original,
+        }
+    }
+}
+
+pub(crate) fn eager_input_promotion_plan(
+    op: &StdTensorOp,
+    input_count: usize,
+    mut dtype_at: impl FnMut(usize) -> DType,
+) -> EagerInputPromotionPlan {
+    match op {
+        StdTensorOp::Add
+        | StdTensorOp::Sub
+        | StdTensorOp::Mul
+        | StdTensorOp::Div
+        | StdTensorOp::Rem
+        | StdTensorOp::Pow
+        | StdTensorOp::Maximum
+        | StdTensorOp::Minimum
+        | StdTensorOp::Compare(_)
+        | StdTensorOp::DotGeneral { .. } => EagerInputPromotionPlan::Pair {
+            first: 0,
+            second: 1,
+            dtype: promote_dtype_for_binary_op(op, dtype_at(0), dtype_at(1)),
+        },
+        StdTensorOp::Select => EagerInputPromotionPlan::Pair {
+            first: 1,
+            second: 2,
+            dtype: promote_dtype(dtype_at(1), dtype_at(2)),
+        },
+        StdTensorOp::Clamp | StdTensorOp::Concatenate { .. } => {
+            EagerInputPromotionPlan::All(promote_dtypes((0..input_count).map(dtype_at)))
+        }
+        StdTensorOp::Scatter(_) => EagerInputPromotionPlan::Pair {
+            first: 0,
+            second: 2,
+            dtype: promote_dtype(dtype_at(0), dtype_at(2)),
+        },
+        StdTensorOp::DynamicUpdateSlice => EagerInputPromotionPlan::Pair {
+            first: 0,
+            second: 1,
+            dtype: promote_dtype(dtype_at(0), dtype_at(1)),
+        },
+        _ => EagerInputPromotionPlan::Unchanged,
+    }
 }
 
 impl<'a> PromotedTensor<'a> {
@@ -91,8 +159,8 @@ fn promote_binary<'a>(
     b: &'a Tensor,
     op: &StdTensorOp,
 ) -> Result<(PromotedTensor<'a>, PromotedTensor<'a>)> {
-    let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
-    promote_binary_to_dtype(exec, a, b, promoted)
+    let plan = eager_input_promotion_plan(op, 2, |index| [a.dtype(), b.dtype()][index]);
+    promote_binary_to_dtype(exec, a, b, plan.target_dtype(0, a.dtype()))
 }
 
 fn materialize_tensor_read(exec: &mut dyn BackendSession, input: TensorRead<'_>) -> Result<Tensor> {
@@ -172,7 +240,8 @@ fn promote_binary_reads<'a>(
     b: TensorRead<'a>,
     op: &StdTensorOp,
 ) -> Result<(PromotedTensorRead<'a>, PromotedTensorRead<'a>)> {
-    let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
+    let plan = eager_input_promotion_plan(op, 2, |index| [a.dtype(), b.dtype()][index]);
+    let promoted = plan.target_dtype(0, a.dtype());
     promote_binary_reads_to_dtype(exec, a, b, promoted)
 }
 
@@ -184,7 +253,11 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads<B: TensorBackend>(
     rhs_conj: bool,
     backend: &mut B,
 ) -> Result<Tensor> {
-    let promoted = crate::shape_infer::promote_dtype(lhs.dtype(), rhs.dtype());
+    let op = StdTensorOp::DotGeneral {
+        config: config.clone(),
+    };
+    let plan = eager_input_promotion_plan(&op, 2, |index| [lhs.dtype(), rhs.dtype()][index]);
+    let promoted = plan.target_dtype(0, lhs.dtype());
     backend.with_backend_session(|exec| {
         let (lhs, rhs) = promote_binary_reads_to_dtype(exec, lhs, rhs, promoted)?;
         exec.dot_general_with_conj_read(
@@ -402,6 +475,9 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         .iter()
         .map(|input| TensorRead::from_tensor(input.tensor()))
         .collect();
+    let promotion_plan =
+        eager_input_promotion_plan(op, inputs.len(), |index| inputs[index].dtype());
+    let target_dtype = |index| promotion_plan.target_dtype(index, inputs[index].dtype());
     let result = match op {
         StdTensorOp::Add => {
             let (a, b) = promote_binary_reads(exec, inputs[0].clone(), inputs[1].clone(), op)?;
@@ -519,17 +595,14 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 ));
         }
         StdTensorOp::Select => {
-            let value_dtype =
-                crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
-            let b = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
-            let c = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
+            let b = promote_read_to_dtype(exec, inputs[1].clone(), target_dtype(1))?;
+            let c = promote_read_to_dtype(exec, inputs[2].clone(), target_dtype(2))?;
             vec![exec.select_read(inputs[0].clone(), b.tensor_read(), c.tensor_read())?]
         }
         StdTensorOp::Clamp => {
-            let value_dtype = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
-            let input = promote_read_to_dtype(exec, inputs[0].clone(), value_dtype)?;
-            let lower = promote_read_to_dtype(exec, inputs[1].clone(), value_dtype)?;
-            let upper = promote_read_to_dtype(exec, inputs[2].clone(), value_dtype)?;
+            let input = promote_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
+            let lower = promote_read_to_dtype(exec, inputs[1].clone(), target_dtype(1))?;
+            let upper = promote_read_to_dtype(exec, inputs[2].clone(), target_dtype(2))?;
             vec![exec.clamp_read(
                 input.tensor_read(),
                 lower.tensor_read(),
@@ -537,13 +610,12 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             )?]
         }
         StdTensorOp::Concatenate { axis, .. } => {
-            let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
             let mut tensors = Vec::with_capacity(inputs.len());
-            for input in inputs {
+            for (index, input) in inputs.iter().enumerate() {
                 tensors.push(concrete_promoted_read_to_dtype(
                     exec,
                     input.clone(),
-                    promoted,
+                    target_dtype(index),
                 )?);
             }
             let refs: Vec<&Tensor> = tensors.iter().map(ConcreteTensorRead::tensor).collect();
@@ -572,10 +644,10 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.gather(tensors[0].tensor(), tensors[1].tensor(), &config)?]
         }
         StdTensorOp::Scatter(config) => {
-            let operand_dtype =
-                crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[2].dtype());
-            let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
-            let updates = concrete_promoted_read_to_dtype(exec, inputs[2].clone(), operand_dtype)?;
+            let operand =
+                concrete_promoted_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
+            let updates =
+                concrete_promoted_read_to_dtype(exec, inputs[2].clone(), target_dtype(2))?;
             let indices = concrete_tensor_read(exec, inputs[1].clone())?;
             vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
         }
@@ -584,10 +656,9 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
         }
         StdTensorOp::DynamicUpdateSlice => {
-            let operand_dtype =
-                crate::shape_infer::promote_dtype(inputs[0].dtype(), inputs[1].dtype());
-            let operand = concrete_promoted_read_to_dtype(exec, inputs[0].clone(), operand_dtype)?;
-            let update = concrete_promoted_read_to_dtype(exec, inputs[1].clone(), operand_dtype)?;
+            let operand =
+                concrete_promoted_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
+            let update = concrete_promoted_read_to_dtype(exec, inputs[1].clone(), target_dtype(1))?;
             let starts = concrete_tensor_read(exec, inputs[2].clone())?;
             vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), starts.tensor())?]
         }
@@ -667,6 +738,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
     }
 
     backend.with_backend_session(|exec| {
+        let promotion_plan =
+            eager_input_promotion_plan(op, inputs.len(), |index| inputs[index].dtype());
+        let target_dtype = |index| promotion_plan.target_dtype(index, inputs[index].dtype());
         let result = match op {
             StdTensorOp::Add => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
@@ -758,25 +832,20 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 ));
             }
             StdTensorOp::Select => {
-                let value_dtype =
-                    crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
-                let b = promote_to_dtype(exec, inputs[1], value_dtype)?;
-                let c = promote_to_dtype(exec, inputs[2], value_dtype)?;
+                let b = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
+                let c = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
                 vec![exec.select(inputs[0], b.tensor(), c.tensor())?]
             }
             StdTensorOp::Clamp => {
-                let value_dtype =
-                    crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
-                let input = promote_to_dtype(exec, inputs[0], value_dtype)?;
-                let lower = promote_to_dtype(exec, inputs[1], value_dtype)?;
-                let upper = promote_to_dtype(exec, inputs[2], value_dtype)?;
+                let input = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
+                let lower = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
+                let upper = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
                 vec![exec.clamp(input.tensor(), lower.tensor(), upper.tensor())?]
             }
             StdTensorOp::Concatenate { axis, .. } => {
-                let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
                 let mut promoted_inputs = Vec::with_capacity(inputs.len());
-                for t in inputs {
-                    promoted_inputs.push(promote_to_dtype(exec, t, promoted)?);
+                for (index, input) in inputs.iter().enumerate() {
+                    promoted_inputs.push(promote_to_dtype(exec, input, target_dtype(index))?);
                 }
                 let promoted_refs: Vec<&Tensor> =
                     promoted_inputs.iter().map(PromotedTensor::tensor).collect();
@@ -803,14 +872,16 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
                 vec![exec.gather(inputs[0], inputs[1], &config)?]
             }
             StdTensorOp::Scatter(config) => {
-                let (operand, updates) = promote_binary(exec, inputs[0], inputs[2], op)?;
+                let operand = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
+                let updates = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
                 vec![exec.scatter(operand.tensor(), inputs[1], updates.tensor(), config)?]
             }
             StdTensorOp::DynamicSlice { slice_sizes } => {
                 vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
             }
             StdTensorOp::DynamicUpdateSlice => {
-                let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                let operand = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
+                let update = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
                 vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
             }
             StdTensorOp::ShapeOf { .. } => {

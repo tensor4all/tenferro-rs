@@ -24,6 +24,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape architecture. Covers `DynamicTruncate`, `transpose_scatter`, symbolic `slice_sizes`, the `Exact`/`UpperBound`/`Unknown` extent model, and extension equalities from graph-owned scopes through compiled guards. This is the key design doc for understanding how tenferro differs from XLA-style shape-specialized compilation. |
 | [eager-concatenate-shape-recording.md](./eager-concatenate-shape-recording.md) | Exact-shape semantic recording for eager concatenate and mixed-activity stack AD (#1692) |
+| [eager-semantic-promotion-recording.md](./eager-semantic-promotion-recording.md) | Shared eager execution/semantic input-promotion planning for AD-safe mixed dtypes (#1698) |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |
 | [xla-backend.md](./xla-backend.md) | Experimental StableHLO lowering and PJRT plugin-loading peer executor over static `CompiledGraph` values |
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |
