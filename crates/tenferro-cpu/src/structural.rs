@@ -287,6 +287,85 @@ where
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
+/// Replay a (possibly conjugating) full-overwrite copy of `src` into a compact
+/// column-major uninitialized destination, writing every destination element.
+///
+/// The destination `output_bytes` must be exactly
+/// `element_count * size_of::<T>()` bytes, aligned for `T`; both are validated
+/// here before any write. The strided kernel replay traverses every
+/// destination element (identical shapes), so zero-element destinations are
+/// trivially satisfied.
+pub(crate) fn typed_copy_into_uninit<T, R>(
+    src: &TypedTensorView<'_, T, R>,
+    conjugate: bool,
+    output_bytes: &mut [MaybeUninit<u8>],
+    op: &'static str,
+) -> crate::Result<()>
+where
+    T: Copy + Send + Sync + ConjElem + 'static,
+    R: TensorRank,
+{
+    if src.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    validate_cpu_host_placement(op, "source", src.placement())?;
+
+    let element_count =
+        tenferro_tensor::validate::checked_shape_product(op, "output", src.shape())?;
+    let byte_len = element_count
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(op, "output", "destination byte length overflow")
+        })?;
+    if output_bytes.len() != byte_len {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "output",
+            format!(
+                "uninitialized destination has {} bytes but {} elements require {byte_len}",
+                output_bytes.len(),
+                element_count
+            ),
+        ));
+    }
+    if !(output_bytes.as_ptr() as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "output",
+            format!(
+                "uninitialized destination is misaligned for {}",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+
+    let src_view: StridedView<'_, T, Identity> = StridedView::new(
+        src.host_storage()?,
+        src.shape(),
+        src.strides(),
+        src.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    let strides = col_major_strides(src.shape());
+    // SAFETY: the caller provides a validated compact column-major destination
+    // of exactly `element_count` `T`-sized slots; alignment and length are
+    // checked above. This view is used only as a `MaybeUninit<T>` write target.
+    let dst_ptr = output_bytes.as_mut_ptr().cast::<MaybeUninit<T>>();
+    let dst = unsafe { std::slice::from_raw_parts_mut(dst_ptr, element_count) };
+    let mut dst_view = StridedViewMut::new(dst, src.shape(), &strides, 0)
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    if conjugate {
+        map_into(&mut dst_view, &src_view, |value| {
+            MaybeUninit::new(value.conj_elem())
+        })
+        .map_err(|err| crate::Error::backend_source(op, err))?;
+    } else {
+        map_into(&mut dst_view, &src_view, MaybeUninit::new)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_cpu_host_placement(
     op: &'static str,
     role: &'static str,

@@ -7,8 +7,9 @@ use crate::gemm::GemmAnalysisCache;
 use crate::provider::tests::{execution_context_fixture, external_execution_context_fixture};
 use crate::provider::{
     CpuExecutionContext, CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider,
-    CpuGroupedGemmRequest, CpuLayoutTransformProvider, CpuLayoutTransformRequest, CpuOperand,
-    CpuProviderOutcome, CpuProviderUnsupported, ParallelMode, StridedLayoutTransformProvider,
+    CpuGroupedGemmRequest, CpuLayoutTransformIntent, CpuLayoutTransformProvider,
+    CpuLayoutTransformRequest, CpuOperand, CpuProviderOutcome, CpuProviderUnsupported,
+    CpuUninitLayoutTransformProvider, ParallelMode, StridedLayoutTransformProvider,
 };
 use crate::{
     CpuBackendKind, CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError,
@@ -2175,4 +2176,130 @@ fn engine_outer_real_faer_writes_only_nonzero_base_output_view_jobs() {
     );
     assert_eq!(submits.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 0);
+}
+
+/// Layout provider without the uninitialized-output witness (default opt-out).
+#[derive(Debug)]
+struct OptOutLayoutProvider;
+
+impl CpuLayoutTransformProvider for OptOutLayoutProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn materialize(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        StridedLayoutTransformProvider.materialize(context, request)
+    }
+}
+
+/// Layout provider that opts into the uninitialized-output contract but always
+/// reports [`CpuProviderOutcome::Unsupported`], forcing the caller's
+/// discard-and-reallocate fallback onto the zeroed path.
+#[derive(Debug)]
+struct UnsupportedUninitLayoutProvider {
+    uninit_calls: Arc<Mutex<usize>>,
+}
+
+impl CpuLayoutTransformProvider for UnsupportedUninitLayoutProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn materialize(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        StridedLayoutTransformProvider.materialize(context, request)
+    }
+
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitLayoutTransformProvider> {
+        Some(self)
+    }
+}
+
+// SAFETY: this test provider asserts the unsafe trait only to exercise the
+// caller's `Unsupported` fallback; it never writes the destination, so it must
+// always return `Unsupported` (never `Executed`).
+unsafe impl CpuUninitLayoutTransformProvider for UnsupportedUninitLayoutProvider {
+    unsafe fn materialize_into_uninit(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _input: &TensorRead<'_>,
+        _intent: CpuLayoutTransformIntent,
+        _conjugate: bool,
+        _output_bytes: &mut [std::mem::MaybeUninit<u8>],
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.uninit_calls.lock().unwrap() += 1;
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::DType(DType::F64),
+        ))
+    }
+}
+
+fn assert_canonical_operand_materialization_with_layout(
+    layout: Arc<dyn CpuLayoutTransformProvider>,
+) {
+    let gemm = Arc::new(CanonicalFallbackSpy::new(
+        CpuProviderUnsupported::Conjugation,
+        CanonicalFallbackBehavior::ConjugatedComplex,
+    ));
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(gemm.clone())
+        .engine_outer_grouped_gemm()
+        .layout_transform_provider(layout)
+        .build()
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(5.0, 1.0)]).unwrap();
+    let mut accumulation = DotGeneralAccumulation::scaled(
+        ContractionScalar::C64(Complex64::new(2.0, 0.0)),
+        ContractionScalar::C64(Complex64::new(3.0, 0.0)),
+    )
+    .unwrap();
+    accumulation.lhs_conj = true;
+    let fixture = execution_context_fixture(1);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            accumulation,
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(37.0, -1.0)],
+    );
+}
+
+#[test]
+fn opted_out_layout_provider_keeps_zeroed_canonical_operand_values() {
+    assert_canonical_operand_materialization_with_layout(Arc::new(OptOutLayoutProvider));
+}
+
+#[test]
+fn opted_in_layout_provider_unsupported_falls_back_to_zeroed_materialization() {
+    let layout = Arc::new(UnsupportedUninitLayoutProvider {
+        uninit_calls: Arc::new(Mutex::new(0)),
+    });
+    let uninit_calls = Arc::clone(&layout.uninit_calls);
+    assert_canonical_operand_materialization_with_layout(layout);
+    // Both canonical operands (lhs and rhs) attempted the uninit path before
+    // falling back to the zeroed materialization.
+    assert_eq!(*uninit_calls.lock().unwrap(), 2);
 }

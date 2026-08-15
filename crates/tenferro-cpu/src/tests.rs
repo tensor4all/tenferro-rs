@@ -694,3 +694,6 @@ mod elementwise_reduction_helpers;
 mod indexing;
 #[path = "tests/cpu_indexing_coverage_tests.rs"]
 mod indexing_coverage;
+#[cfg(feature = "cpu-faer")]
+#[path = "tests/cpu_tests/uninit_dot_output.rs"]
+mod uninit_dot_output;

@@ -5,6 +5,7 @@
 //! tensor metadata and reachable ranges have already been validated.
 
 use core::fmt;
+use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -747,11 +748,29 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
     }
 
     /// Return the borrowed left input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.lhs();
+    /// # }
+    /// ```
     pub fn lhs(&self) -> &TensorRead<'input> {
         self.lhs
     }
 
     /// Return the borrowed right input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.rhs();
+    /// # }
+    /// ```
     pub fn rhs(&self) -> &TensorRead<'input> {
         self.rhs
     }
@@ -762,11 +781,29 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
     }
 
     /// Return the number of output rows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.rows();
+    /// # }
+    /// ```
     pub fn rows(&self) -> usize {
         self.rows
     }
 
     /// Return the number of output columns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.columns();
+    /// # }
+    /// ```
     pub fn columns(&self) -> usize {
         self.columns
     }
@@ -806,6 +843,247 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
             lhs: self.lhs,
             rhs: self.rhs,
             output: self.output,
+            rows: self.rows,
+            columns: self.columns,
+            contracted: self.contracted,
+            batch_count: self.batch_count,
+            lhs_layout: self.lhs_layout,
+            rhs_layout: self.rhs_layout,
+            output_layout: self.output_layout,
+            accumulation: self.accumulation,
+        }
+    }
+}
+
+/// Validated output-free borrowed GEMM request for full-overwrite destinations.
+///
+/// Mirrors [`CpuGemmRequest`] minus the writable output: the destination is
+/// provided separately as `&mut [MaybeUninit<u8>]` to [`CpuUninitGemmProvider`]
+/// callers. This request is only used for `beta == 0` (full-overwrite)
+/// accumulations, where the destination is never read.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::CpuGemmUninitRequest;
+/// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+/// assert!(request.batch_count() >= 1);
+/// # }
+/// ```
+#[derive(Debug)]
+/// Output-free prepared GEMM request for uninitialized full-overwrite
+/// execution (see `CpuUninitGemmProvider::gemm_into_uninit`).
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::CpuGemmUninitRequest;
+/// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+/// #     let _ = request.rows();
+/// #     let _ = request.columns();
+/// #     let _ = request.contracted();
+/// # }
+/// ```
+pub struct CpuGemmUninitRequest<'request, 'input> {
+    lhs: &'request TensorRead<'input>,
+    rhs: &'request TensorRead<'input>,
+    rows: usize,
+    columns: usize,
+    contracted: usize,
+    batch_count: usize,
+    lhs_layout: CpuBatchedMatrixLayout,
+    rhs_layout: CpuBatchedMatrixLayout,
+    output_layout: CpuBatchedMatrixLayout,
+    accumulation: DotGeneralAccumulation,
+}
+
+#[cfg(feature = "cpu-faer")]
+pub(crate) struct CpuGemmUninitRequestParts<'request, 'input> {
+    pub(crate) lhs: &'request TensorRead<'input>,
+    pub(crate) rhs: &'request TensorRead<'input>,
+    pub(crate) rows: usize,
+    pub(crate) columns: usize,
+    pub(crate) contracted: usize,
+    pub(crate) batch_count: usize,
+    pub(crate) lhs_layout: CpuBatchedMatrixLayout,
+    pub(crate) rhs_layout: CpuBatchedMatrixLayout,
+    pub(crate) output_layout: CpuBatchedMatrixLayout,
+    pub(crate) accumulation: DotGeneralAccumulation,
+}
+
+impl<'request, 'input> CpuGemmUninitRequest<'request, 'input> {
+    #[allow(clippy::too_many_arguments, dead_code)]
+    pub(crate) fn new(
+        lhs: &'request TensorRead<'input>,
+        rhs: &'request TensorRead<'input>,
+        rows: usize,
+        columns: usize,
+        contracted: usize,
+        batch_count: usize,
+        lhs_layout: CpuBatchedMatrixLayout,
+        rhs_layout: CpuBatchedMatrixLayout,
+        output_layout: CpuBatchedMatrixLayout,
+        accumulation: DotGeneralAccumulation,
+    ) -> Self {
+        Self {
+            lhs,
+            rhs,
+            rows,
+            columns,
+            contracted,
+            batch_count,
+            lhs_layout,
+            rhs_layout,
+            output_layout,
+            accumulation,
+        }
+    }
+
+    /// Return the `lhs` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.lhs();
+    /// # }
+    /// ```
+    pub fn lhs(&self) -> &TensorRead<'input> {
+        self.lhs
+    }
+
+    /// Return the `rhs` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.rhs();
+    /// # }
+    /// ```
+    pub fn rhs(&self) -> &TensorRead<'input> {
+        self.rhs
+    }
+
+    /// Return the `rows` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.rows();
+    /// # }
+    /// ```
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Return the `columns` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.columns();
+    /// # }
+    /// ```
+    pub fn columns(&self) -> usize {
+        self.columns
+    }
+
+    /// Return the `contracted` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.contracted();
+    /// # }
+    /// ```
+    pub fn contracted(&self) -> usize {
+        self.contracted
+    }
+
+    /// Return the `batch_count` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.batch_count();
+    /// # }
+    /// ```
+    pub fn batch_count(&self) -> usize {
+        self.batch_count
+    }
+
+    /// Return the `lhs_layout` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.lhs_layout();
+    /// # }
+    /// ```
+    pub fn lhs_layout(&self) -> CpuBatchedMatrixLayout {
+        self.lhs_layout
+    }
+
+    /// Return the `rhs_layout` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.rhs_layout();
+    /// # }
+    /// ```
+    pub fn rhs_layout(&self) -> CpuBatchedMatrixLayout {
+        self.rhs_layout
+    }
+
+    /// Return the `output_layout` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.output_layout();
+    /// # }
+    /// ```
+    pub fn output_layout(&self) -> CpuBatchedMatrixLayout {
+        self.output_layout
+    }
+
+    /// Return the `accumulation` of this output-free request.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmUninitRequest;
+    /// # fn inspect(request: &CpuGemmUninitRequest<'_, '_>) {
+    /// #     let _ = request.accumulation();
+    /// # }
+    /// ```
+    pub fn accumulation(&self) -> DotGeneralAccumulation {
+        self.accumulation
+    }
+
+    #[cfg(feature = "cpu-faer")]
+    pub(crate) fn into_parts(self) -> CpuGemmUninitRequestParts<'request, 'input> {
+        CpuGemmUninitRequestParts {
+            lhs: self.lhs,
+            rhs: self.rhs,
             rows: self.rows,
             columns: self.columns,
             contracted: self.contracted,
@@ -1238,6 +1516,84 @@ pub trait CpuGemmProvider: fmt::Debug + Send + Sync + 'static {
         context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
+
+    /// Return the structural full-overwrite witness for this provider.
+    ///
+    /// Returns `Some(self)` only for types that implement
+    /// [`CpuUninitGemmProvider`] via an `unsafe impl`, so a `Some` witness is
+    /// structural proof that the provider asserted the full-overwrite
+    /// destination contract. Defaults to `None` (opted out).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuGemmProvider;
+    /// # fn inspect(provider: &dyn CpuGemmProvider) {
+    /// #     let _ = provider.uninit_provider();
+    /// # }
+    /// ```
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitGemmProvider> {
+        None
+    }
+}
+
+/// Provider for validated GEMM-family requests that fully overwrite their
+/// destination (only `beta == 0` accumulations).
+///
+/// # Safety
+///
+/// Implementors assert that [`CpuUninitGemmProvider::gemm_into_uninit`] writes
+/// every logical output element before returning
+/// [`CpuProviderOutcome::Executed`]; partial writes make the caller's
+/// `assume_init` undefined behavior. Implementations must never read the
+/// destination. This trait is only invoked for `beta == 0` accumulations.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::CpuUninitGemmProvider;
+/// # fn accepts_provider(_: &dyn CpuUninitGemmProvider) {}
+/// ```
+pub unsafe trait CpuUninitGemmProvider: CpuGemmProvider {
+    /// Execute one validated full-overwrite GEMM into uninitialized bytes.
+    ///
+    /// # Safety
+    ///
+    /// Must write every element of the destination represented by
+    /// `output_bytes` (per `request.output_layout()`) before returning
+    /// `Executed`; partial writes are UB at the caller's `assume_init`. The
+    /// destination is never read. Invoked only for `beta == 0` accumulations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when the provider runtime
+    /// fails. A detected inconsistency in engine-attested request metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported
+    /// capabilities use [`CpuProviderOutcome::Unsupported`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::{CpuGemmUninitRequest, CpuProviderOutcome, CpuUninitGemmProvider};
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// use std::mem::MaybeUninit;
+    /// # fn inspect(
+    /// #     provider: &dyn CpuUninitGemmProvider,
+    /// #     context: &CpuExecutionContext<'_>,
+    /// #     request: CpuGemmUninitRequest<'_, '_>,
+    /// #     output_bytes: &mut [MaybeUninit<u8>],
+    /// # ) -> Option<tenferro_tensor::Result<CpuProviderOutcome>> {
+    /// #     let _ = (provider, context, request, output_bytes);
+    /// #     None
+    /// # }
+    /// ```
+    unsafe fn gemm_into_uninit(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuGemmUninitRequest<'_, '_>,
+        output_bytes: &mut [MaybeUninit<u8>],
+    ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 }
 
 /// Provider for engine-owned tensor materialization.
@@ -1268,6 +1624,88 @@ pub trait CpuLayoutTransformProvider: fmt::Debug + Send + Sync + 'static {
         &self,
         context: &CpuExecutionContext<'_>,
         request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome>;
+
+    /// Return the structural full-overwrite witness for this provider.
+    ///
+    /// Returns `Some(self)` only for types that implement
+    /// [`CpuUninitLayoutTransformProvider`] via an `unsafe impl`, so a `Some`
+    /// witness is structural proof that the provider asserted the
+    /// full-overwrite destination contract. Defaults to `None` (opted out).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuLayoutTransformProvider;
+    /// # fn inspect(provider: &dyn CpuLayoutTransformProvider) {
+    /// #     let _ = provider.uninit_provider();
+    /// # }
+    /// ```
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitLayoutTransformProvider> {
+        None
+    }
+}
+
+/// Provider for engine-owned tensor materialization into uninitialized bytes.
+///
+/// # Safety
+///
+/// Implementors assert that [`CpuUninitLayoutTransformProvider::materialize_into_uninit`]
+/// writes every element of `output_bytes` before returning
+/// [`CpuProviderOutcome::Executed`]; partial writes make the caller's
+/// `assume_init` undefined behavior. Implementations must never read the
+/// destination.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::CpuUninitLayoutTransformProvider;
+/// # fn accepts_provider(_: &dyn CpuUninitLayoutTransformProvider) {}
+/// ```
+pub unsafe trait CpuUninitLayoutTransformProvider: CpuLayoutTransformProvider {
+    /// Materialize one validated input into uninitialized bytes.
+    ///
+    /// # Safety
+    ///
+    /// Must write every element of `output_bytes` (a compact column-major
+    /// destination of the input shape for
+    /// [`CpuLayoutTransformIntent::CanonicalColumnMajor`]) before returning
+    /// `Executed`; partial writes are UB at the caller's `assume_init`. The
+    /// destination is never read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when execution fails. A
+    /// detected inconsistency in engine-attested layout or range metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported layouts
+    /// use [`CpuProviderOutcome::Unsupported`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::{CpuLayoutTransformIntent, CpuProviderOutcome, CpuUninitLayoutTransformProvider};
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// use tenferro_tensor::TensorRead;
+    /// use std::mem::MaybeUninit;
+    /// # fn inspect(
+    /// #     provider: &dyn CpuUninitLayoutTransformProvider,
+    /// #     context: &CpuExecutionContext<'_>,
+    /// #     input: &TensorRead<'_>,
+    /// #     intent: CpuLayoutTransformIntent,
+    /// #     output_bytes: &mut [MaybeUninit<u8>],
+    /// # ) -> Option<tenferro_tensor::Result<CpuProviderOutcome>> {
+    /// #     let _ = (provider, context, input, intent, output_bytes);
+    /// #     None
+    /// # }
+    /// ```
+    unsafe fn materialize_into_uninit(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        input: &TensorRead<'_>,
+        intent: CpuLayoutTransformIntent,
+        conjugate: bool,
+        output_bytes: &mut [MaybeUninit<u8>],
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 }
 
@@ -1358,6 +1796,35 @@ impl CpuGemmProvider for FaerGemmProvider {
         #[cfg(not(feature = "cpu-faer"))]
         {
             let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitGemmProvider> {
+        Some(self)
+    }
+}
+
+// SAFETY: `gemm_into_uninit` runs the faer GEMM with `Accum::Replace` semantics
+// (beta == 0 never reads the destination) and writes zeros for empty
+// contractions, so every logical output element is written before `Executed`.
+// See `crate::gemm::execute_faer_gemm_request_into_uninit`.
+unsafe impl CpuUninitGemmProvider for FaerGemmProvider {
+    unsafe fn gemm_into_uninit(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuGemmUninitRequest<'_, '_>,
+        output_bytes: &mut [MaybeUninit<u8>],
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-faer")]
+        {
+            crate::gemm::execute_faer_gemm_request_into_uninit(context, request, output_bytes)
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        {
+            let _ = (context, request, output_bytes);
             Ok(CpuProviderOutcome::Unsupported(
                 CpuProviderUnsupported::RuntimeUnavailable,
             ))
@@ -1458,6 +1925,28 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
         request: CpuLayoutTransformRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         context.with_native_parallelism(|| materialize_strided_layout(request))
+    }
+
+    fn uninit_provider(&self) -> Option<&dyn CpuUninitLayoutTransformProvider> {
+        Some(self)
+    }
+}
+
+// SAFETY: `materialize_into_uninit` replays the layout-transform copy over the
+// full destination (every element written via `MaybeUninit` writes from the
+// source); zero-element destinations are trivially satisfied.
+unsafe impl CpuUninitLayoutTransformProvider for StridedLayoutTransformProvider {
+    unsafe fn materialize_into_uninit(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        input: &TensorRead<'_>,
+        intent: CpuLayoutTransformIntent,
+        conjugate: bool,
+        output_bytes: &mut [MaybeUninit<u8>],
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        context.with_native_parallelism(|| {
+            materialize_strided_layout_into_uninit(input, intent, conjugate, output_bytes)
+        })
     }
 }
 
@@ -1589,6 +2078,56 @@ fn materialize_strided_layout(
     dispatch!(I32, I32);
     dispatch!(I64, I64);
     dispatch!(Bool, Bool);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(input.dtype()),
+    ))
+}
+
+/// Full-overwrite layout transform into an uninitialized compact column-major
+/// destination. Only [`CpuLayoutTransformIntent::CanonicalColumnMajor`] is
+/// implemented; the destination must be exactly `element_count * size_of::<T>()`
+/// bytes of the input dtype `T`, aligned for `T`.
+fn materialize_strided_layout_into_uninit(
+    input: &TensorRead<'_>,
+    intent: CpuLayoutTransformIntent,
+    conjugate: bool,
+    output_bytes: &mut [MaybeUninit<u8>],
+) -> tenferro_tensor::Result<CpuProviderOutcome> {
+    if intent != CpuLayoutTransformIntent::CanonicalColumnMajor {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Layout(CpuOperand::Output),
+        ));
+    }
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            match input {
+                TensorRead::Tensor(Tensor::$owned(input)) => {
+                    let input = input.as_view();
+                    crate::structural::typed_copy_into_uninit(
+                        &input,
+                        conjugate,
+                        output_bytes,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                TensorRead::View(TensorView::$view(input)) => {
+                    crate::structural::typed_copy_into_uninit(
+                        input,
+                        conjugate,
+                        output_bytes,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                _ => {}
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
     dispatch!(C32, C32);
     dispatch!(C64, C64);
     Ok(CpuProviderOutcome::Unsupported(

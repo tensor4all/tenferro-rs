@@ -16,7 +16,7 @@ use super::backend::{
     elementwise_read_into_fallback_with_pool, reclaim_typed, tag_fresh_output, FreshCpuOutput,
 };
 use super::indexed_plan_cache::IndexedPlanCache;
-use super::provider::{CpuExecutionContext, CpuOperationEntry};
+use super::provider::{CpuExecutionContext, CpuOperationEntry, CpuProviderOutcome};
 use super::CpuProviderBundle;
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
@@ -468,13 +468,56 @@ impl CpuExecSession<'_> {
             "dot_general",
         )?;
         self.providers.preflight_dot_general(&self.entry)?;
-        let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
         let accumulation = DotGeneralAccumulation {
             lhs_conj,
             rhs_conj,
             alpha: ContractionScalar::one(dtype)?,
             beta: ContractionScalar::zero(dtype)?,
         };
+
+        // Uninitialized fast path: beta == 0 here by construction, so the
+        // dot output is fully overwritten. Take it only when the GEMM
+        // provider is the guaranteed consumer (no general-contraction
+        // provider) and exposes the full-overwrite witness. The uninit
+        // checkout holds the scratch pool exclusively, so only the direct
+        // GEMM plan is attempted; anything else falls back below.
+        let providers = self.providers;
+        let runtime = providers.dot_general();
+        if runtime.general.is_none() && runtime.gemm.uninit_provider().is_some() {
+            let mut output = crate::dot_runtime::UninitTensor::acquire(
+                self.buffers,
+                dtype,
+                output_shape.clone(),
+            )?;
+            let outcome = runtime.execute_dot_into_uninit(
+                providers.inner(),
+                &self.entry,
+                self.entered.as_ref(),
+                self.gemm_analysis_cache,
+                cache_slot,
+                &lhs,
+                &rhs,
+                config,
+                accumulation,
+                &output_shape,
+                output.as_uninit_bytes_mut(),
+            );
+            match outcome {
+                Ok(CpuProviderOutcome::Executed) => {
+                    // SAFETY: the GEMM provider's unsafe impl guarantees every
+                    // destination element is initialized before `Executed`.
+                    let mut output = unsafe { output.assume_init()? };
+                    tag_fresh_output(&mut output, self.entry.domain_id());
+                    return Ok(output);
+                }
+                Ok(CpuProviderOutcome::Unsupported(_)) => {
+                    // Discard the uninit checkout; fall back to the zeroed path.
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
         self.providers.execute_dot_general_into_scoped(
             &self.entry,
             self.entered.as_ref(),
