@@ -16,8 +16,9 @@ The short version is the five conventions every tenferro program must follow:
 - **Explicit backend.** Direct operations take an explicit backend argument;
   construct the backend/runtime once and reuse it — per-call construction
   discards the buffer pool.
-- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); `...`
-  ellipsis is unsupported.
+- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`).
+  Flat notation supports one right-aligned, broadcastable `...` ellipsis per
+  term; use `EinsumNotation` for programmatic notation.
 - **Result-returning operators.** Traced operators return `Result`; propagate
   with `?`.
 

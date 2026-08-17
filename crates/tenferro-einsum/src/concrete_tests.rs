@@ -7,10 +7,10 @@ use tenferro_tensor::{
 };
 
 use crate::{
-    parse_einsum_subscripts, ConcreteEinsumPlan, Error, TensorEinsumExt, TensorEinsumIntoExt,
-    TensorReadEinsumExt, TensorReadEinsumIntoExt, TensorTensordotExt, TypedTensorEinsumExt,
-    TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
-    TypedTensorTensordotExt,
+    parse_einsum_subscripts, ConcreteEinsumPlan, EinsumAxis, EinsumNotation, Error,
+    TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt, TensorReadEinsumIntoExt,
+    TensorTensordotExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt,
+    TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
 };
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
@@ -31,6 +31,164 @@ fn public_tensor_einsum_ext_executes_dtype_erased_inputs() {
         .unwrap();
 
     assert_f64_tensor(&result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn concrete_einsum_ellipsis_supports_diagonal_and_zero_rank_cases() {
+    let mut backend = CpuBackend::new();
+    let input =
+        Tensor::from_vec_col_major(vec![2, 3, 3], (0..18).map(f64::from).collect::<Vec<_>>())
+            .unwrap();
+    let vector = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+
+    let (diagonal, zero_rank) = backend
+        .with_backend_session(|session| {
+            let diagonal = [&input].einsum("...ii->...i", session)?;
+            let zero_rank = [&vector].einsum("...i->...i", session)?;
+            Ok::<_, crate::Error>((diagonal, zero_rank))
+        })
+        .unwrap();
+
+    assert_f64_tensor(&diagonal, &[2, 3], &[0.0, 1.0, 8.0, 9.0, 16.0, 17.0]);
+    assert_f64_tensor(&zero_rank, &[3], &[1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn concrete_einsum_ellipsis_supports_broadcast_and_programmatic_notation() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6]).unwrap();
+    let notation = crate::EinsumNotation::new(
+        &[
+            &[
+                crate::EinsumAxis::Ellipsis,
+                crate::EinsumAxis::Label(0),
+                crate::EinsumAxis::Label(1),
+            ],
+            &[
+                crate::EinsumAxis::Ellipsis,
+                crate::EinsumAxis::Label(1),
+                crate::EinsumAxis::Label(2),
+            ],
+        ],
+        &[
+            crate::EinsumAxis::Ellipsis,
+            crate::EinsumAxis::Label(0),
+            crate::EinsumAxis::Label(2),
+        ],
+    );
+
+    let (string_result, programmatic_result) = backend
+        .with_backend_session(|session| {
+            let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik", session)?;
+            let programmatic_result = [&lhs, &rhs].einsum_notation(&notation, session)?;
+            Ok::<_, crate::Error>((string_result, programmatic_result))
+        })
+        .unwrap();
+
+    assert_f64_tensor(&string_result, &[2, 2, 2], &[3.0; 8]);
+    assert_f64_tensor(&programmatic_result, &[2, 2, 2], &[3.0; 8]);
+}
+
+#[test]
+fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let notation = EinsumNotation::new(
+        &[
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(0),
+                EinsumAxis::Label(1),
+            ],
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(1),
+                EinsumAxis::Label(2),
+            ],
+        ],
+        &[
+            EinsumAxis::Ellipsis,
+            EinsumAxis::Label(0),
+            EinsumAxis::Label(2),
+        ],
+    );
+    let mut backend = CpuBackend::new();
+
+    let mut erased_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    backend
+        .with_backend_session(|session| {
+            [&lhs, &rhs].einsum_into_notation(
+                &notation,
+                session,
+                TensorWrite::from_tensor(&mut erased_out),
+            )
+        })
+        .unwrap();
+    assert_f64_tensor(&erased_out, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+
+    let typed_lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed_rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let typed = backend
+        .with_backend_session(|session| {
+            [&typed_lhs, &typed_rhs].einsum_notation(&notation, session)
+        })
+        .unwrap();
+    assert_eq!(typed.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let typed_views = [typed_lhs.as_view(), typed_rhs.as_view()];
+    let typed_read = backend
+        .with_backend_session(|session| typed_views.einsum_read_notation(&notation, session))
+        .unwrap();
+    assert_eq!(typed_read.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap();
+    backend
+        .with_backend_session(|session| {
+            [&typed_lhs, &typed_rhs].einsum_into_notation(&notation, session, &mut typed_out)
+        })
+        .unwrap();
+    assert_eq!(typed_out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let mut typed_read_out =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap();
+    backend
+        .with_backend_session(|session| {
+            typed_views.einsum_read_into_notation(&notation, session, &mut typed_read_out)
+        })
+        .unwrap();
+    assert_eq!(
+        typed_read_out.as_slice().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
+
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let read_result = backend
+        .with_backend_session(|session| reads.einsum_read_notation(&notation, session))
+        .unwrap();
+    assert_f64_tensor(&read_result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+    let mut read_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    backend
+        .with_backend_session(|session| {
+            reads.einsum_read_into_notation(
+                &notation,
+                session,
+                TensorWrite::from_tensor(&mut read_out),
+            )
+        })
+        .unwrap();
+    assert_f64_tensor(&read_out, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+
+    ConcreteEinsumPlan::prepare_notation([&lhs, &rhs], &notation).unwrap();
+    ConcreteEinsumPlan::prepare_typed_notation::<f64, _>([&typed_lhs, &typed_rhs], &notation)
+        .unwrap();
+    ConcreteEinsumPlan::prepare_read_notation(reads, &notation).unwrap();
 }
 
 #[test]

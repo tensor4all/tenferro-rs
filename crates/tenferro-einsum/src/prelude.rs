@@ -1,10 +1,11 @@
 //! Einsum and tensordot extension traits for concrete, eager, and traced values.
 
 pub use crate::{
-    ContractionTree, EinsumOptimize, EinsumSubscripts, TensorDotAxes, TensorEinsumExt,
-    TensorEinsumIntoExt, TensorReadEinsumExt, TensorReadEinsumIntoExt, TensorTensordotExt,
-    TraceContextEinsumExt, TracedTensorEinsumExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
-    TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
+    ContractionTree, EinsumAxis, EinsumNotation, EinsumOptimize, EinsumSubscripts, TensorDotAxes,
+    TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt, TensorReadEinsumIntoExt,
+    TensorTensordotExt, TraceContextEinsumExt, TracedTensorEinsumExt, TypedTensorEinsumExt,
+    TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
+    TypedTensorTensordotExt,
 };
 pub use tenferro_runtime::{
     DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TraceContext, TraceValue,

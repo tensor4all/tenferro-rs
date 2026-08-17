@@ -26,11 +26,19 @@ pub(crate) fn build_size_dict(
                 shapes[i].len()
             )));
         }
+        let mut local_sizes = HashMap::new();
         for (j, &label) in input_subs.iter().enumerate() {
             let size = shapes[i][j];
-            if let Some(&existing) = size_dict.get(&label) {
-                if existing != size {
-                    return Err(Error::shape_mismatch("einsum", [existing], [size]));
+            if let Some(previous) = local_sizes.insert(label, size) {
+                if previous != size {
+                    return Err(Error::shape_mismatch("einsum", [previous], [size]));
+                }
+            }
+            if let Some(existing) = size_dict.get_mut(&label) {
+                if *existing == size || *existing == 1 {
+                    *existing = size;
+                } else if size != 1 {
+                    return Err(Error::shape_mismatch("einsum", [*existing], [size]));
                 }
             } else {
                 size_dict.insert(label, size);

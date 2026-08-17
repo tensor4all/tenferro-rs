@@ -55,6 +55,7 @@ pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,
     plan_spec: EinsumPlanSpec,
     output_shape_hint: Option<Vec<SymDim>>,
+    allow_broadcast: bool,
 }
 
 impl std::fmt::Debug for EinsumExtensionOp {
@@ -63,6 +64,7 @@ impl std::fmt::Debug for EinsumExtensionOp {
             .field("subscripts", &self.subscripts)
             .field("plan_spec", &self.plan_spec)
             .field("output_shape_hint", &self.output_shape_hint)
+            .field("allow_broadcast", &self.allow_broadcast)
             .finish()
     }
 }
@@ -81,7 +83,18 @@ impl EinsumExtensionOp {
             subscripts,
             plan_spec,
             output_shape_hint: None,
+            allow_broadcast: false,
         }
+    }
+
+    pub(crate) fn with_plan_spec_and_broadcast(
+        subscripts: EinsumSubscripts,
+        plan_spec: EinsumPlanSpec,
+        allow_broadcast: bool,
+    ) -> Self {
+        let mut op = Self::with_plan_spec(subscripts, plan_spec);
+        op.allow_broadcast = allow_broadcast;
+        op
     }
 
     /// Create an einsum extension payload with an explicit output shape hint.
@@ -97,6 +110,19 @@ impl EinsumExtensionOp {
         op
     }
 
+    #[must_use]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn with_output_shape_hint_and_broadcast(
+        subscripts: EinsumSubscripts,
+        output_shape_hint: Vec<SymDim>,
+        plan_spec: EinsumPlanSpec,
+        allow_broadcast: bool,
+    ) -> Self {
+        let mut op = Self::with_plan_spec_and_broadcast(subscripts, plan_spec, allow_broadcast);
+        op.output_shape_hint = Some(output_shape_hint);
+        op
+    }
+
     /// Return the canonical subscripts.
     #[must_use]
     pub(crate) fn subscripts(&self) -> &EinsumSubscripts {
@@ -107,6 +133,12 @@ impl EinsumExtensionOp {
     #[must_use]
     pub(crate) fn plan_spec(&self) -> &EinsumPlanSpec {
         &self.plan_spec
+    }
+
+    #[must_use]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn allow_broadcast(&self) -> bool {
+        self.allow_broadcast
     }
 }
 
@@ -128,6 +160,7 @@ impl ExtensionOp for EinsumExtensionOp {
             hasher.write_u32(*label);
         }
         hash_einsum_plan_spec(self.plan_spec(), hasher);
+        hasher.write_u8(u8::from(self.allow_broadcast));
         if let Some(shape) = &self.output_shape_hint {
             hasher.write_usize(shape.len());
             for dim in shape {
@@ -149,6 +182,7 @@ impl ExtensionOp for EinsumExtensionOp {
             self.subscripts == that.subscripts
                 && plan_specs_equal(self.plan_spec(), that.plan_spec())
                 && self.output_shape_hint == that.output_shape_hint
+                && self.allow_broadcast == that.allow_broadcast
         })
     }
 
@@ -197,8 +231,22 @@ impl ExtensionOp for EinsumExtensionOp {
                 ));
             }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
-                if let Some(existing) = label_dims.get(&label) {
-                    ctx.require_equal(existing.clone(), dim.clone())?;
+                if let Some(existing) = label_dims.get_mut(&label) {
+                    if !self.allow_broadcast {
+                        ctx.require_equal(existing.clone(), dim.clone())?;
+                        continue;
+                    }
+                    match (existing.constant_value(), dim.constant_value()) {
+                        (Some(lhs), Some(rhs)) if lhs == rhs || lhs == 1 || rhs == 1 => {
+                            *existing = SymDim::from(if lhs == 1 { rhs } else { lhs });
+                        }
+                        (Some(_lhs), Some(_rhs)) => {
+                            ctx.require_equal(existing.clone(), dim.clone())?;
+                        }
+                        (Some(1), None) => *existing = dim.clone(),
+                        (None, Some(1)) => {}
+                        _ => {}
+                    }
                 } else {
                     label_dims.insert(label, dim.clone());
                 }
@@ -515,7 +563,11 @@ fn semantic_vjp_einsum_op(
         let _tree = resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs)
             .map_err(|source| semantic_einsum_unsupported(source.to_string()))?;
     }
-    Ok(EinsumExtensionOp::with_plan_spec(subscripts, plan_spec))
+    Ok(EinsumExtensionOp::with_plan_spec_and_broadcast(
+        subscripts,
+        plan_spec,
+        primal_op.allow_broadcast(),
+    ))
 }
 
 #[cfg(feature = "autodiff")]

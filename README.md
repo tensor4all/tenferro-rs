@@ -49,8 +49,9 @@ targets.
 - **Explicit backend.** Direct operations take an explicit backend argument;
   construct the backend/runtime once and reuse it — per-call construction
   discards the buffer pool.
-- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); `...`
-  ellipsis is unsupported.
+- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`).
+  NumPy-style `...` ellipsis is supported in flat notation and through
+  `EinsumNotation`; parenthesized ellipsis remains unsupported.
 - **Result-returning operators.** Traced operators return `Result`; propagate
   with `?`.
 

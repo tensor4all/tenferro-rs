@@ -9,14 +9,15 @@ use tenferro_runtime::{TraceContext, TraceValue, TracedTensor};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 
 use crate::cache::{
-    einsum_subscripts_retained_bytes, saturating_sum, ParsedEinsum, EINSUM_EXTENSION_FAMILY_ID,
+    einsum_notation_retained_bytes, saturating_sum, ParsedEinsum, EINSUM_EXTENSION_FAMILY_ID,
     EINSUM_PARSE_CACHE,
 };
+use crate::ellipsis::{notation_without_ellipsis, resolve_einsum_notation};
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{plan_spec_from_optimize, resolve_einsum_strategy_with_spec};
 use crate::{
-    parse_einsum_subscripts, EinsumOptimize, EinsumSubscripts, Error, Result, Subscripts,
-    TensorDotAxes,
+    parse_einsum_notation, EinsumAxis, EinsumNotation, EinsumOptimize, EinsumSubscripts, Error,
+    Result, Subscripts, TensorDotAxes,
 };
 
 /// Backend-neutral einsum tracing methods for [`TraceContext`].
@@ -57,6 +58,28 @@ pub trait TraceContextEinsumExt {
     /// program construction fails.
     fn einsum(&mut self, inputs: &[TraceValue], subscripts: &str) -> Result<TraceValue>;
 
+    /// Trace rank-unresolved notation using the default optimizer policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for invalid axis tokens,
+    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
+    /// for symbolic ellipsis or an invalid optimizer policy, or [`Error::Runtime`]
+    /// for graph-build failures.
+    fn einsum_notation(
+        &mut self,
+        inputs: &[TraceValue],
+        notation: &EinsumNotation,
+    ) -> Result<TraceValue>;
+
     /// Trace parsed einsum notation using the default optimizer policy.
     ///
     /// # Errors
@@ -85,6 +108,29 @@ pub trait TraceContextEinsumExt {
         optimize: EinsumOptimize,
     ) -> Result<TraceValue>;
 
+    /// Trace rank-unresolved notation with an explicit optimizer policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for invalid axis tokens,
+    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
+    /// for symbolic ellipsis or an invalid optimizer policy, or [`Error::Runtime`]
+    /// for graph-build failures.
+    fn einsum_notation_with(
+        &mut self,
+        inputs: &[TraceValue],
+        notation: &EinsumNotation,
+        optimize: EinsumOptimize,
+    ) -> Result<TraceValue>;
+
     /// Trace parsed einsum notation with an explicit optimizer policy.
     ///
     /// # Errors
@@ -105,6 +151,14 @@ impl TraceContextEinsumExt for TraceContext {
         self.einsum_with(inputs, subscripts, EinsumOptimize::default())
     }
 
+    fn einsum_notation(
+        &mut self,
+        inputs: &[TraceValue],
+        notation: &EinsumNotation,
+    ) -> Result<TraceValue> {
+        self.einsum_notation_with(inputs, notation, EinsumOptimize::default())
+    }
+
     fn einsum_subscripts(
         &mut self,
         inputs: &[TraceValue],
@@ -120,7 +174,16 @@ impl TraceContextEinsumExt for TraceContext {
         optimize: EinsumOptimize,
     ) -> Result<TraceValue> {
         let parsed = cached_subscripts(self.extension_caches_mut(), subscripts)?;
-        self.einsum_subscripts_with(inputs, &parsed.subscripts, optimize)
+        self.einsum_notation_with(inputs, &parsed.notation, optimize)
+    }
+
+    fn einsum_notation_with(
+        &mut self,
+        inputs: &[TraceValue],
+        notation: &EinsumNotation,
+        optimize: EinsumOptimize,
+    ) -> Result<TraceValue> {
+        trace_context_einsum_notation_with(self, inputs, notation, optimize)
     }
 
     fn einsum_subscripts_with(
@@ -129,8 +192,31 @@ impl TraceContextEinsumExt for TraceContext {
         subscripts: &EinsumSubscripts,
         optimize: EinsumOptimize,
     ) -> Result<TraceValue> {
-        trace_context_einsum_subscripts_with(self, inputs, subscripts, optimize)
+        trace_context_einsum_subscripts_with(self, inputs, subscripts, optimize, false)
     }
+}
+
+fn trace_context_einsum_notation_with(
+    trace: &mut TraceContext,
+    inputs: &[TraceValue],
+    notation: &EinsumNotation,
+    optimize: EinsumOptimize,
+) -> Result<TraceValue> {
+    let allow_broadcast = notation
+        .inputs
+        .iter()
+        .chain(std::iter::once(&notation.output))
+        .any(|term| term.contains(&EinsumAxis::Ellipsis));
+    let subscripts = if allow_broadcast {
+        let shapes = trace_concrete_shapes(trace, inputs)?.ok_or_else(|| {
+            Error::planning("ellipsis einsum requires concrete input dimensions during tracing")
+        })?;
+        let shape_refs: Vec<_> = shapes.iter().map(Vec::as_slice).collect();
+        resolve_einsum_notation(notation, &shape_refs)?.into()
+    } else {
+        notation_without_ellipsis(notation)?.into()
+    };
+    trace_context_einsum_subscripts_with(trace, inputs, &subscripts, optimize, allow_broadcast)
 }
 
 fn trace_context_einsum_subscripts_with(
@@ -138,6 +224,7 @@ fn trace_context_einsum_subscripts_with(
     inputs: &[TraceValue],
     subscripts: &EinsumSubscripts,
     optimize: EinsumOptimize,
+    allow_broadcast: bool,
 ) -> Result<TraceValue> {
     if inputs.is_empty() {
         return Err(Error::invalid_argument(
@@ -167,11 +254,16 @@ fn trace_context_einsum_subscripts_with(
             let shape_refs: Vec<_> = shapes.iter().map(Vec::as_slice).collect();
             let (plan_spec, _tree) =
                 resolve_einsum_strategy_with_spec(EinsumOptimize::Tree(tree), &subs, &shape_refs)?;
-            EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec)
+            EinsumExtensionOp::with_plan_spec_and_broadcast(
+                subscripts.clone(),
+                plan_spec,
+                allow_broadcast,
+            )
         }
-        optimize => EinsumExtensionOp::with_plan_spec(
+        optimize => EinsumExtensionOp::with_plan_spec_and_broadcast(
             subscripts.clone(),
             plan_spec_from_optimize(optimize, &subs)?,
+            allow_broadcast,
         ),
     };
     let outputs = trace
@@ -277,7 +369,7 @@ fn cached_subscripts(
     }
 
     let parsed = Arc::new(ParsedEinsum {
-        subscripts: parse_einsum_subscripts(notation)?,
+        notation: parse_einsum_notation(notation)?,
     });
     let entry = ParsedEinsumCacheEntry {
         notation: notation.to_owned(),
@@ -285,7 +377,7 @@ fn cached_subscripts(
     };
     let retained_bytes = saturating_sum([
         entry.notation.len(),
-        einsum_subscripts_retained_bytes(&parsed.subscripts),
+        einsum_notation_retained_bytes(&parsed.notation),
     ]);
     caches.put(key, entry, retained_bytes);
     Ok(parsed)

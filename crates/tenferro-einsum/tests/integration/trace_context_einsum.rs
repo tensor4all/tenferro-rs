@@ -1,5 +1,6 @@
 use tenferro_einsum::{
-    parse_einsum_subscripts, EinsumOptimize, TraceContextEinsumExt, EINSUM_EXTENSION_FAMILY_ID,
+    parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumOptimize, TraceContextEinsumExt,
+    EINSUM_EXTENSION_FAMILY_ID,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
@@ -32,6 +33,80 @@ fn trace_context_einsum_ext_emits_one_ordered_semantic_extension() {
             .map(|extent| extent.as_exact())
             .collect::<Vec<_>>(),
         [Some(&DimExpr::Const(2)), Some(&DimExpr::Const(2))]
+    );
+}
+
+#[test]
+fn trace_context_einsum_supports_ellipsis_broadcast_and_programmatic_notation() {
+    let batch_matrix = || {
+        ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(2), DimExpr::Const(3)],
+        )
+    };
+    let single_batch_matrix = || {
+        ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(1), DimExpr::Const(3), DimExpr::Const(2)],
+        )
+    };
+    let notation = EinsumNotation::new(
+        &[
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(0),
+                EinsumAxis::Label(1),
+            ],
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(1),
+                EinsumAxis::Label(2),
+            ],
+        ],
+        &[
+            EinsumAxis::Ellipsis,
+            EinsumAxis::Label(0),
+            EinsumAxis::Label(2),
+        ],
+    );
+
+    let mut trace = TraceContext::new();
+    let lhs = trace.input(batch_matrix()).unwrap();
+    let rhs = trace.input(single_batch_matrix()).unwrap();
+    let string_output = trace.einsum(&[lhs, rhs], "...ij,...jk->...ik").unwrap();
+    let string_graph = trace.finish(&[string_output]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_traced_graph(&string_graph)
+        .unwrap();
+    let lhs_tensor = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap();
+    let rhs_tensor = Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6]).unwrap();
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+    assert_eq!(result.shape(), &[2, 2, 2]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0; 8]);
+    assert_eq!(
+        string_graph
+            .program()
+            .value_metadata(string_graph.program().outputs()[0])
+            .unwrap()
+            .shape()
+            .iter()
+            .map(|extent| extent.as_exact())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(&DimExpr::Const(2)),
+            Some(&DimExpr::Const(2)),
+            Some(&DimExpr::Const(2)),
+        ]
+    );
+
+    let mut trace = TraceContext::new();
+    let lhs = trace.input(batch_matrix()).unwrap();
+    let rhs = trace.input(single_batch_matrix()).unwrap();
+    let output = trace.einsum_notation(&[lhs, rhs], &notation).unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    assert_eq!(
+        graph.program().semantic_fingerprint(),
+        string_graph.program().semantic_fingerprint()
     );
 }
 

@@ -30,7 +30,7 @@ enum TensorValue<'a> {
     Owned(Tensor),
 }
 
-impl TensorValue<'_> {
+impl<'a> TensorValue<'a> {
     fn as_tensor(&self) -> Option<&Tensor> {
         match self {
             Self::Borrowed(tensor) => Some(tensor),
@@ -52,6 +52,14 @@ impl TensorValue<'_> {
             Self::Borrowed(tensor) => TensorRead::from_tensor(tensor),
             Self::View(view) => TensorRead::from_view(view.clone()),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
+        }
+    }
+
+    fn borrowed_tensor_view(&self) -> Option<TensorView<'a>> {
+        match self {
+            Self::Borrowed(tensor) => Some(tensor_as_view(tensor)),
+            Self::View(view) => Some(view.clone()),
+            Self::Owned(_) => None,
         }
     }
 
@@ -326,6 +334,40 @@ fn label_size(label: u32, operands: &[&LabeledTensor<'_>]) -> Result<usize> {
     Err(eager_invalid_config(format!(
         "label {label} missing from eager einsum operands"
     )))
+}
+
+fn broadcast_to_tree_sizes<'a>(
+    exec: &mut dyn BackendSession,
+    operand: LabeledTensor<'a>,
+    tree: &ContractionTree,
+) -> Result<LabeledTensor<'a>> {
+    let target_shape: Vec<usize> = operand
+        .labels
+        .iter()
+        .enumerate()
+        .map(|(axis, label)| tree.label_size(*label).unwrap_or(operand.shape()[axis]))
+        .collect();
+    if target_shape == operand.shape() {
+        return Ok(operand);
+    }
+    let dims: Vec<usize> = (0..operand.labels.len()).collect();
+    if let Some(view) = operand.tensor.borrowed_tensor_view() {
+        if !tensor_view_has_backend_buffer(&view) {
+            let view = broadcast_tensor_view(view, &target_shape, &dims)?;
+            return Ok(LabeledTensor {
+                tensor: TensorValue::View(view),
+                labels: operand.labels,
+            });
+        }
+    }
+    let input = operand.tensor_owned(exec)?;
+    let tensor = exec.broadcast_in_dim(&input, &target_shape, &dims)?;
+    let labels = operand.labels.clone();
+    operand.reclaim_if_owned(exec);
+    Ok(LabeledTensor {
+        tensor: TensorValue::Owned(tensor),
+        labels,
+    })
 }
 
 fn reduce_tensor<'a>(
@@ -702,6 +744,14 @@ fn eager_einsum_exec_values<'a>(
                 })
                 .collect()
         });
+
+    profile_eager_einsum_section("exec.broadcast_inputs", || -> Result<()> {
+        for index in 0..labeled.len() {
+            let operand = take_labeled(&mut labeled, index, "input")?;
+            labeled[index] = Some(broadcast_to_tree_sizes(exec, operand, tree)?);
+        }
+        Ok(())
+    })?;
 
     profile_eager_einsum_section("exec.diagonalize_inputs", || -> Result<()> {
         for index in 0..labeled.len() {

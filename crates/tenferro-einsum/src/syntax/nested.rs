@@ -77,6 +77,11 @@ impl NestedEinsum {
     /// labels are invalid, or the notation is otherwise malformed.
     pub fn parse(notation: &str) -> Result<Self> {
         let (lhs, output_str) = split_and_validate_notation(notation)?;
+        if notation.contains('.') {
+            return Err(Error::invalid_subscripts(
+                "ellipsis with parenthesized contraction order is not supported",
+            ));
+        }
 
         let output: Vec<u32> = output_str
             .chars()

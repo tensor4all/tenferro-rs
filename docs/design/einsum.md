@@ -160,9 +160,13 @@ Autodiff eager execution remains separate from concrete `Tensor` execution:
 
 ## Subscripts And Repeated Labels
 
-`Subscripts::parse` accepts flat NumPy/PyTorch-style labels and rejects
+`Subscripts::parse` accepts flat NumPy/PyTorch-style explicit labels and rejects
 parenthesized contraction-order notation. Use `NestedEinsum::parse` when
-contraction order must be preserved.
+contraction order must be preserved. Rank-polymorphic flat notation is parsed
+as [`EinsumNotation`] and resolved only after input ranks are known; one
+right-aligned ellipsis per term supports equal-or-one batch broadcasting. The
+resolved result is converted to `Subscripts` before planning and execution.
+Parenthesized ellipsis and implicit-output equations remain unsupported.
 
 Repeated-label semantics follow the usual einsum rules:
 
@@ -194,7 +198,7 @@ The traced extension API chooses the lowering mode from input shape availability
 | Inputs | Build-time behavior | Runtime behavior |
 | --- | --- | --- |
 | All concrete shapes | optimize the contraction tree at graph build time and lower into ordinary graph ops where possible | execute the lowered graph |
-| Any symbolic shape | emit one einsum extension op | optimize from actual input shapes at runtime |
+| Any symbolic shape | emit one einsum extension op; unresolved ellipsis returns a typed planning error | optimize from actual input shapes at runtime |
 
 `tenferro_einsum` caches concrete-shape contraction trees in the extension
 cache. Runtime contraction trees are keyed by subscripts, input shapes, and the

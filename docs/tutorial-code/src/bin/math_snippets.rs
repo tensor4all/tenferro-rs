@@ -485,6 +485,38 @@ assert_eq!(
         Ok(())
     }
 
+    snippet_einsum_20()?;
+
+    // snippet source: docs/guides/einsum.md:146
+    fn snippet_einsum_20() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:einsum_20
+use tenferro_cpu::CpuBackend;
+use tenferro_einsum::{EinsumAxis, EinsumNotation, TensorEinsumExt};
+use tenferro_tensor::{BackendSessionHost, Tensor};
+
+let lhs = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12])?;
+let rhs = Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6])?;
+let notation = EinsumNotation::new(
+    &[
+        &[EinsumAxis::Ellipsis, EinsumAxis::Label(0), EinsumAxis::Label(1)],
+        &[EinsumAxis::Ellipsis, EinsumAxis::Label(1), EinsumAxis::Label(2)],
+    ],
+    &[EinsumAxis::Ellipsis, EinsumAxis::Label(0), EinsumAxis::Label(2)],
+);
+let mut backend = CpuBackend::new();
+let string_result = backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum("...ij,...jk->...ik", session)
+})?;
+let programmatic_result = backend.with_backend_session(|session| {
+    [&lhs, &rhs].einsum_notation(&notation, session)
+})?;
+assert_eq!(string_result.shape(), &[2, 2, 2]);
+assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
+assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
+        // snippet-end:einsum_20
+        Ok(())
+    }
+
     snippet_einsum_13()?;
 
     // snippet source: docs/guides/einsum.md:146
