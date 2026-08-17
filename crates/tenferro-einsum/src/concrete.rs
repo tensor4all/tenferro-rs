@@ -10,18 +10,19 @@ use crate::eager::{
     eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts_on_session,
     eager_einsum_subscripts_on_session, plan_subscripts,
 };
+use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
-use crate::{ContractionTree, EinsumSubscripts, Error, Result, Subscripts};
+use crate::{
+    parse_einsum_notation, ContractionTree, EinsumNotation, EinsumSubscripts, Error, Result,
+    Subscripts,
+};
 
-const TENSOR_EINSUM_OP: &str = "TensorEinsumExt::einsum";
 const TENSOR_EINSUM_INTO_OP: &str = "TensorEinsumIntoExt::einsum_into";
-const TENSOR_READ_EINSUM_OP: &str = "TensorReadEinsumExt::einsum_read";
 const TENSOR_READ_EINSUM_INTO_OP: &str = "TensorReadEinsumIntoExt::einsum_read_into";
 const TYPED_TENSOR_EINSUM_OP: &str = "TypedTensorEinsumExt::einsum";
 const TYPED_TENSOR_EINSUM_INTO_OP: &str = "TypedTensorEinsumIntoExt::einsum_into";
 const TYPED_TENSOR_READ_EINSUM_OP: &str = "TypedTensorReadEinsumExt::einsum_read";
 const TYPED_TENSOR_READ_EINSUM_INTO_OP: &str = "TypedTensorReadEinsumIntoExt::einsum_read_into";
-const PLAN_PREPARE_OP: &str = "ConcreteEinsumPlan::prepare";
 const PLAN_EXECUTE_OP: &str = "ConcreteEinsumPlan::execute";
 const TYPED_TENSOR_TENSORDOT_OP: &str = "TypedTensorTensordotExt::tensordot";
 
@@ -125,6 +126,25 @@ pub trait TensorEinsumExt {
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor>;
 
+    /// Execute an einsum from rank-unresolved string/programmatic notation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor>;
+
     /// Execute an einsum from parsed integer-label subscripts.
     ///
     /// # Errors
@@ -140,7 +160,16 @@ pub trait TensorEinsumExt {
 
 impl TensorEinsumExt for [&Tensor] {
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
-        let subscripts = parse_subscripts(subscripts, TENSOR_EINSUM_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_notation(&notation, session)
+    }
+
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let subscripts = resolve_tensor_notation(self, notation)?;
         eager_einsum_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 
@@ -157,6 +186,14 @@ impl TensorEinsumExt for [&Tensor] {
 impl<const N: usize> TensorEinsumExt for [&Tensor; N] {
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
         self.as_slice().einsum(subscripts, session)
+    }
+
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        self.as_slice().einsum_notation(notation, session)
     }
 
     fn einsum_subscripts(
@@ -184,6 +221,26 @@ pub trait TensorEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
+    /// Execute an einsum from rank-unresolved notation into caller-provided output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
+    fn einsum_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()>;
+
     /// Execute an einsum from parsed integer-label subscripts into caller-provided output.
     ///
     /// # Errors
@@ -206,7 +263,17 @@ impl TensorEinsumIntoExt for [&Tensor] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
-        let subscripts = parse_subscripts(subscripts, TENSOR_EINSUM_INTO_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_into_notation(&notation, session, out)
+    }
+
+    fn einsum_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()> {
+        let subscripts = resolve_tensor_notation(self, notation)?;
         tensor_einsum_into_subscripts(session, self, &subscripts, out, TENSOR_EINSUM_INTO_OP)
     }
 
@@ -229,6 +296,15 @@ impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
         out: TensorWrite<'_>,
     ) -> Result<()> {
         self.as_slice().einsum_into(subscripts, session, out)
+    }
+
+    fn einsum_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()> {
+        self.as_slice().einsum_into_notation(notation, session, out)
     }
 
     fn einsum_into_subscripts(
@@ -274,6 +350,25 @@ pub trait TypedTensorEinsumExt<T: TensorScalar> {
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>>;
 
+    /// Execute an einsum from rank-unresolved notation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>>;
+
     /// Execute an einsum from parsed integer-label subscripts.
     ///
     /// # Errors
@@ -289,7 +384,16 @@ pub trait TypedTensorEinsumExt<T: TensorScalar> {
 
 impl<T: TensorScalar> TypedTensorEinsumExt<T> for [&TypedTensor<T>] {
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
-        let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_EINSUM_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_notation(&notation, session)
+    }
+
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let subscripts = resolve_typed_notation(self, notation)?;
         typed_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
     }
 
@@ -306,6 +410,14 @@ impl<T: TensorScalar> TypedTensorEinsumExt<T> for [&TypedTensor<T>] {
 impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<T>; N] {
     fn einsum(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
         self.as_slice().einsum(subscripts, session)
+    }
+
+    fn einsum_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        self.as_slice().einsum_notation(notation, session)
     }
 
     fn einsum_subscripts(
@@ -369,6 +481,25 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
         session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>>;
 
+    /// Execute an einsum from rank-unresolved notation over typed views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, views, or execution are invalid.
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>>;
+
     /// Execute an einsum from parsed integer-label subscripts over typed
     /// borrowed views.
     ///
@@ -406,7 +537,16 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumExt<T> for [TypedTensorView<'a, T
         subscripts: &str,
         session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
-        let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_READ_EINSUM_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_read_notation(&notation, session)
+    }
+
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let subscripts = resolve_view_notation(self, notation)?;
         typed_view_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
     }
 
@@ -431,6 +571,14 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumExt<T>
         self.as_slice().einsum_read(subscripts, session)
     }
 
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        self.as_slice().einsum_read_notation(notation, session)
+    }
+
     fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
@@ -452,6 +600,28 @@ pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
     fn einsum_into<'out, O>(
         &self,
         subscripts: &str,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>;
+
+    /// Execute an einsum from rank-unresolved notation into typed output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
+    fn einsum_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
         session: &mut dyn BackendSession,
         out: O,
     ) -> Result<()>
@@ -485,7 +655,20 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
-        let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_EINSUM_INTO_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_into_notation(&notation, session, out)
+    }
+
+    fn einsum_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        let subscripts = resolve_typed_notation(self, notation)?;
         typed_einsum_into_subscripts(
             session,
             self,
@@ -526,6 +709,18 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTen
         O: Into<TypedTensorWrite<'out, T>>,
     {
         self.as_slice().einsum_into(subscripts, session, out)
+    }
+
+    fn einsum_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        self.as_slice().einsum_into_notation(notation, session, out)
     }
 
     fn einsum_into_subscripts<'out, O>(
@@ -596,6 +791,28 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     where
         O: Into<TypedTensorWrite<'out, T>>;
 
+    /// Execute an einsum from rank-unresolved notation over typed views into output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, views, or output are invalid.
+    fn einsum_read_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>;
+
     /// Execute an einsum from parsed integer-label subscripts over typed
     /// borrowed views into a caller-provided typed output.
     ///
@@ -642,7 +859,20 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
-        let subscripts = parse_subscripts(subscripts, TYPED_TENSOR_READ_EINSUM_INTO_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_read_into_notation(&notation, session, out)
+    }
+
+    fn einsum_read_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        let subscripts = resolve_view_notation(self, notation)?;
         typed_view_einsum_into_subscripts(
             session,
             self,
@@ -685,6 +915,19 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
         O: Into<TypedTensorWrite<'out, T>>,
     {
         self.as_slice().einsum_read_into(subscripts, session, out)
+    }
+
+    fn einsum_read_into_notation<'out, O>(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: O,
+    ) -> Result<()>
+    where
+        O: Into<TypedTensorWrite<'out, T>>,
+    {
+        self.as_slice()
+            .einsum_read_into_notation(notation, session, out)
     }
 
     fn einsum_read_into_subscripts<'out, O>(
@@ -737,6 +980,25 @@ pub trait TensorReadEinsumExt {
     /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor>;
 
+    /// Execute an einsum from rank-unresolved notation over read-only inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor>;
+
     /// Execute an einsum from parsed integer-label subscripts over read-only
     /// tensor inputs.
     ///
@@ -753,7 +1015,16 @@ pub trait TensorReadEinsumExt {
 
 impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
     fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
-        let subscripts = parse_subscripts(subscripts, TENSOR_READ_EINSUM_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_read_notation(&notation, session)
+    }
+
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let subscripts = resolve_read_notation(self, notation)?;
         eager_einsum_read_subscripts_on_session(session, self, &subscripts).map_err(Error::from)
     }
 
@@ -770,6 +1041,14 @@ impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
 impl<'a, const N: usize> TensorReadEinsumExt for [TensorRead<'a>; N] {
     fn einsum_read(&self, subscripts: &str, session: &mut dyn BackendSession) -> Result<Tensor> {
         self.as_slice().einsum_read(subscripts, session)
+    }
+
+    fn einsum_read_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        self.as_slice().einsum_read_notation(notation, session)
     }
 
     fn einsum_read_subscripts(
@@ -797,6 +1076,26 @@ pub trait TensorReadEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
+    /// Execute an einsum from rank-unresolved notation over read-only inputs into output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
+    fn einsum_read_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()>;
+
     /// Execute an einsum from parsed integer-label subscripts over read-only inputs into output.
     ///
     /// # Errors
@@ -819,7 +1118,17 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
         session: &mut dyn BackendSession,
         out: TensorWrite<'_>,
     ) -> Result<()> {
-        let subscripts = parse_subscripts(subscripts, TENSOR_READ_EINSUM_INTO_OP)?;
+        let notation = parse_einsum_notation(subscripts)?;
+        self.einsum_read_into_notation(&notation, session, out)
+    }
+
+    fn einsum_read_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()> {
+        let subscripts = resolve_read_notation(self, notation)?;
         tensor_read_einsum_into_subscripts(
             session,
             self,
@@ -854,6 +1163,16 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
         out: TensorWrite<'_>,
     ) -> Result<()> {
         self.as_slice().einsum_read_into(subscripts, session, out)
+    }
+
+    fn einsum_read_into_notation(
+        &self,
+        notation: &EinsumNotation,
+        session: &mut dyn BackendSession,
+        out: TensorWrite<'_>,
+    ) -> Result<()> {
+        self.as_slice()
+            .einsum_read_into_notation(notation, session, out)
     }
 
     fn einsum_read_into_subscripts(
@@ -910,8 +1229,8 @@ impl ConcreteEinsumPlan {
     where
         I: AsRef<[&'a Tensor]>,
     {
-        let subscripts = parse_subscripts(subscripts, PLAN_PREPARE_OP)?;
-        Self::prepare_subscripts_internal(input_specs(inputs.as_ref()), &subscripts)
+        let notation = parse_einsum_notation(subscripts)?;
+        Self::prepare_notation(inputs, &notation)
     }
 
     /// Prepare a plan from dtype-erased concrete tensor inputs and parsed
@@ -930,6 +1249,22 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(input_specs(inputs.as_ref()), &subscripts)
     }
 
+    /// Prepare a plan from rank-unresolved notation and concrete tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
+    /// [`Error::Validation`] for rank, shape, or dtype violations, or
+    /// [`Error::Planning`] when no contraction tree can be built.
+    pub fn prepare_notation<'a, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
+    where
+        I: AsRef<[&'a Tensor]>,
+    {
+        let inputs = inputs.as_ref();
+        let subscripts = resolve_tensor_notation(inputs, notation)?;
+        Self::prepare_subscripts_internal(input_specs(inputs), &subscripts)
+    }
+
     /// Prepare a plan from typed concrete tensor inputs and string notation.
     ///
     /// # Errors
@@ -942,8 +1277,8 @@ impl ConcreteEinsumPlan {
         T: TensorScalar,
         I: AsRef<[&'a TypedTensor<T>]>,
     {
-        let subscripts = parse_subscripts(subscripts, PLAN_PREPARE_OP)?;
-        Self::prepare_subscripts_internal(typed_input_specs(inputs.as_ref()), &subscripts)
+        let notation = parse_einsum_notation(subscripts)?;
+        Self::prepare_typed_notation(inputs, &notation)
     }
 
     /// Prepare a plan from typed concrete tensor inputs and parsed integer-label
@@ -965,6 +1300,23 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(typed_input_specs(inputs.as_ref()), &subscripts)
     }
 
+    /// Prepare a plan from rank-unresolved notation and typed concrete inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
+    /// [`Error::Validation`] for rank or shape violations, or [`Error::Planning`]
+    /// when no contraction tree can be built.
+    pub fn prepare_typed_notation<'a, T, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
+    where
+        T: TensorScalar,
+        I: AsRef<[&'a TypedTensor<T>]>,
+    {
+        let inputs = inputs.as_ref();
+        let subscripts = resolve_typed_notation(inputs, notation)?;
+        Self::prepare_subscripts_internal(typed_input_specs(inputs), &subscripts)
+    }
+
     /// Prepare a plan from read-only tensor inputs and string notation.
     ///
     /// # Errors
@@ -976,8 +1328,8 @@ impl ConcreteEinsumPlan {
     where
         I: AsRef<[TensorRead<'a>]>,
     {
-        let subscripts = parse_subscripts(subscripts, PLAN_PREPARE_OP)?;
-        Self::prepare_subscripts_internal(read_input_specs(inputs.as_ref()), &subscripts)
+        let notation = parse_einsum_notation(subscripts)?;
+        Self::prepare_read_notation(inputs, &notation)
     }
 
     /// Prepare a plan from read-only tensor inputs and parsed integer-label
@@ -994,6 +1346,22 @@ impl ConcreteEinsumPlan {
     {
         let subscripts = Subscripts::from(subscripts);
         Self::prepare_subscripts_internal(read_input_specs(inputs.as_ref()), &subscripts)
+    }
+
+    /// Prepare a plan from rank-unresolved notation and read-only inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
+    /// [`Error::Validation`] for rank, shape, or dtype violations, or
+    /// [`Error::Planning`] when no contraction tree can be built.
+    pub fn prepare_read_notation<'a, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
+        let subscripts = resolve_read_notation(inputs, notation)?;
+        Self::prepare_subscripts_internal(read_input_specs(inputs), &subscripts)
     }
 
     /// Number of binary contraction steps in the prepared tree (diagnostics).
@@ -1395,8 +1763,39 @@ struct ConcreteEinsumInputSpec {
     shape: Vec<usize>,
 }
 
-fn parse_subscripts(subscripts: &str, _op: &'static str) -> Result<Subscripts> {
-    Subscripts::parse(subscripts)
+fn resolve_shapes(notation: &EinsumNotation, shapes: Vec<&[usize]>) -> Result<Subscripts> {
+    resolve_einsum_notation(notation, &shapes)
+}
+
+fn resolve_tensor_notation(inputs: &[&Tensor], notation: &EinsumNotation) -> Result<Subscripts> {
+    resolve_shapes(
+        notation,
+        inputs.iter().map(|tensor| tensor.shape()).collect(),
+    )
+}
+
+fn resolve_typed_notation<T: TensorScalar>(
+    inputs: &[&TypedTensor<T>],
+    notation: &EinsumNotation,
+) -> Result<Subscripts> {
+    resolve_shapes(
+        notation,
+        inputs.iter().map(|tensor| tensor.shape()).collect(),
+    )
+}
+
+fn resolve_view_notation<'a, T: TensorScalar>(
+    inputs: &[TypedTensorView<'a, T>],
+    notation: &EinsumNotation,
+) -> Result<Subscripts> {
+    resolve_shapes(notation, inputs.iter().map(|view| view.shape()).collect())
+}
+
+fn resolve_read_notation<'a>(
+    inputs: &[TensorRead<'a>],
+    notation: &EinsumNotation,
+) -> Result<Subscripts> {
+    resolve_shapes(notation, inputs.iter().map(|input| input.shape()).collect())
 }
 
 fn input_specs(inputs: &[&Tensor]) -> Vec<ConcreteEinsumInputSpec> {
@@ -1542,26 +1941,18 @@ fn output_spec(
         }
     }
 
-    let mut output_shape = Vec::with_capacity(tree.subscripts.output.len());
-    for &label in &tree.subscripts.output {
-        let mut found = None;
-        for (input, labels) in inputs.iter().zip(tree.subscripts.inputs.iter()) {
-            if labels.len() != input.shape.len() {
-                return Err(Error::rank_mismatch(op, labels.len(), input.shape.len()));
-            }
-            if let Some(axis) = labels.iter().position(|candidate| *candidate == label) {
-                found = Some(input.shape[axis]);
-                break;
-            }
+    for (input, labels) in inputs.iter().zip(tree.subscripts.inputs.iter()) {
+        if labels.len() != input.shape.len() {
+            return Err(Error::rank_mismatch(op, labels.len(), input.shape.len()));
         }
-        let Some(extent) = found else {
-            return Err(Error::invalid_argument(
-                op,
-                "output labels",
-                format!("output label {label} is missing from inputs"),
-            ));
-        };
-        output_shape.push(extent);
+    }
+    let output_shape = tree.output_shape();
+    if output_shape.len() != tree.subscripts.output.len() {
+        return Err(Error::invalid_argument(
+            op,
+            "output labels",
+            "an output label is missing from all inputs",
+        ));
     }
     Ok(ConcreteEinsumInputSpec {
         dtype,

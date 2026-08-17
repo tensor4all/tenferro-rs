@@ -546,6 +546,38 @@ fn dim_expr_uses_input(dim: &DimExpr, input_idx: usize) -> bool {
     }
 }
 
+fn broadcast_initial_value(
+    builder: &mut GraphBuilder<StdTensorOp>,
+    tree: &ContractionTree,
+    value: ValueRef<StdTensorOp>,
+    labels: &[u32],
+    shape: &[DimExpr],
+) -> ValueRef<StdTensorOp> {
+    let target_shape: Vec<DimExpr> = labels
+        .iter()
+        .enumerate()
+        .map(|(axis, label)| {
+            let target = tree.label_size(*label).unwrap_or(0);
+            match shape[axis] {
+                DimExpr::Const(1) if target != 1 => DimExpr::Const(target),
+                _ => shape[axis].clone(),
+            }
+        })
+        .collect();
+    if target_shape == shape {
+        return value;
+    }
+    let outputs = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: target_shape,
+            dims: (0..labels.len()).collect(),
+        },
+        vec![value],
+        OperationRole::Primary,
+    );
+    ValueRef::Local(outputs[0])
+}
+
 /// Lower a planned einsum contraction tree into a compute graph graph.
 ///
 /// # Errors
@@ -609,6 +641,16 @@ pub(crate) fn build_einsum_graph_dim_expr(
         })
         .collect::<Result<_>>()?;
 
+    for (index, lv) in labeled.iter_mut().enumerate() {
+        lv.val = broadcast_initial_value(
+            builder,
+            tree,
+            lv.val.clone(),
+            &lv.labels,
+            &input_shapes[index],
+        );
+    }
+
     // Diagonalize repeated indices in each input
     for lv in &mut labeled {
         *lv = diagonalize_repeated(builder, lv);
@@ -629,7 +671,7 @@ pub(crate) fn build_einsum_graph_dim_expr(
         // Embed diagonal axes if output needs higher multiplicity
         let result = embed_repeated(builder, &result, output_labels)?;
 
-        // Reorder if needed
+        // Reorder if needed.
         if result.labels == *output_labels {
             return Ok(localize_value_ref(builder, result.val, &result.shape));
         }
@@ -686,7 +728,7 @@ pub(crate) fn build_einsum_graph_dim_expr(
         .collect();
     let result = reduce_val(builder, result, &extra_labels);
 
-    // Final reorder if needed
+    // Final reorder if needed.
     if result.labels == *output_labels {
         return Ok(localize_value_ref(builder, result.val, &result.shape));
     }

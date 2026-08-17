@@ -7,7 +7,7 @@
 - **Column-major storage.** Dense buffers are column-major: the leftmost dimension varies fastest. Row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major — permuted/wrong values, never rejected.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit backend.** Direct operations take an explicit backend argument; construct the backend/runtime once and reuse it — per-call construction discards the buffer pool.
-- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); `...` ellipsis is unsupported.
+- **Einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`). Flat notation supports one right-aligned, broadcastable `...` ellipsis per term; `EinsumNotation` is the programmatic form. Parenthesized ellipsis remains unsupported.
 - **Result-returning operators.** Traced operators return `Result`; propagate with `?`.
 
 ## Recipes and references
@@ -28,7 +28,7 @@
 
 ## Guides
 
-- [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): WARNING — tenferro's dialect requires the explicit arrow and rejects `...` ellipsis; read before porting an equation.
+- [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): Requires the explicit arrow; documents flat `...` ellipsis and `EinsumNotation` semantics plus the parenthesized-ellipsis limitation.
 - [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
 - [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer or BLAS/LAPACK directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and provider thread control.
 - [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.

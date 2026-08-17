@@ -299,6 +299,18 @@ impl ContractionTree {
         self.steps.len()
     }
 
+    pub(crate) fn label_size(&self, label: u32) -> Option<usize> {
+        self.size_dict.get(&label).copied()
+    }
+
+    pub(crate) fn output_shape(&self) -> Vec<usize> {
+        self.subscripts
+            .output
+            .iter()
+            .filter_map(|label| self.label_size(*label))
+            .collect()
+    }
+
     /// Return the operand indices for a pairwise contraction step.
     ///
     /// The returned indices refer to the original inputs (`0..input_count`) and

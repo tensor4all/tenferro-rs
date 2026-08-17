@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::EinsumSubscripts;
+use crate::{EinsumAxis, EinsumNotation, EinsumSubscripts};
 
 /// Stable family identifier for the standard tenferro einsum extension.
 pub const EINSUM_EXTENSION_FAMILY_ID: &str = "tenferro.einsum.v1";
@@ -15,8 +15,8 @@ pub(crate) const EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE: &str = "eager_expanded_pr
 
 /// Parsed einsum notation retained by parse caches.
 pub(crate) struct ParsedEinsum {
-    /// Canonical parsed subscripts.
-    pub(crate) subscripts: EinsumSubscripts,
+    /// Parsed rank-unresolved notation.
+    pub(crate) notation: EinsumNotation,
 }
 
 /// Return the retained-byte estimate for canonical subscripts.
@@ -25,6 +25,15 @@ pub(crate) fn einsum_subscripts_retained_bytes(subscripts: &EinsumSubscripts) ->
     saturating_sum([
         vec_of_vec_retained_bytes(&subscripts.inputs),
         vec_retained_bytes(&subscripts.output),
+    ])
+}
+
+pub(crate) fn einsum_notation_retained_bytes(notation: &EinsumNotation) -> usize {
+    saturating_sum([
+        vec_of_vec_retained_bytes(&notation.inputs),
+        vec_retained_bytes(&notation.output),
+        (notation.inputs.iter().map(Vec::capacity).sum::<usize>() + notation.output.capacity())
+            .saturating_mul(std::mem::size_of::<EinsumAxis>()),
     ])
 }
 

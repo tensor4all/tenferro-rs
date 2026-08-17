@@ -3,6 +3,8 @@
 //! This crate provides:
 //!
 //! - **String notation**: `"ij,jk->ik"` (NumPy/PyTorch compatible)
+//! - **Ellipsis notation**: `"...ij,...jk->...ik"` with right-aligned
+//!   equal-or-one broadcasting, plus programmatic [`EinsumNotation`]
 //! - **Parenthesized notation**: `"ij,(jk,kl)->il"` respects user-specified
 //!   contraction order via [`NestedEinsum`]
 //! - **Integer label notation**: using `u32` labels
@@ -69,6 +71,7 @@ mod concrete;
 mod eager;
 #[cfg(feature = "autodiff")]
 mod eager_ad;
+mod ellipsis;
 mod error;
 mod extension;
 pub mod lowering;
@@ -97,7 +100,9 @@ pub use extension::extension_module;
 pub use extension::semantic_ad_rules;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
-pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
+pub use subscripts::{
+    parse_einsum_notation, parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumSubscripts,
+};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;

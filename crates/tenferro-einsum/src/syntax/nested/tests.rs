@@ -5,6 +5,12 @@ fn labels(s: &str) -> Vec<u32> {
 }
 
 #[test]
+fn parse_rejects_ellipsis_in_parenthesized_notation() {
+    let error = NestedEinsum::parse("(...ij,jk),kl->...il").unwrap_err();
+    assert!(error.to_string().contains("parenthesized"));
+}
+
+#[test]
 fn parse_group_preserves_intermediate_output_label_order() {
     let nested = NestedEinsum::parse("(ca,ab),cd->bd").unwrap();
 

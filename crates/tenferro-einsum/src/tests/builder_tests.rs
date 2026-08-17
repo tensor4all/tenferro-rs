@@ -83,6 +83,32 @@ fn graph_identity_external_input_is_localized() {
 }
 
 #[test]
+fn graph_broadcasts_singleton_batch_before_matmul() {
+    let tree = make_tree("bij,bjk->bik", &[&[2, 2, 3], &[1, 3, 2]]);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+    let b = builder.add_input(input_key(1));
+
+    let result = build_einsum_graph(
+        &mut builder,
+        &tree,
+        &[ValueRef::Local(a), ValueRef::Local(b)],
+        &[vec![2, 2, 3], vec![1, 3, 2]],
+    );
+
+    builder.set_outputs(vec![unwrap_local(result)]);
+    let graph = builder.build();
+    assert!(graph.operations().iter().any(|node| {
+        matches!(
+            &node.operation,
+            StdTensorOp::BroadcastInDim { shape, dims }
+                if shape.as_slice() == [DimExpr::Const(2), DimExpr::Const(3), DimExpr::Const(2)]
+                    && dims.as_slice() == [0, 1, 2]
+        )
+    }));
+}
+
+#[test]
 fn graph_matmul_ij_jk_ik() {
     let tree = make_tree("ij,jk->ik", &[&[2, 3], &[3, 4]]);
     let mut builder = GraphBuilder::<StdTensorOp>::new();

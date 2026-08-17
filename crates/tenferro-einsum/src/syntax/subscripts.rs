@@ -93,6 +93,11 @@ impl Subscripts {
                 "Subscripts::parse does not accept parentheses; use NestedEinsum::parse to preserve parenthesized contraction order",
             ));
         }
+        if notation.contains('.') {
+            return Err(Error::invalid_subscripts(
+                "einsum ellipsis requires rank-aware resolution; use parse_einsum_notation or an einsum operation",
+            ));
+        }
 
         let output: Vec<u32> = output_str
             .chars()

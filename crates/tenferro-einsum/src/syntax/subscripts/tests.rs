@@ -21,6 +21,6 @@ fn parse_rejects_ellipsis_with_specific_error() {
         err,
         Error::InvalidSubscripts { message }
             if message.contains("ellipsis")
-                && message.contains("not supported")
+                && message.contains("rank-aware")
     ));
 }

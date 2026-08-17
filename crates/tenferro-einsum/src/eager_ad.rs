@@ -25,12 +25,16 @@ use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
     EINSUM_EXTENSION_FAMILY_ID,
 };
+use crate::ellipsis::resolve_einsum_notation;
 use crate::extension::EinsumExtensionOp;
 use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
     EinsumPlanSpec,
 };
-use crate::{parse_einsum_subscripts, EinsumSubscripts, Error, Result, Subscripts, TensorDotAxes};
+use crate::{
+    parse_einsum_notation, EinsumNotation, EinsumSubscripts, Error, Result, Subscripts,
+    TensorDotAxes,
+};
 
 /// Eager einsum extension methods for slices or arrays of [`EagerTensor`] refs.
 pub trait EagerEinsumExt {
@@ -43,6 +47,21 @@ pub trait EagerEinsumExt {
     /// [`Error::Planning`] / [`Error::Runtime`] for contraction planning and
     /// execution failures.
     fn einsum(&self, subscripts: &str) -> Result<EagerTensor>;
+
+    /// Execute an einsum from rank-unresolved notation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
+    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
+    /// assert_eq!(notation.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, planning, or runtime error when notation or execution is invalid.
+    fn einsum_notation(&self, notation: &EinsumNotation) -> Result<EagerTensor>;
 
     /// Execute an einsum from parsed integer labels.
     ///
@@ -86,6 +105,10 @@ impl EagerEinsumExt for [&EagerTensor] {
         einsum(self, subscripts)
     }
 
+    fn einsum_notation(&self, notation: &EinsumNotation) -> Result<EagerTensor> {
+        einsum_notation(self, notation)
+    }
+
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor> {
         einsum_subscripts(self, subscripts)
     }
@@ -94,6 +117,10 @@ impl EagerEinsumExt for [&EagerTensor] {
 impl<const N: usize> EagerEinsumExt for [&EagerTensor; N] {
     fn einsum(&self, subscripts: &str) -> Result<EagerTensor> {
         einsum(self.as_slice(), subscripts)
+    }
+
+    fn einsum_notation(&self, notation: &EinsumNotation) -> Result<EagerTensor> {
+        self.as_slice().einsum_notation(notation)
     }
 
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor> {
@@ -150,8 +177,29 @@ impl EagerTensorEinsumExt for EagerTensor {
 /// [`Error::Planning`] when no contraction path is valid, or [`Error::Runtime`]
 /// for extension registration and backend execution failures.
 pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
-    let subscripts = parse_einsum_subscripts(subscripts)?;
-    einsum_subscripts(inputs, &subscripts)
+    let notation = parse_einsum_notation(subscripts)?;
+    einsum_notation(inputs, &notation)
+}
+
+/// Execute an einsum eagerly from rank-unresolved notation.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidSubscripts`] for invalid axis tokens,
+/// [`Error::Validation`] for input count, rank, shape, or dtype mismatches,
+/// [`Error::Planning`] for an invalid contraction path, or [`Error::Runtime`]
+/// for extension registration and backend execution failures.
+pub fn einsum_notation(inputs: &[&EagerTensor], notation: &EinsumNotation) -> Result<EagerTensor> {
+    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
+    let subscripts = resolve_einsum_notation(notation, &shapes)?;
+    let subscripts = EinsumSubscripts::from(subscripts);
+    let allow_broadcast = notation
+        .inputs
+        .iter()
+        .chain(std::iter::once(&notation.output))
+        .any(|term| term.contains(&crate::EinsumAxis::Ellipsis))
+        || requires_broadcast(inputs, &subscripts);
+    einsum_subscripts_with_broadcast(inputs, &subscripts, allow_broadcast)
 }
 
 /// Execute an einsum eagerly from integer labels.
@@ -188,6 +236,14 @@ pub fn einsum_subscripts(
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<EagerTensor> {
+    einsum_subscripts_with_broadcast(inputs, subscripts, false)
+}
+
+fn einsum_subscripts_with_broadcast(
+    inputs: &[&EagerTensor],
+    subscripts: &EinsumSubscripts,
+    allow_broadcast: bool,
+) -> Result<EagerTensor> {
     if let Some(result) = try_direct_binary_dot_general(inputs, subscripts) {
         return result;
     }
@@ -197,15 +253,23 @@ pub fn einsum_subscripts(
     }
 
     let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
-    if let Some(result) = try_expand_eager_einsum(inputs, subscripts)? {
-        return Ok(result);
+    if !requires_broadcast(inputs, subscripts) {
+        if let Some(result) = try_expand_eager_einsum(inputs, subscripts)? {
+            return Ok(result);
+        }
     }
 
-    let op = Arc::new(EinsumExtensionOp::with_output_shape_hint(
-        subscripts.clone(),
-        output_shape_hint,
-        EinsumPlanSpec::Auto(default_auto_options()),
-    ));
+    let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
+    let op = Arc::new(if allow_broadcast {
+        EinsumExtensionOp::with_output_shape_hint_and_broadcast(
+            subscripts.clone(),
+            output_shape_hint,
+            plan_spec,
+            true,
+        )
+    } else {
+        EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec)
+    });
     let mut outputs =
         apply_eager_with_extension_session(op, inputs, eager_cpu_extension_module()?)?;
     outputs.pop().ok_or_else(|| {
@@ -232,16 +296,47 @@ fn try_direct_binary_dot_general(
     if let Some(plan) =
         try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)
     {
-        return Some(match plan.operand_order {
-            BinaryDotOperandOrder::Original => inputs[0]
-                .dot_general(inputs[1], plan.config)
-                .map_err(Error::Runtime),
-            BinaryDotOperandOrder::Swapped => inputs[1]
-                .dot_general(inputs[0], plan.config)
-                .map_err(Error::Runtime),
-        });
+        let (lhs, rhs) = match plan.operand_order {
+            BinaryDotOperandOrder::Original => (inputs[0], inputs[1]),
+            BinaryDotOperandOrder::Swapped => (inputs[1], inputs[0]),
+        };
+        if !exact_dot_shapes(lhs.shape(), rhs.shape(), &plan.config) {
+            return None;
+        }
+        return Some(lhs.dot_general(rhs, plan.config).map_err(Error::Runtime));
     }
     None
+}
+
+fn requires_broadcast(inputs: &[&EagerTensor], subscripts: &EinsumSubscripts) -> bool {
+    let mut sizes = std::collections::HashMap::<u32, usize>::new();
+    for (tensor, labels) in inputs.iter().zip(&subscripts.inputs) {
+        for (&label, &size) in labels.iter().zip(tensor.shape()) {
+            if let Some(previous) = sizes.insert(label, size) {
+                if previous != size && (previous == 1 || size == 1) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn exact_dot_shapes(
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    config: &tenferro_tensor::DotGeneralConfig,
+) -> bool {
+    config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&config.rhs_contracting_dims)
+        .all(|(&lhs, &rhs)| lhs_shape[lhs] == rhs_shape[rhs])
+        && config
+            .lhs_batch_dims
+            .iter()
+            .zip(&config.rhs_batch_dims)
+            .all(|(&lhs, &rhs)| lhs_shape[lhs] == rhs_shape[rhs])
 }
 
 /// Whether the untracked whole-program eager einsum executor is enabled.
@@ -851,17 +946,22 @@ fn infer_eager_output_shape(
             ));
         }
         for (&label, &dim) in labels.iter().zip(shape.iter()) {
-            if let Some(existing) = label_dims.insert(label, dim) {
-                if existing != dim {
+            if let Some(existing) = label_dims.get_mut(&label) {
+                if *existing != dim && *existing != 1 && dim != 1 {
                     return Err(Error::validation(
                         "einsum",
                         ShapeMismatch::ExpectedActual {
-                            expected: tenferro_tensor::ShapeVec::from_vec(vec![existing]),
+                            expected: tenferro_tensor::ShapeVec::from_vec(vec![*existing]),
                             actual: tenferro_tensor::ShapeVec::from_vec(vec![dim]),
                         }
                         .into(),
                     ));
                 }
+                if *existing == 1 {
+                    *existing = dim;
+                }
+            } else {
+                label_dims.insert(label, dim);
             }
         }
     }

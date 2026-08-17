@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EagerEinsumExt, EagerTensorEinsumExt};
-use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
+use tenferro_einsum::{EinsumAxis, EinsumNotation, EinsumSubscripts, TensorDotAxes};
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, Tensor};
 use tenferro_tensor::ValidationError;
 
@@ -19,6 +19,51 @@ fn test_ctx() -> Arc<EagerRuntime> {
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "1");
     }
     EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
+}
+
+#[test]
+fn eager_tensor_einsum_ellipsis_broadcast_matches_programmatic_notation() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let notation = EinsumNotation::new(
+        &[
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(0),
+                EinsumAxis::Label(1),
+            ],
+            &[
+                EinsumAxis::Ellipsis,
+                EinsumAxis::Label(1),
+                EinsumAxis::Label(2),
+            ],
+        ],
+        &[
+            EinsumAxis::Ellipsis,
+            EinsumAxis::Label(0),
+            EinsumAxis::Label(2),
+        ],
+    );
+
+    let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik").unwrap();
+    let programmatic_result = [&lhs, &rhs].einsum_notation(&notation).unwrap();
+
+    assert_eq!(string_result.shape(), &[2, 2, 2]);
+    assert_eq!(programmatic_result.shape(), &[2, 2, 2]);
+    assert_eq!(f64_data(&string_result.to_tensor().unwrap()), &[3.0; 8]);
+    assert_eq!(
+        f64_data(&programmatic_result.to_tensor().unwrap()),
+        &[3.0; 8]
+    );
 }
 
 #[test]
@@ -203,6 +248,34 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
 
     assert_eq!(c.shape(), &[2, 2]);
     assert_eq!(f64_data(&c.to_tensor().unwrap()), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn eager_tensor_einsum_ellipsis_backward_matches_expected_values() {
+    let ctx = test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 3, 2], vec![1.0_f64; 12]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+
+    let c = [&a, &b].einsum("...ij,...jk->...ik").unwrap();
+    let loss = c.reduce_sum(Some(&[0, 1, 2])).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_eq!(
+        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        &[2.0; 12]
+    );
+    assert_eq!(
+        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
+        &[2.0; 12]
+    );
 }
 
 #[test]
