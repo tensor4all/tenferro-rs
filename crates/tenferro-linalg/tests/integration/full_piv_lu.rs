@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
@@ -11,6 +11,18 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().expect("expected f64 tensor")
+}
+
+fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
+}
+
+fn c64_data(tensor: &Tensor) -> &[Complex64] {
+    tensor.as_slice::<Complex64>().expect("expected c64 tensor")
+}
+
+fn c32_data(tensor: &Tensor) -> &[Complex32] {
+    tensor.as_slice::<Complex32>().expect("expected c32 tensor")
 }
 
 fn matmul(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
@@ -148,4 +160,120 @@ fn full_piv_lu_solve_accepts_vector_rhs() {
 
     assert_eq!(x.shape(), &[2]);
     assert_close(f64_data(&x), &[4.0, -1.0]);
+}
+
+#[test]
+fn full_piv_lu_solve_accepts_small_and_large_scaled_f64_systems() {
+    let base_a = [3.0, 0.0, 0.0, 2.0];
+    let base_b = [6.0, 4.0];
+    let mut backend = CpuBackend::new();
+
+    for scale in [1.0e-20, 1.0e20] {
+        let a = f64_tensor(
+            vec![2, 2],
+            base_a.iter().map(|value| value * scale).collect(),
+        );
+        let b = f64_tensor(
+            vec![2, 1],
+            base_b.iter().map(|value| value * scale).collect(),
+        );
+        let x = support::with_cpu_linalg(&mut backend, |backend| {
+            backend.full_piv_lu_solve(&a, &b, false)
+        })
+        .unwrap();
+        assert_close(f64_data(&x), &[2.0, 2.0]);
+    }
+}
+
+#[test]
+fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
+    let mut backend = CpuBackend::new();
+    for scale in [1.0e-10_f32, 1.0e10_f32] {
+        let a = f32_tensor(vec![2, 2], vec![3.0 * scale, 0.0, 0.0, 2.0 * scale]);
+        let b = f32_tensor(vec![2, 1], vec![6.0 * scale, 4.0 * scale]);
+        let x = support::with_cpu_linalg(&mut backend, |backend| {
+            backend.full_piv_lu_solve(&a, &b, false)
+        })
+        .unwrap();
+        let values = x.as_slice::<f32>().unwrap();
+        assert!((values[0] - 2.0).abs() < 1.0e-5);
+        assert!((values[1] - 2.0).abs() < 1.0e-5);
+    }
+
+    for scale in [1.0e-20_f64, 1.0e20_f64] {
+        let a = Tensor::C64(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex64::new(3.0 * scale, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(2.0 * scale, 0.0),
+                ],
+            )
+            .unwrap(),
+        );
+        let b = Tensor::C64(
+            TypedTensor::from_vec_col_major(
+                vec![2, 1],
+                vec![
+                    Complex64::new(6.0 * scale, 0.0),
+                    Complex64::new(4.0 * scale, 0.0),
+                ],
+            )
+            .unwrap(),
+        );
+        let x = support::with_cpu_linalg(&mut backend, |backend| {
+            backend.full_piv_lu_solve(&a, &b, false)
+        })
+        .unwrap();
+        let values = c64_data(&x);
+        assert!((values[0].re - 2.0).abs() < 1.0e-12);
+        assert!((values[1].re - 2.0).abs() < 1.0e-12);
+    }
+
+    for scale in [1.0e-10_f32, 1.0e10_f32] {
+        let a = Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 2],
+                vec![
+                    Complex32::new(3.0 * scale, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(2.0 * scale, 0.0),
+                ],
+            )
+            .unwrap(),
+        );
+        let b = Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![2, 1],
+                vec![
+                    Complex32::new(6.0 * scale, 0.0),
+                    Complex32::new(4.0 * scale, 0.0),
+                ],
+            )
+            .unwrap(),
+        );
+        let x = support::with_cpu_linalg(&mut backend, |backend| {
+            backend.full_piv_lu_solve(&a, &b, false)
+        })
+        .unwrap();
+        let values = c32_data(&x);
+        assert!((values[0].re - 2.0).abs() < 1.0e-5);
+        assert!((values[1].re - 2.0).abs() < 1.0e-5);
+    }
+}
+
+#[test]
+fn full_piv_lu_solve_rejects_exactly_singular_system() {
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
+    let b = f64_tensor(vec![2, 1], vec![1.0, 2.0]);
+    let mut backend = CpuBackend::new();
+
+    let error = support::with_cpu_linalg(&mut backend, |backend| {
+        backend.full_piv_lu_solve(&a, &b, false)
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure);
 }

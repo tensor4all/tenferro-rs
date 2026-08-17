@@ -38,6 +38,7 @@ env:
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
   PJRT_ARCHIVE: pjrt-tests.tar.zst
+  CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
   # Keep these in sync with runpod-gpu-test.yml (contract-tested).
   CUDARC_CUDA_VERSION: "12080"
   CUDA_MIN_RUNTIME_VERSION: "12.4"
@@ -74,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v14-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -88,6 +89,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
           lookup-only: true
 
@@ -148,13 +150,22 @@ jobs:
             -p tenferro-xla \
             --features pjrt
 
+      - name: Build CUDA tutorial artifact
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path docs/tutorial-code/Cargo.toml \
+            --no-default-features --features cuda,cpu-faer --bin cuda_tutorial
+          tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/release cuda_tutorial
+
       - name: Log built archive sizes
         if: steps.archive_lookup.outputs.cache-hit != 'true'
         working-directory: tenferro-rs
         run: |
           set -euo pipefail
-          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" target/ci 2>/dev/null \
-            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
+          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}" target/ci 2>/dev/null \
+            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}" || true
           df -h .
 
       - name: Publish archive cache
@@ -164,6 +175,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -175,6 +187,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 

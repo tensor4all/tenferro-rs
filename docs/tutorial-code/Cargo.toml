@@ -165,6 +165,11 @@ name = "cuda_fft"
 path = "src/bin/cuda_fft.rs"
 required-features = ["cuda"]
 
+[[bin]]
+name = "cuda_tutorial"
+path = "src/bin/cuda_tutorial.rs"
+required-features = ["cuda"]
+
 [[test]]
 name = "tutorial_binaries"
 path = "tests/tutorial_binaries.rs"

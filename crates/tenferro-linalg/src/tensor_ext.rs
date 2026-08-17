@@ -145,6 +145,26 @@ pub trait TensorLinalgExt {
         &self,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// Compute singular values without allocating singular-vector outputs.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend has no values-only capability, rather than silently computing a
+    /// full decomposition and discarding its vectors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let values = host.with_backend_session(|session| a.svdvals(session))?;
+    /// assert_eq!(values.as_slice::<f64>()?, &[4.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svdvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for matrix metadata or options, plus SVD backend errors.
@@ -567,6 +587,29 @@ pub trait TensorReadLinalgExt {
         self,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// Compute singular values from a borrowed tensor read target.
+    ///
+    /// Eligible faer host views are consumed without a full input copy. A
+    /// provider that requires owned compact storage may materialize explicitly;
+    /// unsupported providers return a typed error.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend has no borrowed values-only capability.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::TensorReadLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let values = host.with_backend_session(|session| TensorRead::from_tensor(&a).svdvals_read(session))?;
+    /// assert_eq!(values.as_slice::<f64>()?, &[4.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svdvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for metadata/options, plus read/materialization or SVD errors.
@@ -1058,6 +1101,28 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn svd(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>>;
+    /// Compute singular values without allocating singular-vector outputs.
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
+    /// backend has no values-only capability.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::TypedTensorLinalgExt;
+    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
+    /// # let mut host = CpuBackend::new();
+    /// let values = host.with_backend_session(|session| a.svdvals(session))?;
+    /// assert_eq!(values.as_slice()?, &[4.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn svdvals(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>>;
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for metadata/options, plus backend or typed-output errors.
@@ -1456,6 +1521,10 @@ impl TensorLinalgExt for Tensor {
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
         with_linalg_backend(session, "svd", |backend| three(backend.svd(self)?, "svd"))
     }
+    fn svdvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "svdvals", |backend| backend.svd_values(self))
+    }
+
     fn svd_with_options(
         &self,
         options: SvdOptions,
@@ -1597,6 +1666,12 @@ impl TensorReadLinalgExt for TensorRead<'_> {
             three(backend.svd_read(self)?, "svd_read")
         })
     }
+    fn svdvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
+        with_linalg_backend(session, "svdvals_read", |backend| {
+            backend.svd_values_read(self)
+        })
+    }
+
     fn svd_with_options_read(
         self,
         options: SvdOptions,
@@ -1770,15 +1845,7 @@ impl TensorReadLinalgExt for TensorRead<'_> {
     }
     fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "eigvalsh_read", |backend| {
-            // The Hermitian values-only hook owns its input, so the read must
-            // materialize first (same materialization the extension session
-            // path uses for linalg reads). Tradeoff: the previous
-            // `eigh_read(...).0` could run faer directly on an eligible
-            // strided view without copying; `eigvalsh_read` now always
-            // materializes, while the full `eigh_read` surface keeps the
-            // strided-view path.
-            let materialized = backend.to_contiguous_read(self)?;
-            backend.eigh_values(&materialized)
+            backend.eigh_values_read(self)
         })
     }
     fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {
@@ -1818,6 +1885,15 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
     fn svd(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedSvd<T>> {
         with_linalg_backend(session, "svd", |backend| {
             typed_svd(T::tensor_read(self).svd_read(backend)?)
+        })
+    }
+
+    fn svdvals(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>> {
+        with_linalg_backend(session, "svdvals", |backend| {
+            typed_output::<<T as TensorScalar>::Real>(T::tensor_read(self).svdvals_read(backend)?)
         })
     }
 

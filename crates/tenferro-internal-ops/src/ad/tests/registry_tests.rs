@@ -8,6 +8,7 @@ use crate::ad::context::ShapeGuardContext;
 use crate::ad::registry::primitive_ad_rule;
 use crate::std_tensor_op::StdTensorOp;
 
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "residual mask")]
 fn residual_mask_detector_rejects_undeclared_input_access() {

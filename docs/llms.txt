@@ -21,6 +21,7 @@
 ## Getting started
 
 - [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/): Walks through tenferro's tensor layer, execution model, and backend/device choices, including a first CPU program.
+- [API migration guide](https://tensor4all.org/tenferro-rs/getting-started/api-migration.html): Maps removed modules, free functions, fallible constructors, and changed signatures to the current trait-based API.
 - [Coming from ndarray / nalgebra / ndarray-linalg](https://tensor4all.org/tenferro-rs/getting-started/ndarray-nalgebra-mapping.html): For Rust users with ndarray or nalgebra priors: the column-major asymmetry, crate selection, explicit backends, faer vs BLAS providers, and zero-copy interop with existing buffers.
 - [PyTorch and JAX Mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html): Translates common `torch` and `jax.numpy` operations into tenferro's direct, eager, and traced APIs.
 - [Choosing a Tensor API](https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html): Explains how to select the tensor API by value type, execution timing, and backend/device.

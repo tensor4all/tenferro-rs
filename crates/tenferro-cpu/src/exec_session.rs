@@ -138,6 +138,14 @@ impl CpuExecSession<'_> {
             .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
 
+    #[cfg(feature = "cpu-faer")]
+    pub(crate) fn with_faer_parallelism(
+        &mut self,
+        callback: impl FnOnce(faer::Par) -> crate::Result<()> + Send,
+    ) -> crate::Result<()> {
+        self.run_native_with_context(|context, _| callback(context.faer_parallelism()))
+    }
+
     fn run_native_with_context<R: Send>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,

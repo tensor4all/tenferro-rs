@@ -97,6 +97,7 @@ env:
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
   PJRT_ARCHIVE: pjrt-tests.tar.zst
+  CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
   # Keep 12.8 bindings so newer runtimes retain every CubeCL CUDA feature.
   CUDARC_CUDA_VERSION: "12080"
   # RunPod may select the 12.4 baseline; 12.8 enables the full CubeCL feature set.
@@ -472,7 +473,7 @@ jobs:
           # archive build commands or toolkit selection change; unrelated
           # workflow edits must not invalidate the key (#1403).
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v14-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -489,6 +490,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
 
       - name: Reuse archive artifact from a prior trusted run
@@ -514,12 +516,13 @@ jobs:
                 > /tmp/archive-reuse.zip \
               && unzip -o /tmp/archive-reuse.zip -d tenferro-rs \
               && [ -f "tenferro-rs/${CUDA_ARCHIVE}" ] \
-              && [ -f "tenferro-rs/${PJRT_ARCHIVE}" ]; then
+              && [ -f "tenferro-rs/${PJRT_ARCHIVE}" ] \
+              && [ -f "tenferro-rs/${CUDA_TUTORIAL_ARCHIVE}" ]; then
               reused=true
               echo "Reused immutable archive artifact ${artifact_id} from trusted run ${run_id}."
             else
               echo "Artifact ${artifact_id} download failed; falling back to build."
-              rm -f "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}"
+              rm -f "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}" "tenferro-rs/${CUDA_TUTORIAL_ARCHIVE}"
             fi
           fi
           echo "reused=${reused}" >> "${GITHUB_OUTPUT}"
@@ -585,6 +588,15 @@ jobs:
             -p tenferro-xla \
             --features pjrt
 
+      - name: Build CUDA tutorial artifact
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path docs/tutorial-code/Cargo.toml \
+            --no-default-features --features cuda,cpu-faer --bin cuda_tutorial
+          tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/release cuda_tutorial
+
       - name: Verify CUDA/PJRT test archives
         working-directory: tenferro-rs
         env:
@@ -600,6 +612,10 @@ jobs:
             echo "Missing archive: ${PJRT_ARCHIVE}"
             exit 1
           fi
+          if [ ! -f "${CUDA_TUTORIAL_ARCHIVE}" ]; then
+            echo "Missing archive: ${CUDA_TUTORIAL_ARCHIVE}"
+            exit 1
+          fi
           echo "Build environment glibc: $(ldd --version | head -1)"
           if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
             echo "Archive source: trusted Actions cache."
@@ -609,8 +625,8 @@ jobs:
             nvcc_bin="${CUDA_PATH}/bin/nvcc"
             echo "Archive source: fresh build with PTX toolkit ${CUDA_PATH} ($("${nvcc_bin}" --version | head -1))."
           fi
-          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" target/ci 2>/dev/null \
-            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
+          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}" target/ci 2>/dev/null \
+            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" "${CUDA_TUTORIAL_ARCHIVE}" || true
           df -h .
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -623,6 +639,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 
@@ -866,6 +883,7 @@ jobs:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
+            tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -881,7 +899,7 @@ jobs:
           else
             echo "Using CUDA/PJRT test archives downloaded from workflow artifact."
           fi
-          ls -lh "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}"
+          ls -lh "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}" "tenferro-rs/${CUDA_TUTORIAL_ARCHIVE}"
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
         with:
@@ -1217,6 +1235,16 @@ jobs:
             --no-fail-fast \
             -E 'not (test(eager_backend_capability_boundary) | test(execution_session_capability_cannot_project_or_escape_owner_borrow) | test(cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark))' \
             -j 1
+
+      - name: Run CUDA tutorial artifact
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          tutorial_dir="${RUNNER_TEMP}/cuda-tutorial"
+          rm -rf "${tutorial_dir}"
+          mkdir -p "${tutorial_dir}"
+          tar --zstd -xf "${CUDA_TUTORIAL_ARCHIVE}" -C "${tutorial_dir}"
+          TENFERRO_REQUIRE_CUDA=1 "${tutorial_dir}/cuda_tutorial"
 
       - name: Run OpenXLA PJRT E2E tests from archive
         working-directory: tenferro-rs

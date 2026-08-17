@@ -206,6 +206,80 @@ where
     Some(unsafe { f(&mut *(data.cast::<CpuExecSession<'static>>())) })
 }
 
+/// Invoke a direct faer operation with the parallelism selected by a CPU session.
+///
+/// The `faer::Par` value is scoped to the callback and is derived from the
+/// session's managed thread budget and nesting policy. A non-CPU session, or a
+/// CPU session built without `cpu-faer`, returns a typed unsupported error.
+/// `Par::Seq` remains the portable choice for direct calls outside a session.
+///
+/// # Examples
+///
+/// ```rust
+/// # #[cfg(feature = "cpu-faer")]
+/// # fn example() -> tenferro_tensor::Result<()> {
+/// use tenferro_cpu::{CpuBackend, FaerParallelismExt};
+/// use tenferro_tensor::BackendSessionHost;
+///
+/// let mut backend = CpuBackend::with_threads(2)?;
+/// backend.with_backend_session(|session| {
+///     session.with_faer_parallelism(|parallel| {
+///         let _ = parallel;
+///         Ok(())
+///     })
+/// })?;
+/// # Ok(())
+/// # }
+/// # fn main() {}
+/// ```
+#[cfg(feature = "cpu-faer")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cpu-faer")))]
+pub trait FaerParallelismExt {
+    /// Run a scoped callback with this session's faer parallelism policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the session is not
+    /// a CPU/faer execution session, or the callback's own typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "cpu-faer")]
+    /// # fn example(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_tensor::Result<()> {
+    /// use tenferro_cpu::FaerParallelismExt;
+    /// session.with_faer_parallelism(|parallel| {
+    ///     let _ = parallel;
+    ///     Ok::<_, tenferro_tensor::Error>(())
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn with_faer_parallelism(
+        &mut self,
+        callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
+    ) -> tenferro_tensor::Result<()>;
+}
+
+#[cfg(feature = "cpu-faer")]
+impl<S> FaerParallelismExt for S
+where
+    S: tenferro_tensor::BackendSession + ?Sized,
+{
+    fn with_faer_parallelism(
+        &mut self,
+        callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
+    ) -> tenferro_tensor::Result<()> {
+        with_cpu_exec_session(self, |session| session.with_faer_parallelism(callback))
+            .unwrap_or_else(|| {
+                Err(tenferro_tensor::Error::unsupported(
+                    "with_faer_parallelism",
+                    "selected session is not a CPU/faer execution session",
+                ))
+            })
+    }
+}
+
 // Unit tests exercise the pool-aware kernels through the former convenience
 // names without restoring those names to the production crate surface.
 #[cfg(test)]

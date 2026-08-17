@@ -1,23 +1,27 @@
 # Tutorials
 
-These tutorials are ordered, runnable introductions to the main tenferro
-workflows. They complement the guides: tutorials show one complete path, while
-guides describe the broader APIs and tradeoffs.
+These tutorials are ordered by user workflow. Standard scientific computing
+comes first; extension authoring and execution-model internals are advanced
+paths. The repository is extensible internally, but ordinary use stays
+conventional: construct a value, enter a session, call an operation, and keep
+the result.
 
-Short tutorial programs in this section are sourced from `docs/tutorial-code`
-and are run by the workspace test workflow. Extension tutorials live in
-standalone nested crates under `ext/` and are tested through their manifest
-paths. Longer application samples, such as the KdV PINN tutorial, point at
-standalone sample packages and may use compile-only CI coverage when execution
-would be too slow for every pull request.
-
-## Suggested Order
+## Start here
 
 | Tutorial | Use it when |
 | --- | --- |
+| [Ordinary CPU scientific computing](../getting-started/index.md#quickstart-a-direct-tensor-and-linalg) | You want matmul, solve, and singular values in one bounded backend session. |
 | [TypedTensor for numeric computation without autodiff](typed-tensor-non-ad.md) | You know the scalar type in Rust and want ndarray-like CPU tensor computation without AD. |
-| [Eager autodiff, PyTorch style](eager-autodiff-pytorch-style.md) | You want immediate execution, scalar losses, `backward()`, accumulated gradients, or the broader functional eager AD entry point. |
+| [CUDA and explicit device movement](../guides/devices-and-gpu.md#cuda-quickstart) | You want to upload inputs, run supported operations on CUDA, and download values explicitly. Hardware-executed CUDA tutorial validation lives in the GPU CI lane; CPU CI only compile-checks that artifact. |
+| [Using tenferro with ndarray/faer data](../getting-started/ndarray-nalgebra-mapping.md#zero-copy-interop-keep-your-faerndarray-buffers) | Your application already owns arrays and needs an explicit borrowed-view round trip. |
+| [Calling faer or BLAS/LAPACK directly](../guides/external-linalg-interop.md) | One specialized routine is outside the standard operation families; borrow compact host storage, call the external library, and continue with tenferro. |
+| [Eager autodiff, PyTorch style](eager-autodiff-pytorch-style.md) | You want immediate execution, scalar losses, `backward()`, accumulated gradients, or the functional eager AD entry point. |
 | [Traced autodiff, JAX style](traced-autodiff-jax-style.md) | You want to build a graph, compile/run it, and use `grad` or `jvp` on the traced graph. |
+
+## Advanced topics
+
+| Tutorial | Use it when |
+| --- | --- |
 | [Einsum: subscripts to gradients](einsum-subscripts-to-gradients.md) | You contract more than two tensors and want planned contraction order plus AD. |
 | [XLA backend: einsum to StableHLO](xla-einsum-backend.md) | You want to lower a fixed-shape N-ary einsum path through the experimental XLA executor. |
 | [Dynamic shapes: truncated SVD](dynamic-shape-truncated-svd.md) | Output ranks depend on runtime values such as singular-value thresholds. |
@@ -25,7 +29,10 @@ would be too slow for every pull request.
 | [Sparse tensor extension](sparse-extension.md) | You want a fixed-pattern sparse COO extension with sparse-sparse contraction and value AD. |
 | [KdV PINN sample](kdv-pinn.md) | You want a full traced-graph PINN training loop with PDE residuals and scalar loss gradients. |
 
-## Running The Tutorial Code
+The [custom operations guide](../guides/custom-operations.md) explains the
+extension architecture only when you need to add a new operation family.
+
+## Running the tutorial code
 
 From the repository root:
 
@@ -33,9 +40,11 @@ From the repository root:
 cargo test -p tenferro-tutorial-code --release
 ```
 
-The CI workflow runs this package through the existing workspace test command,
-so tutorial execution does not add a second tenferro compilation step after
-unit tests.
+The CI workflow runs this package through the existing workspace test workflow.
+The CPU tutorial binaries remain hardware-independent. The CUDA tutorial is
+compiled and archived on the non-GPU CUDA lane and executed with deterministic
+value assertions on the trusted GPU lane; see [Devices and GPU](../guides/devices-and-gpu.md)
+for the exact transfer contract.
 
 The tropical and sparse extension tutorials are tested as standalone crates:
 

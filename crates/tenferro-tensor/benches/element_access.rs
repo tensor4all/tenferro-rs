@@ -89,6 +89,22 @@ fn bench_rank<const R: usize>(c: &mut Criterion, name: &str, shape: [usize; R]) 
         });
     });
 
+    group.bench_function(
+        BenchmarkId::new("direct_slice_unchecked", INDEX_COUNT),
+        |b| {
+            let data = tensor.as_slice().unwrap();
+            b.iter(|| {
+                let mut sum = 0.0;
+                for &offset in &offsets {
+                    // SAFETY: offsets are generated from in-bounds indices and the
+                    // compact fixture has exactly shape.product() elements.
+                    sum += black_box(unsafe { data.get_unchecked(black_box(offset)) });
+                }
+                black_box(sum)
+            });
+        },
+    );
+
     group.bench_function(BenchmarkId::new("direct_slice_mut", INDEX_COUNT), |b| {
         b.iter_batched(
             || tensor.duplicate().unwrap(),
@@ -208,6 +224,33 @@ fn bench_rank2_fixed(c: &mut Criterion) {
             let mut sum = 0.0;
             for [i, j] in &indices {
                 sum += *black_box(tensor.get2(black_box(*i), black_box(*j)).unwrap());
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("nested_get2", |b| {
+        b.iter(|| {
+            let mut sum = 0.0;
+            for j in 0..shape[1] {
+                for i in 0..shape[0] {
+                    sum += *black_box(tensor.get2(i, j).unwrap());
+                }
+            }
+            black_box(sum)
+        });
+    });
+
+    group.bench_function("nested_direct_slice_unchecked", |b| {
+        b.iter(|| {
+            let data = tensor.as_slice().unwrap();
+            let mut sum = 0.0;
+            for j in 0..shape[1] {
+                for i in 0..shape[0] {
+                    let offset = i + shape[0] * j;
+                    // SAFETY: nested loops stay within the compact fixture.
+                    sum += black_box(unsafe { data.get_unchecked(offset) });
+                }
             }
             black_box(sum)
         });

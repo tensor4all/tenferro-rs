@@ -124,8 +124,12 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self>;
     /// Wrap an arbitrarily-strided 2D host view as a faer MatRef (no copy).
     /// # Safety
-    /// Caller must guarantee: host placement, exactly 2 dims, finite non-negative strides,
-    /// and that the backing data lives for at least `'a`.
+    /// Caller must guarantee host placement, exactly two dimensions, finite
+    /// non-negative strides, a non-null properly aligned base pointer, and
+    /// that every address reached by the shape/stride rectangle is within the
+    /// backing allocation for at least `'a`. The shape/stride span and offset
+    /// must already have passed `TypedTensorView` layout validation; callers
+    /// must not rely on this constructor to check pointer arithmetic or ranges.
     unsafe fn faer_mat_ref_strided<'a>(
         base: *const Self,
         m: usize,
@@ -142,6 +146,14 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         full: bool,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn svd_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>>;
     fn qr_core(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -157,6 +169,13 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
+    fn eigh_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>>;
     fn cholesky_core(
         ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
@@ -338,7 +357,7 @@ fn eig_imag_is_effectively_zero(real: f64, imag: f64, eps: f64) -> bool {
 }
 
 fn real_pivot_is_effectively_singular(pivot: f64, max_diagonal: f64, eps: f64) -> bool {
-    pivot.abs() <= eps * max_diagonal.max(1.0)
+    pivot.abs() <= eps * max_diagonal
 }
 
 fn complex_pivot_is_effectively_singular(
@@ -347,7 +366,7 @@ fn complex_pivot_is_effectively_singular(
     max_diagonal: f64,
     eps: f64,
 ) -> bool {
-    real.hypot(imag) <= eps * max_diagonal.max(1.0)
+    real.hypot(imag) <= eps * max_diagonal
 }
 
 fn checked_product(
@@ -1659,8 +1678,19 @@ macro_rules! impl_faer_linalg_for_real {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
-        let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data()?, m, n);
+        Self::svd_values_core(ctx, buffers, mat, m, n, input.placement())
+    }
+
+    fn svd_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
+        let k = m.min(n);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
             m,
@@ -1682,7 +1712,7 @@ macro_rules! impl_faer_linalg_for_real {
         )
         .map_err(|_| decomposition_failed("svd_values"))?;
 
-        tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), input.placement())
+        tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)
     }
 
     fn qr_2d(
@@ -1712,6 +1742,16 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
         let mat = MatRef::from_column_major_slice(input.host_data()?, n, n);
+        Self::eigh_values_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn eigh_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let mut values = Diag::zeros(n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
             n,
@@ -1730,7 +1770,7 @@ macro_rules! impl_faer_linalg_for_real {
         )
         .map_err(|_| decomposition_failed("eigh_values"))?;
 
-        tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), input.placement())
+        tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), placement)
     }
 
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self> {
@@ -2479,8 +2519,31 @@ macro_rules! impl_faer_linalg_for_complex {
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let (m, n) = matrix_dims(input, "svd_values")?;
-        let k = m.min(n);
         let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), m, n);
+        Self::svd_values_core(ctx, buffers, mat, m, n, input.placement())
+    }
+
+    fn svd_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        m: usize,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
+        // SAFETY: `mat` is a validated host view with an in-bounds shape/stride
+        // span and aligned base; the `impl_complex_faer_casts` const assertions
+        // prove the scalar layouts match for this faer reinterpretation.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr() as *const $faer_complex,
+                m,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
+        let k = m.min(n);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
             m,
@@ -2507,7 +2570,7 @@ macro_rules! impl_faer_linalg_for_complex {
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
-        tensor_from_vec_with_template(vec![k], data, input.placement())
+        tensor_from_vec_with_template(vec![k], data, placement)
     }
 
     fn qr_2d(
@@ -2537,6 +2600,28 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let n = square_matrix_dim(input, "eigh_values")?;
         let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()?), n, n);
+        Self::eigh_values_core(ctx, buffers, mat, n, input.placement())
+    }
+
+    fn eigh_values_core(
+        ctx: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        mat: MatRef<'_, Self>,
+        n: usize,
+        placement: &tenferro_tensor::Placement,
+    ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
+        // SAFETY: `mat` is a validated host view with an in-bounds square span
+        // and aligned base; the `impl_complex_faer_casts` const assertions prove
+        // the scalar layouts match for this faer reinterpretation.
+        let mat: MatRef<'_, $faer_complex> = unsafe {
+            MatRef::from_raw_parts(
+                mat.as_ptr() as *const $faer_complex,
+                n,
+                n,
+                mat.row_stride(),
+                mat.col_stride(),
+            )
+        };
         let mut values = Diag::zeros(n);
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
             n,
@@ -2560,7 +2645,7 @@ macro_rules! impl_faer_linalg_for_complex {
         for i in 0..col.nrows() {
             data.push(col[i].re);
         }
-        tensor_from_vec_with_template(vec![n], data, input.placement())
+        tensor_from_vec_with_template(vec![n], data, placement)
     }
 
     fn faer_mat_ref_compact<'a>(data: &'a [Self], m: usize, n: usize) -> MatRef<'a, Self> {
@@ -3431,6 +3516,25 @@ pub(crate) fn svd_view<T: FaerLinalg + 'static>(
     T::svd_core(ctx, buffers, mat, m, n, false, &placement)
 }
 
+pub(crate) fn svd_values_view<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<TypedTensor<<T as FaerLinalg>::Real>> {
+    let (m, n) = matrix_dims_view(&view, "svd_values")?;
+    let placement = view.placement().clone();
+    if m == 0 || n == 0 {
+        return tensor_from_vec_with_template(vec![m.min(n)], Vec::new(), &placement);
+    }
+    let base = host_base_ptr(&view)?;
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
+    let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
+    T::svd_values_core(ctx, buffers, mat, m, n, &placement)
+}
+
 pub(crate) fn qr_view<T: FaerLinalg + 'static>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -3458,9 +3562,38 @@ pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
-    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::eigh_core(ctx, buffers, mat, m, &placement)
+}
+
+pub(crate) fn eigh_values_view<T: FaerLinalg + 'static>(
+    ctx: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    view: TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<TypedTensor<<T as FaerLinalg>::Real>> {
+    let (m, n) = matrix_dims_view(&view, "eigh_values")?;
+    if m != n {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "eigh_values",
+            vec![m],
+            vec![n],
+        ));
+    }
+    let placement = view.placement().clone();
+    if n == 0 {
+        return tensor_from_vec_with_template(vec![0], Vec::new(), &placement);
+    }
+    let base = host_base_ptr(&view)?;
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
+    let mat = unsafe { T::faer_mat_ref_strided(base, n, n, view.strides()[0], view.strides()[1]) };
+    T::eigh_values_core(ctx, buffers, mat, n, &placement)
 }
 
 pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
@@ -3478,7 +3611,10 @@ pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
-    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     tensor_from_vec_with_template(
         vec![m, m],
@@ -3495,7 +3631,10 @@ pub(crate) fn lu_view<T: FaerLinalg + 'static>(
     let (m, n) = matrix_dims_view(&view, "lu")?;
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
-    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::lu_core(ctx, buffers, mat, m, n, &placement)
 }
@@ -3515,7 +3654,10 @@ pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
-    // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
+    // SAFETY: `TypedTensorView` construction validates the shape/stride span and
+    // offset against its host allocation; `faer_strided_ok` additionally proves
+    // host placement, rank 2, and non-negative strides. `host_base_ptr` returns
+    // the aligned non-null element pointer at that validated offset.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::full_piv_lu_core(ctx, buffers, mat, m, &placement)
 }

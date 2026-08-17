@@ -31,6 +31,26 @@ system OpenBLAS (`cpu-blas` with the native library linked through
 `RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
 OpenBLAS from source.
 
+For direct faer work that should remain parallel, import
+`tenferro_cpu::FaerParallelismExt` and scope the call inside the backend
+session:
+
+```text
+backend.with_backend_session(|session| {
+    session.with_faer_parallelism(|parallel| {
+        faer_operation(..., parallel)
+    })
+})?;
+```
+
+This capability supplies the session-selected `faer::Par`: managed multi-thread
+inner execution receives bounded `Par::rayon(n)`, while one-thread or nested
+execution receives `Par::Seq`. The callback cannot retain the capability or
+session executor. A direct `Par::Seq` call remains the simplest portable escape
+hatch; an ambient `Par::rayon(n)` is outside tenferro's thread-budget and
+affinity contract. The scoped capability is CPU/faer-specific and does not
+claim affinity for external BLAS/OpenMP workers.
+
 ## When to use this
 
 Use direct external calls when tenferro's own APIs do not cover the routine you

@@ -24,6 +24,23 @@ must start as issues.
 - Treat maintainers as the authority for labels, acceptance, roadmap priority,
   and merge decisions.
 
+## Reporting a documentation gap found by an AI agent
+
+When an agent reaches a missing, stale, or contradictory explanation while
+following a user workflow, it should report the gap to the user instead of
+silently repairing or opening an issue. The report should include:
+
+- the missing or stale claim and the workflow that exposed it;
+- the exact command, API name, error, or documentation page that is evidence;
+- the intended audience and the proposed canonical destination; and
+- a concise suggested correction, with links to the current source or tests.
+
+Ask the user or maintainer to approve the structured issue draft before running
+`gh issue create`. After approval, classify it as a documentation issue and
+follow the normal draft/creation steps below. Do not create compatibility
+aliases, change public APIs, or turn the report into an implementation PR as a
+way to hide the documentation gap.
+
 ## Step 1: Classify
 
 Determine the issue type:

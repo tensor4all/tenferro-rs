@@ -616,7 +616,7 @@ class WorkflowContractTests(unittest.TestCase):
             archive_block.count(
                 "if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'"
             ),
-            5,
+            6,
         )
         self.assertIn(
             "name: ${{ steps.archive_key.outputs.artifact_name }}", archive_block

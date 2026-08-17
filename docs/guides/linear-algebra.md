@@ -62,7 +62,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Dense solve | `solve` | `solve` | `solve` |
 | Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
-| SVD | `svd`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
+| SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
 | Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
 | General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
@@ -75,9 +75,15 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 
 Concrete, read, typed, eager, and traced tensor APIs are crate-root extension
 traits. Concrete methods take `&mut dyn BackendSession` obtained through
-`BackendSessionHost::with_backend_session`. `LinalgBackend` is the SPI provider
-contract used by backend implementations and lower-level session tests, not by
-ordinary callers.
+`BackendSessionHost::with_backend_session`. `TensorReadLinalgExt::svdvals_read`
+and `eigvalsh_read` accept borrowed inputs; eligible faer host views avoid a
+full input copy, while providers that need owned compact storage materialize at
+the provider boundary. A values-only backend capability returns only the
+values tensor and does not allocate singular/eigenvectors; unsupported
+providers return a typed error rather than computing a full decomposition and
+discarding its factors. `LinalgBackend` is the SPI provider contract used by
+backend implementations and lower-level session tests, not by ordinary
+callers.
 
 ## Batch And Inner Parallelism
 

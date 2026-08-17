@@ -9,6 +9,8 @@ use num_complex::{Complex32, Complex64};
 
 #[cfg(feature = "cpu-blas")]
 use crate::CpuBackendKind;
+#[cfg(feature = "cpu-faer")]
+use crate::FaerParallelismExt;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, pow, reduce_max,
@@ -55,6 +57,25 @@ fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
         })
         .expect("CpuBackend must expose its scoped CpuExecSession");
     assert_eq!(value, 17);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_parallelism_capability_runs_inside_a_cpu_session() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    backend
+        .with_backend_session(|session| {
+            session.with_faer_parallelism(|parallel| {
+                let _ = parallel;
+                Ok(())
+            })
+        })
+        .unwrap();
+
+    let error = backend
+        .with_faer_parallelism(|_| Ok::<_, Error>(()))
+        .unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {

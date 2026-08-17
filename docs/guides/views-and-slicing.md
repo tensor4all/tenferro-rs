@@ -103,3 +103,45 @@ This is why the following two operations have different names and contracts:
 
 See [storage ownership](../storage-ownership.md) for detached/scoped execution,
 AD/checkpoint retention, provider namespaces, and Apple shared endpoint rules.
+
+## Scalar access and expert host loops
+
+`TypedTensor::get2`, `get3`, `get_mut2`, and `get_mut3` are the checked scalar
+APIs. They validate rank and every axis in release builds, use checked
+column-major offset arithmetic, verify host access, and perform the final host
+buffer check. Use them when the algorithm genuinely needs indexed lookup.
+
+`TypedTensor::get_unchecked` and `get_unchecked_mut` are unsafe generic-rank
+APIs. The caller must guarantee the exact rank and every in-bounds index;
+debug builds still assert those preconditions, while release builds omit the
+rank/axis checks. The current contract deliberately retains checked offset
+arithmetic and still returns a host-access error for device-backed storage.
+
+For a compact host tensor, the supported expert path is to borrow the slice once
+and use ordinary slice iteration or `slice::get_unchecked` inside a loop whose
+bounds were established by the caller:
+
+```text
+let data = tensor.as_slice()?;
+let rows = tensor.shape()[0];
+let cols = tensor.shape()[1];
+let mut sum = 0.0;
+for column in 0..cols {
+    for row in 0..rows {
+        let offset = row + rows * column;
+        // SAFETY: the loop bounds and compact column-major layout prove the
+        // offset is within `data`.
+        sum += unsafe { *data.get_unchecked(offset) };
+    }
+}
+```
+
+This path is explicit about host residency and lifetime, and avoids repeating
+provider lookup or tensor metadata validation. `iter()`/`iter_mut()` are the
+preferred abstraction for full contiguous traversal; `as_slice()` plus
+`get_unchecked` is for measured expert kernels. There is no separate raw pointer
+or raw strided-view API: non-contiguous views should use their checked view
+accessors or an explicit backend-owned materialization. The release benchmark
+`tenferro-tensor/benches/element_access.rs` compares these paths with checked
+accessors and records the generated-code probe in
+`docs/testing/storage-static-rank-codegen.md`.

@@ -250,6 +250,31 @@ fn traced_eigvals_uses_general_values_only_path() {
 fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     let source = crate_source("src/tensor_ext.rs");
 
+    // Owned SVD values: values-only hook, not compute-and-discard via svd.
+    let owned_svdvals = source_section(
+        &source,
+        "fn svdvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn svd_with_options(",
+    );
+    assert!(
+        owned_svdvals.contains("backend.svd_values(self)"),
+        "svdvals should call the singular-values-only backend hook"
+    );
+    assert!(
+        !owned_svdvals.contains("svd(backend)"),
+        "svdvals should not compute singular vectors and discard them"
+    );
+
+    let read_svdvals = source_section(
+        &source,
+        "fn svdvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn svd_with_options_read(",
+    );
+    assert!(
+        read_svdvals.contains("backend.svd_values_read(self)"),
+        "svdvals_read should call the borrowed singular-values-only hook"
+    );
+
     // Owned eigvalsh: values-only hook, not compute-and-discard via eigh.
     let owned_eigvalsh = source_section(
         &source,
@@ -280,15 +305,15 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
         "owned eigvals should not compute eigenvectors and discard them"
     );
 
-    // Read surfaces: materialize the read, then run the values-only hook.
+    // Read surfaces route directly through the borrowed values-only hook.
     let read_eigvalsh = source_section(
         &source,
         "fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
         "fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
     );
     assert!(
-        read_eigvalsh.contains("to_contiguous_read") && read_eigvalsh.contains("eigh_values("),
-        "eigvalsh_read should materialize the read then call eigh_values"
+        read_eigvalsh.contains("eigh_values_read(self)"),
+        "eigvalsh_read should call the borrowed Hermitian values-only hook"
     );
     assert!(
         !read_eigvalsh.contains("eigh_read(backend)?.0"),
@@ -378,6 +403,10 @@ fn cpu_backend_overrides_prepared_lu_and_values_only_paths() {
 fn backend_surface_has_hidden_hermitian_values_only_hook() {
     let source = crate_source("src/backend.rs");
 
+    assert!(
+        source.contains("fn svd_values_read") && source.contains("fn eigh_values_read"),
+        "backend surface should include borrowed values-only hooks"
+    );
     assert!(
         source.contains("fn eigh_values"),
         "backend surface should include a hidden eigh_values hook"
