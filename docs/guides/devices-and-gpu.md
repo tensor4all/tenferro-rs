@@ -119,6 +119,18 @@ LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
   cargo run -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
+The runnable tutorial `cuda_tutorial` follows the same minimal workflow
+(upload -> one bounded session -> download) and asserts `[4.0, 6.0]`. It is
+compiled and archived on the non-GPU CUDA lane, then executed with
+`TENFERRO_REQUIRE_CUDA=1` on the trusted GPU lane and the supported legacy
+manual GPU lane. Ordinary CPU tutorial CI never requires a CUDA device; the
+CUDA tutorial is the hardware-gated artifact described in the tutorial index.
+
+```bash
+cargo build -p tenferro-tutorial-code --no-default-features \
+  --features cuda,cpu-faer --bin cuda_tutorial
+```
+
 The example downloads the result back to CPU and asserts the expected values.
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination; for supported floating and complex permutation layouts it uses

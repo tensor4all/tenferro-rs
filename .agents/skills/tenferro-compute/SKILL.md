@@ -17,7 +17,10 @@ not when changing tenferro itself.
    directly.
 3. Bring the operation's public `*Ext` trait into scope. An E0599 saying that
    a method does not exist usually means the right extension trait is missing.
-4. Read only the relevant reference below before writing the program.
+4. If an older example mentions a removed module/free function or a
+   constructor signature that no longer compiles, read the [API migration
+   guide](../../../docs/getting-started/api-migration.md).
+5. Read only the relevant reference below before writing the program.
 
 | Need | Read |
 | --- | --- |

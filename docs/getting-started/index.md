@@ -9,6 +9,12 @@ optional `backward()` on scalar losses, functional eager `grad`, `vjp`, and
 `jvp`, traced graph execution, einsum, linear algebra, and CUDA execution
 through the feature-gated CUDA backend.
 
+## If an older example no longer compiles
+
+Start with the [API migration guide](api-migration.md) when a removed module,
+free function, constructor, or changed signature appears in an existing
+example. It maps the common pre-0.3 spellings to the current trait-based API.
+
 ## Mental Model
 
 tenferro has three independent choices. Pick the smallest tensor layer that
@@ -153,16 +159,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
     let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![6.0, 2.0])?;
 
-    let product = backend.with_backend_session(|session| a.matmul(&identity, session))?;
+    let (product, solution, singular_values) = backend.with_backend_session(|session| {
+        let product = a.matmul(&identity, session)?;
+        let solution = product.solve(&rhs, session)?;
+        let singular_values = product.svdvals(session)?;
+        Ok::<_, tenferro_runtime::Error>((product, solution, singular_values))
+    })?;
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
-
-    let (u, s, vt) = backend.with_backend_session(|session| product.svd(session))?;
-    assert_eq!(u.shape(), &[2, 2]);
-    assert_eq!(s.shape(), &[2]);
-    assert_eq!(vt.shape(), &[2, 2]);
-    assert_close(s.as_slice()?, &[3.0, 1.0]);
+    assert_close(solution.as_slice()?, &[2.0, 2.0]);
+    assert_close(singular_values.as_slice()?, &[3.0, 1.0]);
 
     Ok(())
 }
@@ -170,9 +178,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <!-- end-snippet-source -->
 
 Expected output: the program exits silently because the shape and value
-assertions pass. The same explicit `CpuBackend` instance is reused for ordinary
-tensor operations and `svd_read`. The `from_vec_col_major` buffer is
-column-major: the leftmost axis varies fastest in memory.
+assertions pass. The same explicit `CpuBackend` session owns matmul, solve, and
+values-only SVD. The `from_vec_col_major` buffer is column-major: the leftmost
+axis varies fastest in memory.
 
 ## Quickstart B: Traced AD
 

@@ -20,10 +20,12 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
 
     host.with_backend_session(|session| {
         let (_u, s, _vt) = input.svd(session).unwrap();
+        let svdvals = input.svdvals(session).unwrap();
         let (_q, r) = TensorRead::from_tensor(&input).qr_read(session).unwrap();
         let (sign, logabsdet) = input.slogdet(session).unwrap();
 
         assert_eq!(s.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
+        assert_eq!(svdvals.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
         assert_eq!(r.shape(), &[2, 2]);
         assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
         assert!((logabsdet.as_slice::<f64>().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
@@ -56,9 +58,13 @@ fn typed_surface_exposes_associated_real_and_complex_outputs() {
             TypedTensor<f64>,
             TypedTensor<Complex64>,
         ) = complex.svd(session).unwrap();
+        let real_values: TypedTensor<f64> = real.svdvals(session).unwrap();
+        let complex_values: TypedTensor<f64> = complex.svdvals(session).unwrap();
 
         assert_eq!(singular_values.as_slice().unwrap(), &[4.0, 2.0]);
         assert_eq!(complex_singular_values.as_slice().unwrap(), &[4.0, 2.0]);
+        assert_eq!(real_values.as_slice().unwrap(), &[4.0, 2.0]);
+        assert_eq!(complex_values.as_slice().unwrap(), &[4.0, 2.0]);
         assert_eq!(eigenvalues.shape(), &[2]);
     });
 }
@@ -105,12 +111,17 @@ fn read_surface_accepts_a_strided_view_without_an_input_clone() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 0.0, 0.0, 2.0, 0.0, 0.0])
             .unwrap();
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
+    let values_view = input.as_view().transpose_view([1, 0]).unwrap();
     let read = TensorRead::from_view(f64::tensor_view(transposed));
     let mut host = CpuBackend::new();
 
     host.with_backend_session(|session| {
         let (_u, singular_values, _vt) = read.svd_read(session).unwrap();
+        let values = TensorRead::from_view(f64::tensor_view(values_view))
+            .svdvals_read(session)
+            .unwrap();
         assert_eq!(singular_values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
+        assert_eq!(values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
     });
 }
 
@@ -205,11 +216,15 @@ fn read_surface_covers_factorizations_and_composites() {
         TensorRead::from_tensor(&a).slogdet_read(session).unwrap();
         TensorRead::from_tensor(&a).det_read(session).unwrap();
         TensorRead::from_tensor(&a).inv_read(session).unwrap();
+        let svdvals = TensorRead::from_tensor(&a).svdvals_read(session).unwrap();
         let eigvalsh = TensorRead::from_tensor(&a).eigvalsh_read(session).unwrap();
         let eigvals = TensorRead::from_tensor(&a).eigvals_read(session).unwrap();
         // Values-only reads must still produce the same eigenvalues as the
         // full decomposition surfaces (issue #1666). A = [[4, 1], [1, 3]] has
         // eigenvalues (7 ± √5) / 2.
+        let svdvals_values = svdvals.as_slice::<f64>().unwrap();
+        assert!((svdvals_values[0] - (7.0 + 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
+        assert!((svdvals_values[1] - (7.0 - 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
         let eigvalsh_values = eigvalsh.as_slice::<f64>().unwrap();
         assert!((eigvalsh_values[0] - (7.0 - 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
         assert!((eigvalsh_values[1] - (7.0 + 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);

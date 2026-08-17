@@ -298,6 +298,14 @@ pub trait LinalgBackend: BackendSession {
         ))
     }
 
+    #[doc(hidden)]
+    fn svd_values_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "svd_values",
+            "backend does not implement borrowed singular-values-only decomposition",
+        ))
+    }
+
     /// Compute public QR outputs `(Q, R)`.
     ///
     /// QR is thin: for an `m x n` input, `Q` has shape `m x min(m, n)` and
@@ -672,6 +680,14 @@ pub trait LinalgBackend: BackendSession {
                 "backend {} does not implement internal Hermitian eigenvalues-only decomposition",
                 std::any::type_name::<Self>()
             ),
+        ))
+    }
+
+    #[doc(hidden)]
+    fn eigh_values_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "eigh_values",
+            "backend does not implement borrowed Hermitian eigenvalues-only decomposition",
         ))
     }
 

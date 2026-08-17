@@ -16,10 +16,10 @@
 use faer::linalg::matmul::matmul;
 use faer::linalg::solvers::Solve;
 use faer::{Accum, Mat, MatMut, MatRef, Par};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{CpuBackend, FaerParallelismExt};
 use tenferro_tensor::{
-    BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind, Placement,
-    StorageBuffer, TensorViewCanonicalization, TypedTensor, TypedTensorView,
+    BackendSessionHost, BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind,
+    Placement, StorageBuffer, TensorViewCanonicalization, TypedTensor, TypedTensorView,
 };
 
 fn assert_close(actual: f64, expected: f64, context: &str) {
@@ -127,6 +127,36 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
 }
 // snippet-end:faer-solve
 
+// snippet-start:faer-session-parallelism
+fn faer_parallelism_from_session() -> tenferro_tensor::Result<()> {
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
+    let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0])?;
+    let mut backend = CpuBackend::with_threads(2)?;
+    let mut product = Mat::<f64>::zeros(2, 2);
+    backend.with_backend_session(|session| {
+        session.with_faer_parallelism(|parallel| {
+            let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
+            let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 2);
+            matmul(
+                product.as_mut(),
+                Accum::Replace,
+                a_view,
+                b_view,
+                1.0,
+                parallel,
+            );
+            Ok(())
+        })
+    })?;
+    let product = product.as_ref();
+    assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");
+    assert_close(*product.get(1, 0), 43.0, "A * B (1,0)");
+    assert_close(*product.get(0, 1), 22.0, "A * B (0,1)");
+    assert_close(*product.get(1, 1), 50.0, "A * B (1,1)");
+    Ok(())
+}
+// snippet-end:faer-session-parallelism
+
 // snippet-start:faer-non-contiguous
 fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Result<()> {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])?;
@@ -198,6 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     faer_immutable_view()?;
     faer_mutable_view()?;
     faer_solve_on_zero_copy_views()?;
+    faer_parallelism_from_session()?;
     faer_rejects_non_contiguous_without_materializing()?;
     faer_rejects_non_host_storage()?;
     println!("faer_interop: all checks passed");

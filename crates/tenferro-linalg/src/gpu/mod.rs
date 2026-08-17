@@ -82,6 +82,27 @@ impl LinalgBackend for CudaExecSession<'_> {
         }
     }
 
+    fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        let input = input.tensor_view();
+        match input {
+            TensorView::F32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.svd_values(&Tensor::F32(input))),
+            TensorView::F64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.svd_values(&Tensor::F64(input))),
+            TensorView::C32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.svd_values(&Tensor::C32(input))),
+            TensorView::C64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.svd_values(&Tensor::C64(input))),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("svd_values", input.dtype()))
+            }
+        }
+    }
+
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         linalg::qr(self, input)
     }
@@ -266,6 +287,27 @@ impl LinalgBackend for CudaExecSession<'_> {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::eigh_values(self, input)
+    }
+
+    fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        let input = input.tensor_view();
+        match input {
+            TensorView::F32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.eigh_values(&Tensor::F32(input))),
+            TensorView::F64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.eigh_values(&Tensor::F64(input))),
+            TensorView::C32(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.eigh_values(&Tensor::C32(input))),
+            TensorView::C64(view) => self
+                .to_contiguous(&view)
+                .and_then(|input| self.eigh_values(&Tensor::C64(input))),
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("eigh_values", input.dtype()))
+            }
+        }
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {

@@ -2,7 +2,9 @@
 
 Choose the tier before choosing the method. Direct operations run inside an explicit
 `with_backend_session` entry; eager operations run through an `EagerRuntime`;
-traced operations build a graph and execute it later.
+traced operations build a graph and execute it later. If an older example refers
+to a removed module, free function, or fallible-constructor change, start with
+the [API migration guide](../../../../docs/getting-started/api-migration.md).
 
 ## Direct concrete tensors
 

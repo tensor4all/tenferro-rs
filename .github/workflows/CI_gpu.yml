@@ -36,6 +36,7 @@ env:
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
   PJRT_ARCHIVE: pjrt-tests.tar.zst
+  CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst
   CUDA_RUNTIME_VERSION: "12.8"
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
@@ -177,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
-          echo "key=cuda-pjrt-archive-v6-ci-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+          echo "key=cuda-pjrt-archive-v7-ci-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', 'docs/tutorial-code/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
       - name: Cache CUDA/PJRT test archives
         uses: actions/cache@v4
         id: cuda_archive_cache
@@ -185,6 +186,7 @@ jobs:
           path: |
             ${{ env.CUDA_ARCHIVE }}
             ${{ env.PJRT_ARCHIVE }}
+            ${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
       - uses: Swatinem/rust-cache@v2
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
@@ -220,6 +222,14 @@ jobs:
             --archive-file "${PJRT_ARCHIVE}" \
             -p tenferro-xla \
             --features pjrt
+
+      - name: Build CUDA tutorial artifact
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path docs/tutorial-code/Cargo.toml \
+            --no-default-features --features cuda,cpu-faer --bin cuda_tutorial
+          tar --zstd -cf "${CUDA_TUTORIAL_ARCHIVE}" -C target/release cuda_tutorial
       - name: Verify CUDA/PJRT test archives
         env:
           ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
@@ -231,6 +241,10 @@ jobs:
           fi
           if [ ! -f "${PJRT_ARCHIVE}" ]; then
             echo "Missing archive: ${PJRT_ARCHIVE}"
+            exit 1
+          fi
+          if [ ! -f "${CUDA_TUTORIAL_ARCHIVE}" ]; then
+            echo "Missing archive: ${CUDA_TUTORIAL_ARCHIVE}"
             exit 1
           fi
           if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
@@ -245,6 +259,7 @@ jobs:
           path: |
             ${{ env.CUDA_ARCHIVE }}
             ${{ env.PJRT_ARCHIVE }}
+            ${{ env.CUDA_TUTORIAL_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 
@@ -494,6 +509,15 @@ jobs:
             --no-fail-fast \
             -E 'not (test(eager_backend_capability_boundary) | test(execution_session_capability_cannot_project_or_escape_owner_borrow) | test(cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark))' \
             -j 1
+      - name: Run CUDA tutorial artifact
+        run: |
+          set -euo pipefail
+          tutorial_dir="${RUNNER_TEMP}/cuda-tutorial"
+          rm -rf "${tutorial_dir}"
+          mkdir -p "${tutorial_dir}"
+          tar --zstd -xf "${CUDA_TUTORIAL_ARCHIVE}" -C "${tutorial_dir}"
+          TENFERRO_REQUIRE_CUDA=1 "${tutorial_dir}/cuda_tutorial"
+
       - name: Run OpenXLA PJRT E2E tests from archive
         env:
           NEXTEST_TEST_THREADS: "1"

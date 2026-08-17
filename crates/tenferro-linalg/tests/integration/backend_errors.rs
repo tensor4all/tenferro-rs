@@ -385,6 +385,28 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
+        .svd_values_read(TensorRead::from_tensor(&owned_input))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "svd_values",
+            ref message,
+        } if message.contains("borrowed singular-values-only")
+    ));
+
+    let err = backend
+        .eigh_values_read(TensorRead::from_tensor(&owned_input))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "eigh_values",
+            ref message,
+        } if message.contains("borrowed Hermitian")
+    ));
+
+    let err = backend
         .qr_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
 

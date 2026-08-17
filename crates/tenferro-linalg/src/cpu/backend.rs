@@ -354,48 +354,10 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
-        match linalg_provider_kind(self.kind(), "svd_values")? {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    self.with_linalg_pool_fresh(|ctx, buffers| match input {
-                        Tensor::F32(t) => {
-                            linalg::faer::svd_values(ctx, buffers, t).map(Tensor::F32)
-                        }
-                        Tensor::F64(t) => {
-                            linalg::faer::svd_values(ctx, buffers, t).map(Tensor::F64)
-                        }
-                        Tensor::C32(t) => {
-                            linalg::faer::svd_values(ctx, buffers, t).map(Tensor::F32)
-                        }
-                        Tensor::C64(t) => {
-                            linalg::faer::svd_values(ctx, buffers, t).map(Tensor::F64)
-                        }
-                        _ => Err(unsupported_dtype("svd_values", input.dtype())),
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("svd_values", self.kind()))
-                }
-            }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.with_linalg_pool_fresh(|_, buffers| match input {
-                        Tensor::F32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
-                        Tensor::F64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
-                        Tensor::C32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
-                        Tensor::C64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
-                        _ => Err(unsupported_dtype("svd_values", input.dtype())),
-                    })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unsupported_provider("svd_values", self.kind()))
-                }
-            }
-        }
+        let provider = linalg_provider_kind(self.kind(), "svd_values")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            svd_values_entered(provider, context, buffers, input)
+        })
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -409,6 +371,21 @@ impl LinalgBackend for CpuExecSession<'_> {
             }
             context.with_materialized_tensor_read(buffers, "svd", input, |input, buffers| {
                 svd_entered(provider, context, buffers, input)
+            })
+        })
+    }
+
+    fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor_read("svd_values", &input)?;
+        ensure_supported_linalg_dtype("svd_values", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "svd_values")?;
+        self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return svd_values_faer_view_entered(context, buffers, input.tensor_view());
+            }
+            context.with_materialized_tensor_read(buffers, "svd_values", input, |input, buffers| {
+                svd_values_entered(provider, context, buffers, input)
             })
         })
     }
@@ -456,6 +433,24 @@ impl LinalgBackend for CpuExecSession<'_> {
             context.with_materialized_tensor_read(buffers, "eigh", input, |input, buffers| {
                 eigh_entered(provider, context, buffers, input)
             })
+        })
+    }
+
+    fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor_read("eigh_values", &input)?;
+        ensure_supported_linalg_dtype("eigh_values", input.dtype())?;
+        let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
+        self.with_linalg_pool_fresh(move |context, buffers| {
+            #[cfg(feature = "cpu-faer")]
+            if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
+                return eigh_values_faer_view_entered(context, buffers, input.tensor_view());
+            }
+            context.with_materialized_tensor_read(
+                buffers,
+                "eigh_values",
+                input,
+                |input, buffers| eigh_values_entered(provider, context, buffers, input),
+            )
         })
     }
 
@@ -527,48 +522,10 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eigh_values", input)?;
-        match linalg_provider_kind(self.kind(), "eigh_values")? {
-            CpuLinalgProvider::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    self.with_linalg_pool_fresh(|ctx, buffers| match input {
-                        Tensor::F32(t) => {
-                            linalg::faer::eigh_values(ctx, buffers, t).map(Tensor::F32)
-                        }
-                        Tensor::F64(t) => {
-                            linalg::faer::eigh_values(ctx, buffers, t).map(Tensor::F64)
-                        }
-                        Tensor::C32(t) => {
-                            linalg::faer::eigh_values(ctx, buffers, t).map(Tensor::F32)
-                        }
-                        Tensor::C64(t) => {
-                            linalg::faer::eigh_values(ctx, buffers, t).map(Tensor::F64)
-                        }
-                        _ => Err(unsupported_dtype("eigh_values", input.dtype())),
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unsupported_provider("eigh_values", self.kind()))
-                }
-            }
-            CpuLinalgProvider::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.with_linalg_pool_fresh(|_, buffers| match input {
-                        Tensor::F32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
-                        Tensor::F64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
-                        Tensor::C32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
-                        Tensor::C64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
-                        _ => Err(unsupported_dtype("eigh_values", input.dtype())),
-                    })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unsupported_provider("eigh_values", self.kind()))
-                }
-            }
-        }
+        let provider = linalg_provider_kind(self.kind(), "eigh_values")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            eigh_values_entered(provider, context, buffers, input)
+        })
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1662,6 +1619,59 @@ fn svd_entered(
     }
 }
 
+fn svd_values_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Tensor> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input {
+                    Tensor::F32(t) => {
+                        linalg::faer::svd_values(context, buffers, t).map(Tensor::F32)
+                    }
+                    Tensor::F64(t) => {
+                        linalg::faer::svd_values(context, buffers, t).map(Tensor::F64)
+                    }
+                    Tensor::C32(t) => {
+                        linalg::faer::svd_values(context, buffers, t).map(Tensor::F32)
+                    }
+                    Tensor::C64(t) => {
+                        linalg::faer::svd_values(context, buffers, t).map(Tensor::F64)
+                    }
+                    _ => Err(unsupported_dtype("svd_values", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("svd_values", CpuBackendKind::Faer))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match input {
+                    Tensor::F32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
+                    Tensor::F64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
+                    Tensor::C32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
+                    Tensor::C64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
+                    _ => Err(unsupported_dtype("svd_values", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("svd_values", CpuBackendKind::Blas))
+            }
+        }
+    }
+}
+
 fn qr_entered(
     provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
@@ -1770,6 +1780,59 @@ fn eigh_entered(
     }
 }
 
+fn eigh_values_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Tensor> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input {
+                    Tensor::F32(t) => {
+                        linalg::faer::eigh_values(context, buffers, t).map(Tensor::F32)
+                    }
+                    Tensor::F64(t) => {
+                        linalg::faer::eigh_values(context, buffers, t).map(Tensor::F64)
+                    }
+                    Tensor::C32(t) => {
+                        linalg::faer::eigh_values(context, buffers, t).map(Tensor::F32)
+                    }
+                    Tensor::C64(t) => {
+                        linalg::faer::eigh_values(context, buffers, t).map(Tensor::F64)
+                    }
+                    _ => Err(unsupported_dtype("eigh_values", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("eigh_values", CpuBackendKind::Faer))
+            }
+        }
+        CpuLinalgProvider::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                let _ = context;
+                match input {
+                    Tensor::F32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
+                    Tensor::F64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
+                    Tensor::C32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
+                    Tensor::C64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
+                    _ => Err(unsupported_dtype("eigh_values", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("eigh_values", CpuBackendKind::Blas))
+            }
+        }
+    }
+}
+
 fn eig_entered(
     provider: CpuLinalgProvider,
     context: &CpuExecutionContext<'_>,
@@ -1843,6 +1906,29 @@ fn svd_faer_view_entered(
 }
 
 #[cfg(feature = "cpu-faer")]
+fn svd_values_faer_view_entered(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: TensorView<'_>,
+) -> tenferro_tensor::Result<Tensor> {
+    match input {
+        TensorView::F32(view) => {
+            linalg::faer::svd_values_view(context, buffers, view).map(Tensor::F32)
+        }
+        TensorView::F64(view) => {
+            linalg::faer::svd_values_view(context, buffers, view).map(Tensor::F64)
+        }
+        TensorView::C32(view) => {
+            linalg::faer::svd_values_view(context, buffers, view).map(Tensor::F32)
+        }
+        TensorView::C64(view) => {
+            linalg::faer::svd_values_view(context, buffers, view).map(Tensor::F64)
+        }
+        unsupported => Err(unsupported_dtype("svd_values", unsupported.dtype())),
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
 fn qr_faer_view_entered(
     context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -1877,6 +1963,29 @@ fn eigh_faer_view_entered(
         TensorView::C64(view) => linalg::faer::eigh_view(context, buffers, view)
             .and_then(eigh_c64_outputs_to_public_tensors),
         unsupported => Err(unsupported_dtype("eigh", unsupported.dtype())),
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
+fn eigh_values_faer_view_entered(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: TensorView<'_>,
+) -> tenferro_tensor::Result<Tensor> {
+    match input {
+        TensorView::F32(view) => {
+            linalg::faer::eigh_values_view(context, buffers, view).map(Tensor::F32)
+        }
+        TensorView::F64(view) => {
+            linalg::faer::eigh_values_view(context, buffers, view).map(Tensor::F64)
+        }
+        TensorView::C32(view) => {
+            linalg::faer::eigh_values_view(context, buffers, view).map(Tensor::F32)
+        }
+        TensorView::C64(view) => {
+            linalg::faer::eigh_values_view(context, buffers, view).map(Tensor::F64)
+        }
+        unsupported => Err(unsupported_dtype("eigh_values", unsupported.dtype())),
     }
 }
 

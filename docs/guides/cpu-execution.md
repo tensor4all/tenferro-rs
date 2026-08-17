@@ -83,6 +83,28 @@ waiting for it from the outer execution can deadlock. Finish the outer backend
 execution before launching new top-level backend calls. Ordinary Rayon work
 that does not re-enter a CPU backend remains supported.
 
+### Scoped direct faer calls
+
+Downstream code that needs a faer routine not exposed by tenferro can use
+`tenferro_cpu::FaerParallelismExt` on the active `BackendSession`:
+
+```text
+backend.with_backend_session(|session| {
+    session.with_faer_parallelism(|parallel| {
+        faer_operation(..., parallel)
+    })
+})?;
+```
+
+The callback receives the same policy as an internal faer operation: bounded
+`Par::rayon(n)` for managed multi-thread inner execution, and `Par::Seq` for
+one-thread or already-inner/outer-worker execution. The capability is lexical;
+it does not expose the Rayon pool, executor handle, mutable CPU context, or a
+value that can outlive the callback. Calling tenferro backend/session methods
+from the callback remains unsupported and retains the existing reentrancy
+diagnostics. This guarantee applies to direct faer/Rayon-compatible calls, not
+to workers created internally by OpenBLAS, MKL, Accelerate, or OpenMP.
+
 ## External BLAS Providers
 
 OpenBLAS, Intel MKL, Apple Accelerate, and OpenMP-backed BLAS implementations
