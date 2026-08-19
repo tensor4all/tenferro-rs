@@ -1,10 +1,12 @@
 use crate::{
     backend::{
-        validate_dot_general_read_into, validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob,
+        validate_axpby_read_into_accum, validate_dot_general_read_into, validate_grouped_gemm,
+        GroupedGemmConfig, GroupedGemmJob,
     },
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
-    ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    AllocationDomainId, AllocationId, BackendCachedDot, BackendRuntimeCache, BackendSession,
+    BackendSessionHost, BackendStorage, CompareDir, ContractionScalar, DType,
+    DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig, Placement, ScatterConfig,
+    SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
@@ -534,6 +536,102 @@ impl BackendSession for DefaultReadBackend {
 impl BackendSessionHost for DefaultReadBackend {}
 
 impl TensorBackend for DefaultReadBackend {}
+
+#[test]
+fn blas1_session_defaults_are_unsupported_without_transfer_or_fallback() {
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap();
+    let mut backend = DefaultReadBackend::default();
+
+    let vdot = backend.vdot_read(
+        TensorRead::from_tensor(&input),
+        TensorRead::from_tensor(&input),
+    );
+    let norm = backend.norm_squared_read(TensorRead::from_tensor(&input));
+    let axpby = backend.axpby_read_into_accum(
+        ContractionScalar::F64(1.0),
+        TensorRead::from_tensor(&input),
+        ContractionScalar::F64(1.0),
+        TensorWrite::from_tensor(&mut output),
+    );
+
+    for result in [vdot.map(|_| ()), norm.map(|_| ()), axpby] {
+        assert!(matches!(result, Err(crate::Error::Unsupported { .. })));
+    }
+    assert!(backend.calls.is_empty());
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[10.0, 20.0]);
+}
+
+#[derive(Debug)]
+struct AliasedBackendStorage {
+    domain: AllocationDomainId,
+    allocation: AllocationId,
+    len: usize,
+}
+
+impl BackendStorage<f64> for AliasedBackendStorage {
+    fn backend_family(&self) -> &'static str {
+        "blas1-alias-test"
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
+fn blas1_axpby_rejects_backend_alias_before_execution() {
+    let domain = AllocationDomainId::fresh();
+    let allocation = AllocationId::from_backend_id(1713);
+    let storage = || {
+        StorageBuffer::Backend(Box::new(AliasedBackendStorage {
+            domain,
+            allocation,
+            len: 2,
+        }))
+    };
+    let placement = Placement {
+        memory_kind: crate::MemoryKind::Device,
+        device: None,
+        cpu_affinity: None,
+    };
+    let x = Tensor::F64(
+        TypedTensor::from_buffer_col_major(vec![2], storage(), placement.clone()).unwrap(),
+    );
+    let mut y =
+        Tensor::F64(TypedTensor::from_buffer_col_major(vec![2], storage(), placement).unwrap());
+
+    let error = validate_axpby_read_into_accum(
+        ContractionScalar::F64(1.0),
+        &TensorRead::from_tensor(&x),
+        ContractionScalar::F64(1.0),
+        &TensorWrite::from_tensor(&mut y),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument {
+                argument: "out",
+                ..
+            },
+            ..
+        }
+    ));
+}
 
 #[test]
 fn default_read_methods_delegate_owned_tensors_and_reject_views() {

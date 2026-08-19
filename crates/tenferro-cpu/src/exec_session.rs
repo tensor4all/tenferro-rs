@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
     CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
-    PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TypedTensor,
+    PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TensorView, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -67,6 +67,36 @@ fn allocate_dot_output(
             dtype,
             crate::cpu_contraction_unsupported_dtype_message(dtype),
         )),
+    }
+}
+
+fn flatten_compact_read(
+    input: TensorRead<'_>,
+    element_count: usize,
+) -> crate::Result<TensorRead<'_>> {
+    macro_rules! flatten {
+        ($variant:ident, $view:expr) => {
+            Ok(TensorRead::from_view(TensorView::$variant(
+                $view.try_reshape(&[element_count])?,
+            )))
+        };
+    }
+
+    match input {
+        TensorRead::Tensor(Tensor::F32(tensor)) => flatten!(F32, tensor.as_view()),
+        TensorRead::Tensor(Tensor::F64(tensor)) => flatten!(F64, tensor.as_view()),
+        TensorRead::Tensor(Tensor::I32(tensor)) => flatten!(I32, tensor.as_view()),
+        TensorRead::Tensor(Tensor::I64(tensor)) => flatten!(I64, tensor.as_view()),
+        TensorRead::Tensor(Tensor::Bool(tensor)) => flatten!(Bool, tensor.as_view()),
+        TensorRead::Tensor(Tensor::C32(tensor)) => flatten!(C32, tensor.as_view()),
+        TensorRead::Tensor(Tensor::C64(tensor)) => flatten!(C64, tensor.as_view()),
+        TensorRead::View(TensorView::F32(view)) => flatten!(F32, view),
+        TensorRead::View(TensorView::F64(view)) => flatten!(F64, view),
+        TensorRead::View(TensorView::I32(view)) => flatten!(I32, view),
+        TensorRead::View(TensorView::I64(view)) => flatten!(I64, view),
+        TensorRead::View(TensorView::Bool(view)) => flatten!(Bool, view),
+        TensorRead::View(TensorView::C32(view)) => flatten!(C32, view),
+        TensorRead::View(TensorView::C64(view)) => flatten!(C64, view),
     }
 }
 
@@ -870,6 +900,57 @@ impl TensorFusion for CpuExecSession<'_> {
 }
 
 impl BackendSession for CpuExecSession<'_> {
+    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
+        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &lhs)?;
+        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &rhs)?;
+        let element_count = tenferro_tensor::validate::checked_shape_product(
+            "BackendSession::vdot_read",
+            "shape",
+            lhs.shape(),
+        )?;
+        let (lhs, rhs, rank) = if lhs.shape().len() > 2
+            && lhs.is_col_major_contiguous()?
+            && rhs.is_col_major_contiguous()?
+        {
+            (
+                flatten_compact_read(lhs, element_count)?,
+                flatten_compact_read(rhs, element_count)?,
+                1,
+            )
+        } else {
+            let rank = lhs.shape().len();
+            (lhs, rhs, rank)
+        };
+        let axes = (0..rank).collect::<Vec<_>>();
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: axes.clone(),
+            rhs_contracting_dims: axes,
+            lhs_batch_dims: Vec::new(),
+            rhs_batch_dims: Vec::new(),
+        };
+        self.execute_dot_allocated(None, lhs, rhs, &config, true, false)
+    }
+
+    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        tenferro_tensor::backend::validate_norm_squared_read(&input)?;
+        crate::blas1::validate_cpu_read("BackendSession::norm_squared_read", &input)?;
+        self.run_native_fresh(|buffers| reduction::norm_squared_read(buffers, input))
+    }
+
+    fn axpby_read_into_accum(
+        &mut self,
+        alpha: ContractionScalar,
+        x: TensorRead<'_>,
+        beta: ContractionScalar,
+        y: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        tenferro_tensor::backend::validate_axpby_read_into_accum(alpha, &x, beta, &y)?;
+        self.run_native_with_context(|context, buffers| {
+            crate::blas1::axpby_read_into_accum(context, buffers, alpha, x, beta, y)
+        })
+    }
+
     fn session_type_id(&self) -> TypeId {
         TypeId::of::<CpuExecSessionMarker>()
     }

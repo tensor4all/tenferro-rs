@@ -152,3 +152,31 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 - Runtime/fixture warning-denied clippy, formatting, and diff checks passed.
 
 Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.
+
+## Issue 1713: session-scoped BLAS-1
+
+### Design and review gate
+
+- Design: [`../design/session-blas1.md`](../design/session-blas1.md)
+- Reviewer: `reviewer-flash-opencode-go`, read-only
+- Pre-implementation verdict: **Correct-to-merge**.
+
+### Decisions
+
+- Add object-safe default-unsupported methods directly to `BackendSession`; unsupported backends cannot transfer or fall back.
+- Reuse all-axis dot-general with lhs conjugation for VDOT and strided-kernel reduction for real norm-squared output.
+- Reuse `ContractionScalar` with exact dtype matching.
+- Implement fused compact-destination AXPBY as the accepted issue-specific RMW exception because strided-rs has no in-place read-modify-write primitive; validate shape/dtype/placement/compactness/overlap before mutation.
+- Borrow compact x, materialize a noncompact same-placement x exactly once, and reject noncompact y.
+
+### Verification and measurement
+
+- Tensor/CPU suites: 1461 passed; focused BLAS-1 tests cover F32/F64/C32/C64, lhs-only complex conjugation, rank-N/empty/strided paths, invalid requests, safe backend-alias rejection, unsupported defaults, and a CG microfixture.
+- Steady-state allocation probe: 100 compact 65,536-element AXPBY calls allocated 0 bytes in the counted window.
+- Default cpu-faer, cpu-blas-only, and combined cpu-faer+cpu-blas configurations check successfully.
+- Warning-denied all-target clippy, CPU/tensor doctests, formatting, and diff checks passed.
+- Release Criterion quick medians (approximate): length 1,024 — fused 7.89 µs (1 thread), 13.38 µs (4 threads), manual 1.01 µs; length 65,536 — fused 27.14 µs (1 thread), 24.88 µs (4 threads), manual 68.39 µs. The session/provider boundary dominates tiny vectors; fused parallel execution wins for the representative large vector.
+- VDOT follows provider reduction order; norm-squared deliberately returns the sum of squared magnitudes without `sqrt` and follows strided-kernel reduction order; tests use dtype-appropriate tolerances. AXPBY deliberately rejects noncompact y and materializes only noncompact x.
+- Coverage: `semantic_extension.rs` 92.6%; `blas1.rs` 90.5%; the complete repository coverage gate passes.
+
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**, including a follow-up soundness verdict on compact mutable-view pointer provenance. Combined-PR gates remain pending.

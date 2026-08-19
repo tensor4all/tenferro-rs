@@ -69,6 +69,10 @@ lru.workspace = true
 criterion.workspace = true
 
 [[bench]]
+name = "blas1"
+harness = false
+
+[[bench]]
 name = "dot_general_overhead"
 harness = false
 
