@@ -714,9 +714,12 @@ impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_tropical_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -741,9 +744,12 @@ impl SemanticLinearTransposeRule for TropicalEinsumJvpTransposeRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_tropical_jvp_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -768,9 +774,12 @@ impl SemanticPrimalVjpRule for TropicalEinsumJvpTransposeRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_tropical_jvp_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -795,9 +804,12 @@ impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_tropical_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,

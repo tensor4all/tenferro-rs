@@ -102,3 +102,29 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 - Targeted clippy, doc snippets, and public error docs passed.
 
 Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.
+
+## Issue 1711: checked semantic AD residual access
+
+### Design and review gate
+
+- Design: [`../design/checked-semantic-ad-residual-access.md`](../design/checked-semantic-ad-residual-access.md)
+- Reviewer: `reviewer-flash-opencode-go`, read-only
+- Pre-implementation verdict: **Correct-to-merge**.
+
+### Decisions
+
+- Remove raw primal value slices from transpose/direct primal-VJP requests; linearization remains unrestricted.
+- Add bounds-first, mask-checked value access with typed family/kind/index errors.
+- Snapshot dtype/shape metadata into request-owned boxes so metadata remains available without exposing `ProgramValue` or aliasing the mutable builder.
+- Keep `ResidualSpec` as the only tensor-retention authority; metadata snapshots retain no tensor data.
+- Migrate standard and nested extension rules with no compatibility shim.
+
+### Verification
+
+- Focused semantic-extension tests cover undeclared input/output access, metadata-only access, bounds precedence, and absence of raw request accessors.
+- Wilson-like four-input direct VJP covers inactive inputs and a non-unit cotangent while executing one force node.
+- Debug standard-crate suites: 1347 passed; sparse autodiff: 25 passed; tropical autodiff: 77 passed.
+- Release-mode semantic-extension tests: 5 passed.
+- Workspace/nested checks, formatting, public error docs, and warning-denied clippy passed.
+
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.

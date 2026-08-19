@@ -770,9 +770,12 @@ impl SemanticLinearTransposeRule for SparseMatmulAdRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_sparse_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -797,9 +800,12 @@ impl SemanticLinearTransposeRule for SparseMatmulJvpTransposeRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_sparse_jvp_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -824,9 +830,12 @@ impl SemanticPrimalVjpRule for SparseMatmulJvpTransposeRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_sparse_jvp_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,
@@ -851,9 +860,12 @@ impl SemanticPrimalVjpRule for SparseMatmulAdRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         semantic_sparse_vjp(
             request.op(),
-            request.primal_inputs(),
+            &primal_inputs,
             request.cotangent_outputs()[0],
             request.active_inputs(),
             builder,

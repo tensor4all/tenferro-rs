@@ -163,11 +163,12 @@ impl SemanticPrimalVjpRule for ActionRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut tenferro_runtime::program::SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
-        assert_eq!(request.active_inputs(), &[true, true, true, true]);
         let AdValue::Value(cotangent) = request.cotangent_outputs()[0] else {
-            return Ok(vec![AdValue::Absent; 4].into_boxed_slice());
+            return Ok(vec![AdValue::Absent; request.primal_input_count()].into_boxed_slice());
         };
-        let mut force_inputs = request.primal_inputs().to_vec();
+        let mut force_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<Result<Vec<_>, _>>()?;
         force_inputs.push(cotangent);
         let force_outputs = builder.add_extension(Arc::new(ForceOp), &force_inputs)?;
         Ok(force_outputs
@@ -202,7 +203,7 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
         .collect::<Vec<_>>();
     let input_refs = inputs.iter().collect::<Vec<_>>();
     let action = apply(Arc::new(ActionOp), &input_refs).unwrap().remove(0);
-    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let vjp = ad.vjp_many(&action, &input_refs, &cotangent).unwrap();
     assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 1);
     let force_outputs = vjp
@@ -236,8 +237,23 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
     let program = compiler.compile_many(&force_outputs).unwrap();
     let outputs = runtime.run_compiled(&program, &[]).unwrap();
 
-    let expected = [60.0, 40.0, 30.0, 24.0];
+    let expected = [120.0, 80.0, 60.0, 48.0];
     for (output, expected) in outputs.iter().zip(expected) {
+        assert_eq!(output.as_slice::<f64>().unwrap(), &[expected]);
+    }
+    assert_eq!(FORCE_EXECUTIONS.load(Ordering::SeqCst), 1);
+
+    FORCE_EXECUTIONS.store(0, Ordering::SeqCst);
+    let subset = ad
+        .vjp_many(&action, &[&inputs[0], &inputs[2]], &cotangent)
+        .unwrap()
+        .into_iter()
+        .map(|value| value.unwrap())
+        .collect::<Vec<_>>();
+    let subset_refs = subset.iter().collect::<Vec<_>>();
+    let subset_program = compiler.compile_many(&subset_refs).unwrap();
+    let subset_outputs = runtime.run_compiled(&subset_program, &[]).unwrap();
+    for (output, expected) in subset_outputs.iter().zip([120.0, 60.0]) {
         assert_eq!(output.as_slice::<f64>().unwrap(), &[expected]);
     }
     assert_eq!(FORCE_EXECUTIONS.load(Ordering::SeqCst), 1);

@@ -3,7 +3,7 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::{
-    AdValue, ResidualSpec, SemanticAdError, SemanticExtensionRegistryError,
+    AdValue, PrimalValueKind, ResidualSpec, SemanticAdError, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
@@ -137,8 +137,49 @@ impl SemanticLinearTransposeRule for IdentityRule {
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
         assert_eq!(request.residuals().len(), 1);
-        assert_eq!(request.primal_inputs().len(), 1);
-        assert_eq!(request.primal_outputs().len(), 1);
+        assert_eq!(request.primal_input_count(), 1);
+        assert_eq!(request.primal_output_count(), 1);
+        assert_eq!(request.primal_input_meta(0).unwrap().dtype(), DType::F64);
+        assert_eq!(
+            request.primal_output_meta(0).unwrap().shape(),
+            &[tenferro_ops::shape_extent::ShapeExtent::Exact(
+                DimExpr::Const(2)
+            )]
+        );
+        assert!(matches!(
+            request.primal_input_value(0),
+            Err(SemanticAdError::UndeclaredResidualValue {
+                family_id: "tenferro-ad.semantic-identity.v1",
+                kind: PrimalValueKind::Input,
+                index: 0,
+            })
+        ));
+        assert!(matches!(
+            request.primal_output_value(0),
+            Err(SemanticAdError::UndeclaredResidualValue {
+                family_id: "tenferro-ad.semantic-identity.v1",
+                kind: PrimalValueKind::Output,
+                index: 0,
+            })
+        ));
+        assert!(matches!(
+            request.primal_input_value(1),
+            Err(SemanticAdError::PrimalIndexOutOfBounds {
+                kind: PrimalValueKind::Input,
+                index: 1,
+                len: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            request.primal_output_meta(1),
+            Err(SemanticAdError::PrimalIndexOutOfBounds {
+                kind: PrimalValueKind::Output,
+                index: 1,
+                len: 1,
+                ..
+            })
+        ));
         assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
         assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
@@ -160,9 +201,77 @@ impl SemanticPrimalVjpRule for IdentityRule {
         _builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         assert_eq!(request.active_inputs(), &[true]);
+        assert_eq!(request.primal_input_count(), 1);
+        assert_eq!(request.primal_output_count(), 1);
+        assert_eq!(request.primal_input_meta(0).unwrap().dtype(), DType::F64);
+        assert_eq!(
+            request.primal_output_meta(0).unwrap().shape(),
+            &[tenferro_ops::shape_extent::ShapeExtent::Exact(
+                DimExpr::Const(2)
+            )]
+        );
+        assert!(matches!(
+            request.primal_input_value(0),
+            Err(SemanticAdError::UndeclaredResidualValue {
+                family_id: "tenferro-ad.semantic-identity.v1",
+                kind: PrimalValueKind::Input,
+                index: 0,
+            })
+        ));
+        assert!(matches!(
+            request.primal_output_value(0),
+            Err(SemanticAdError::UndeclaredResidualValue {
+                family_id: "tenferro-ad.semantic-identity.v1",
+                kind: PrimalValueKind::Output,
+                index: 0,
+            })
+        ));
+        assert!(matches!(
+            request.primal_input_value(1),
+            Err(SemanticAdError::PrimalIndexOutOfBounds {
+                kind: PrimalValueKind::Input,
+                index: 1,
+                len: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            request.primal_output_meta(1),
+            Err(SemanticAdError::PrimalIndexOutOfBounds {
+                kind: PrimalValueKind::Output,
+                index: 1,
+                len: 1,
+                ..
+            })
+        ));
         assert!(request.op().family_id().starts_with("tenferro-ad.semantic"));
         assert_eq!(request.residual_mask(), ResidualSpec::none());
         Ok(request.cotangent_outputs().into())
+    }
+}
+
+#[test]
+fn checked_requests_expose_no_raw_primal_value_slices() {
+    let source = include_str!("../../src/semantic_extension.rs");
+    for (start, end) in [
+        (
+            "impl<'a> SemanticLinearTransposeRequest<'a>",
+            "/// Ordered inputs for one direct semantic primal-VJP rule.",
+        ),
+        (
+            "impl<'a> SemanticPrimalVjpRequest<'a>",
+            "/// Definitional JVP rule for one extension family.",
+        ),
+    ] {
+        let body = source
+            .split_once(start)
+            .unwrap()
+            .1
+            .split_once(end)
+            .unwrap()
+            .0;
+        assert!(!body.contains("fn primal_inputs("));
+        assert!(!body.contains("fn primal_outputs("));
     }
 }
 

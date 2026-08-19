@@ -11,8 +11,8 @@ use std::sync::Arc;
 pub use tenferro_ops::ad::ResidualSpec;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::program::{
-    ProgramBuildError, ProgramValue, SemanticOpRef, SemanticOperationView, SemanticProgramBuilder,
-    SemanticProvenanceView,
+    ProgramBuildError, ProgramValue, ProgramValueMetadata, SemanticOpRef, SemanticOperationView,
+    SemanticProgramBuilder, SemanticProvenanceView,
 };
 
 /// One optional semantic AD value.
@@ -65,6 +65,24 @@ pub enum SemanticExtensionRegistryError {
     },
 }
 
+/// Whether a checked semantic AD request refers to a primal input or output.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ad::semantic_extension::PrimalValueKind;
+///
+/// assert_eq!(format!("{:?}", PrimalValueKind::Input), "Input");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrimalValueKind {
+    /// An ordered primal input.
+    Input,
+    /// An ordered primal output.
+    Output,
+}
+
 /// Failures while dispatching or building semantic extension AD.
 #[derive(Debug, thiserror::Error)]
 pub enum SemanticAdError {
@@ -94,6 +112,32 @@ pub enum SemanticAdError {
         expected: usize,
         /// Supplied field length.
         actual: usize,
+    },
+    /// A checked primal value index is outside the request's ordered values.
+    #[error(
+        "semantic extension family {family_id:?} {kind:?} index {index} is out of bounds for length {len}"
+    )]
+    PrimalIndexOutOfBounds {
+        /// Extension family that owns the request.
+        family_id: &'static str,
+        /// Ordered primal collection being accessed.
+        kind: PrimalValueKind,
+        /// Requested index.
+        index: usize,
+        /// Number of values in the collection.
+        len: usize,
+    },
+    /// A checked primal value was not declared as a tensor residual by the rule.
+    #[error(
+        "semantic extension family {family_id:?} may not access undeclared {kind:?} residual value {index}"
+    )]
+    UndeclaredResidualValue {
+        /// Extension family that owns the request.
+        family_id: &'static str,
+        /// Ordered primal collection being accessed.
+        kind: PrimalValueKind,
+        /// Requested index.
+        index: usize,
     },
     /// A request or result value belongs to another builder.
     #[error("semantic AD field {field}[{index}] does not belong to the destination builder")]
@@ -214,11 +258,12 @@ impl SemanticLinearizeResult {
 }
 
 /// Ordered inputs for one semantic linear-transpose rule.
-#[derive(Clone, Copy)]
 pub struct SemanticLinearTransposeRequest<'a> {
     op: &'a dyn ExtensionOp,
     primal_inputs: &'a [ProgramValue],
     primal_outputs: &'a [ProgramValue],
+    primal_input_metadata: Box<[ProgramValueMetadata]>,
+    primal_output_metadata: Box<[ProgramValueMetadata]>,
     cotangent_outputs: &'a [AdValue],
     active_inputs: &'a [bool],
     residuals: &'a [ProgramValue],
@@ -228,54 +273,127 @@ pub struct SemanticLinearTransposeRequest<'a> {
 
 impl<'a> SemanticLinearTransposeRequest<'a> {
     /// Borrow the extension payload.
-    pub const fn op(self) -> &'a dyn ExtensionOp {
+    pub fn op(&self) -> &dyn ExtensionOp {
         self.op
     }
 
-    /// Borrow ordered destination-local primal inputs.
-    pub const fn primal_inputs(self) -> &'a [ProgramValue] {
-        self.primal_inputs
+    /// Return one declared primal input tensor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] before checking the
+    /// residual mask, or [`SemanticAdError::UndeclaredResidualValue`] when the
+    /// rule did not declare this input as a tensor residual.
+    pub fn primal_input_value(&self, index: usize) -> Result<ProgramValue, SemanticAdError> {
+        checked_primal_value(
+            self.op.family_id(),
+            PrimalValueKind::Input,
+            index,
+            self.primal_inputs,
+            self.residual_mask,
+        )
     }
 
-    /// Borrow ordered destination-local primal outputs.
-    pub const fn primal_outputs(self) -> &'a [ProgramValue] {
-        self.primal_outputs
+    /// Return one declared primal output tensor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] before checking the
+    /// residual mask, or [`SemanticAdError::UndeclaredResidualValue`] when the
+    /// rule did not declare this output as a tensor residual.
+    pub fn primal_output_value(&self, index: usize) -> Result<ProgramValue, SemanticAdError> {
+        checked_primal_value(
+            self.op.family_id(),
+            PrimalValueKind::Output,
+            index,
+            self.primal_outputs,
+            self.residual_mask,
+        )
+    }
+
+    /// Borrow metadata for one primal input without exposing its value token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] when `index` is not
+    /// an ordered primal input.
+    pub fn primal_input_meta(
+        &self,
+        index: usize,
+    ) -> Result<&ProgramValueMetadata, SemanticAdError> {
+        checked_primal_metadata(
+            self.op.family_id(),
+            PrimalValueKind::Input,
+            index,
+            &self.primal_input_metadata,
+        )
+    }
+
+    /// Borrow metadata for one primal output without exposing its value token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] when `index` is not
+    /// an ordered primal output.
+    pub fn primal_output_meta(
+        &self,
+        index: usize,
+    ) -> Result<&ProgramValueMetadata, SemanticAdError> {
+        checked_primal_metadata(
+            self.op.family_id(),
+            PrimalValueKind::Output,
+            index,
+            &self.primal_output_metadata,
+        )
+    }
+
+    /// Return the number of ordered primal inputs.
+    #[must_use]
+    pub const fn primal_input_count(&self) -> usize {
+        self.primal_input_metadata.len()
+    }
+
+    /// Return the number of ordered primal outputs.
+    #[must_use]
+    pub const fn primal_output_count(&self) -> usize {
+        self.primal_output_metadata.len()
     }
 
     /// Borrow ordered optional output cotangents.
-    pub const fn cotangent_outputs(self) -> &'a [AdValue] {
+    pub fn cotangent_outputs(&self) -> &[AdValue] {
         self.cotangent_outputs
     }
 
     /// Borrow the ordered active-input mask.
-    pub const fn active_inputs(self) -> &'a [bool] {
+    pub fn active_inputs(&self) -> &[bool] {
         self.active_inputs
     }
 
     /// Borrow ordered residuals produced by linearization.
-    pub const fn residuals(self) -> &'a [ProgramValue] {
+    pub fn residuals(&self) -> &[ProgramValue] {
         self.residuals
     }
 
     /// Return this rule's declared residual mask: which primal input/output
     /// indices may be read as tensor values. Accesses outside the mask must
     /// only use shape/dtype metadata.
-    pub const fn residual_mask(self) -> ResidualSpec {
+    pub const fn residual_mask(&self) -> ResidualSpec {
         self.residual_mask
     }
 
     /// Return bounded operation provenance.
-    pub const fn provenance(self) -> SemanticProvenanceView<'a> {
+    pub const fn provenance(&self) -> SemanticProvenanceView<'a> {
         self.provenance
     }
 }
 
 /// Ordered inputs for one direct semantic primal-VJP rule.
-#[derive(Clone, Copy)]
 pub struct SemanticPrimalVjpRequest<'a> {
     op: &'a dyn ExtensionOp,
     primal_inputs: &'a [ProgramValue],
     primal_outputs: &'a [ProgramValue],
+    primal_input_metadata: Box<[ProgramValueMetadata]>,
+    primal_output_metadata: Box<[ProgramValueMetadata]>,
     cotangent_outputs: &'a [AdValue],
     active_inputs: &'a [bool],
     residual_mask: ResidualSpec,
@@ -284,39 +402,111 @@ pub struct SemanticPrimalVjpRequest<'a> {
 
 impl<'a> SemanticPrimalVjpRequest<'a> {
     /// Borrow the extension payload.
-    pub const fn op(self) -> &'a dyn ExtensionOp {
+    pub fn op(&self) -> &dyn ExtensionOp {
         self.op
     }
 
-    /// Borrow ordered destination-local primal inputs.
-    pub const fn primal_inputs(self) -> &'a [ProgramValue] {
-        self.primal_inputs
+    /// Return one declared primal input tensor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] before checking the
+    /// residual mask, or [`SemanticAdError::UndeclaredResidualValue`] when the
+    /// rule did not declare this input as a tensor residual.
+    pub fn primal_input_value(&self, index: usize) -> Result<ProgramValue, SemanticAdError> {
+        checked_primal_value(
+            self.op.family_id(),
+            PrimalValueKind::Input,
+            index,
+            self.primal_inputs,
+            self.residual_mask,
+        )
     }
 
-    /// Borrow ordered destination-local primal outputs.
-    pub const fn primal_outputs(self) -> &'a [ProgramValue] {
-        self.primal_outputs
+    /// Return one declared primal output tensor value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] before checking the
+    /// residual mask, or [`SemanticAdError::UndeclaredResidualValue`] when the
+    /// rule did not declare this output as a tensor residual.
+    pub fn primal_output_value(&self, index: usize) -> Result<ProgramValue, SemanticAdError> {
+        checked_primal_value(
+            self.op.family_id(),
+            PrimalValueKind::Output,
+            index,
+            self.primal_outputs,
+            self.residual_mask,
+        )
+    }
+
+    /// Borrow metadata for one primal input without exposing its value token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] when `index` is not
+    /// an ordered primal input.
+    pub fn primal_input_meta(
+        &self,
+        index: usize,
+    ) -> Result<&ProgramValueMetadata, SemanticAdError> {
+        checked_primal_metadata(
+            self.op.family_id(),
+            PrimalValueKind::Input,
+            index,
+            &self.primal_input_metadata,
+        )
+    }
+
+    /// Borrow metadata for one primal output without exposing its value token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdError::PrimalIndexOutOfBounds`] when `index` is not
+    /// an ordered primal output.
+    pub fn primal_output_meta(
+        &self,
+        index: usize,
+    ) -> Result<&ProgramValueMetadata, SemanticAdError> {
+        checked_primal_metadata(
+            self.op.family_id(),
+            PrimalValueKind::Output,
+            index,
+            &self.primal_output_metadata,
+        )
+    }
+
+    /// Return the number of ordered primal inputs.
+    #[must_use]
+    pub const fn primal_input_count(&self) -> usize {
+        self.primal_input_metadata.len()
+    }
+
+    /// Return the number of ordered primal outputs.
+    #[must_use]
+    pub const fn primal_output_count(&self) -> usize {
+        self.primal_output_metadata.len()
     }
 
     /// Borrow ordered optional output cotangents.
-    pub const fn cotangent_outputs(self) -> &'a [AdValue] {
+    pub fn cotangent_outputs(&self) -> &[AdValue] {
         self.cotangent_outputs
     }
 
     /// Borrow the ordered active-input mask.
-    pub const fn active_inputs(self) -> &'a [bool] {
+    pub fn active_inputs(&self) -> &[bool] {
         self.active_inputs
     }
 
     /// Return this rule's declared residual mask: which primal input/output
     /// indices may be read as tensor values. Accesses outside the mask must
     /// only use shape/dtype metadata.
-    pub const fn residual_mask(self) -> ResidualSpec {
+    pub const fn residual_mask(&self) -> ResidualSpec {
         self.residual_mask
     }
 
     /// Return bounded operation provenance.
-    pub const fn provenance(self) -> SemanticProvenanceView<'a> {
+    pub const fn provenance(&self) -> SemanticProvenanceView<'a> {
         self.provenance
     }
 }
@@ -648,6 +838,8 @@ impl SemanticExtensionRuleSet {
         validate_len("active_inputs", op.input_count(), active_inputs.len())?;
         validate_ad_values("cotangent_outputs", cotangent_outputs, builder)?;
         validate_values("residuals", residuals, builder)?;
+        let primal_input_metadata = snapshot_metadata(primal_inputs, builder)?;
+        let primal_output_metadata = snapshot_metadata(primal_outputs, builder)?;
         let rule =
             self.lookup_linear_transpose(op.family_id())
                 .ok_or(SemanticAdError::MissingRule {
@@ -659,6 +851,8 @@ impl SemanticExtensionRuleSet {
                 op,
                 primal_inputs,
                 primal_outputs,
+                primal_input_metadata,
+                primal_output_metadata,
                 cotangent_outputs,
                 active_inputs,
                 residuals,
@@ -699,6 +893,8 @@ impl SemanticExtensionRuleSet {
         )?;
         validate_len("active_inputs", op.input_count(), active_inputs.len())?;
         validate_ad_values("cotangent_outputs", cotangent_outputs, builder)?;
+        let primal_input_metadata = snapshot_metadata(primal_inputs, builder)?;
+        let primal_output_metadata = snapshot_metadata(primal_outputs, builder)?;
         let rule = self
             .lookup_primal_vjp(op.family_id())
             .ok_or(SemanticAdError::MissingRule {
@@ -710,6 +906,8 @@ impl SemanticExtensionRuleSet {
                 op,
                 primal_inputs,
                 primal_outputs,
+                primal_input_metadata,
+                primal_output_metadata,
                 cotangent_outputs,
                 active_inputs,
                 residual_mask: rule.residual_mask(),
@@ -755,6 +953,62 @@ fn validate_operation_inputs(
     )?;
     validate_values("primal_inputs", primal_inputs, builder)?;
     validate_values("primal_outputs", primal_outputs, builder)
+}
+
+fn checked_primal_value(
+    family_id: &'static str,
+    kind: PrimalValueKind,
+    index: usize,
+    values: &[ProgramValue],
+    residual_mask: ResidualSpec,
+) -> Result<ProgramValue, SemanticAdError> {
+    if index >= values.len() {
+        return Err(SemanticAdError::PrimalIndexOutOfBounds {
+            family_id,
+            kind,
+            index,
+            len: values.len(),
+        });
+    }
+    let declared = match kind {
+        PrimalValueKind::Input => residual_mask.declares_input(index),
+        PrimalValueKind::Output => residual_mask.declares_output(index),
+    };
+    if !declared {
+        return Err(SemanticAdError::UndeclaredResidualValue {
+            family_id,
+            kind,
+            index,
+        });
+    }
+    Ok(values[index])
+}
+
+fn checked_primal_metadata<'a>(
+    family_id: &'static str,
+    kind: PrimalValueKind,
+    index: usize,
+    metadata: &'a [ProgramValueMetadata],
+) -> Result<&'a ProgramValueMetadata, SemanticAdError> {
+    metadata
+        .get(index)
+        .ok_or(SemanticAdError::PrimalIndexOutOfBounds {
+            family_id,
+            kind,
+            index,
+            len: metadata.len(),
+        })
+}
+
+fn snapshot_metadata(
+    values: &[ProgramValue],
+    builder: &SemanticProgramBuilder,
+) -> Result<Box<[ProgramValueMetadata]>, SemanticAdError> {
+    values
+        .iter()
+        .copied()
+        .map(|value| Ok(builder.value_metadata(value)?.clone()))
+        .collect()
 }
 
 fn validate_values(
