@@ -1701,6 +1701,89 @@ fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cas
 }
 
 #[test]
+fn tensor_read_as_slice_keeps_compact_owner_pointer_identity() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let expected = tensor.as_slice::<f64>().unwrap();
+
+    let actual = TensorRead::from_tensor(&tensor).as_slice::<f64>().unwrap();
+
+    assert_eq!(actual.as_ptr(), expected.as_ptr());
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn tensor_read_as_slice_keeps_compact_view_pointer_identity() {
+    let data = [1.0_f64, 2.0];
+    let shape = [2];
+    let view = TensorView::f64(&shape, &data).unwrap();
+
+    let actual = TensorRead::from_view(view).as_slice::<f64>().unwrap();
+
+    assert_eq!(actual.as_ptr(), data.as_ptr());
+    assert_eq!(actual, &data);
+}
+
+#[test]
+fn tensor_read_as_slice_rejects_noncompact_typed_view() {
+    let data = [1.0_f64, 2.0, 3.0];
+    let view = TensorView::F64(TypedTensorView::from_slice([2], [2], 0, &data).unwrap());
+
+    let err = TensorRead::from_view(view).as_slice::<f64>().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::InvalidArgument {
+                argument: "layout",
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn tensor_read_as_slice_rejects_dtype_mismatch() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+
+    let err = TensorRead::from_tensor(&tensor)
+        .as_slice::<f32>()
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::DTypeMismatch { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn tensor_read_as_slice_rejects_backend_owned_storage_without_transfer() {
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1709, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+            cpu_affinity: None,
+        },
+    )
+    .unwrap();
+
+    let err = TensorRead::from_tensor(&Tensor::F64(tensor))
+        .as_slice::<f64>()
+        .unwrap_err();
+
+    assert!(matches!(err, Error::RuntimeState { .. }));
+    assert!(err.to_string().contains("download explicitly first"));
+}
+
+#[test]
 fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let read_tensor = TensorRead::from_tensor(&tensor);

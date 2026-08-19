@@ -5283,6 +5283,36 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Borrow this read target as a typed compact host slice without allocation.
+    ///
+    /// This delegates to [`TensorView::as_slice`]. Cloning a `TensorRead` is a
+    /// shallow clone of its borrowed reference or view metadata, so the returned
+    /// slice retains the original `'a` storage lifetime and never outlives the
+    /// storage borrowed by this read target. This method does not materialize,
+    /// transfer, or otherwise canonicalize the input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
+    /// input dtype, [`ValidationError::InvalidArgument`] for a noncompact view,
+    /// or a typed runtime-state host-access error for backend-owned storage.
+    /// Backend-owned
+    /// inputs are never downloaded implicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let read = TensorRead::from_tensor(&tensor);
+    /// assert_eq!(read.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&'a [T]> {
+        self.clone().tensor_view().as_slice()
+    }
+
     pub fn dtype(&self) -> DType {
         match self {
             Self::Tensor(tensor) => tensor.dtype(),

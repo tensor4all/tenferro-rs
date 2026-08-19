@@ -85,7 +85,12 @@ module for each operation family. The macro generates the private engine and
 prepared-operation adapter plus an `extension_module` constructor. Its required
 callback is `execute_reads`, which receives borrowed `TensorRead` inputs and an
 `ExtensionExecutionContext`; the legacy `execute` argument may still be present
-for existing callers but is unused and may be omitted.
+for existing callers but is unused and may be omitted. A host/reference executor
+should use `TensorRead::as_slice::<T>()` to borrow compact host storage directly.
+That accessor never allocates or transfers: it rejects a noncompact view or
+backend-owned buffer with a typed error. If a kernel requires canonical compact
+layout, call `to_contiguous_read` explicitly once and reuse the returned tensor;
+do not silently download backend storage or fall back to CPU.
 
 Extension operation descriptors do not need process-global registration. Construct
 `Arc<dyn ExtensionOp>` and pass it to `tenferro_runtime::extension::apply` for

@@ -52,3 +52,28 @@ The combined-PR local gate, coverage run, deterministic repository-rules review,
 ### Remaining risks
 
 No issue-#1708 blocker remains. Issue #1709 owns allocation behavior beyond establishing the borrowed `execute_reads` boundary.
+
+## Issue 1709: borrowed extension reads
+
+### Design and review gate
+
+- Design: [`../design/borrowed-extension-reads.md`](../design/borrowed-extension-reads.md)
+- Reviewer: `reviewer-flash-opencode-go`, read-only
+- Pre-implementation verdict: **Correct-to-merge** after explicitly recording the shallow-clone/original-storage lifetime invariant.
+
+### Decisions
+
+- Reuse the existing read-based generated executor; the runtime already forwards `TensorRead` unchanged.
+- Add only `TensorRead::as_slice<T>` as an allocation-free convenience over the existing `TensorView::as_slice<T>` contract.
+- Keep noncompact materialization and backend transfer explicit; no macro/runtime policy or fallback was added.
+- Use pointer identity and explicit callback counters as deterministic evidence. Allocator bytes compare borrowed execution against an equivalent output-construction baseline so output/runtime bookkeeping is not misclassified as input duplication.
+
+### Verification
+
+- `cargo test -p tenferro-tensor tensor_read_as_slice`: 5 passed.
+- `cargo test -p tenferro-tensor --doc`: 327 passed.
+- `bash tests/run-extension-authoring-fixture.sh`: passed with four-input pointer checks, explicit materialization count, backend rejection, and allocation comparison.
+- Targeted tensor and external-fixture clippy: passed with warnings denied.
+- Doc snippets and public error docs: passed.
+
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.
