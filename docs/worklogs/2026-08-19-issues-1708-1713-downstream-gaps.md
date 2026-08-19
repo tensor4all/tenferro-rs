@@ -77,3 +77,28 @@ No issue-#1708 blocker remains. Issue #1709 owns allocation behavior beyond esta
 - Doc snippets and public error docs: passed.
 
 Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.
+
+## Issue 1710: multi-input traced JVP and VJP
+
+### Design and review gate
+
+- Design: [`../design/multi-input-traced-ad.md`](../design/multi-input-traced-ad.md)
+- Reviewer: `reviewer-flash-opencode-go`, read-only
+- Pre-implementation verdict: **Correct-to-merge**.
+
+### Decisions
+
+- Compile one semantic source, union one activity mask, run one cached semantic transform, and bind all derivative seeds once.
+- Build all requested VJP traces from one shared derivative graph and one metadata/constraint analysis.
+- Preserve request order and `None` for unreachable leaves; repeat duplicate VJP results without re-accumulation.
+- Reject duplicate JVP leaves from the raw request before compilation; distinct tangents form one directional derivative.
+- Keep single-input APIs source-compatible by delegating through the many-input helpers.
+
+### Verification
+
+- Multi-input integration tests cover two/four inputs, empty and unreachable requests, duplicate policies, metadata errors, transform-cache entry counts, and shared graph identity.
+- A Wilson-like four-input action direct-VJP rule emits one four-output force extension; `compile_many` execution reports exactly one force callback and correct outputs.
+- `cargo test -p tenferro-ad`: 589 passed across unit, integration, and doctest suites.
+- Targeted clippy, doc snippets, and public error docs passed.
+
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.

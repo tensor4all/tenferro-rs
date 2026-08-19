@@ -53,6 +53,8 @@ mod hvp;
 mod iterative_ad;
 #[path = "integration/memory_order_api.rs"]
 mod memory_order_api;
+#[path = "integration/multi_input_traced.rs"]
+mod multi_input_traced;
 #[path = "integration/numpy_api.rs"]
 mod numpy_api;
 #[path = "integration/placement_bound_eager.rs"]
