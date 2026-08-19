@@ -172,7 +172,7 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 ### Verification and measurement
 
 - Tensor/CPU suites: 1461 passed; focused BLAS-1 tests cover F32/F64/C32/C64, lhs-only complex conjugation, rank-N/empty/strided paths, invalid requests, safe backend-alias rejection, unsupported defaults, and a CG microfixture.
-- Steady-state allocation probe: 100 compact 65,536-element AXPBY calls allocated 0 bytes in the counted window.
+- Steady-state allocation probe over 100 compact 65,536-element AXPBY calls: cpu-faer allocated 0 bytes; cpu-blas retained one 1,520-byte provider bookkeeping allocation. Both are far below the 524,288-byte vector size and prove no full-size temporary. The cross-provider gate intentionally allows at most one allocation while requiring total bytes below one vector; it guards the accepted no-full-size-temporary contract rather than an inaccurate provider-independent absolute-zero claim.
 - Default cpu-faer, cpu-blas-only, and combined cpu-faer+cpu-blas configurations check successfully.
 - Warning-denied all-target clippy, CPU/tensor doctests, formatting, and diff checks passed.
 - Release Criterion full 100-sample intervals: length 1,024 — fused 9.602–9.802 µs (1 thread), 13.967–14.200 µs (4 threads), manual 0.855–0.870 µs (1 thread), 1.246–1.272 µs (4 threads); length 65,536 — fused 21.585–22.025 µs (1 thread), 24.619–24.788 µs (4 threads), manual 58.489–59.790 µs (1 thread), 58.159–59.111 µs (4 threads). The session/provider boundary dominates tiny vectors; the fused path is 2.4–2.7x faster for the representative large vector. No multithread speedup claim is made for these sizes.
@@ -187,7 +187,7 @@ Candidate `a608aab624f14e00bdd3570087edae655e8e6a9a` was audited read-only after
 
 - **Specification and architecture** (`reviewer-gpt`): PASS; #1708–#1713 acceptance mappings, dependency ordering, extension/AD/runtime/session boundaries, and migration compatibility closed.
 - **Rust safety and lifecycle** (`reviewer-flash`): PASS; TensorRead lifetime, checked-request ownership, AXPBY alias/pointer proof, and pooled rank-0 initialization were sound. Empty rank-0 shape product is exactly one.
-- **Performance and parallelism** (`deepseek-brainstormer`): PASS against the accepted allocation/one-pass criteria; 0 steady-state AXPBY allocations and full Criterion intervals recorded above. Small-vector and multithread overhead are explicit limitations, not hidden claims.
+- **Performance and parallelism** (`deepseek-brainstormer`): PASS against the accepted allocation/one-pass criteria; provider-specific bounded allocation evidence and full Criterion intervals are recorded above. Small-vector and multithread overhead are explicit limitations, not hidden claims.
 - **Public API and documentation** (built-in `reviewer`): PASS; facades, typed errors, object safety, runnable examples, guides, architecture map, and feature combinations aligned.
 - **CPU and NUMA** (built-in `scout`): PASS; production session routes, provider/strided ownership, placement rejection, serial/owned-Rayon paths, re-entry, and failure behavior aligned. Unchanged multi-socket behavior was not benchmarked.
 - **GPU, XLA, and multi-GPU** (`gpt-brainstormer`): static/API/build PASS; hardware execution unavailable and unaffected by the diff because only CPU overrides the new default-unsupported methods. Hosted CI is the verification owner.
