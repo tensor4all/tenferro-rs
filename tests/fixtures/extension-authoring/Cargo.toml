@@ -1,0 +1,12 @@
+[package]
+name = "extension-authoring-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+tenferro-runtime = { path = "../../../crates/tenferro-runtime", default-features = false, features = ["cpu-faer"] }
+tenferro-tensor = { path = "../../../crates/tenferro-tensor", default-features = false }
+tenferro-cpu = { path = "../../../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }

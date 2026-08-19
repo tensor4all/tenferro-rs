@@ -17,9 +17,9 @@ use tenferro_cpu::{
     CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
-    BackendSessionHost, CpuDomainId, DType, DotGeneralAccumulation, DotGeneralConfig, SliceConfig,
-    Tensor, TensorBuffer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
-    TensorReduction, TensorWrite,
+    BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
+    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot, TensorElementwise,
+    TensorIndexing, TensorRead, TensorReduction, TensorWrite,
 };
 
 struct CountingAllocator;
@@ -285,6 +285,45 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
     assert_eq!(count.bytes, 0);
     assert_eq!(calls.load(Ordering::Relaxed), WARMUP + 2 * ITERATIONS);
     assert_eq!(black_box(output.as_slice::<f64>().unwrap()[0]), 6.0);
+}
+
+#[test]
+fn warmed_compact_axpby_has_no_steady_state_allocation() {
+    let _probe = PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    const ITERATIONS: usize = 100;
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let x = Tensor::from_vec_col_major(vec![65_536], vec![1.0_f64; 65_536]).unwrap();
+    let mut y = Tensor::from_vec_col_major(vec![65_536], vec![2.0_f64; 65_536]).unwrap();
+
+    let count = backend.with_backend_session(|session| {
+        let mut dispatch = || {
+            session
+                .axpby_read_into_accum(
+                    ContractionScalar::F64(0.5),
+                    TensorRead::from_tensor(black_box(&x)),
+                    ContractionScalar::F64(0.5),
+                    TensorWrite::from_tensor(black_box(&mut y)),
+                )
+                .unwrap();
+        };
+        for _ in 0..32 {
+            dispatch();
+        }
+        let first = count_repeated(&mut dispatch, ITERATIONS);
+        let steady = count_repeated(&mut dispatch, ITERATIONS);
+        black_box(first);
+        steady
+    });
+
+    eprintln!("AXPBY steady-state allocation probe: {count:?}");
+    let full_vector_bytes = 65_536 * std::mem::size_of::<f64>();
+    assert!(
+        count.allocations <= 1 && count.bytes < full_vector_bytes,
+        "AXPBY must not allocate a full-size temporary: {count:?}"
+    );
+    assert!((y.as_slice::<f64>().unwrap()[0] - 1.0).abs() < 1.0e-12);
 }
 
 #[test]

@@ -442,6 +442,51 @@ impl AdContext {
         )
     }
 
+    /// Forward-mode directional derivative for multiple distinct traced leaves.
+    ///
+    /// Reachable leaves are transformed together in one derivative graph.
+    /// Unreachable leaves contribute nothing; an empty or fully unreachable
+    /// request returns `None`. Duplicate `wrt` leaves are rejected before the
+    /// transform because one semantic seed slot cannot accept two tangents.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let output = (&x * &y).unwrap();
+    /// assert!(ad.jvp_many(&output, &[(&x, &dx), (&y, &dy)]).unwrap().is_some());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] for duplicate leaves or
+    /// incompatible tangent metadata, [`tenferro_runtime::Error::UnsupportedAdRule`]
+    /// when a required rule is unavailable, or a typed runtime-state error when
+    /// derivative graph construction fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints may fail during later compilation or execution.
+    pub fn jvp_many(
+        &self,
+        output: &TracedTensor,
+        wrt_tangents: &[(&TracedTensor, &TracedTensor)],
+    ) -> Result<Option<TracedTensor>> {
+        crate::traced::jvp_many_with_rules_and_cache(
+            output,
+            wrt_tangents,
+            &self.semantic_extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
+    }
+
     /// Reverse-mode vector-Jacobian product.
     ///
     /// Complex cotangents use tenferro's Hermitian real-inner-product
@@ -514,6 +559,53 @@ impl AdContext {
         crate::traced::vjp_optional_with_rules_and_cache(
             output,
             wrt,
+            cotangent,
+            &self.semantic_extension_rules,
+            Some(self.ad_transform_cache.as_ref()),
+        )
+    }
+
+    /// Reverse-mode products for multiple traced leaves in one derivative graph.
+    ///
+    /// Results align with `wrts`; unreachable leaves produce `None`. Duplicate
+    /// leaves are allowed and repeat the same traced derivative without
+    /// accumulating the cotangent twice. An empty request validates that the
+    /// cotangent has concrete data, then returns an empty vector.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let seed = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let output = (&x * &y).unwrap();
+    /// let products = ad.vjp_many(&output, &[&x, &y], &seed).unwrap();
+    /// assert!(products.iter().all(Option::is_some));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] for invalid cotangent
+    /// metadata, [`tenferro_runtime::Error::UnsupportedAdRule`] when a required
+    /// rule is unavailable, or a typed runtime-state error when derivative graph
+    /// construction fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints may fail during later compilation or execution.
+    pub fn vjp_many(
+        &self,
+        output: &TracedTensor,
+        wrts: &[&TracedTensor],
+        cotangent: &TracedTensor,
+    ) -> Result<Vec<Option<TracedTensor>>> {
+        crate::traced::vjp_many_with_rules_and_cache(
+            output,
+            wrts,
             cotangent,
             &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),

@@ -144,6 +144,12 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let primal_outputs = (0..request.primal_output_count())
+            .map(|index| request.primal_output_value(index))
+            .collect::<Result<Vec<_>, _>>()?;
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::LinearTranspose)?;
         match op.op() {
             LinalgOp::TriangularSolve {
@@ -152,8 +158,8 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 transpose_a,
                 unit_diagonal,
             } => semantic_triangular_solve_transpose(
-                request.primal_inputs(),
-                request.primal_outputs(),
+                &primal_inputs,
+                &primal_outputs,
                 request.cotangent_outputs(),
                 request.active_inputs(),
                 request.residual_mask(),
@@ -170,8 +176,8 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
                 )?;
                 semantic_custom_transpose(
                     request.op(),
-                    request.primal_inputs(),
-                    request.primal_outputs(),
+                    &primal_inputs,
+                    &primal_outputs,
                     request.cotangent_outputs(),
                     &active_inputs,
                     builder,
@@ -180,8 +186,8 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
             }
             LinalgOp::FullPivLuSolve { .. } => semantic_custom_transpose(
                 request.op(),
-                request.primal_inputs(),
-                request.primal_outputs(),
+                &primal_inputs,
+                &primal_outputs,
                 request.cotangent_outputs(),
                 request.active_inputs(),
                 builder,
@@ -189,8 +195,8 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
             ),
             LinalgOp::Solve => semantic_custom_transpose(
                 request.op(),
-                request.primal_inputs(),
-                request.primal_outputs(),
+                &primal_inputs,
+                &primal_outputs,
                 request.cotangent_outputs(),
                 request.active_inputs(),
                 builder,
@@ -203,8 +209,8 @@ impl SemanticLinearTransposeRule for LinalgAdRule {
             }),
             _ => semantic_linearized_transpose(
                 request.op(),
-                request.primal_inputs(),
-                request.primal_outputs(),
+                &primal_inputs,
+                &primal_outputs,
                 request.cotangent_outputs(),
                 request.active_inputs(),
                 builder,

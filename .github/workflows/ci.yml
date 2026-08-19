@@ -211,6 +211,9 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
       - uses: taiki-e/install-action@cargo-llvm-cov
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - name: Run external extension authoring fixture
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: bash tests/run-extension-authoring-fixture.sh
       - name: Generate and enforce coverage
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/ci/run_profile.py coverage

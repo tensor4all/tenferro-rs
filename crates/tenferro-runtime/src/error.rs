@@ -20,11 +20,46 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tenferro_ops::{dim_expr::DimExprEvalError, ShapeRelation, SymDimConversionError};
 use tenferro_tensor::{DType, ErrorKind, ValidationError, ValidationKind};
 
+use crate::runtime::{PrepareError, UnsupportedReason};
+
 static NEXT_CONTEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Boxed source used when a runtime registry or compiler subsystem crosses
 /// the runtime error boundary with a concrete error owned by another crate.
 pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
+
+/// Borrowed, stable classification of a runtime preparation or execution failure.
+///
+/// The view retains references to the original error payloads and performs no
+/// message formatting or allocation. Match a wildcard because this enum is
+/// non-exhaustive.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::{Error, ErrorPhase, RuntimeFailureReasonRef};
+///
+/// let error = Error::unsupported("compare", ErrorPhase::Compile, "not available");
+/// assert!(matches!(
+///     error.reason(),
+///     RuntimeFailureReasonRef::UnsupportedOperation { operation: "compare" }
+/// ));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum RuntimeFailureReasonRef<'a> {
+    /// An operation belongs to an extension family with no installed module.
+    MissingExtension { family: &'a str },
+    /// No prepared engine accepts an input at its physical placement.
+    NoInputIngress {
+        input_index: usize,
+        placement: &'a tenferro_tensor::Placement,
+    },
+    /// A provider or tensor backend does not implement an operation.
+    UnsupportedOperation { operation: &'a str },
+    /// A failure has no stable structured classification.
+    Other,
+}
 
 /// Phase at which a runtime failure was discovered.
 ///
@@ -693,6 +728,46 @@ impl Error {
         }
     }
 
+    /// Return a borrowed stable reason for this runtime failure.
+    ///
+    /// Classification checks the primary error of [`Error::WithSuppressed`],
+    /// then walks the standard source chain. It never parses display text and
+    /// does not allocate; the original error, kind, phase, display, and source
+    /// chain remain unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase, RuntimeFailureReasonRef};
+    ///
+    /// let error = Error::unsupported("compare", ErrorPhase::Compile, "not available");
+    /// assert_eq!(
+    ///     error.reason(),
+    ///     RuntimeFailureReasonRef::UnsupportedOperation { operation: "compare" }
+    /// );
+    /// assert_eq!(Error::Internal("validation".into()).reason(), RuntimeFailureReasonRef::Other);
+    /// ```
+    pub fn reason(&self) -> RuntimeFailureReasonRef<'_> {
+        if let Self::WithSuppressed { primary, .. } = self {
+            return primary.reason();
+        }
+        if let Some(reason) = direct_reason(self) {
+            return reason;
+        }
+
+        let mut source = StdError::source(self);
+        while let Some(error) = source {
+            if let Some(reason) = error.downcast_ref::<Error>().and_then(direct_reason) {
+                return reason;
+            }
+            if let Some(reason) = prepare_reason(error) {
+                return reason;
+            }
+            source = StdError::source(error);
+        }
+        RuntimeFailureReasonRef::Other
+    }
+
     /// Return the stable coarse classification of this runtime failure.
     ///
     /// # Examples
@@ -792,6 +867,53 @@ impl Error {
             _ => None,
         }
     }
+}
+
+fn direct_reason(error: &Error) -> Option<RuntimeFailureReasonRef<'_>> {
+    match error {
+        Error::Unsupported { op, .. } => {
+            Some(RuntimeFailureReasonRef::UnsupportedOperation { operation: op })
+        }
+        Error::UnsupportedAdRule { op, .. } => {
+            Some(RuntimeFailureReasonRef::UnsupportedOperation { operation: op })
+        }
+        Error::TensorRuntime(error) => tensor_reason(error),
+        Error::Extension { family, kind, .. } if *kind == ErrorKind::Unsupported => {
+            Some(RuntimeFailureReasonRef::UnsupportedOperation { operation: family })
+        }
+        _ => None,
+    }
+}
+
+fn tensor_reason(error: &tenferro_tensor::Error) -> Option<RuntimeFailureReasonRef<'_>> {
+    match error {
+        tenferro_tensor::Error::Unsupported { op, .. }
+        | tenferro_tensor::Error::UnsupportedDType { op, .. }
+        | tenferro_tensor::Error::UnsupportedDTypeConversion { op, .. } => {
+            Some(RuntimeFailureReasonRef::UnsupportedOperation { operation: op })
+        }
+        _ => None,
+    }
+}
+
+fn prepare_reason<'a>(error: &'a (dyn StdError + 'static)) -> Option<RuntimeFailureReasonRef<'a>> {
+    let prepare = error.downcast_ref::<PrepareError>()?;
+    Some(match prepare {
+        PrepareError::MissingExtension { family_id } => {
+            RuntimeFailureReasonRef::MissingExtension { family: family_id }
+        }
+        PrepareError::NoInputIngress {
+            input_index,
+            placement,
+        } => RuntimeFailureReasonRef::NoInputIngress {
+            input_index: *input_index,
+            placement,
+        },
+        PrepareError::Unsupported {
+            reason: UnsupportedReason::Operation { operation },
+        } => RuntimeFailureReasonRef::UnsupportedOperation { operation },
+        _ => return None,
+    })
 }
 
 fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {

@@ -1281,7 +1281,7 @@ impl SemanticLinearTransposeRule for FftAdRule {
             request.op(),
             request.cotangent_outputs()[0],
             request.active_inputs()[0],
-            request.primal_inputs()[0],
+            request.primal_input_value(0)?,
             request.residual_mask(),
             builder,
         )?]
@@ -1308,7 +1308,7 @@ impl SemanticPrimalVjpRule for FftAdRule {
             request.op(),
             request.cotangent_outputs()[0],
             request.active_inputs()[0],
-            request.primal_inputs()[0],
+            request.primal_input_value(0)?,
             request.residual_mask(),
             builder,
         )?]

@@ -960,6 +960,12 @@ pub enum PrepareError {
         /// Engine whose preparation capability cannot be used for execution.
         engine_id: EngineId,
     },
+    /// The compiled graph uses an extension family absent from the runtime.
+    #[error("missing extension family {family_id:?}")]
+    MissingExtension {
+        /// Stable extension family identifier.
+        family_id: &'static str,
+    },
     /// No eligible engine declared an ingress compatible with an input placement.
     #[error("no eligible input ingress for input {input_index} at placement {placement:?}")]
     NoInputIngress {

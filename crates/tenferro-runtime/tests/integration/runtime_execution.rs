@@ -27,9 +27,9 @@ use tenferro_runtime::{
     PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
     PreparedOperationExecutor, PreparedOperationPlan, ProviderDeviceIdentity, ProviderId,
     ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
-    RuntimeConfigError, RuntimeInputContract, RuntimeReconfigureError, SpecializationProjection,
-    StorageClass, TracedTensor, TransferEndpoint, TransferError, TransferProvider,
-    TransferProviderContractError, TransferRequest,
+    RuntimeConfigError, RuntimeFailureReasonRef, RuntimeInputContract, RuntimeReconfigureError,
+    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
+    TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, HostAccessError,
@@ -2546,14 +2546,9 @@ fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail
 
     let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
 
-    let prepare_error = error
-        .source()
-        .and_then(StdError::source)
-        .and_then(|source| source.downcast_ref::<PrepareError>())
-        .expect("typed prepare error");
     assert!(matches!(
-        prepare_error,
-        PrepareError::NoInputIngress { input_index: 0, .. }
+        error.reason(),
+        RuntimeFailureReasonRef::NoInputIngress { input_index: 0, .. }
     ));
     assert_eq!(first_counters.execute.load(Ordering::SeqCst), 0);
     assert_eq!(second_counters.execute.load(Ordering::SeqCst), 0);
@@ -3783,14 +3778,12 @@ fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<d
         .submit(&program, ExecutionInputs::new(vec![input])?)
         .unwrap_err();
 
-    let prepare_error = error
-        .source()
-        .and_then(StdError::source)
-        .and_then(|source| source.downcast_ref::<PrepareError>())
-        .expect("submit preserves the typed preparation error synchronously");
+    let (error, _) = error
+        .into_pre_admission()
+        .expect("submit preserves the rejected inputs");
     assert!(matches!(
-        prepare_error,
-        PrepareError::NoInputIngress {
+        error.reason(),
+        RuntimeFailureReasonRef::NoInputIngress {
             input_index: 0,
             placement,
         } if placement == &input_placement

@@ -36,8 +36,8 @@ use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use tenferro_tensor::{
@@ -2717,6 +2717,26 @@ impl CpuBackend {
 }
 
 impl BackendSession for CpuBackend {
+    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.run_backend_session_cached(None, move |session| session.vdot_read(lhs, rhs))
+    }
+
+    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.run_backend_session_cached(None, move |session| session.norm_squared_read(input))
+    }
+
+    fn axpby_read_into_accum(
+        &mut self,
+        alpha: ContractionScalar,
+        x: TensorRead<'_>,
+        beta: ContractionScalar,
+        y: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        self.run_backend_session_cached(None, move |session| {
+            session.axpby_read_into_accum(alpha, x, beta, y)
+        })
+    }
+
     fn session_type_id(&self) -> TypeId {
         TypeId::of::<CpuBackendSessionMarker>()
     }

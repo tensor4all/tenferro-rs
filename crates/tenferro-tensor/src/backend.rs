@@ -4105,6 +4105,112 @@ impl<T> TensorBackendOps for T where
 {
 }
 
+/// Validate the shared input contract for [`BackendSession::vdot_read`].
+#[doc(hidden)]
+pub fn validate_vdot_read(lhs: &TensorRead<'_>, rhs: &TensorRead<'_>) -> crate::Result<()> {
+    let op = "BackendSession::vdot_read";
+    validate_supported_blas1_dtype(op, lhs.dtype())?;
+    if rhs.dtype() != lhs.dtype() {
+        return Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()));
+    }
+    if lhs.shape() != rhs.shape() {
+        return Err(Error::shape_mismatch(
+            op,
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
+    }
+    validate_shape_product(op, lhs.shape())?;
+    validate_compatible_placement(op, lhs, rhs)
+}
+
+/// Validate the shared input contract for [`BackendSession::norm_squared_read`].
+#[doc(hidden)]
+pub fn validate_norm_squared_read(input: &TensorRead<'_>) -> crate::Result<()> {
+    validate_supported_blas1_dtype("BackendSession::norm_squared_read", input.dtype())?;
+    validate_shape_product("BackendSession::norm_squared_read", input.shape()).map(|_| ())
+}
+
+/// Validate the shared input and destination contract for
+/// [`BackendSession::axpby_read_into_accum`].
+#[doc(hidden)]
+pub fn validate_axpby_read_into_accum(
+    alpha: ContractionScalar,
+    x: &TensorRead<'_>,
+    beta: ContractionScalar,
+    y: &TensorWrite<'_>,
+) -> crate::Result<()> {
+    let op = "BackendSession::axpby_read_into_accum";
+    validate_supported_blas1_dtype(op, x.dtype())?;
+    if y.dtype() != x.dtype() {
+        return Err(Error::dtype_mismatch(op, x.dtype(), y.dtype()));
+    }
+    if alpha.dtype() != x.dtype() {
+        return Err(Error::dtype_mismatch(op, x.dtype(), alpha.dtype()));
+    }
+    if beta.dtype() != x.dtype() {
+        return Err(Error::dtype_mismatch(op, x.dtype(), beta.dtype()));
+    }
+    if x.shape() != y.shape() {
+        return Err(Error::shape_mismatch(
+            op,
+            x.shape().to_vec(),
+            y.shape().to_vec(),
+        ));
+    }
+    validate_shape_product(op, x.shape())?;
+    if !y.as_read().is_col_major_contiguous()? {
+        return Err(Error::invalid_argument(
+            op,
+            "y",
+            "destination must be compact column-major and injective",
+        ));
+    }
+    validate_compatible_placement(op, x, &y.as_read())?;
+    validate_read_into_destination(op, std::slice::from_ref(x), y)
+}
+
+/// # Errors
+///
+/// Returns [`Error::Unsupported`] when `dtype` is not floating or complex.
+fn validate_supported_blas1_dtype(op: &'static str, dtype: DType) -> crate::Result<()> {
+    if matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+        Ok(())
+    } else {
+        Err(Error::unsupported(
+            op,
+            format!("unsupported dtype {dtype:?}; supported dtypes: F32/F64/C32/C64"),
+        ))
+    }
+}
+
+/// # Errors
+///
+/// Returns [`Error::Validation`] with [`ValidationError::IntegerOverflow`] when
+/// the checked shape product overflows.
+fn validate_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usize> {
+    crate::validate::checked_shape_product(op, "shape", shape)
+}
+
+/// # Errors
+///
+/// Returns [`Error::Validation`] with [`ValidationError::InvalidArgument`] when
+/// placements differ.
+fn validate_compatible_placement(
+    op: &'static str,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+) -> crate::Result<()> {
+    if lhs.placement() != rhs.placement() {
+        return Err(Error::invalid_argument(
+            op,
+            "placement",
+            "tensor inputs must have compatible placement",
+        ));
+    }
+    Ok(())
+}
+
 /// Execution session surface for dense tensor backends.
 ///
 /// All operations run within a backend-owned execution scope such as a CPU
@@ -4131,6 +4237,111 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// Build-local identity for backend-extension session capability dispatch.
     #[doc(hidden)]
     fn session_type_id(&self) -> TypeId;
+
+    /// Compute the all-axis conjugating dot product without transferring either input.
+    ///
+    /// The result is a rank-0 tensor with the input dtype and has the value
+    /// `sum(conj(lhs) * rhs)`. Borrowed views remain borrowed through the
+    /// backend's existing same-placement planning boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendSession, TensorRead};
+    ///
+    /// fn vdot(session: &mut dyn BackendSession, x: TensorRead<'_>, y: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+    /// {
+    ///     session.vdot_read(x, y)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unsupported`] when the backend does not override this
+    /// capability or the dtype is unsupported; [`Error::Validation`] with
+    /// `DTypeMismatch`, `ShapeMismatch`, or `InvalidArgument` when dtype, shape,
+    /// or placement differs; [`Error::RuntimeState`] for inaccessible backend
+    /// storage; or [`Error::BackendSource`] when provider execution fails.
+    fn vdot_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(Error::unsupported(
+            "BackendSession::vdot_read",
+            "backend session does not implement vdot_read",
+        ))
+    }
+
+    /// Compute the all-axis sum of squared magnitudes without taking a square root.
+    ///
+    /// The result is rank 0 and is F32 for F32/C32 input or F64 for F64/C64
+    /// input. No transfer or full-size algebra temporary is implied by this
+    /// session contract.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendSession, TensorRead};
+    ///
+    /// fn norm_squared(session: &mut dyn BackendSession, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+    /// {
+    ///     session.norm_squared_read(x)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unsupported`] when the backend does not override this
+    /// capability or the dtype is unsupported, [`Error::RuntimeState`] when
+    /// backend storage is not host-accessible, or [`Error::BackendSource`] when
+    /// reduction execution fails.
+    fn norm_squared_read(&mut self, _input: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(Error::unsupported(
+            "BackendSession::norm_squared_read",
+            "backend session does not implement norm_squared_read",
+        ))
+    }
+
+    /// Apply `y <- alpha * x + beta * y` in one pass into caller-owned storage.
+    ///
+    /// Scalars must have the exact tensor dtype; real coefficients for complex
+    /// vectors are represented as complex values with zero imaginary part. The
+    /// destination must be compact and injective, and any x/y storage overlap
+    /// is rejected before mutation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendSession, ContractionScalar, TensorRead, TensorWrite};
+    ///
+    /// fn axpby(session: &mut dyn BackendSession, x: TensorRead<'_>, y: TensorWrite<'_>)
+    ///     -> tenferro_tensor::Result<()>
+    /// {
+    ///     session.axpby_read_into_accum(
+    ///         ContractionScalar::F64(1.0), x, ContractionScalar::F64(0.0), y,
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unsupported`] when the backend does not override this
+    /// capability or the dtype is unsupported; [`Error::Validation`] with
+    /// `DTypeMismatch`, `ShapeMismatch`, or `InvalidArgument` for scalar/dtype,
+    /// shape, placement, compactness, injectivity, or overlap failures; or
+    /// [`Error::RuntimeState`] for inaccessible backend storage. Invalid
+    /// requests leave the destination unchanged.
+    fn axpby_read_into_accum(
+        &mut self,
+        _alpha: ContractionScalar,
+        _x: TensorRead<'_>,
+        _beta: ContractionScalar,
+        _y: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        Err(Error::unsupported(
+            "BackendSession::axpby_read_into_accum",
+            "backend session does not implement axpby_read_into_accum",
+        ))
+    }
 
     /// Erased pointer used only by backend leaf crates for a checked session
     /// capability bridge. The pointer is borrowed for the lifetime of `self`.

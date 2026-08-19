@@ -133,7 +133,8 @@ tenferro-internal-cpu-kernels
 tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-extension-macros
 tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
-                              tenferro-internal-ops
+                              tenferro-internal-ops,
+                              tenferro-internal-extension-macros
 tenferro-xla              -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor
 tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
@@ -160,6 +161,9 @@ Additional internal dependencies:
   execution bridge. The preparation/execution substrate is implemented in
   `tenferro-runtime`; any CPU dependency in the opposite direction remains
   dev/test-only and is not a production edge.
+- `tenferro-runtime` depends on `tenferro-internal-extension-macros` only to
+  re-export the supported out-of-tree authoring macro; the proc-macro crate
+  emits runtime paths and does not depend back on `tenferro-runtime`.
 - `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft` depend on
   `tenferro-runtime` for extension application and runtime registration.
 - `tenferro-xla` depends on `tenferro-runtime` to read compiled programs and

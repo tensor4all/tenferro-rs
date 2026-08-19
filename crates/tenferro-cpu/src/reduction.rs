@@ -2,7 +2,7 @@ use std::mem::size_of_val;
 
 use num_traits::Float;
 use strided_kernel::{
-    col_major_strides, reduce_axis, ErasedReducePlan, ExecContext, KernelDType, ReduceOp,
+    col_major_strides, reduce, reduce_axis, ErasedReducePlan, ExecContext, KernelDType, ReduceOp,
 };
 
 use super::{typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput};
@@ -344,6 +344,94 @@ pub(crate) fn reduce_sum_squares(
             input.dtype(),
         )),
     }
+}
+
+pub(crate) fn norm_squared_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => match input {
+            Tensor::F32(input) => {
+                let view = typed_view("BackendSession::norm_squared_read", input)?;
+                let value = norm_squared_scalar(&view, |x| x * x, 0.0_f32)?;
+                pooled_scalar_f32(buffers, value)
+            }
+            Tensor::F64(input) => {
+                let view = typed_view("BackendSession::norm_squared_read", input)?;
+                let value = norm_squared_scalar(&view, |x| x * x, 0.0_f64)?;
+                pooled_scalar_f64(buffers, value)
+            }
+            Tensor::C32(input) => {
+                let view = typed_view("BackendSession::norm_squared_read", input)?;
+                let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f32)?;
+                pooled_scalar_f32(buffers, value)
+            }
+            Tensor::C64(input) => {
+                let view = typed_view("BackendSession::norm_squared_read", input)?;
+                let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f64)?;
+                pooled_scalar_f64(buffers, value)
+            }
+            _ => Err(unsupported_sum_squares_dtype(
+                "BackendSession::norm_squared_read",
+                input.dtype(),
+            )),
+        },
+        TensorRead::View(input) => match input {
+            TensorView::F32(input) => {
+                let view = typed_view_from_view("BackendSession::norm_squared_read", &input)?;
+                let value = norm_squared_scalar(&view, |x| x * x, 0.0_f32)?;
+                pooled_scalar_f32(buffers, value)
+            }
+            TensorView::F64(input) => {
+                let view = typed_view_from_view("BackendSession::norm_squared_read", &input)?;
+                let value = norm_squared_scalar(&view, |x| x * x, 0.0_f64)?;
+                pooled_scalar_f64(buffers, value)
+            }
+            TensorView::C32(input) => {
+                let view = typed_view_from_view("BackendSession::norm_squared_read", &input)?;
+                let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f32)?;
+                pooled_scalar_f32(buffers, value)
+            }
+            TensorView::C64(input) => {
+                let view = typed_view_from_view("BackendSession::norm_squared_read", &input)?;
+                let value = norm_squared_scalar(&view, |x| x.norm_sqr(), 0.0_f64)?;
+                pooled_scalar_f64(buffers, value)
+            }
+            _ => Err(unsupported_sum_squares_dtype(
+                "BackendSession::norm_squared_read",
+                input.dtype(),
+            )),
+        },
+    }
+}
+
+fn norm_squared_scalar<T, U, M>(
+    input: &strided_kernel::StridedView<'_, T>,
+    map_fn: M,
+    init: U,
+) -> crate::Result<U>
+where
+    T: Copy + Send + Sync,
+    U: Clone + Send + Sync + std::ops::Add<Output = U>,
+    M: Fn(T) -> U + Copy + Send + Sync,
+{
+    reduce(input, map_fn, |lhs, rhs| lhs + rhs, init)
+        .map_err(|err| crate::Error::backend_source("BackendSession::norm_squared_read", err))
+}
+
+fn pooled_scalar_f32(buffers: &mut BufferPool, value: f32) -> crate::Result<Tensor> {
+    let mut output = PooledUninitOutput::<f32>::new(buffers, vec![])?;
+    output.as_uninit_slice_mut()[0].write(value);
+    // SAFETY: the rank-0 output has exactly one element, initialized above.
+    unsafe { output.assume_init().map(Tensor::F32) }
+}
+
+fn pooled_scalar_f64(buffers: &mut BufferPool, value: f64) -> crate::Result<Tensor> {
+    let mut output = PooledUninitOutput::<f64>::new(buffers, vec![])?;
+    output.as_uninit_slice_mut()[0].write(value);
+    // SAFETY: the rank-0 output has exactly one element, initialized above.
+    unsafe { output.assume_init().map(Tensor::F64) }
 }
 
 pub(crate) fn reduce_sum_squares_read(

@@ -25,7 +25,9 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 #[cfg(feature = "autodiff")]
-use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
+use tenferro_runtime::program::{
+    CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
+};
 use tenferro_tensor::{
     BackendSession, DType, Error as TensorError, Tensor, TensorBackend, TensorRead,
 };
@@ -408,10 +410,14 @@ impl SemanticLinearTransposeRule for EinsumAdRule {
         request: SemanticLinearTransposeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let primal_output_metadata = request.primal_output_meta(0)?;
         semantic_einsum_vjp(
             request.op(),
-            request.primal_inputs(),
-            request.primal_outputs(),
+            &primal_inputs,
+            primal_output_metadata,
             request.cotangent_outputs(),
             request.active_inputs(),
             request.residual_mask(),
@@ -437,10 +443,14 @@ impl SemanticPrimalVjpRule for EinsumAdRule {
         request: SemanticPrimalVjpRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        let primal_inputs = (0..request.primal_input_count())
+            .map(|index| request.primal_input_value(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let primal_output_metadata = request.primal_output_meta(0)?;
         semantic_einsum_vjp(
             request.op(),
-            request.primal_inputs(),
-            request.primal_outputs(),
+            &primal_inputs,
+            primal_output_metadata,
             request.cotangent_outputs(),
             request.active_inputs(),
             request.residual_mask(),
@@ -453,7 +463,7 @@ impl SemanticPrimalVjpRule for EinsumAdRule {
 fn semantic_einsum_vjp(
     payload: &dyn ExtensionOp,
     primal_inputs: &[ProgramValue],
-    primal_outputs: &[ProgramValue],
+    primal_output_metadata: &ProgramValueMetadata,
     cotangent_outputs: &[AdValue],
     active_inputs: &[bool],
     residual_mask: ResidualSpec,
@@ -469,7 +479,7 @@ fn semantic_einsum_vjp(
         .copied()
         .map(|value| semantic_value_shape(builder, value))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let cotangent_shape = semantic_value_shape(builder, primal_outputs[0])?;
+    let cotangent_shape = semantic_metadata_shape(primal_output_metadata)?;
 
     let input_labels = &op.subscripts.inputs;
     let output_labels = &op.subscripts.output;
@@ -575,8 +585,14 @@ fn semantic_value_shape(
     builder: &SemanticProgramBuilder,
     value: ProgramValue,
 ) -> std::result::Result<Vec<DimExpr>, SemanticAdError> {
-    builder
-        .value_metadata(value)?
+    semantic_metadata_shape(builder.value_metadata(value)?)
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_metadata_shape(
+    metadata: &ProgramValueMetadata,
+) -> std::result::Result<Vec<DimExpr>, SemanticAdError> {
+    metadata
         .shape()
         .iter()
         .map(|extent| {

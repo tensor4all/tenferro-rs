@@ -53,6 +53,7 @@ mod affinity_policy;
 mod analytic;
 mod arbiter;
 pub mod backend;
+mod blas1;
 pub(crate) mod buffer_pool {
     pub use tenferro_internal_cpu_kernels::buffer_pool::*;
 }
