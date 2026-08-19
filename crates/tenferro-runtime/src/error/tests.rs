@@ -1,9 +1,158 @@
 use std::error::Error as StdError;
 
 use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
-use tenferro_tensor::{DType, ErrorKind, ShapeMismatch, ShapeVec, ValidationError, ValidationKind};
+use tenferro_tensor::{
+    DType, ErrorKind, Placement, ShapeMismatch, ShapeVec, ValidationError, ValidationKind,
+};
 
-use super::{ContextId, Error, ErrorPhase, ShapeConstraintEvalError};
+use crate::runtime::{PrepareError, UnsupportedReason};
+
+use super::{ContextId, Error, ErrorPhase, RuntimeFailureReasonRef, ShapeConstraintEvalError};
+
+#[test]
+fn reason_classifies_typed_runtime_failures_without_changing_sources() {
+    let family = "tenferro.test.missing-family.v1";
+    let missing = Error::runtime_state_source(
+        "run",
+        ErrorPhase::Execution,
+        PrepareError::MissingExtension { family_id: family },
+    );
+    assert_eq!(
+        missing.reason(),
+        RuntimeFailureReasonRef::MissingExtension { family }
+    );
+    assert_eq!(missing.kind(), ErrorKind::RuntimeState);
+    assert_eq!(missing.phase(), Some(ErrorPhase::Execution));
+    assert!(missing.to_string().contains(family));
+    assert!(missing.source().is_some());
+    assert!(missing
+        .source()
+        .unwrap()
+        .downcast_ref::<PrepareError>()
+        .is_some());
+
+    let placement = Placement::default();
+    let ingress = Error::runtime_state_source(
+        "run",
+        ErrorPhase::Execution,
+        PrepareError::NoInputIngress {
+            input_index: 3,
+            placement: placement.clone(),
+        },
+    );
+    assert_eq!(
+        ingress.reason(),
+        RuntimeFailureReasonRef::NoInputIngress {
+            input_index: 3,
+            placement: &placement,
+        }
+    );
+
+    let unsupported = Error::runtime_state_source(
+        "run",
+        ErrorPhase::Compile,
+        PrepareError::Unsupported {
+            reason: UnsupportedReason::Operation {
+                operation: "provider-op",
+            },
+        },
+    );
+    assert_eq!(
+        unsupported.reason(),
+        RuntimeFailureReasonRef::UnsupportedOperation {
+            operation: "provider-op"
+        }
+    );
+    assert_ne!(
+        unsupported.reason(),
+        RuntimeFailureReasonRef::MissingExtension { family }
+    );
+
+    let nested = Error::runtime_state_source(
+        "outer",
+        ErrorPhase::Execution,
+        Error::runtime_state_source(
+            "inner",
+            ErrorPhase::Compile,
+            PrepareError::MissingExtension { family_id: family },
+        ),
+    );
+    assert_eq!(
+        nested.reason(),
+        RuntimeFailureReasonRef::MissingExtension { family }
+    );
+
+    let primary = Error::unsupported("primary-op", ErrorPhase::Execution, "primary");
+    let suppressed = Error::extension(
+        "secondary",
+        ErrorPhase::Execution,
+        family,
+        ErrorKind::RuntimeState,
+        PrepareError::MissingExtension { family_id: family },
+    );
+    let aggregate = Error::with_suppressed(primary, suppressed);
+    assert_eq!(
+        aggregate.reason(),
+        RuntimeFailureReasonRef::UnsupportedOperation {
+            operation: "primary-op"
+        }
+    );
+
+    assert_eq!(
+        Error::Internal("future-like".into()).reason(),
+        RuntimeFailureReasonRef::Other
+    );
+}
+
+#[test]
+fn direct_reason_classification_uses_stable_operation_borrows() {
+    assert_eq!(
+        Error::unsupported("runtime-op", ErrorPhase::Compile, "detail").reason(),
+        RuntimeFailureReasonRef::UnsupportedOperation {
+            operation: "runtime-op"
+        }
+    );
+    assert_eq!(
+        Error::extension(
+            "extension-op",
+            ErrorPhase::Compile,
+            "family.v1",
+            ErrorKind::Unsupported,
+            std::io::Error::other("failure"),
+        )
+        .reason(),
+        RuntimeFailureReasonRef::UnsupportedOperation {
+            operation: "family.v1"
+        }
+    );
+    assert_eq!(
+        Error::extension(
+            "extension-op",
+            ErrorPhase::Execution,
+            "family.v1",
+            ErrorKind::RuntimeState,
+            std::io::Error::other("failure"),
+        )
+        .reason(),
+        RuntimeFailureReasonRef::Other
+    );
+    assert_eq!(
+        Error::TensorRuntime(tenferro_tensor::Error::unsupported("tensor-op", "detail")).reason(),
+        RuntimeFailureReasonRef::UnsupportedOperation {
+            operation: "tensor-op"
+        }
+    );
+}
+
+#[test]
+fn unknown_reason_does_not_downcast_or_parse_text() {
+    let error = Error::runtime_state_source(
+        "run",
+        ErrorPhase::Execution,
+        std::io::Error::other("no eligible input ingress for input 7"),
+    );
+    assert_eq!(error.reason(), RuntimeFailureReasonRef::Other);
+}
 
 #[test]
 fn dimension_evaluation_errors_keep_the_runtime_vocabulary() {

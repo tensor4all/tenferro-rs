@@ -12,8 +12,8 @@ use tenferro_runtime::extension::{
 };
 use tenferro_runtime::{
     CoreCapabilityKind, DType, ErasedExecutionContext, Error, ExecutionContextIdentity,
-    ExecutionContextMismatch, GraphCompiler, PrepareError, ProviderContractError, Runtime, Tensor,
-    TracedTensor, UnsupportedReason,
+    ExecutionContextMismatch, GraphCompiler, PrepareError, ProviderContractError, Runtime,
+    RuntimeFailureReasonRef, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
     BackendStorageHandle, Placement, StorageBuffer, TensorBackend, TensorRead, TensorView,
@@ -246,10 +246,8 @@ fn has_missing_family(error: &(dyn StdError + 'static)) -> bool {
     while let Some(source) = current {
         if matches!(
             source.downcast_ref::<PrepareError>(),
-            Some(PrepareError::Unsupported {
-                reason: UnsupportedReason::Operation {
-                    operation: IDENTITY_FAMILY,
-                },
+            Some(PrepareError::MissingExtension {
+                family_id: IDENTITY_FAMILY,
             })
         ) {
             return true;
@@ -407,6 +405,12 @@ fn main() -> Result<(), Box<dyn StdError>> {
         Error::RuntimeStateSource { .. } | Error::Extension { .. }
     ));
     assert!(has_missing_family(&missing), "{missing:?}");
+    assert_eq!(
+        missing.reason(),
+        RuntimeFailureReasonRef::MissingExtension {
+            family: IDENTITY_FAMILY
+        }
+    );
 
     let wrong_family_program = compile_op(Arc::new(WrongFamilyOp))?;
     let wrong_family = runtime

@@ -128,3 +128,27 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 - Workspace/nested checks, formatting, public error docs, and warning-denied clippy passed.
 
 Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.
+
+## Issue 1712: structured runtime failure reasons
+
+### Design and review gate
+
+- Design: [`../design/structured-runtime-failure-reasons.md`](../design/structured-runtime-failure-reasons.md)
+- Reviewer: `reviewer-flash-opencode-go`, read-only
+- Pre-implementation verdict: **Correct-to-merge**.
+
+### Decisions
+
+- Add one borrowed, non-exhaustive reason view while retaining every owned error and source link.
+- Replace the ambiguous missing-extension `PrepareError::Unsupported` at the already-known compiled-preparation seam with a precise `PrepareError::MissingExtension` source.
+- Classify primary errors before suppressed errors; traverse typed sources without strings or allocation.
+- Keep real extension/provider unsupported failures distinct from missing registration.
+
+### Verification
+
+- Runtime error tests cover missing extension, no input ingress, unsupported operation, nested wrappers, suppressed-primary precedence, and `Other`.
+- Runtime integration tests consume no-ingress reasons without downcasts; the external fixture verifies exact missing-extension family through the real compiled path.
+- `cargo test -p tenferro-runtime`: 973 passed; external fixture passed.
+- Runtime/fixture warning-denied clippy, formatting, and diff checks passed.
+
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**. Coverage review and combined-PR gates remain pending.

@@ -752,10 +752,8 @@ fn resolve_preparation_context(
     if let Some(error) = last_route_error {
         return Err(error);
     }
-    if let Some(operation) = missing_extension_family {
-        return Err(Arc::new(PrepareError::Unsupported {
-            reason: UnsupportedReason::Operation { operation },
-        }));
+    if let Some(family_id) = missing_extension_family {
+        return Err(Arc::new(PrepareError::MissingExtension { family_id }));
     }
 
     Err(Arc::new(PrepareError::NoEligibleEngine { constraint }))
