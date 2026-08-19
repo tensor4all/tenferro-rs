@@ -175,8 +175,28 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 - Steady-state allocation probe: 100 compact 65,536-element AXPBY calls allocated 0 bytes in the counted window.
 - Default cpu-faer, cpu-blas-only, and combined cpu-faer+cpu-blas configurations check successfully.
 - Warning-denied all-target clippy, CPU/tensor doctests, formatting, and diff checks passed.
-- Release Criterion quick medians (approximate): length 1,024 — fused 7.89 µs (1 thread), 13.38 µs (4 threads), manual 1.01 µs; length 65,536 — fused 27.14 µs (1 thread), 24.88 µs (4 threads), manual 68.39 µs. The session/provider boundary dominates tiny vectors; fused parallel execution wins for the representative large vector.
+- Release Criterion full 100-sample intervals: length 1,024 — fused 9.602–9.802 µs (1 thread), 13.967–14.200 µs (4 threads), manual 0.855–0.870 µs (1 thread), 1.246–1.272 µs (4 threads); length 65,536 — fused 21.585–22.025 µs (1 thread), 24.619–24.788 µs (4 threads), manual 58.489–59.790 µs (1 thread), 58.159–59.111 µs (4 threads). The session/provider boundary dominates tiny vectors; the fused path is 2.4–2.7x faster for the representative large vector. No multithread speedup claim is made for these sizes.
 - VDOT follows provider reduction order; norm-squared deliberately returns the sum of squared magnitudes without `sqrt` and follows strided-kernel reduction order; tests use dtype-appropriate tolerances. AXPBY deliberately rejects noncompact y and materializes only noncompact x.
 - Coverage: `semantic_extension.rs` 92.6%; `blas1.rs` 90.5%; the complete repository coverage gate passes.
 
-Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**, including a follow-up soundness verdict on compact mutable-view pointer provenance. Combined-PR gates remain pending.
+Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to-merge**, including a follow-up soundness verdict on compact mutable-view pointer provenance.
+
+## Final combined verification and cross-phase audit
+
+Candidate `a608aab624f14e00bdd3570087edae655e8e6a9a` was audited read-only after all task-local gates:
+
+- **Specification and architecture** (`reviewer-gpt`): PASS; #1708–#1713 acceptance mappings, dependency ordering, extension/AD/runtime/session boundaries, and migration compatibility closed.
+- **Rust safety and lifecycle** (`reviewer-flash`): PASS; TensorRead lifetime, checked-request ownership, AXPBY alias/pointer proof, and pooled rank-0 initialization were sound. Empty rank-0 shape product is exactly one.
+- **Performance and parallelism** (`deepseek-brainstormer`): PASS against the accepted allocation/one-pass criteria; 0 steady-state AXPBY allocations and full Criterion intervals recorded above. Small-vector and multithread overhead are explicit limitations, not hidden claims.
+- **Public API and documentation** (built-in `reviewer`): PASS; facades, typed errors, object safety, runnable examples, guides, architecture map, and feature combinations aligned.
+- **CPU and NUMA** (built-in `scout`): PASS; production session routes, provider/strided ownership, placement rejection, serial/owned-Rayon paths, re-entry, and failure behavior aligned. Unchanged multi-socket behavior was not benchmarked.
+- **GPU, XLA, and multi-GPU** (`gpt-brainstormer`): static/API/build PASS; hardware execution unavailable and unaffected by the diff because only CPU overrides the new default-unsupported methods. Hosted CI is the verification owner.
+- **Integration auditor** (built-in `worker`): PASS; no Critical, Important, Minor, or cross-lane contradiction remained. Hardware-only limitations were classified as unaffected-by-diff and non-blocking.
+
+Fresh combined gates:
+
+- `python3 scripts/ci/run_profile.py coverage`: PASS, 193/193 files; `semantic_extension.rs` 92.6%, `blas1.rs` 90.5%.
+- `python3 scripts/ci/run_profile.py docs`: PASS, including faer/BLAS tutorial binaries and rendered site checks.
+- `bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-cpu blas1'`: PASS.
+- Committed-head deterministic repository-rules review: PASS; only the required recorded external-LLM-skip notice remained.
+- Branch was behind `origin/main` by zero commits at audit time.
