@@ -28,7 +28,7 @@ struct RuntimeArgs {
     runtime: Ident,
     family_id: Path,
     op_type: Path,
-    execute: Path,
+    execute: Option<Path>,
     execute_reads: Path,
     execute_in_session: Option<Path>,
     session_supported: Option<Path>,
@@ -102,7 +102,7 @@ impl Parse for RuntimeArgs {
             runtime: required(runtime, "runtime")?,
             family_id: required(family_id, "family_id")?,
             op_type: required(op_type, "op_type")?,
-            execute: required(execute, "execute")?,
+            execute,
             execute_reads: required(execute_reads, "execute_reads")?,
             execute_in_session,
             session_supported,
@@ -130,12 +130,10 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 /// Generate a standard extension module, preparation engine, and prepared
 /// operation.
 ///
-/// The `execute` function must have this signature:
-/// `fn<B: BackendBound + 'static>(&OpType, &[&Tensor], &mut ExtensionExecutionContext<'_, B>)`.
-///
 /// `execute_reads` is required. It must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
 ///
+/// The legacy `execute` argument is accepted but unused and may be omitted.
 /// `session_supported` and `execute_in_session` are optional, but must be
 /// supplied together. The former has signature
 /// `fn<B: BackendBound + 'static>(&OpType) -> bool`; the latter has signature

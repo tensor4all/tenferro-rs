@@ -2,8 +2,8 @@
 //!
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
 //! runtime crate. External crates implement
-//! [`tenferro_ops::ext_op::ExtensionOp`] and build traced graphs containing
-//! the extension via [`apply`].
+//! [`ExtensionOp`] and build traced graphs containing the extension via
+//! [`apply`].
 //!
 //! See `docs/spec/extension-op.md` for the normative contract.
 //!
@@ -23,7 +23,7 @@ use computegraph::types::{OperationRole, ValueRef};
 use computegraph::GraphOperation;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{SymDim, TensorMeta};
+use tenferro_ops::TensorMeta;
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, ErrorPhase, Result};
@@ -44,13 +44,18 @@ pub use crate::shape_infer::{
     infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
     promote_dtype_div_like, promote_dtype_for_binary_op, promote_dtypes,
 };
-pub use tenferro_ops::ext_op::ExtensionOp;
-pub use tenferro_ops::ExtensionFamilyId;
+pub use tenferro_extension_macros::define_extension_runtime;
+pub use tenferro_ops::ext_op::{
+    ExtensionAlias, ExtensionAliasDeclaration, ExtensionEffect, ExtensionEffectAccess,
+    ExtensionEffectDeclaration, ExtensionOp,
+};
+pub use tenferro_ops::{ExtensionFamilyId, ExtensionShapeContext, SymDim};
 
 pub use crate::extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };
 pub use crate::extension_execution_context::ExtensionExecutionContext;
+pub use crate::runtime::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 
 /// Apply an extension op in the traced graph.
 ///
@@ -70,9 +75,8 @@ pub use crate::extension_execution_context::ExtensionExecutionContext;
 /// ```rust
 /// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro_runtime::extension::{apply, ExtensionOp};
+/// use tenferro_runtime::extension::{apply, ExtensionOp, ExtensionShapeContext};
 /// use tenferro_runtime::{DType, SymDim, TracedTensor};
-/// use tenferro_ops::ExtensionShapeContext;
 ///
 /// # #[derive(Clone, Debug)]
 /// # struct IdentityExt;
@@ -334,8 +338,9 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<Ve
 ///
 /// ```rust
 /// # use std::{any::Any, sync::Arc};
-/// use tenferro_ops::ExtensionShapeContext;
-/// use tenferro_runtime::extension::{attach_expanded_shape_contract, ExtensionOp};
+/// use tenferro_runtime::extension::{
+///     attach_expanded_shape_contract, ExtensionOp, ExtensionShapeContext,
+/// };
 /// use tenferro_runtime::{DType, SymDim, TracedTensor};
 ///
 /// # #[derive(Clone, Debug)]
@@ -516,8 +521,10 @@ fn attach_inferred_expanded_shape_contract(
 /// ```rust
 /// # use std::{any::Any, sync::Arc};
 /// use computegraph::types::OperationRole;
-/// use tenferro_ops::{std_tensor_op::StdTensorOp, ExtensionShapeContext};
-/// use tenferro_runtime::extension::{apply_expanded_graph_with_shape_contract, ExtensionOp};
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+/// use tenferro_runtime::extension::{
+///     apply_expanded_graph_with_shape_contract, ExtensionOp, ExtensionShapeContext,
+/// };
 /// use tenferro_runtime::{DType, SymDim, TracedTensor};
 ///
 /// # #[derive(Clone, Debug)]

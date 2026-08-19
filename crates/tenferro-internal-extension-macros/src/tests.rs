@@ -95,6 +95,21 @@ fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_regis
 }
 
 #[test]
+fn extension_runtime_macro_accepts_omitted_legacy_execute() {
+    let args = syn::parse_str::<super::RuntimeArgs>(
+        r#"
+        runtime = TinyRuntime,
+        family_id = TINY_EXTENSION_FAMILY_ID,
+        op_type = TinyExtensionOp,
+        execute_reads = execute_tiny_extension_reads,
+        "#,
+    )
+    .expect("execute_reads is the only required callback");
+
+    assert!(args.execute.is_none());
+}
+
+#[test]
 fn extension_runtime_macro_accepts_custom_backend_bound() {
     let tokens = expand_extension_runtime(syn::parse_quote! {
         runtime = LinalgRuntime,
@@ -126,6 +141,22 @@ fn extension_runtime_macro_generates_required_prepared_read_executor() {
     assert!(source.contains("TensorRead < '_ >"));
     assert!(source.contains("execute_einsum_extension_reads"));
     assert!(source.contains("& self . op"));
+}
+
+#[test]
+fn extension_runtime_macro_requires_paired_session_callbacks() {
+    let err = super::expand_extension_runtime(syn::parse_quote! {
+        runtime = SessionRuntime,
+        family_id = SESSION_EXTENSION_FAMILY_ID,
+        op_type = SessionExtensionOp,
+        execute_reads = execute_session_reads,
+        session_supported = supports_session,
+    })
+    .expect_err("session callbacks must be supplied together");
+
+    assert!(err
+        .to_string()
+        .contains("execute_in_session and session_supported must be supplied together"));
 }
 
 #[test]

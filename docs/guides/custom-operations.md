@@ -38,9 +38,8 @@ An extension crate is responsible for:
 
 - a stable operation descriptor, so graphs can compare and cache it,
 - output dtype and shape inference,
-- concrete execution for the supported backend and device combinations,
-- optional host/reference execution for families that can run without a
-  backend-specific kernel,
+- concrete execution for the supported backend and device combinations through
+  an `ExtensionModule`,
 - optional linearize, linear-transpose, and direct primal-VJP rules for
   automatic differentiation,
 - clear errors when a dtype, shape, backend, or AD path is not supported.
@@ -81,19 +80,28 @@ descriptor. It carries operation parameters such as axes, modes, constants, or
 kernel configuration. Tensor-valued parameters should usually be normal inputs,
 not descriptor fields.
 
+Use the authoring facade's `define_extension_runtime!` once in an ordinary Rust
+module for each operation family. The macro generates the private engine and
+prepared-operation adapter plus an `extension_module` constructor. Its required
+callback is `execute_reads`, which receives borrowed `TensorRead` inputs and an
+`ExtensionExecutionContext`; the legacy `execute` argument may still be present
+for existing callers but is unused and may be omitted.
+
 Extension operation descriptors do not need process-global registration. Construct
 `Arc<dyn ExtensionOp>` and pass it to `tenferro_runtime::extension::apply` for
-traced tensors or `apply_eager` for eager tensors.
-
-Forward execution goes through a registered `ExtensionModule`. If the operation
-has a simple host/reference implementation, expose it with
-`ExtensionOp::host_reference` and provide a host-reference module; otherwise
-provide a backend-specific module owned by the extension crate.
-
-`ExtensionModule` registers one or more extension preparation/execution engines
-and their planning configs against an immutable runtime snapshot. Use it for
-runtime-owned preparation metadata and bounded cache owners, not for hidden
+traced tensors. Forward execution goes through the explicitly registered
+`ExtensionModule`: build a `Runtime`, install the module, compile the traced
+graph, and execute it. The module registers extension preparation/execution
+engines and planning configs against an immutable runtime snapshot. Use it for
+runtime-owned preparation metadata and bounded cache owners, not hidden
 process-global provider state.
+
+The complete runnable example—including two families in separate modules and
+missing-module, wrong-family, and wrong-context typed-error checks—is the
+workspace-external fixture at
+[`tests/fixtures/extension-authoring`](../../tests/fixtures/extension-authoring).
+Run it with `bash tests/run-extension-authoring-fixture.sh`; keep this guide's
+API description aligned with that fixture.
 
 For AD, implement the role-specific traits the operation needs:
 `tenferro_ad::semantic_extension::SemanticLinearizeRule`,
