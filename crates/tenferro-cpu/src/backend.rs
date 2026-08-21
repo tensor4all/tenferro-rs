@@ -13,7 +13,9 @@ use crate::arbiter::{
     ResourcePermit,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
-use crate::dot_runtime::{CpuProviderBundle, CpuProviderBundleInstallError};
+use crate::dot_runtime::{
+    CpuProviderBundle, CpuProviderBundleInstallError, CpuProviderDomainContract,
+};
 use crate::engine::{CpuEngine, EngineResources};
 use crate::indexed_plan_cache::{
     IndexedPlanCache, IndexedPlanCacheLimits, DEFAULT_INDEXED_PLAN_CACHE_LIMITS,
@@ -24,7 +26,7 @@ use crate::placement::{
 };
 use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use crate::{
-    discover_cpu_topology, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
+    discover_cpu_topology, CpuAdmissionMode, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
     CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
     CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
@@ -314,6 +316,7 @@ impl CpuBackendKind {
 ///     mode,
 ///     CpuExecutionMode::Managed
 ///         | CpuExecutionMode::ExternalManaged
+///         | CpuExecutionMode::CallerManaged
 ///         | CpuExecutionMode::ProviderDefaultExclusive
 ///         | CpuExecutionMode::Compatibility
 /// ));
@@ -322,8 +325,10 @@ impl CpuBackendKind {
 pub enum CpuExecutionMode {
     /// tenferro owns a pinned Rayon engine for the resolved CPU placement.
     Managed,
-    /// The application supplied and owns the selected CPU domain executor.
+    /// The application supplied an executor with cooperative CPU-set admission.
     ExternalManaged,
+    /// The application supplied the executor and owns cross-domain admission.
+    CallerManaged,
     /// An external provider owns worker placement under a process-wide permit.
     ProviderDefaultExclusive,
     /// A legacy unpinned Rayon context is used because managed affinity is unavailable.
@@ -459,7 +464,8 @@ impl From<CpuBackendError> for crate::Error {
                 | CpuPlacementError::ManagedAffinityUnavailable { .. }
                 | CpuPlacementError::NumaDiscoveryUnavailable { .. }
                 | CpuPlacementError::UnknownNumaNode { .. }
-                | CpuPlacementError::UnregisteredExternalPlacement { .. } => {
+                | CpuPlacementError::UnregisteredExternalPlacement { .. }
+                | CpuPlacementError::UnregisteredExternalDomain { .. } => {
                     Self::runtime_state_source(op, source)
                 }
                 CpuPlacementError::ExternalProviderAffinityUnmanaged { .. } => {
@@ -496,10 +502,11 @@ pub struct CpuExecutionInfo {
     resolved_placement: Option<ResolvedCpuPlacement>,
     topology: CpuTopology,
     domain_id: CpuDomainId,
-    domain_cpus: CpuSet,
+    domain_cpus: Option<CpuSet>,
     worker_count: usize,
     thread_budget: usize,
-    placement_guarantee: CpuPlacementGuarantee,
+    placement_guarantee: Option<CpuPlacementGuarantee>,
+    admission_mode: CpuAdmissionMode,
     domain_ownership: CpuDomainOwnership,
     executor_affinity: CpuExecutorAffinity,
     executor_shutdown: CpuExecutorShutdown,
@@ -587,10 +594,12 @@ impl CpuExecutionInfo {
     ///
     /// ```
     /// let info = tenferro_cpu::CpuBackend::new().execution_info();
-    /// assert!(!info.domain_cpus().is_empty());
+    /// if let Some(cpus) = info.domain_cpus() {
+    ///     assert!(!cpus.is_empty());
+    /// }
     /// ```
-    pub fn domain_cpus(&self) -> &CpuSet {
-        &self.domain_cpus
+    pub fn domain_cpus(&self) -> Option<&CpuSet> {
+        self.domain_cpus.as_ref()
     }
 
     /// Return the worker count of the selected domain executor.
@@ -631,8 +640,22 @@ impl CpuExecutionInfo {
     ///     .placement_guarantee();
     /// let _ = format!("{guarantee:?}");
     /// ```
-    pub fn placement_guarantee(&self) -> CpuPlacementGuarantee {
+    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
         self.placement_guarantee
+    }
+
+    /// Return the selected domain's admission contract.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuAdmissionMode, CpuBackend};
+    ///
+    /// let mode: CpuAdmissionMode = CpuBackend::new().execution_info().admission_mode();
+    /// assert_eq!(mode, CpuAdmissionMode::CooperativeCpuSet);
+    /// ```
+    pub fn admission_mode(&self) -> CpuAdmissionMode {
+        self.admission_mode
     }
 
     /// Return whether tenferro or the application owns the selected domain.
@@ -694,8 +717,18 @@ impl CpuExecutionInfo {
     }
 }
 
-fn provider_diagnostic(kind: CpuBackendKind, ownership: CpuDomainOwnership) -> &'static str {
+fn provider_diagnostic(
+    kind: CpuBackendKind,
+    ownership: CpuDomainOwnership,
+    admission_mode: CpuAdmissionMode,
+) -> &'static str {
     if ownership == CpuDomainOwnership::ExternalManaged {
+        if admission_mode == CpuAdmissionMode::CallerManaged {
+            // INVARIANT: public caller-managed constructors validate and select
+            // CpuBackendKind::Faer before building the external registry.
+            debug_assert_eq!(kind, CpuBackendKind::Faer);
+            return "faer (caller-managed CPU executor and admission)";
+        }
         return match kind {
             CpuBackendKind::Faer => "faer (externally managed CPU executor)",
             CpuBackendKind::Blas => "BLAS/LAPACK (externally managed CPU executor)",
@@ -951,6 +984,20 @@ impl CpuBackendState {
             .ok_or(CpuPlacementError::UnregisteredExternalPlacement { requested })
     }
 
+    fn external_engine_for_id(
+        &self,
+        domain: CpuDomainId,
+    ) -> Result<Arc<CpuEngine>, CpuPlacementError> {
+        let CpuEngineRegistry::ExternalPrebuilt(registry) = &self.engines else {
+            return Err(CpuPlacementError::UnregisteredExternalDomain { domain });
+        };
+        registry
+            .by_id
+            .get(&domain)
+            .cloned()
+            .ok_or(CpuPlacementError::UnregisteredExternalDomain { domain })
+    }
+
     fn is_external(&self) -> bool {
         matches!(&self.engines, CpuEngineRegistry::ExternalPrebuilt(_))
     }
@@ -1080,6 +1127,42 @@ fn resolve_discovered_topology(
         backend: kind,
         source,
     })
+}
+
+fn external_engine_resolution(
+    engine: &CpuEngine,
+    requested: CpuPlacement,
+    kind: CpuBackendKind,
+) -> Result<ResolvedCpuExecution, CpuPlacementError> {
+    match engine.domain().admission_mode() {
+        CpuAdmissionMode::CooperativeCpuSet => engine
+            .placement()
+            .cloned()
+            .map(ResolvedCpuExecution::ExternalManaged)
+            .ok_or(CpuPlacementError::InternalState {
+                requested,
+                backend: kind,
+                message: "cooperative external domain has no placement",
+            }),
+        CpuAdmissionMode::CallerManaged => Ok(ResolvedCpuExecution::ExternalCallerManaged),
+    }
+}
+
+fn external_domain_backend_kind(
+    op: &'static str,
+    domains: &[ExternalCpuDomain],
+) -> Result<CpuBackendKind, CpuBackendError> {
+    let kind = if domains
+        .iter()
+        .any(|domain| domain.admission_mode() == CpuAdmissionMode::CallerManaged)
+    {
+        CpuBackendKind::Faer
+    } else {
+        CpuBackendKind::default_compiled()
+    };
+    ensure_cpu_backend_kind_available(kind, op)
+        .map_err(|error| constructor_tensor_error(op, error))?;
+    Ok(kind)
 }
 
 fn coordinator_node_domain_ids(topology: &CpuTopology) -> BTreeMap<NumaNodeId, CpuDomainId> {
@@ -1336,7 +1419,8 @@ impl CpuBackend {
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
     ) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::from_external_managed_domains";
-        let kind = CpuBackendKind::default_compiled();
+        let domains: Vec<_> = domains.into_iter().collect();
+        let kind = external_domain_backend_kind(op, &domains)?;
         let topology = resolve_discovered_topology(kind, discover_cpu_topology())
             .map_err(|source| CpuBackendError::placement(op, source))?;
         Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
@@ -1344,6 +1428,7 @@ impl CpuBackend {
             domains,
             topology,
             ResourceArbiter::global(),
+            kind,
             CpuProviderBundle::standard(kind, false),
         )
     }
@@ -1408,7 +1493,8 @@ impl CpuBackend {
         provider_bundle: CpuProviderBundle,
     ) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::from_external_managed_domains_with_provider_bundle";
-        let kind = CpuBackendKind::default_compiled();
+        let domains: Vec<_> = domains.into_iter().collect();
+        let kind = external_domain_backend_kind(op, &domains)?;
         let topology = resolve_discovered_topology(kind, discover_cpu_topology())
             .map_err(|source| CpuBackendError::placement(op, source))?;
         Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
@@ -1416,6 +1502,7 @@ impl CpuBackend {
             domains,
             topology,
             ResourceArbiter::global(),
+            kind,
             provider_bundle,
         )
     }
@@ -1425,6 +1512,7 @@ impl CpuBackend {
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
         topology: CpuTopology,
         arbiter: ResourceArbiter,
+        kind: CpuBackendKind,
         provider_bundle: CpuProviderBundle,
     ) -> Result<Self, CpuBackendError> {
         let domains: Vec<_> = domains.into_iter().collect();
@@ -1441,70 +1529,72 @@ impl CpuBackend {
                     ExternalCpuDomainRegistryError::DuplicateDomainId { id: domain.id() }.into(),
                 );
             }
-            match domain.placement() {
-                ResolvedCpuPlacement::NumaNode { id, .. } => {
-                    if !node_ids.insert(*id) {
-                        return Err(ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
-                            placement: CpuPlacement::NumaNode(*id),
+            if let Some(placement) = domain.placement() {
+                match placement {
+                    ResolvedCpuPlacement::NumaNode { id, .. } => {
+                        if !node_ids.insert(*id) {
+                            return Err(
+                                ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
+                                    placement: CpuPlacement::NumaNode(*id),
+                                }
+                                .into(),
+                            );
                         }
-                        .into());
+                    }
+                    ResolvedCpuPlacement::AllAllowed { cpus } => {
+                        if has_all_allowed {
+                            return Err(
+                                ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
+                                    placement: CpuPlacement::AllAllowed,
+                                }
+                                .into(),
+                            );
+                        }
+                        has_all_allowed = true;
+                        if domain.placement_guarantee()
+                            == Some(CpuPlacementGuarantee::ExactDeclared)
+                            && cpus != topology.allowed_cpus()
+                        {
+                            return Err(ExternalCpuDomainRegistryError::ExactAllAllowedMismatch {
+                                domain: domain.id(),
+                                declared: cpus.clone(),
+                                allowed: topology.allowed_cpus().clone(),
+                            }
+                            .into());
+                        }
                     }
                 }
-                ResolvedCpuPlacement::AllAllowed { cpus } => {
-                    if has_all_allowed {
-                        return Err(ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
-                            placement: CpuPlacement::AllAllowed,
-                        }
-                        .into());
+                if let Some(cpu) = placement
+                    .cpus()
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .find(|cpu| !topology.allowed_cpus().contains(*cpu))
+                {
+                    return Err(ExternalCpuDomainRegistryError::CpuOutsideAllowedSet {
+                        domain: domain.id(),
+                        cpu,
                     }
-                    has_all_allowed = true;
-                    if domain.placement_guarantee() == CpuPlacementGuarantee::ExactDeclared
-                        && cpus != topology.allowed_cpus()
-                    {
-                        return Err(ExternalCpuDomainRegistryError::ExactAllAllowedMismatch {
-                            domain: domain.id(),
-                            declared: cpus.clone(),
-                            allowed: topology.allowed_cpus().clone(),
-                        }
-                        .into());
-                    }
+                    .into());
                 }
             }
-            if let Some(cpu) = domain
-                .cpus()
-                .as_slice()
-                .iter()
-                .copied()
-                .find(|cpu| !topology.allowed_cpus().contains(*cpu))
-            {
-                return Err(ExternalCpuDomainRegistryError::CpuOutsideAllowedSet {
-                    domain: domain.id(),
-                    cpu,
-                }
-                .into());
-            }
         }
-        if !domain_ids.contains(&default_domain) {
-            return Err(
-                ExternalCpuDomainRegistryError::MissingDefaultDomain { default_domain }.into(),
-            );
-        }
-
         let buffer_limit = crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES;
         let mut by_id = BTreeMap::new();
         let mut by_node = BTreeMap::new();
         let mut all_allowed = None;
         for domain in domains {
             let id = domain.id();
-            let placement = domain.placement().clone();
+            let placement = domain.placement().cloned();
             let engine = Arc::new(CpuEngine::from_external(domain, buffer_limit));
             match placement {
-                ResolvedCpuPlacement::NumaNode { id, .. } => {
+                Some(ResolvedCpuPlacement::NumaNode { id, .. }) => {
                     by_node.insert(id, Arc::clone(&engine));
                 }
-                ResolvedCpuPlacement::AllAllowed { .. } => {
+                Some(ResolvedCpuPlacement::AllAllowed { .. }) => {
                     all_allowed = Some(Arc::clone(&engine));
                 }
+                None => {}
             }
             by_id.insert(id, engine);
         }
@@ -1513,8 +1603,21 @@ impl CpuBackend {
                 ExternalCpuDomainRegistryError::MissingDefaultDomain { default_domain }.into(),
             );
         };
-        let resolved = ResolvedCpuExecution::ExternalManaged(engine.placement().clone());
-        let kind = CpuBackendKind::default_compiled();
+        let resolved = match engine.domain().admission_mode() {
+            CpuAdmissionMode::CooperativeCpuSet => ResolvedCpuExecution::ExternalManaged(
+                engine.placement().cloned().ok_or_else(|| {
+                    CpuBackendError::placement(
+                        "CpuBackend external domain resolution",
+                        CpuPlacementError::InternalState {
+                            requested: CpuPlacement::Auto,
+                            backend: kind,
+                            message: "cooperative external domain has no placement",
+                        },
+                    )
+                })?,
+            ),
+            CpuAdmissionMode::CallerManaged => ResolvedCpuExecution::ExternalCallerManaged,
+        };
         let backend = Self {
             runtime_identity: CpuRuntimeIdentity::fresh(),
             shared: Arc::new(CpuBackendState {
@@ -1755,6 +1858,46 @@ impl CpuBackend {
         )
     }
 
+    /// Select a registered externally managed domain by stable identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuBackend, ExternalCpuDomain, RayonCpuDomainExecutor};
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(1).build()?);
+    /// let id = CpuDomainId::new(5);
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     id,
+    ///     Arc::new(RayonCpuDomainExecutor::new(pool)),
+    ///     NonZeroUsize::MIN,
+    /// )?;
+    /// let backend = CpuBackend::from_external_managed_domains(id, [domain])?;
+    /// assert_eq!(backend.for_domain(id)?.execution_info().domain_id(), id);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuPlacementError::UnregisteredExternalDomain`] when this is not
+    /// an external coordinator or `domain` is not registered.
+    pub fn for_domain(&self, domain: CpuDomainId) -> Result<Self, CpuPlacementError> {
+        let engine = self.shared.external_engine_for_id(domain)?;
+        let resolved = external_engine_resolution(&engine, CpuPlacement::Auto, self.kind())?;
+        Ok(Self {
+            runtime_identity: CpuRuntimeIdentity::fresh(),
+            shared: Arc::clone(&self.shared),
+            requested: CpuPlacement::Auto,
+            resolved,
+            engine,
+            provider_bundle: self.provider_bundle.clone(),
+            allocation_domain: self.allocation_domain.clone(),
+        })
+    }
+
     fn for_placement_with_affinity(
         &self,
         requested: CpuPlacement,
@@ -1762,11 +1905,12 @@ impl CpuBackend {
     ) -> Result<Self, CpuPlacementError> {
         if self.shared.is_external() {
             let engine = self.shared.external_engine_for(requested)?;
+            let resolved = external_engine_resolution(&engine, requested, self.kind())?;
             return Ok(Self {
                 runtime_identity: CpuRuntimeIdentity::fresh(),
                 shared: Arc::clone(&self.shared),
                 requested,
-                resolved: ResolvedCpuExecution::ExternalManaged(engine.placement().clone()),
+                resolved,
                 engine,
                 provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
@@ -1791,7 +1935,8 @@ impl CpuBackend {
         }
         let engine_placement = match &resolved {
             ResolvedCpuExecution::Managed(placement) => placement.clone(),
-            ResolvedCpuExecution::ExternalManaged(_) => {
+            ResolvedCpuExecution::ExternalManaged(_)
+            | ResolvedCpuExecution::ExternalCallerManaged => {
                 return Err(CpuPlacementError::InternalState {
                     requested,
                     backend: self.kind(),
@@ -1859,6 +2004,7 @@ impl CpuBackend {
             ResolvedCpuExecution::Managed(placement)
             | ResolvedCpuExecution::ExternalManaged(placement) => Some(placement),
             ResolvedCpuExecution::Compatibility
+            | ResolvedCpuExecution::ExternalCallerManaged
             | ResolvedCpuExecution::ProviderDefaultExclusive => None,
         }
     }
@@ -1905,19 +2051,22 @@ impl CpuBackend {
         let domain = self.engine.domain();
         let capabilities = domain.executor_capabilities();
         let (executor_affinity, executor_shutdown) =
-            if domain.ownership() == CpuDomainOwnership::ExternalManaged {
-                (
+            match (domain.ownership(), domain.admission_mode()) {
+                (CpuDomainOwnership::ExternalManaged, CpuAdmissionMode::CooperativeCpuSet) => (
                     CpuExecutorAffinity::CallerDeclaredUnverified,
                     CpuExecutorShutdown::CallerOwned,
-                )
-            } else {
-                (capabilities.affinity, capabilities.shutdown)
+                ),
+                (CpuDomainOwnership::ExternalManaged, CpuAdmissionMode::CallerManaged) => {
+                    (capabilities.affinity, CpuExecutorShutdown::CallerOwned)
+                }
+                (CpuDomainOwnership::Managed, _) => (capabilities.affinity, capabilities.shutdown),
             };
         CpuExecutionInfo {
             backend_kind: self.kind(),
             execution_mode: match &self.resolved {
                 ResolvedCpuExecution::Managed(_) => CpuExecutionMode::Managed,
                 ResolvedCpuExecution::ExternalManaged(_) => CpuExecutionMode::ExternalManaged,
+                ResolvedCpuExecution::ExternalCallerManaged => CpuExecutionMode::CallerManaged,
                 ResolvedCpuExecution::ProviderDefaultExclusive => {
                     CpuExecutionMode::ProviderDefaultExclusive
                 }
@@ -1927,14 +2076,19 @@ impl CpuBackend {
             resolved_placement: self.resolved_placement().cloned(),
             topology: self.shared.topology.clone(),
             domain_id: domain.id(),
-            domain_cpus: domain.cpus().clone(),
+            domain_cpus: domain.cpus().cloned(),
             worker_count: capabilities.worker_count.get(),
             thread_budget: domain.thread_budget().get(),
             placement_guarantee: domain.placement_guarantee(),
+            admission_mode: domain.admission_mode(),
             domain_ownership: domain.ownership(),
             executor_affinity,
             executor_shutdown,
-            provider_diagnostic: provider_diagnostic(self.kind(), domain.ownership()),
+            provider_diagnostic: provider_diagnostic(
+                self.kind(),
+                domain.ownership(),
+                domain.admission_mode(),
+            ),
         }
     }
 
@@ -2017,13 +2171,20 @@ impl CpuBackend {
         let allowed = self.shared.topology.allowed_cpus();
         let validate_engine = |engine: &CpuEngine| {
             let domain = engine.domain();
-            bundle.validate_for_domain(
-                domain.id(),
-                domain.thread_budget(),
-                domain.placement_guarantee(),
-                domain.cpus(),
-                allowed,
-            )
+            let contract = match (domain.placement_guarantee(), domain.cpus()) {
+                (Some(placement_guarantee), Some(domain_cpus)) => {
+                    CpuProviderDomainContract::CooperativeCpuSet {
+                        placement_guarantee,
+                        domain_cpus,
+                        process_allowed_cpus: allowed,
+                    }
+                }
+                (None, None) => CpuProviderDomainContract::CallerManaged,
+                // INVARIANT: CpuResourceDomain stores placement and guarantee in
+                // the same admission enum variant, so their optionality matches.
+                _ => unreachable!("CPU domain placement and guarantee must match"),
+            };
+            bundle.validate_for_domain(domain.id(), domain.thread_budget(), contract)
         };
 
         match &self.shared.engines {
@@ -2050,9 +2211,11 @@ impl CpuBackend {
                     bundle.validate_for_domain(
                         domain_id,
                         budget,
-                        CpuPlacementGuarantee::ExactDeclared,
-                        node.cpus(),
-                        allowed,
+                        CpuProviderDomainContract::CooperativeCpuSet {
+                            placement_guarantee: CpuPlacementGuarantee::ExactDeclared,
+                            domain_cpus: node.cpus(),
+                            process_allowed_cpus: allowed,
+                        },
                     )?;
                 }
             }
@@ -2685,6 +2848,18 @@ impl CpuBackend {
                 .shared
                 .arbiter
                 .acquire_recovering(placement.cpus().clone(), owner),
+            ResolvedCpuExecution::ExternalCallerManaged => {
+                // INVARIANT: this resolved mode is created only from a domain
+                // whose admission variant owns the matching active-entry flag.
+                let active = self
+                    .engine
+                    .domain()
+                    .caller_managed_active()
+                    .unwrap_or_else(|| {
+                        unreachable!("caller-managed execution needs a local admission guard")
+                    });
+                ResourcePermit::caller_managed(active, owner)
+            }
             ResolvedCpuExecution::Compatibility => self
                 .shared
                 .arbiter
@@ -2705,6 +2880,7 @@ impl CpuBackend {
             | ResolvedCpuExecution::ExternalManaged(placement) => {
                 self.shared.arbiter.try_acquire(placement.cpus().clone())
             }
+            ResolvedCpuExecution::ExternalCallerManaged => Ok(None),
             ResolvedCpuExecution::Compatibility => self
                 .shared
                 .arbiter

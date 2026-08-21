@@ -20,6 +20,65 @@ provider calls both cross the selected all-allowed domain executor exactly
 once. The executor entry owns admission and caller-thread placement; the BLAS
 runtime, rather than the executor's Rayon workers, owns provider fan-out.
 
+## Caller-managed external admission
+
+An external domain explicitly selects one of two admission contracts:
+
+- **cooperative CPU-set admission** retains the existing resolved placement,
+  placement guarantee, and process-wide overlap arbitration; or
+- **caller-managed admission** declares no CPU set. The supplied executor's
+  workers are the complete CPU universe for that domain, and the caller owns
+  admission and oversubscription across caller-managed domains.
+
+`ExternalCpuDomain::new` remains the cooperative constructor.
+`ExternalCpuDomain::new_caller_managed(id, executor, thread_budget)` selects the
+second contract. `ExternalCpuDomain::admission_mode()` and
+`CpuExecutionInfo::admission_mode()` expose the distinction. Placement and CPU
+set accessors on `ExternalCpuDomain`, `CpuExecutionInfo`, and provider-facing
+`CpuExecutionContext` return `None` for caller-managed domains rather than
+inventing a placement claim. `CpuBackend::for_domain(CpuDomainId)` selects any
+registered external domain by stable ID; placement selection remains available
+only for cooperative domains.
+
+Caller-managed execution never enters `ResourceArbiter`, so unrelated
+caller-managed domains do not conflict because their process affinity overlaps.
+Instead, each caller-managed domain owns a small RAII admission guard carrying
+tenferro's execution-owner identity. It rejects a second public backend entry
+while that domain is active, including entry from another worker of the same
+caller pool, and clears on success, error, or unwind. This preserves public
+`CpuBackend` recursive-entry rejection without requiring TLS installation on a
+pool built by the caller. The permit never reports arbiter re-entry, so the
+existing engine-resource lock continues to protect that domain's caches and
+buffer pool. Cooperative, managed, compatibility, and provider-exclusive
+permits are unchanged.
+
+The standard caller-owned Rayon adapter retains an `Arc<rayon::ThreadPool>` and
+implements the generic `CpuDomainExecutor` contract without constructing or
+shutting down a pool. Its synchronous `install` delegates to that exact pool,
+including when called by a worker already inside the same pool; inner faer and
+strided parallelism therefore sees only that pool and the validated domain
+thread budget. `submit` partitions only the indexed jobs supplied by tenferro.
+No path may fall back to ambient/global Rayon.
+
+Caller-managed domains explicitly select `CpuBackendKind::Faer`, independent of
+`CpuBackendKind::default_compiled()`; construction returns a typed unsupported
+configuration error when faer is not compiled. Provider-domain validation has a
+distinct caller-managed branch with no advisory or process-all-allowed bypass.
+It accepts only thread controls `PerCallUpperBound`, `Sequential`, or
+`BinaryClampToOne` and placement controls `EngineWorkers` or `CallingThread`.
+Caller-managed domains carry no `CpuPlacementGuarantee`. A bundle with external
+workers, uncontrolled thread count, or no placement control fails with a typed
+construction error before execution. The current BLAS/LAPACK operation-family
+path is unsupported because its process-global or provider-owned workers cannot
+be confined to the supplied executor. It must not run and then weaken
+isolation, mutate an output, or fall back silently.
+
+Diagnostics report caller-managed admission, absent verified placement, caller
+executor/shutdown ownership, worker count, and thread budget. Fresh output
+metadata may retain the stable CPU domain ID for routing, but it is not evidence
+of CPU affinity or NUMA residency. Executor ownership stays with the caller and
+is retained by the domain for every active synchronous job.
+
 The unentered crate-private `CpuOperationEntry` holds the selected domain and
 resource permit. It is the only CPU backend value allowed to call executor
 `install` or `submit`. Provider-facing `CpuExecutionContext` values are created

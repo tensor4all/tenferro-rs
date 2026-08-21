@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use thiserror::Error;
@@ -349,8 +349,10 @@ impl ResourceArbiter {
                     owner: waiter.owner,
                 });
                 return Ok(ResourcePermit {
-                    inner: Arc::clone(&self.inner),
-                    id,
+                    kind: ResourcePermitKind::Arbitrated {
+                        inner: Arc::clone(&self.inner),
+                        id,
+                    },
                     owner,
                     reentrant,
                 });
@@ -399,8 +401,10 @@ impl ResourceArbiter {
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
         state.active.push(ActiveRequest { id, request, owner });
         Ok(Some(ResourcePermit {
-            inner: Arc::clone(&self.inner),
-            id,
+            kind: ResourcePermitKind::Arbitrated {
+                inner: Arc::clone(&self.inner),
+                id,
+            },
             owner,
             reentrant,
         }))
@@ -442,14 +446,32 @@ impl ResourceArbiter {
     }
 }
 
+enum ResourcePermitKind {
+    Arbitrated { inner: Arc<ArbiterInner>, id: u64 },
+    CallerManaged { active: Arc<AtomicBool> },
+}
+
 pub(crate) struct ResourcePermit {
-    inner: Arc<ArbiterInner>,
-    id: u64,
+    kind: ResourcePermitKind,
     owner: ResourceOwner,
     reentrant: bool,
 }
 
 impl ResourcePermit {
+    pub(crate) fn caller_managed(active: Arc<AtomicBool>, owner: ResourceOwner) -> Self {
+        if active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            panic!("{BACKEND_REENTRY_PANIC}");
+        }
+        Self {
+            kind: ResourcePermitKind::CallerManaged { active },
+            owner,
+            reentrant: false,
+        }
+    }
+
     pub(crate) fn is_reentrant(&self) -> bool {
         self.reentrant
     }
@@ -461,27 +483,38 @@ impl ResourcePermit {
 
 impl fmt::Debug for ResourcePermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResourcePermit")
-            .field("id", &self.id)
-            .finish_non_exhaustive()
+        let mut permit = f.debug_struct("ResourcePermit");
+        match &self.kind {
+            ResourcePermitKind::Arbitrated { id, .. } => permit.field("id", id),
+            ResourcePermitKind::CallerManaged { .. } => {
+                permit.field("admission", &"caller-managed")
+            }
+        };
+        permit.finish_non_exhaustive()
     }
 }
 
 impl Drop for ResourcePermit {
     fn drop(&mut self) {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
-            state.active.swap_remove(position);
+        match &self.kind {
+            ResourcePermitKind::Arbitrated { inner, id } => {
+                let mut state = inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(position) = state.active.iter().position(|active| active.id == *id) {
+                    state.active.swap_remove(position);
+                }
+                // Always broadcast: the request-id-exhaustion recovery loop parks on
+                // the condvar WITHOUT a waiter-list entry (until active and waiters
+                // are both empty), so the waiter list cannot tell whether a thread is
+                // parked. Skipping here would risk stranding that recovery waiter.
+                inner.changed.notify_all();
+            }
+            ResourcePermitKind::CallerManaged { active } => {
+                active.store(false, Ordering::Release);
+            }
         }
-        // Always broadcast: the request-id-exhaustion recovery loop parks on
-        // the condvar WITHOUT a waiter-list entry (until active and waiters
-        // are both empty), so the waiter list cannot tell whether a thread is
-        // parked. Skipping here would risk stranding that recovery waiter.
-        self.inner.changed.notify_all();
     }
 }
 

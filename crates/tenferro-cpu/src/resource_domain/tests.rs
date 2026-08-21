@@ -25,7 +25,7 @@ fn external_domain_guarantees_round_trip_without_upgrading_affinity() {
         )
         .unwrap();
 
-        assert_eq!(domain.placement_guarantee(), guarantee);
+        assert_eq!(domain.placement_guarantee(), Some(guarantee));
         assert_eq!(
             domain.executor_capabilities().affinity,
             CpuExecutorAffinity::CallerDeclaredUnverified
@@ -70,12 +70,12 @@ fn external_node_domain_reports_public_diagnostics() {
     .unwrap();
 
     assert_eq!(domain.id(), CpuDomainId::new(9));
-    assert_eq!(domain.placement(), &placement);
-    assert_eq!(domain.cpus().as_usize_vec(), vec![3, 5]);
+    assert_eq!(domain.placement(), Some(&placement));
+    assert_eq!(domain.cpus().map(CpuSet::as_usize_vec), Some(vec![3, 5]));
     assert_eq!(domain.thread_budget(), nonzero(2));
     assert_eq!(
         domain.placement_guarantee(),
-        CpuPlacementGuarantee::ExactDeclared
+        Some(CpuPlacementGuarantee::ExactDeclared)
     );
     assert_eq!(domain.ownership(), CpuDomainOwnership::ExternalManaged);
     assert_eq!(domain.executor_capabilities(), expected_capabilities);
@@ -93,14 +93,47 @@ fn external_all_allowed_domain_reports_public_diagnostics() {
     )
     .unwrap();
 
-    assert_eq!(domain.placement(), &placement);
-    assert_eq!(domain.placement().node_id(), None);
-    assert_eq!(domain.cpus().as_usize_vec(), vec![1, 8]);
+    assert_eq!(domain.placement(), Some(&placement));
+    assert_eq!(
+        domain.placement().and_then(ResolvedCpuPlacement::node_id),
+        None
+    );
+    assert_eq!(domain.cpus().map(CpuSet::as_usize_vec), Some(vec![1, 8]));
     assert_eq!(
         domain.placement_guarantee(),
-        CpuPlacementGuarantee::AdvisoryDeclared
+        Some(CpuPlacementGuarantee::AdvisoryDeclared)
     );
     assert_eq!(domain.ownership(), CpuDomainOwnership::ExternalManaged);
+}
+
+#[test]
+fn caller_managed_domain_has_no_fabricated_placement_and_validates_budget() {
+    let domain = ExternalCpuDomain::new_caller_managed(
+        CpuDomainId::new(12),
+        Arc::new(TestExecutor::new(3)),
+        nonzero(2),
+    )
+    .unwrap();
+    assert_eq!(domain.admission_mode(), CpuAdmissionMode::CallerManaged);
+    assert!(domain.placement().is_none());
+    assert!(domain.cpus().is_none());
+    assert!(domain.placement_guarantee().is_none());
+    assert_eq!(domain.executor_capabilities().worker_count.get(), 3);
+    assert_eq!(domain.thread_budget().get(), 2);
+
+    let error = ExternalCpuDomain::new_caller_managed(
+        CpuDomainId::new(13),
+        Arc::new(TestExecutor::new(2)),
+        nonzero(3),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ExternalCpuDomainError::ThreadBudgetExceedsWorkerCount {
+            thread_budget: 3,
+            worker_count: 2,
+        }
+    );
 }
 
 #[test]
@@ -133,7 +166,7 @@ fn zero_thread_budget_is_unrepresentable_at_the_safe_public_boundary() {
 #[test]
 fn defensive_validation_rejects_empty_placement() {
     assert_eq!(
-        validate_external_domain_config(0, 1, nonzero(1)),
+        validate_external_domain_config(Some(0), 1, nonzero(1)),
         Err(ExternalCpuDomainError::EmptyPlacementCpuSet)
     );
 }
@@ -141,7 +174,7 @@ fn defensive_validation_rejects_empty_placement() {
 #[test]
 fn defensive_validation_rejects_zero_executor_workers() {
     assert_eq!(
-        validate_external_domain_config(1, 0, nonzero(1)),
+        validate_external_domain_config(Some(1), 0, nonzero(1)),
         Err(ExternalCpuDomainError::ZeroExecutorWorkers)
     );
 }

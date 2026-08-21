@@ -205,11 +205,14 @@ fn provider_context_exposes_only_execution_policy() {
     let fixture = execution_context_fixture(4);
     fixture.with_context(ParallelMode::Inner, |provider_context| {
         assert_eq!(provider_context.domain_id(), CpuDomainId::new(9));
-        assert_eq!(provider_context.cpus().as_slice(), &[CpuId::new(0)]);
+        assert_eq!(
+            provider_context.cpus().map(|cpus| cpus.as_slice()),
+            Some(&[CpuId::new(0)][..])
+        );
         assert_eq!(provider_context.thread_budget().get(), 4);
         assert_eq!(
             provider_context.placement_guarantee(),
-            CpuPlacementGuarantee::AdvisoryDeclared
+            Some(CpuPlacementGuarantee::AdvisoryDeclared)
         );
         assert_eq!(provider_context.parallel_mode(), ParallelMode::Inner);
     });

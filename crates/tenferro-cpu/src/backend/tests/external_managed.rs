@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -291,6 +292,7 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
             [domain],
             topology([0, 1, 2, 3]),
             ResourceArbiter::new(),
+            CpuBackendKind::Faer,
             bundle_with_gemm_capabilities(controlled_external_capabilities()),
         )
         .unwrap_err();
@@ -337,6 +339,7 @@ fn external_constructor_accepts_the_initial_standard_faer_bundle() {
             )],
             topology([0, 1, 2, 3]),
             ResourceArbiter::new(),
+            CpuBackendKind::Faer,
             bundle.clone(),
         )
         .unwrap();
@@ -360,6 +363,7 @@ fn external_constructor_rejects_the_initial_uncontrolled_standard_blas_bundle() 
             )],
             topology([0, 1]),
             ResourceArbiter::new(),
+            CpuBackendKind::Blas,
             CpuProviderBundle::standard(CpuBackendKind::Blas, false),
         )
         .unwrap_err();
@@ -454,13 +458,13 @@ fn external_diagnostics_distinguish_worker_count_and_thread_budget() {
     assert_eq!(info.execution_mode(), CpuExecutionMode::ExternalManaged);
     assert_eq!(info.domain_id(), CpuDomainId::new(17));
     assert_eq!(info.resolved_placement(), Some(&placement));
-    assert_eq!(info.domain_cpus(), placement.cpus());
+    assert_eq!(info.domain_cpus(), Some(placement.cpus()));
     assert_eq!(info.worker_count(), 3);
     assert_eq!(info.thread_budget(), 2);
     assert_eq!(backend.num_threads(), 2);
     assert_eq!(
         info.placement_guarantee(),
-        CpuPlacementGuarantee::AdvisoryDeclared
+        Some(CpuPlacementGuarantee::AdvisoryDeclared)
     );
     assert_eq!(info.domain_ownership(), CpuDomainOwnership::ExternalManaged);
     assert_eq!(
@@ -1183,6 +1187,229 @@ fn external_prebuilt_engines_are_counted_once_by_buffer_controls() {
     }
 }
 
+#[cfg(not(feature = "cpu-faer"))]
+#[test]
+fn caller_managed_public_constructor_requires_faer_before_backend_construction() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let domain = caller_managed_domain(20, pool, 1);
+    let error =
+        CpuBackend::from_external_managed_domains(CpuDomainId::new(20), [domain]).unwrap_err();
+    assert!(matches!(error, CpuBackendError::Tensor(_)));
+    assert!(error.to_string().contains("cpu-faer"));
+}
+
+#[test]
+fn caller_managed_same_pool_entry_uses_only_the_declared_rayon_team() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .thread_name(|index| format!("caller-managed-a-{index}"))
+            .build()
+            .unwrap(),
+    );
+    let weak_pool = Arc::downgrade(&pool);
+    let domain = ExternalCpuDomain::new_caller_managed(
+        CpuDomainId::new(21),
+        Arc::new(crate::RayonCpuDomainExecutor::new(Arc::clone(&pool))),
+        NonZeroUsize::new(2).unwrap(),
+    )
+    .unwrap();
+    let mut backend = external_backend(CpuDomainId::new(21), [domain], topology([0])).unwrap();
+
+    let names = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+    let observed = Arc::clone(&names);
+    pool.install(|| {
+        backend
+            .with_linalg_pool(|context, _| {
+                assert_eq!(context.thread_budget().get(), 2);
+                assert_eq!(context.admission_mode(), CpuAdmissionMode::CallerManaged);
+                assert!(context.cpus().is_none());
+                context.with_native_parallelism(|| {
+                    rayon::broadcast(|_| {
+                        observed
+                            .lock()
+                            .unwrap()
+                            .insert(std::thread::current().name().unwrap_or("").to_owned());
+                    });
+                });
+                Ok(())
+            })
+            .unwrap();
+    });
+
+    let names = names.lock().unwrap();
+    assert_eq!(names.len(), 2);
+    assert!(names
+        .iter()
+        .all(|name| name.starts_with("caller-managed-a-")));
+    drop(names);
+    drop(pool);
+    assert!(weak_pool.upgrade().is_some());
+    drop(backend);
+    assert!(weak_pool.upgrade().is_none());
+}
+
+#[test]
+fn distinct_caller_managed_domains_overlap_and_select_by_id() {
+    let pool_a = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let pool_b = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let domains = [
+        caller_managed_domain(31, Arc::clone(&pool_a), 1),
+        caller_managed_domain(32, Arc::clone(&pool_b), 1),
+    ];
+    let mut backend_a = external_backend(CpuDomainId::new(31), domains, topology([0])).unwrap();
+    let mut backend_b = backend_a.for_domain(CpuDomainId::new(32)).unwrap();
+    assert_eq!(
+        backend_a.execution_info().execution_mode(),
+        CpuExecutionMode::CallerManaged
+    );
+    assert_eq!(backend_b.execution_info().domain_id(), CpuDomainId::new(32));
+    assert!(backend_a.execution_info().resolved_placement().is_none());
+    assert!(backend_b.execution_info().domain_cpus().is_none());
+    assert_eq!(
+        backend_a.execution_info().executor_affinity(),
+        CpuExecutorAffinity::None
+    );
+    assert_eq!(
+        backend_a.execution_info().executor_shutdown(),
+        CpuExecutorShutdown::CallerOwned
+    );
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_a_tx, release_a_rx) = mpsc::channel();
+    let (release_b_tx, release_b_rx) = mpsc::channel();
+    let first = std::thread::spawn(move || {
+        backend_a
+            .with_linalg_pool(move |_, _| {
+                entered_tx.send(31).unwrap();
+                release_a_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
+    });
+    let entered_tx = entered_rx;
+    let (second_entered_tx, second_entered_rx) = mpsc::channel();
+    let second = std::thread::spawn(move || {
+        backend_b
+            .with_linalg_pool(move |_, _| {
+                second_entered_tx.send(32).unwrap();
+                release_b_rx.recv().unwrap();
+                Ok(())
+            })
+            .unwrap();
+    });
+
+    let first_id = entered_tx.recv_timeout(Duration::from_secs(2));
+    let second_id = second_entered_rx.recv_timeout(Duration::from_secs(2));
+    release_a_tx.send(()).unwrap();
+    release_b_tx.send(()).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(first_id.unwrap(), 31);
+    assert_eq!(second_id.unwrap(), 32);
+}
+
+#[test]
+fn caller_managed_public_reentry_is_rejected_and_unwind_releases_admission() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap(),
+    );
+    let domain = caller_managed_domain(41, Arc::clone(&pool), 2);
+    let mut backend = external_backend(CpuDomainId::new(41), [domain], topology([0])).unwrap();
+    let mut nested = backend.clone();
+
+    backend
+        .with_linalg_pool(|_, _| {
+            let (result_tx, result_rx) = mpsc::channel();
+            rayon::scope(|scope| {
+                scope.spawn(move |_| {
+                    let rejected = catch_unwind(AssertUnwindSafe(|| {
+                        nested.with_linalg_pool(|_, _| Ok(())).unwrap();
+                    }))
+                    .is_err();
+                    result_tx.send(rejected).unwrap();
+                });
+            });
+            assert!(result_rx.recv().unwrap());
+            Ok(())
+        })
+        .unwrap();
+
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_linalg_pool(|_, _| -> crate::Result<()> { panic!("fixture unwind") })
+            .unwrap();
+    }));
+    assert!(panic.is_err());
+    backend.with_linalg_pool(|_, _| Ok(())).unwrap();
+}
+
+#[test]
+fn caller_managed_constructor_rejects_external_provider_workers_before_execution() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap(),
+    );
+    let domain = caller_managed_domain(51, pool, 2);
+    let error =
+        CpuBackend::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            CpuDomainId::new(51),
+            [domain],
+            topology([0]),
+            ResourceArbiter::new(),
+            CpuBackendKind::Faer,
+            bundle_with_gemm_capabilities(controlled_external_capabilities()),
+        )
+        .unwrap_err();
+
+    let CpuBackendError::Tensor(error) = error else {
+        panic!("caller-managed provider rejection must retain the typed tensor wrapper");
+    };
+    let source = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+        .unwrap();
+    assert!(matches!(
+        source,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            source: crate::CpuProviderDomainError::CallerManagedPlacementNotEnforceable { .. },
+            ..
+        }
+    ));
+}
+
+fn caller_managed_domain(
+    id: u64,
+    pool: Arc<rayon::ThreadPool>,
+    thread_budget: usize,
+) -> ExternalCpuDomain {
+    ExternalCpuDomain::new_caller_managed(
+        CpuDomainId::new(id),
+        Arc::new(crate::RayonCpuDomainExecutor::new(pool)),
+        NonZeroUsize::new(thread_budget).unwrap(),
+    )
+    .unwrap()
+}
+
 fn external_backend(
     default_domain: CpuDomainId,
     domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1193,6 +1420,7 @@ fn external_backend(
         domains,
         topology,
         ResourceArbiter::new(),
+        CpuBackendKind::Faer,
         CpuProviderBundle::standard(CpuBackendKind::Faer, false),
     )
 }

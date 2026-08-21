@@ -153,7 +153,8 @@ pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
 pub use domain_executor::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, RayonCpuDomainExecutor,
+    ScopedCpuJob, ScopedCpuJobs,
 };
 pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
@@ -171,7 +172,9 @@ pub use provider_capability::{
     CpuPlacementControl, CpuProviderDomainError, CpuProviderExecutionCapabilities,
     CpuThreadCountControl,
 };
-pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
+pub use resource_domain::{
+    CpuAdmissionMode, CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError,
+};
 pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
     runtime_hardware_class,

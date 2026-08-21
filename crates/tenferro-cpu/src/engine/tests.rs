@@ -18,12 +18,12 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
         CpuEngine::new_managed(CpuDomainId::new(0), placement.clone(), usize::MAX, 0).unwrap();
 
     assert_eq!(engine.domain().thread_budget().get(), selected.len());
-    assert_eq!(engine.placement(), &placement);
+    assert_eq!(engine.placement(), Some(&placement));
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
     assert_eq!(engine.domain().ownership(), CpuDomainOwnership::Managed);
     assert_eq!(
         engine.domain().placement_guarantee(),
-        CpuPlacementGuarantee::ExactDeclared
+        Some(CpuPlacementGuarantee::ExactDeclared)
     );
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 0);
@@ -43,13 +43,13 @@ fn engine_from_context_preserves_placement_context_and_resources() {
         4096,
     );
 
-    assert_eq!(engine.placement(), &placement);
+    assert_eq!(engine.placement(), Some(&placement));
     assert_eq!(engine.domain().thread_budget().get(), 1);
     assert_eq!(Arc::strong_count(&context), 2);
     assert_eq!(engine.domain().id(), CpuDomainId::new(3));
     assert_eq!(
         engine.domain().placement_guarantee(),
-        CpuPlacementGuarantee::AdvisoryDeclared
+        Some(CpuPlacementGuarantee::AdvisoryDeclared)
     );
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 4096);
@@ -87,7 +87,7 @@ fn external_engine_moves_the_resource_domain_without_a_staging_context() {
     let engine = CpuEngine::from_external(external, 2048);
 
     assert_eq!(engine.domain().id(), CpuDomainId::new(9));
-    assert_eq!(engine.placement(), &placement);
+    assert_eq!(engine.placement(), Some(&placement));
     assert_eq!(
         engine.domain().ownership(),
         CpuDomainOwnership::ExternalManaged

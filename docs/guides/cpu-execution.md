@@ -83,7 +83,32 @@ waiting for it from the outer execution can deadlock. Finish the outer backend
 execution before launching new top-level backend calls. Ordinary Rayon work
 that does not re-enter a CPU backend remains supported.
 
-### Scoped direct faer calls
+## Caller-managed executor domains
+
+A host scheduler that already owns independent Rayon pools can register each
+pool as a caller-managed external domain. Use
+`RayonCpuDomainExecutor::new(Arc<rayon::ThreadPool>)` with
+`ExternalCpuDomain::new_caller_managed`; the generic `CpuDomainExecutor` trait
+remains available for non-Rayon executors. No CPU set is declared or inferred.
+Select a registered domain with `CpuBackend::for_domain(CpuDomainId)`.
+
+Caller-managed domains use faer and tenferro-native kernels only. tenferro
+retains the supplied executor, enters only that executor, applies the declared
+thread budget, and never creates or shuts down another pool. Entry from an
+exclusive coarse task already running on the same Rayon pool is supported.
+Distinct caller-managed domains do not enter the process-wide CPU-set arbiter,
+so their pools may overlap even when the process affinity mask is identical.
+The host owns cross-domain scheduling and oversubscription policy.
+
+A second public backend entry into the same active domain is rejected, including
+entry from another worker of that pool. Provider bundles with external workers
+or uncontrolled thread counts, and BLAS/LAPACK configurations that cannot stay
+inside the supplied executor, fail during backend construction. Diagnostics
+report `CpuAdmissionMode::CallerManaged`; resolved placement, domain CPUs, and
+placement guarantee are `None` because tenferro has no verified placement
+claim.
+
+## Scoped direct faer calls
 
 Downstream code that needs a faer routine not exposed by tenferro can use
 `tenferro_cpu::FaerParallelismExt` on the active `BackendSession`:

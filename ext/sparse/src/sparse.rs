@@ -294,7 +294,7 @@ pub(crate) fn validate_coordinates(
         ));
     }
     let mut entries = Vec::with_capacity(coord_shape[1]);
-    for pair in coordinates.as_slice::<i64>()?.chunks_exact(2) {
+    for pair in coordinates.as_slice::<i64>()?.as_chunks::<2>().0 {
         let row = usize::try_from(pair[0]).map_err(|_| {
             Error::invalid_argument(OP, "coordinates", "negative sparse row coordinate")
         })?;
