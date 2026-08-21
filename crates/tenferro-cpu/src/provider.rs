@@ -183,18 +183,34 @@ impl<'a> CpuExecutionContext<'a> {
         self.domain.id()
     }
 
-    /// Return the selected domain's declared logical CPU set.
+    /// Return the selected domain's declared logical CPU set, when present.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_cpu::CpuExecutionContext;
     /// # fn inspect(context: &CpuExecutionContext<'_>) {
-    /// assert!(!context.cpus().is_empty());
+    /// if let Some(cpus) = context.cpus() {
+    ///     assert!(!cpus.is_empty());
+    /// }
     /// # }
     /// ```
-    pub fn cpus(&self) -> &CpuSet {
+    pub fn cpus(&self) -> Option<&CpuSet> {
         self.domain.cpus()
+    }
+
+    /// Return the selected domain's admission contract.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuAdmissionMode, CpuExecutionContext};
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// let _mode: CpuAdmissionMode = context.admission_mode();
+    /// # }
+    /// ```
+    pub fn admission_mode(&self) -> crate::CpuAdmissionMode {
+        self.domain.admission_mode()
     }
 
     /// Return the non-zero maximum participating-thread budget.
@@ -211,7 +227,7 @@ impl<'a> CpuExecutionContext<'a> {
         self.domain.thread_budget()
     }
 
-    /// Return the strength of the selected domain's placement guarantee.
+    /// Return the strength of the selected domain's placement guarantee, when present.
     ///
     /// # Examples
     ///
@@ -221,7 +237,7 @@ impl<'a> CpuExecutionContext<'a> {
     /// let _guarantee = context.placement_guarantee();
     /// # }
     /// ```
-    pub fn placement_guarantee(&self) -> CpuPlacementGuarantee {
+    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
         self.domain.placement_guarantee()
     }
 

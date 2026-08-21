@@ -110,7 +110,7 @@ impl CpuEngine {
         &self.domain
     }
 
-    pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
+    pub(crate) fn placement(&self) -> Option<&ResolvedCpuPlacement> {
         self.domain.placement()
     }
 }

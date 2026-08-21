@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::*;
 
@@ -97,6 +99,42 @@ fn outer_submission_is_synchronous_and_indexed() {
     executor.submit(&jobs).unwrap();
 
     assert_eq!(seen.map(|value| value.load(Ordering::Relaxed)), [1, 1]);
+}
+
+#[test]
+fn caller_owned_rayon_adapter_uses_only_the_supplied_pool_for_install_and_submit() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .thread_name(|index| format!("caller-adapter-{index}"))
+            .build()
+            .unwrap(),
+    );
+    let executor = RayonCpuDomainExecutor::new(Arc::clone(&pool));
+
+    let installed_name = pool.install(|| {
+        install_scoped(&executor, || {
+            std::thread::current().name().unwrap_or("").to_owned()
+        })
+        .unwrap()
+    });
+    assert!(installed_name.starts_with("caller-adapter-"));
+
+    let names = Arc::new(Mutex::new(BTreeSet::new()));
+    let observed = Arc::clone(&names);
+    let jobs = indexed_jobs(64, move |_| {
+        observed
+            .lock()
+            .unwrap()
+            .insert(std::thread::current().name().unwrap_or("").to_owned());
+        Ok(())
+    });
+    executor.submit(&jobs).unwrap();
+    assert!(names
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|name| name.starts_with("caller-adapter-")));
 }
 
 #[test]

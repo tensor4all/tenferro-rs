@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -26,6 +27,37 @@ pub enum CpuDomainOwnership {
     Managed,
     /// The application supplied and owns the executor resource policy.
     ExternalManaged,
+}
+
+/// Admission contract for one CPU resource domain.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuAdmissionMode;
+///
+/// assert_ne!(
+///     CpuAdmissionMode::CooperativeCpuSet,
+///     CpuAdmissionMode::CallerManaged,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CpuAdmissionMode {
+    /// tenferro arbitrates the domain's declared CPU set with other CPU work.
+    CooperativeCpuSet,
+    /// The caller owns cross-domain admission; tenferro guards only this domain.
+    CallerManaged,
+}
+
+#[derive(Debug)]
+enum CpuDomainAdmission {
+    CooperativeCpuSet {
+        placement: ResolvedCpuPlacement,
+        guarantee: CpuPlacementGuarantee,
+    },
+    CallerManaged {
+        active: Arc<AtomicBool>,
+    },
 }
 
 /// Typed failure to construct an externally managed CPU resource domain.
@@ -64,10 +96,9 @@ pub enum ExternalCpuDomainError {
 #[derive(Debug)]
 pub(crate) struct CpuResourceDomain {
     id: CpuDomainId,
-    placement: ResolvedCpuPlacement,
+    admission: CpuDomainAdmission,
     executor: Arc<dyn CpuDomainExecutor>,
     thread_budget: NonZeroUsize,
-    placement_guarantee: CpuPlacementGuarantee,
     ownership: CpuDomainOwnership,
 }
 
@@ -82,11 +113,29 @@ impl CpuResourceDomain {
     ) -> Self {
         Self {
             id,
-            placement,
+            admission: CpuDomainAdmission::CooperativeCpuSet {
+                placement,
+                guarantee: placement_guarantee,
+            },
             executor,
             thread_budget,
-            placement_guarantee,
             ownership,
+        }
+    }
+
+    fn new_caller_managed(
+        id: CpuDomainId,
+        executor: Arc<dyn CpuDomainExecutor>,
+        thread_budget: NonZeroUsize,
+    ) -> Self {
+        Self {
+            id,
+            admission: CpuDomainAdmission::CallerManaged {
+                active: Arc::new(AtomicBool::new(false)),
+            },
+            executor,
+            thread_budget,
+            ownership: CpuDomainOwnership::ExternalManaged,
         }
     }
 
@@ -94,12 +143,29 @@ impl CpuResourceDomain {
         self.id
     }
 
-    pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
-        &self.placement
+    pub(crate) fn admission_mode(&self) -> CpuAdmissionMode {
+        match self.admission {
+            CpuDomainAdmission::CooperativeCpuSet { .. } => CpuAdmissionMode::CooperativeCpuSet,
+            CpuDomainAdmission::CallerManaged { .. } => CpuAdmissionMode::CallerManaged,
+        }
     }
 
-    pub(crate) fn cpus(&self) -> &CpuSet {
-        self.placement.cpus()
+    pub(crate) fn placement(&self) -> Option<&ResolvedCpuPlacement> {
+        match &self.admission {
+            CpuDomainAdmission::CooperativeCpuSet { placement, .. } => Some(placement),
+            CpuDomainAdmission::CallerManaged { .. } => None,
+        }
+    }
+
+    pub(crate) fn cpus(&self) -> Option<&CpuSet> {
+        self.placement().map(ResolvedCpuPlacement::cpus)
+    }
+
+    pub(crate) fn caller_managed_active(&self) -> Option<Arc<AtomicBool>> {
+        match &self.admission {
+            CpuDomainAdmission::CallerManaged { active } => Some(Arc::clone(active)),
+            CpuDomainAdmission::CooperativeCpuSet { .. } => None,
+        }
     }
 
     pub(crate) fn executor(&self) -> &Arc<dyn CpuDomainExecutor> {
@@ -110,8 +176,11 @@ impl CpuResourceDomain {
         self.thread_budget
     }
 
-    pub(crate) fn placement_guarantee(&self) -> CpuPlacementGuarantee {
-        self.placement_guarantee
+    pub(crate) fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
+        match self.admission {
+            CpuDomainAdmission::CooperativeCpuSet { guarantee, .. } => Some(guarantee),
+            CpuDomainAdmission::CallerManaged { .. } => None,
+        }
     }
 
     pub(crate) fn ownership(&self) -> CpuDomainOwnership {
@@ -203,7 +272,7 @@ impl ExternalCpuDomain {
         placement_guarantee: CpuPlacementGuarantee,
     ) -> Result<Self, ExternalCpuDomainError> {
         let worker_count = executor.capabilities().worker_count.get();
-        validate_external_domain_config(placement.cpus().len(), worker_count, thread_budget)?;
+        validate_external_domain_config(Some(placement.cpus().len()), worker_count, thread_budget)?;
         Ok(Self {
             domain: CpuResourceDomain::new(
                 id,
@@ -213,6 +282,52 @@ impl ExternalCpuDomain {
                 placement_guarantee,
                 CpuDomainOwnership::ExternalManaged,
             ),
+        })
+    }
+
+    /// Construct a caller-managed domain without declaring a CPU set.
+    ///
+    /// The caller owns admission between distinct caller-managed domains. tenferro
+    /// retains `executor`, rejects concurrent public entry into this domain, and
+    /// never constructs or shuts down another executor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{
+    ///     CpuAdmissionMode, ExternalCpuDomain, RayonCpuDomainExecutor,
+    /// };
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(2).build()?);
+    /// let executor = Arc::new(RayonCpuDomainExecutor::new(Arc::clone(&pool)));
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     CpuDomainId::new(9),
+    ///     executor,
+    ///     NonZeroUsize::new(2).unwrap(),
+    /// )?;
+    /// assert_eq!(domain.admission_mode(), CpuAdmissionMode::CallerManaged);
+    /// assert!(domain.placement().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExternalCpuDomainError::ZeroExecutorWorkers`] when the executor
+    /// reports no workers, or
+    /// [`ExternalCpuDomainError::ThreadBudgetExceedsWorkerCount`] when
+    /// `thread_budget` exceeds the executor worker count.
+    pub fn new_caller_managed(
+        id: CpuDomainId,
+        executor: Arc<dyn CpuDomainExecutor>,
+        thread_budget: NonZeroUsize,
+    ) -> Result<Self, ExternalCpuDomainError> {
+        let worker_count = executor.capabilities().worker_count.get();
+        validate_external_domain_config(None, worker_count, thread_budget)?;
+        Ok(Self {
+            domain: CpuResourceDomain::new_caller_managed(id, executor, thread_budget),
         })
     }
 
@@ -230,31 +345,70 @@ impl ExternalCpuDomain {
         self.domain.id()
     }
 
-    /// Return the declared resolved placement.
+    /// Return the declared resolved placement, if this domain uses CPU-set admission.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::{ExternalCpuDomain, ResolvedCpuPlacement};
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuContext, ExternalCpuDomain};
+    /// use tenferro_tensor::CpuDomainId;
     ///
-    /// let _placement: fn(&ExternalCpuDomain) -> &ResolvedCpuPlacement =
-    ///     ExternalCpuDomain::placement;
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     CpuDomainId::new(1),
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::MIN,
+    /// )?;
+    /// assert!(domain.placement().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn placement(&self) -> &ResolvedCpuPlacement {
+    pub fn placement(&self) -> Option<&ResolvedCpuPlacement> {
         self.domain.placement()
     }
 
-    /// Return the logical CPUs declared for this domain.
+    /// Return the logical CPUs declared for CPU-set admission.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::{CpuSet, ExternalCpuDomain};
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuContext, ExternalCpuDomain};
+    /// use tenferro_tensor::CpuDomainId;
     ///
-    /// let _cpus: fn(&ExternalCpuDomain) -> &CpuSet = ExternalCpuDomain::cpus;
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     CpuDomainId::new(1),
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::MIN,
+    /// )?;
+    /// assert!(domain.cpus().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn cpus(&self) -> &CpuSet {
+    pub fn cpus(&self) -> Option<&CpuSet> {
         self.domain.cpus()
+    }
+
+    /// Return this domain's admission contract.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuAdmissionMode, CpuContext, ExternalCpuDomain};
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     CpuDomainId::new(1),
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::MIN,
+    /// )?;
+    /// assert_eq!(domain.admission_mode(), CpuAdmissionMode::CallerManaged);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn admission_mode(&self) -> CpuAdmissionMode {
+        self.domain.admission_mode()
     }
 
     /// Return the nonzero thread budget requested for tenferro work.
@@ -272,17 +426,25 @@ impl ExternalCpuDomain {
         self.domain.thread_budget()
     }
 
-    /// Return whether placement is an exact or advisory declaration.
+    /// Return whether cooperative placement is an exact or advisory declaration.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::{CpuPlacementGuarantee, ExternalCpuDomain};
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuContext, ExternalCpuDomain};
+    /// use tenferro_tensor::CpuDomainId;
     ///
-    /// let _guarantee: fn(&ExternalCpuDomain) -> CpuPlacementGuarantee =
-    ///     ExternalCpuDomain::placement_guarantee;
+    /// let domain = ExternalCpuDomain::new_caller_managed(
+    ///     CpuDomainId::new(1),
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::MIN,
+    /// )?;
+    /// assert!(domain.placement_guarantee().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn placement_guarantee(&self) -> CpuPlacementGuarantee {
+    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
         self.domain.placement_guarantee()
     }
 
@@ -322,11 +484,11 @@ impl From<ExternalCpuDomain> for CpuResourceDomain {
 }
 
 fn validate_external_domain_config(
-    cpu_count: usize,
+    cpu_count: Option<usize>,
     worker_count: usize,
     thread_budget: NonZeroUsize,
 ) -> Result<(), ExternalCpuDomainError> {
-    if cpu_count == 0 {
+    if cpu_count == Some(0) {
         return Err(ExternalCpuDomainError::EmptyPlacementCpuSet);
     }
     if worker_count == 0 {

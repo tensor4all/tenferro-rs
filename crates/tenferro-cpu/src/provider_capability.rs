@@ -142,6 +142,16 @@ pub enum CpuProviderDomainError {
         /// Placement guarantee requested by the domain.
         guarantee: CpuPlacementGuarantee,
     },
+    /// The provider can leave the supplied executor in caller-managed mode.
+    #[error(
+        "provider placement control {placement:?} can leave the caller-managed executor for thread budget {thread_budget}"
+    )]
+    CallerManagedPlacementNotEnforceable {
+        /// Requested maximum number of participating threads.
+        thread_budget: usize,
+        /// Provider placement classification.
+        placement: CpuPlacementControl,
+    },
     /// The provider cannot honor the engine-selected fan-out mode.
     #[error("provider cannot honor requested CPU parallel mode {mode:?}")]
     ParallelModeNotSupported {
@@ -299,6 +309,27 @@ pub(crate) fn serial_capabilities() -> CpuProviderExecutionCapabilities {
 #[cfg(any(test, feature = "cpu-blas"))]
 pub(crate) fn builtin_blas_execution_capabilities() -> CpuProviderExecutionCapabilities {
     uncontrolled_external_capabilities()
+}
+
+pub(crate) fn validate_provider_for_caller_managed_domain(
+    capabilities: CpuProviderExecutionCapabilities,
+    thread_budget: NonZeroUsize,
+) -> Result<(), CpuProviderDomainError> {
+    if enforced_provider_thread_limit(capabilities.thread_count, thread_budget).is_none() {
+        return Err(CpuProviderDomainError::ThreadCountNotEnforceable {
+            thread_budget: thread_budget.get(),
+            control: capabilities.thread_count,
+        });
+    }
+    match capabilities.placement {
+        CpuPlacementControl::EngineWorkers | CpuPlacementControl::CallingThread => Ok(()),
+        CpuPlacementControl::ExternalWorkers | CpuPlacementControl::None => Err(
+            CpuProviderDomainError::CallerManagedPlacementNotEnforceable {
+                thread_budget: thread_budget.get(),
+                placement: capabilities.placement,
+            },
+        ),
+    }
 }
 
 pub(crate) fn validate_provider_for_domain(

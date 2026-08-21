@@ -1,6 +1,9 @@
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use rayon::prelude::*;
 
 /// Inner parallel-region support offered by a CPU domain executor.
 ///
@@ -450,6 +453,84 @@ pub trait CpuDomainExecutor: Debug + Send + Sync + 'static {
     /// [`CpuDomainExecutorError::Cancellation`], or
     /// [`CpuDomainExecutorError::PanicBridge`] for executor-owned failures.
     fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError>;
+}
+
+/// Adapter that executes CPU-domain jobs on one caller-owned Rayon pool.
+///
+/// The adapter retains the supplied pool and never creates, reconfigures, or
+/// shuts it down. [`CpuDomainExecutor`] remains the primary injection contract;
+/// this type is only a convenience for Rayon hosts.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use tenferro_cpu::{CpuDomainExecutor, RayonCpuDomainExecutor};
+///
+/// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(2).build()?);
+/// let executor = RayonCpuDomainExecutor::new(Arc::clone(&pool));
+/// assert_eq!(executor.capabilities().worker_count.get(), 2);
+/// assert_eq!(Arc::strong_count(&pool), 2);
+/// # Ok::<(), rayon::ThreadPoolBuildError>(())
+/// ```
+pub struct RayonCpuDomainExecutor {
+    pool: Arc<rayon::ThreadPool>,
+}
+
+impl std::fmt::Debug for RayonCpuDomainExecutor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RayonCpuDomainExecutor")
+            .field("worker_count", &self.pool.current_num_threads())
+            .finish_non_exhaustive()
+    }
+}
+
+impl RayonCpuDomainExecutor {
+    /// Retain one caller-owned Rayon pool as a CPU-domain executor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuDomainExecutor, RayonCpuDomainExecutor};
+    ///
+    /// let pool = Arc::new(rayon::ThreadPoolBuilder::new().num_threads(2).build()?);
+    /// let executor = RayonCpuDomainExecutor::new(pool);
+    /// assert_eq!(executor.capabilities().worker_count.get(), 2);
+    /// # Ok::<(), rayon::ThreadPoolBuildError>(())
+    /// ```
+    pub fn new(pool: Arc<rayon::ThreadPool>) -> Self {
+        Self { pool }
+    }
+}
+
+impl CpuDomainExecutor for RayonCpuDomainExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        // INVARIANT: Rayon rejects thread pools with zero workers.
+        let worker_count =
+            NonZeroUsize::new(self.pool.current_num_threads()).unwrap_or(NonZeroUsize::MIN);
+        CpuDomainExecutorCapabilities {
+            worker_count,
+            outer_parallelism: worker_count.get() > 1,
+            inner_parallelism: CpuInnerParallelism::Rayon,
+            reentrancy: CpuExecutorReentrancy::SameExecutor,
+            affinity: CpuExecutorAffinity::None,
+            shutdown: CpuExecutorShutdown::CallerOwned,
+        }
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        self.pool.install(|| {
+            (0..jobs.len())
+                .into_par_iter()
+                .try_for_each(|index| jobs.run(index))
+        })
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        self.pool.install(|| job.run())
+    }
 }
 
 pub(crate) struct ScopedJob<F, R> {

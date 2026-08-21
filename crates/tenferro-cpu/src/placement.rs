@@ -216,6 +216,12 @@ pub enum CpuPlacementError {
         /// The explicit registry-only placement request.
         requested: CpuPlacement,
     },
+    /// An externally managed coordinator has no domain with the requested ID.
+    #[error("externally managed CPU coordinator has no registered domain {domain:?}")]
+    UnregisteredExternalDomain {
+        /// Missing caller-stable domain identity.
+        domain: crate::CpuDomainId,
+    },
     /// A pinned engine could not be built for an otherwise valid placement.
     #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {source}")]
     EngineConstruction {
@@ -244,6 +250,7 @@ pub(crate) enum ResolvedCpuExecution {
     Compatibility,
     Managed(ResolvedCpuPlacement),
     ExternalManaged(ResolvedCpuPlacement),
+    ExternalCallerManaged,
     ProviderDefaultExclusive,
 }
 

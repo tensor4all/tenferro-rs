@@ -198,6 +198,16 @@ pub(crate) struct CpuProviderBundleInner {
     pub(crate) dot_general: DotGeneralRuntime,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum CpuProviderDomainContract<'a> {
+    CooperativeCpuSet {
+        placement_guarantee: CpuPlacementGuarantee,
+        domain_cpus: &'a CpuSet,
+        process_allowed_cpus: &'a CpuSet,
+    },
+    CallerManaged,
+}
+
 /// Immutable direct provider slots installed on a CPU backend.
 ///
 /// Clones share the same slot identity and may safely share compatible
@@ -285,20 +295,30 @@ impl CpuProviderBundle {
         &self,
         domain_id: CpuDomainId,
         thread_budget: std::num::NonZeroUsize,
-        placement_guarantee: CpuPlacementGuarantee,
-        domain_cpus: &CpuSet,
-        process_allowed_cpus: &CpuSet,
+        contract: CpuProviderDomainContract<'_>,
     ) -> std::result::Result<(), CpuProviderBundleInstallError> {
         let runtime = self.dot_general();
         let validate = |provider, capabilities| {
-            crate::provider_capability::validate_provider_for_domain(
-                capabilities,
-                thread_budget,
-                placement_guarantee,
-                domain_cpus,
-                process_allowed_cpus,
-            )
-            .map_err(|source| CpuProviderBundleInstallError::IncompatibleDomain {
+            let result = match contract {
+                CpuProviderDomainContract::CooperativeCpuSet {
+                    placement_guarantee,
+                    domain_cpus,
+                    process_allowed_cpus,
+                } => crate::provider_capability::validate_provider_for_domain(
+                    capabilities,
+                    thread_budget,
+                    placement_guarantee,
+                    domain_cpus,
+                    process_allowed_cpus,
+                ),
+                CpuProviderDomainContract::CallerManaged => {
+                    crate::provider_capability::validate_provider_for_caller_managed_domain(
+                        capabilities,
+                        thread_budget,
+                    )
+                }
+            };
+            result.map_err(|source| CpuProviderBundleInstallError::IncompatibleDomain {
                 domain_id,
                 provider,
                 source,

@@ -179,6 +179,14 @@ let backend = CpuBackend::with_threads(1)?;
 For BLAS/LAPACK providers, apply the same rule to provider thread variables.
 For benchmarks, pin all relevant thread counts and report them with the result.
 
+When the host already partitions coarse work across caller-owned Rayon pools,
+use caller-managed external domains instead of fabricating disjoint CPU sets.
+Each domain's `worker_count` is the pool capacity visible to tenferro and its
+`thread_budget` is the maximum inner participation for one operation. Distinct
+domains may overlap in process affinity and execute concurrently; the host must
+admit at most one coarse tenferro operation per pool and account for any physical
+CPU oversubscription. See [CPU Execution and NUMA Placement](cpu-execution.md#caller-managed-executor-domains).
+
 ## Reuse Runtime State
 
 Reuse execution objects when you repeat related work:

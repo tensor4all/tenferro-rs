@@ -1,6 +1,7 @@
 use super::{
     validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
-    GroupedJobState, PackedJobStates, GROUPED_INLINE_JOB_CAPACITY, GROUPED_JOBS_PER_STATE_WORD,
+    CpuProviderDomainContract, GroupedJobState, PackedJobStates, GROUPED_INLINE_JOB_CAPACITY,
+    GROUPED_JOBS_PER_STATE_WORD,
 };
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::gemm::GemmAnalysisCache;
@@ -1039,9 +1040,11 @@ fn provider_capabilities_are_snapshotted_once_when_the_bundle_is_built() {
         .validate_for_domain(
             crate::CpuDomainId::new(17),
             NonZeroUsize::new(2).unwrap(),
-            crate::CpuPlacementGuarantee::ExactDeclared,
-            &cpus,
-            &cpus,
+            CpuProviderDomainContract::CooperativeCpuSet {
+                placement_guarantee: crate::CpuPlacementGuarantee::ExactDeclared,
+                domain_cpus: &cpus,
+                process_allowed_cpus: &cpus,
+            },
         )
         .unwrap();
 
