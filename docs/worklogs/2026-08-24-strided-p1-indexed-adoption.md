@@ -114,5 +114,29 @@ Both load gates passed.
 
 The need gate is **PASS for all three families**: every one-thread generic
 median exceeds 1.0 ms and is at least 22x its rank-one control. The cases and
-gates are now frozen. Pin update, candidate timing, local verification, and
-final review remain pending.
+gates were frozen before the pin change.
+
+## Candidate evidence
+
+All four workspace packages and the source-contract test now name merged
+revision `75fb0f70`. The ignored local lock resolved all four packages to that
+exact revision at version 0.4.0.
+
+The complete candidate one-thread arm ran on CPU 0 (selected 0.0%, sibling
+maximum 1.5%), then the complete four-thread arm ran on CPUs 0-3 (selected
+0.0-1.3%, sibling maximum 1.3%). Both gates passed.
+
+| case | baseline 1T | candidate 1T | speedup | baseline 4T | candidate 4T | speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| rank-4 gather | 15.493624 ms | 1.965112 ms | 7.88x | 1.694236 ms | 0.690068 ms | 2.46x |
+| rank-4 dynamic slice | 10.196747 ms | 0.517754 ms | 19.69x | 0.826853 ms | 0.187705 ms | 4.40x |
+| rank-4 dynamic update | 2.925773 ms | 0.656598 ms | 4.46x | 0.919375 ms | 0.283038 ms | 3.25x |
+| rank-1 gather control | 0.326885 ms | 0.325019 ms | — | 0.276394 ms | 0.220226 ms | — |
+| rank-1 dynamic slice control | 0.078981 ms | 0.076262 ms | — | 0.068561 ms | 0.066091 ms | — |
+| rank-1 dynamic update control | 0.130352 ms | 0.123853 ms | — | 0.122812 ms | 0.123983 ms | — |
+
+Every candidate gate is **PASS**. Generic one-thread improvements exceed 3x,
+four-thread improvements exceed 2x, and the maximum control regression is
+0.95%, below 10%. The probe's exact-value assertions for gather, slice, updated
+window, and untouched update regions passed. Local verification and exact-final
+review remain pending.
