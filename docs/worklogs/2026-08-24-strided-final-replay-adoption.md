@@ -63,8 +63,9 @@ Precommit to L3 domain 0: CPU 1 for the one-thread arm and CPUs 1-4 for the
 four-thread arm. Before a run, selected cores average below 2% busy over four
 seconds and every other core in that domain stays below 20%. Permit at most two
 load-gate attempts per complete arm, record every failed gate, and declare the
-arm INCONCLUSIVE rather than selecting another domain. Benchmark processes run
-sequentially.
+arm INCONCLUSIVE rather than selecting another domain. An INCONCLUSIVE arm
+fails this attempt and requires a fresh sequential baseline/candidate pair;
+it cannot contribute a partial result. Benchmark processes run sequentially.
 
 Need gate: baseline rank-8 median exceeds 1.0 ms or is at least 2x its matching
 control. For each family that passes need, require:
@@ -85,3 +86,10 @@ control. For each family that passes need, require:
 
 Coverage is metadata-only for tenferro executable source; hosted CI owns the
 full dependency-resolved coverage gate.
+
+## Design gate
+
+Read-only `reviewer-flash` with high thinking rejected the first design because
+owned `div` bypasses `erased_zip_into`. The corrected design at `dcf468d3` uses
+`div_read_into`, fixes exactness and bounded load-gate semantics, and received a
+fresh **Correct-to-merge** verdict. Baseline and pin work may proceed.
