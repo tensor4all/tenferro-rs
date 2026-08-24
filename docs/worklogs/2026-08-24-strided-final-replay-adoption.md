@@ -141,5 +141,9 @@ version 0.4.0 and exact revision `53ecd771`.
 - durable upstream results: benchmark-suite PR #34, merge `51c6acd1`
 
 Coverage was reviewed: this adoption changes dependency metadata and its
-contract test but adds no tenferro executable source line. Exact-final review,
-committed repository-rules review, and hosted CI remain pending.
+contract test but adds no tenferro executable source line. Explicit ancestry
+and version checks passed: `75fb0f70` is an ancestor of `53ecd771`, whose
+workspace remains version 0.4.0. The committed repository-rules review passed
+with only the expected external-LLM-skipped warning. Exact-final review of
+candidate `e84fdecb` by read-only `reviewer-flash` (high) returned
+**Correct-to-merge** with no blocking findings. Hosted CI remains pending.
