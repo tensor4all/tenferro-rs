@@ -20,8 +20,8 @@ Pull requests have one primary class and independent lane flags:
 
 Mixed docs and CI changes are CI-only with both lightweight flags enabled.
 Unknown paths always fall back to code. Pushes to `main` force the
-comprehensive non-GPU matrix; they do not add a second paid GPU run after the
-pull-request gate.
+comprehensive Linux and macOS matrix; they do not add a second paid RunPod GPU
+run after the pull-request gate.
 
 Required job names do not disappear when work is unnecessary. Each required
 job either runs its selected profile or publishes an explicit successful
@@ -37,6 +37,24 @@ CI configuration. Local and hosted execution call the same profile names.
 execute once. Hosted Rust compile/test commands use workspace `[profile.ci]`
 (`opt-level=0`, `debug=0`, `incremental=false`, `strip="symbols"`) rather than
 `--release`; local `dev`/`test` profiles stay incremental.
+
+## macOS support gate
+
+`macOS workspace tests` is a required Apple Silicon execution gate for code
+changes and `main` pushes. It runs the shared `workspace-faer` profile on
+`macos-15`, covering workspace tests and doctests including macOS-only
+Apple/Metal paths. The job starts only after `CI gate (PR workspace tests)` has
+accepted the selected Linux workspace and extension lanes. This keeps macOS
+runner use off failed Linux revisions; the RunPod GPU workflow may start from
+the same Linux gate in parallel.
+
+The change policy also runs this gate when its workflow, shared profile, or
+classifier changes, so CI-only edits can validate the native lane. Other
+CI-only and docs-only changes run an explicit successful no-op on
+`ubuntu-latest` instead of allocating a macOS runner. A Linux gate failure also
+stays on Ubuntu and fails closed. The older Linux-hosted Apple cross-target
+type-check is removed because the real macOS workspace run compiles and
+executes the same target-gated code.
 
 ## RunPod trust boundary
 

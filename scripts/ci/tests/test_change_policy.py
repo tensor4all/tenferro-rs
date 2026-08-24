@@ -22,6 +22,7 @@ class ChangePolicyTests(unittest.TestCase):
         self.assertFalse(policy.run_rust)
         self.assertFalse(policy.run_extensions)
         self.assertFalse(policy.run_gpu)
+        self.assertFalse(policy.run_macos)
 
     def test_ci_and_docs_runs_both_lightweight_suites(self) -> None:
         policy = classify_paths(
@@ -31,6 +32,23 @@ class ChangePolicyTests(unittest.TestCase):
         self.assertTrue(policy.run_ci_config)
         self.assertTrue(policy.run_docs)
         self.assertFalse(policy.run_rust)
+        self.assertFalse(policy.run_macos)
+
+    def test_macos_control_plane_requires_macos(self) -> None:
+        for path in (
+            ".github/workflows/ci-pr-workspace-tests.yml",
+            "scripts/ci/change_policy.py",
+            "scripts/ci/run_profile.py",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
+                self.assertTrue(policy.run_ci_config)
+                self.assertTrue(policy.run_macos)
+
+    def test_unrelated_ci_change_does_not_require_macos(self) -> None:
+        policy = classify_paths([".github/workflows/docs.yml"])
+        self.assertFalse(policy.run_macos)
 
     def test_runpod_control_plane_requires_gpu(self) -> None:
         for path in (
@@ -67,14 +85,16 @@ class ChangePolicyTests(unittest.TestCase):
                 self.assertTrue(policy.run_rust)
                 self.assertTrue(policy.run_extensions)
                 self.assertTrue(policy.run_gpu)
+                self.assertTrue(policy.run_macos)
 
-    def test_push_to_main_forces_comprehensive_non_gpu_lanes(self) -> None:
+    def test_push_to_main_forces_comprehensive_lanes(self) -> None:
         policy = classify_paths(["README.md"], event="push")
         self.assertIs(policy.change_class, ChangeClass.CODE)
         self.assertTrue(policy.run_rust)
         self.assertTrue(policy.run_extensions)
         self.assertTrue(policy.run_docs)
         self.assertTrue(policy.run_ci_config)
+        self.assertTrue(policy.run_macos)
 
     def test_paths_are_normalized_and_deduplicated(self) -> None:
         policy = classify_paths([" ./README.md ", "README.md", ""])
@@ -101,6 +121,7 @@ class ChangePolicyTests(unittest.TestCase):
             self.assertEqual(values["classification"], "docs-only")
             self.assertEqual(values["run_docs"], "true")
             self.assertEqual(values["run_rust"], "false")
+            self.assertEqual(values["run_macos"], "false")
             self.assertIn("README.md", values["reason"])
 
     def test_cli_classifies_deleted_documentation_as_docs_only(self) -> None:

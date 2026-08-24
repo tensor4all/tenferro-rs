@@ -32,6 +32,7 @@ class ChangePolicy:
     run_docs: bool
     run_ci_config: bool
     run_gpu: bool
+    run_macos: bool
     reasons: tuple[str, ...]
 
     def as_output(self) -> dict[str, str | bool]:
@@ -45,6 +46,7 @@ class ChangePolicy:
             "run_docs": self.run_docs,
             "run_ci_config": self.run_ci_config,
             "run_gpu": self.run_gpu,
+            "run_macos": self.run_macos,
             "reason": "; ".join(self.reasons),
         }
 
@@ -66,6 +68,13 @@ _CI_FILES = frozenset(
     }
 )
 _CI_PREFIXES = (".github/workflows/", "scripts/ci/")
+_MACOS_CONTROL_FILES = frozenset(
+    {
+        ".github/workflows/ci-pr-workspace-tests.yml",
+        "scripts/ci/change_policy.py",
+        "scripts/ci/run_profile.py",
+    }
+)
 _GPU_CONTROL_FILES = frozenset(
     {
         ".github/workflows/CI_gpu.yml",
@@ -99,6 +108,10 @@ def _is_gpu_control_plane_path(path: str) -> bool:
     return path in _GPU_CONTROL_FILES
 
 
+def _is_macos_control_plane_path(path: str) -> bool:
+    return path in _MACOS_CONTROL_FILES
+
+
 def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
     return ChangePolicy(
         change_class=ChangeClass.CODE,
@@ -108,6 +121,7 @@ def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
         run_docs=True,
         run_ci_config=True,
         run_gpu=run_gpu,
+        run_macos=True,
         reasons=(reason,),
     )
 
@@ -155,6 +169,7 @@ def classify_paths(
         run_docs=bool(docs),
         run_ci_config=has_ci,
         run_gpu=any(_is_gpu_control_plane_path(path) for path in ci),
+        run_macos=any(_is_macos_control_plane_path(path) for path in ci),
         reasons=reasons,
     )
 
