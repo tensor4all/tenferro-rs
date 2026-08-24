@@ -138,5 +138,24 @@ maximum 1.5%), then the complete four-thread arm ran on CPUs 0-3 (selected
 Every candidate gate is **PASS**. Generic one-thread improvements exceed 3x,
 four-thread improvements exceed 2x, and the maximum control regression is
 0.95%, below 10%. The probe's exact-value assertions for gather, slice, updated
-window, and untouched update regions passed. Local verification and exact-final
-review remain pending.
+window, and untouched update regions passed.
+
+## Verification
+
+- build-artifact dependency-contract tests: 9 passed
+- focused CPU indexing tests: 28 passed
+- gather delegation contract: 1 passed
+- negative/clamped scatter boundary contract: 1 passed
+- `bash scripts/check-pr-fast.sh --coverage-reviewed --test "cargo test -p tenferro-cpu 'tests::indexing::'"`: pass
+  - root and standalone-extension formatting: pass
+  - doc snippets: pass
+  - workspace and standalone-extension CI-parity clippy: pass
+  - focused indexing tests: 28 passed
+- local lock resolution: all four strided packages at exact `75fb0f70`, version
+  0.4.0
+
+Coverage was explicitly reviewed: the PR changes dependency metadata and its
+source-contract test but adds no tenferro executable source line; hosted CI owns
+the exact dependency-resolved workspace coverage run. Final committed
+repository-rules review, exact-diff `reviewer-flash` verdict, and hosted CI
+remain pending.
