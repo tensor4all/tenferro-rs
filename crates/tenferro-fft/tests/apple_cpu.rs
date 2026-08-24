@@ -3,7 +3,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
 use tenferro_gpu::{apple::AppleContext, webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
-use tenferro_tensor::{BackendSessionHost, HostAccessError, StorageBuffer, Tensor};
+use tenferro_tensor::{BackendSessionHost, HostAccessError, Tensor, TensorScalar};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -15,13 +15,10 @@ fn apple_context() -> Option<AppleContext> {
     }
 }
 
-fn mapped_slice<T: Copy + Send + Sync + 'static>(
+fn mapped_slice<T: TensorScalar + Copy + Send + Sync + 'static>(
     tensor: &tenferro_tensor::TypedTensor<T>,
 ) -> Vec<T> {
-    let StorageBuffer::Backend(buffer) = tensor.buffer() else {
-        panic!("expected managed backend output")
-    };
-    buffer.map_read().unwrap().to_vec()
+    tensor.with_host_read(<[T]>::to_vec).unwrap()
 }
 
 #[test]
@@ -163,21 +160,20 @@ fn managed_cpu_fft_rejects_foreign_and_device_local_buffers_without_transfers() 
     let foreign = first.upload_tensor(&host).unwrap();
     let first_before = first.transfer_stats();
     let second_before = second.transfer_stats();
-    let error = foreign
-        .fft(
-            None,
-            -1,
-            FftNorm::Backward,
-            &mut second.cpu_backend().clone(),
-        )
+    let mut second_cpu = second.cpu_backend().clone();
+    let error = second_cpu
+        .with_backend_session(|session| foreign.fft(None, -1, FftNorm::Backward, session))
         .unwrap_err();
-    assert!(matches!(
-        error,
-        tenferro_tensor::Error::HostAccess {
-            source: HostAccessError::ForeignDomain { .. },
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            tenferro_tensor::Error::HostAccess {
+                source: HostAccessError::ForeignDomain { .. },
+                ..
+            }
+        ),
+        "unexpected foreign-domain error: {error:?}"
+    );
     assert_eq!(first.transfer_stats(), first_before);
     assert_eq!(second.transfer_stats(), second_before);
 
@@ -187,13 +183,9 @@ fn managed_cpu_fft_rejects_foreign_and_device_local_buffers_without_transfers() 
     let device_local = upload_webgpu_tensor(&runtime, &host).unwrap();
     runtime.synchronize().unwrap();
     let before = first.transfer_stats();
-    let error = device_local
-        .fft(
-            None,
-            -1,
-            FftNorm::Backward,
-            &mut first.cpu_backend().clone(),
-        )
+    let mut first_cpu = first.cpu_backend().clone();
+    let error = first_cpu
+        .with_backend_session(|session| device_local.fft(None, -1, FftNorm::Backward, session))
         .unwrap_err();
     assert!(matches!(
         error,

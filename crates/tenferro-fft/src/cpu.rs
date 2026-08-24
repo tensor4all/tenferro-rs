@@ -5,8 +5,7 @@ use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuExecSession;
 use tenferro_tensor::{
     AllocationDomainId, DType, DeviceKind, HostAccessError, MemoryKind, Placement,
-    SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
-    TypedTensor,
+    SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -242,15 +241,24 @@ fn with_managed_read<T, R>(
     execute: impl FnOnce(&[T]) -> tenferro_tensor::Result<R>,
 ) -> tenferro_tensor::Result<R>
 where
-    T: Send + Sync + 'static,
+    T: TensorScalar + Send + Sync + 'static,
 {
-    let StorageBuffer::Backend(buffer) = input.buffer() else {
+    if input.placement().memory_kind != MemoryKind::Managed {
         return Err(tenferro_tensor::Error::host_access(
             op,
-            HostAccessError::Unsupported { backend: "host" },
+            HostAccessError::Unsupported {
+                backend: if matches!(
+                    input.placement().memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) {
+                    "host"
+                } else {
+                    "backend"
+                },
+            },
         ));
-    };
-    match buffer.allocation_domain() {
+    }
+    match input.allocation_domain() {
         Some(actual) if actual == expected_domain => {}
         Some(actual) => {
             return Err(tenferro_tensor::Error::host_access(
@@ -264,24 +272,18 @@ where
         None => {
             return Err(tenferro_tensor::Error::host_access(
                 op,
-                HostAccessError::Unsupported {
-                    backend: buffer.backend_family(),
-                },
+                HostAccessError::Unsupported { backend: "backend" },
             ));
         }
     }
-    if input.placement().memory_kind != MemoryKind::Managed {
-        return Err(tenferro_tensor::Error::host_access(
-            op,
-            HostAccessError::Unsupported {
-                backend: buffer.backend_family(),
-            },
-        ));
+    if let Some(buffer) = input.backend_buffer() {
+        let read = buffer
+            .map_read()
+            .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
+        execute(&read)
+    } else {
+        input.with_host_read(execute)?
     }
-    let read = buffer
-        .map_read()
-        .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
-    execute(&read)
 }
 
 fn write_managed_output<T>(
@@ -291,7 +293,7 @@ fn write_managed_output<T>(
     values: &[T],
 ) -> tenferro_tensor::Result<()>
 where
-    T: Send + Sync + 'static,
+    T: TensorScalar + Send + Sync + 'static,
 {
     if output.allocation_domain() != Some(expected_domain) {
         return Err(tenferro_tensor::Error::runtime_state(
@@ -305,18 +307,24 @@ where
             "shared allocation owner returned a non-managed output",
         ));
     }
-    let Some(buffer) = output.backend_buffer_mut() else {
-        return Err(tenferro_tensor::Error::runtime_state(
-            op,
-            "shared allocation owner returned a host output",
-        ));
-    };
-    let mut write = buffer
-        .map_write()
-        .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
-    write
-        .copy_from_slice(values)
-        .map_err(|source| tenferro_tensor::Error::host_access(op, source))
+    if let Some(buffer) = output.backend_buffer_mut() {
+        let mut write = buffer
+            .map_write()
+            .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
+        return write
+            .copy_from_slice(values)
+            .map_err(|source| tenferro_tensor::Error::host_access(op, source));
+    }
+    output.with_host_write(|write| {
+        if write.len() != values.len() {
+            return Err(tenferro_tensor::Error::runtime_state(
+                op,
+                "shared allocation owner returned an output with the wrong length",
+            ));
+        }
+        write.copy_from_slice(values);
+        Ok(())
+    })?
 }
 
 macro_rules! write_managed_output {

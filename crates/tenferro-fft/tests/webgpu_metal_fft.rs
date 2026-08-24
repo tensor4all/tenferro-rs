@@ -8,7 +8,7 @@ mod metal {
         webgpu::with_webgpu_exec_session, webgpu::WebGpuBackend, webgpu::WebGpuExecSession,
         webgpu::WebGpuRuntime,
     };
-    use tenferro_tensor::{BackendSessionHost, Error, StorageBuffer, Tensor};
+    use tenferro_tensor::{BackendSessionHost, Error, HostAccessError, Tensor, TensorScalar};
 
     /// Visit the concrete WebGPU session for SPI-level behavior only: stream
     /// synchronization and backend-interop limits. Concrete FFT trait calls
@@ -26,11 +26,10 @@ mod metal {
         })
     }
 
-    fn mapped<T: Copy + Send + Sync + 'static>(tensor: &tenferro_tensor::TypedTensor<T>) -> Vec<T> {
-        let StorageBuffer::Backend(buffer) = tensor.buffer() else {
-            panic!("expected managed backend buffer")
-        };
-        buffer.map_read().unwrap().to_vec()
+    fn mapped<T: TensorScalar + Copy + Send + Sync + 'static>(
+        tensor: &tenferro_tensor::TypedTensor<T>,
+    ) -> Vec<T> {
+        tensor.with_host_read(<[T]>::to_vec).unwrap()
     }
 
     fn c32_values(tensor: &Tensor) -> Vec<Complex32> {
@@ -316,7 +315,16 @@ mod metal {
         let error = metal
             .with_backend_session(|session| device_local.fft(None, 0, FftNorm::Backward, session))
             .unwrap_err();
-        assert!(matches!(error, Error::RuntimeState { .. }));
+        assert!(
+            matches!(
+                error,
+                Error::HostAccess {
+                    source: HostAccessError::ForeignDomain { .. },
+                    ..
+                }
+            ),
+            "unexpected device-local error: {error:?}"
+        );
         assert_eq!(context.transfer_stats(), before);
     }
 }

@@ -8,15 +8,14 @@ use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendSessionHost, Error, StorageBuffer, Tensor, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, Error, Tensor, TensorScalar, TypedTensor,
 };
 
 #[cfg(target_os = "macos")]
-fn managed_values<T: Copy + Send + Sync + 'static>(tensor: &TypedTensor<T>) -> Vec<T> {
-    let StorageBuffer::Backend(buffer) = tensor.buffer() else {
-        panic!("expected Apple managed storage")
-    };
-    buffer.map_read().unwrap().to_vec()
+fn managed_values<T: TensorScalar + Copy + Send + Sync + 'static>(
+    tensor: &TypedTensor<T>,
+) -> Vec<T> {
+    tensor.with_host_read(<[T]>::to_vec).unwrap()
 }
 
 #[cfg(target_os = "macos")]
