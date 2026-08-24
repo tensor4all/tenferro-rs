@@ -44,19 +44,27 @@ A temporary release probe outside the repository uses one reusable
   control;
 - rank-8 `TensorIndexing::pad` with axis-0 interior padding 1, with rank-1 dense
   edge-pad control;
-- compact rank-8 integer `TensorElementwise::div` with all-nonzero divisors,
-  with compact rank-1 divide control.
+- compact rank-8 integer `TensorElementwise::div_read_into` with all-nonzero
+  divisors and a caller-owned output, with compact rank-1 `div_read_into`
+  control. The owned `div` method is deliberately excluded because it routes to
+  the unaffected typed zip path rather than `erased_zip_into`.
 
-Tensor construction, backend construction, warmup, input allocation, and
-correctness references stay outside timing. Each call returns a fresh tensor,
-which is black-boxed. Run 3 warmups and 15 samples; report median and IQR.
+Tensor construction, backend construction, warmup, input/output allocation,
+and correctness references stay outside timing. Reduction and pad return fresh
+tensors, which are black-boxed; `div_read_into` overwrites and black-boxes its
+preallocated output. Reduction uses exactly representable small integer-valued
+`f64` inputs and checks the known axis-0 pair sums exactly. The paired candidate
+must also match the baseline output bitwise. Pad and integer-division outputs
+check known exact values. Run 3 warmups and 15 samples; report median and IQR.
 Run the complete one-thread arm before the complete four-thread arm. Baseline
 and candidate use identical source and arm order.
 
-Pin each process to idle cores in one EPYC L3 domain. Before a run, selected
-cores average below 2% busy over four seconds and every other core in that
-L3 domain stays below 20%; otherwise rerun the complete arm. Benchmark
-processes run sequentially.
+Precommit to L3 domain 0: CPU 1 for the one-thread arm and CPUs 1-4 for the
+four-thread arm. Before a run, selected cores average below 2% busy over four
+seconds and every other core in that domain stays below 20%. Permit at most two
+load-gate attempts per complete arm, record every failed gate, and declare the
+arm INCONCLUSIVE rather than selecting another domain. Benchmark processes run
+sequentially.
 
 Need gate: baseline rank-8 median exceeds 1.0 ms or is at least 2x its matching
 control. For each family that passes need, require:
