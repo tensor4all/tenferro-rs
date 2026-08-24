@@ -58,6 +58,9 @@ The earlier pinned one-thread issue measurements were 6.624 ms for public
 gather and 5.320 ms for public additive scatter. The adoption therefore closes
 the measured lower-layer replay bottleneck while retaining tenferro's expected
 allocation/index-conversion overhead and ordered additive-scatter semantics.
+The four-thread direct-scatter timing can benefit from the plan's parallel
+operand-copy phase; repeated-index update replay itself remains serial and
+order-preserving.
 
 The focused local PR gate passed with coverage explicitly reviewed:
 
@@ -69,6 +72,13 @@ bash scripts/check-pr-fast.sh --coverage-reviewed \
 This included root and standalone-extension formatting, documentation-snippet
 checks, CI-parity clippy for the workspace and standalone extension manifests,
 and the 28 focused CPU indexing tests.
+
+The root `Cargo.lock` is intentionally ignored by `.gitignore`; tenferro does
+not commit a workspace lockfile. It was regenerated locally and resolved all
+four strided packages to `39111bd7`, but it is not a PR artifact. This also
+records the evidence for rejecting a review false positive that assumed
+`origin/main` tracked the lockfile (`git cat-file -e origin/main:Cargo.lock`
+reported no such tracked path).
 
 The exact-candidate repository-rules and independent review results are
 recorded in the PR body because adding a commit identity here would make this
