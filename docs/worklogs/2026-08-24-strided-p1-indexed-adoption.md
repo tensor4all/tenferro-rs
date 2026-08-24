@@ -157,5 +157,7 @@ window, and untouched update regions passed.
 Coverage was explicitly reviewed: the PR changes dependency metadata and its
 source-contract test but adds no tenferro executable source line; hosted CI owns
 the exact dependency-resolved workspace coverage run. Final committed
-repository-rules review, exact-diff `reviewer-flash` verdict, and hosted CI
-remain pending.
+repository-rules review passed with only the expected external-LLM-skipped
+warning. `reviewer-flash` reviewed exact candidate `4181d42` and returned
+**Correct-to-merge**, with no Critical or Important findings. Hosted CI remains
+the final merge gate.
