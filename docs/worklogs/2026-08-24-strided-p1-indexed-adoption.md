@@ -94,5 +94,25 @@ proceed. Before baseline, repository evidence confirmed:
 - target `Cargo.toml` declares workspace version 0.4.0 and all four pinned
   packages at 0.4.0.
 
-The fixed probe arm order is recorded above. Baseline, pin update, candidate
-timing, local verification, and final review remain pending.
+The fixed probe arm order is recorded above.
+
+## Baseline evidence
+
+A release probe built from baseline pin `39111bd7` ran the complete one-thread
+arm on CPU 2 (selected 0.5%, L3 sibling maximum 11.0%) and then the complete
+four-thread arm on CPUs 16,17,18,20 (selected below 2%, sibling maximum 10.8%).
+Both load gates passed.
+
+| case | 1-thread median ± IQR | 4-thread median ± IQR |
+|---|---:|---:|
+| rank-4 gather | 15.493624 ± 0.148721 ms | 1.694236 ± 0.052341 ms |
+| rank-4 dynamic slice | 10.196747 ± 1.126156 ms | 0.826853 ± 0.005960 ms |
+| rank-4 dynamic update | 2.925773 ± 0.361855 ms | 0.919375 ± 0.005470 ms |
+| rank-1 gather control | 0.326885 ± 0.026871 ms | 0.276394 ± 0.107672 ms |
+| rank-1 dynamic slice control | 0.078981 ± 0.001040 ms | 0.068561 ± 0.001899 ms |
+| rank-1 dynamic update control | 0.130352 ± 0.011981 ms | 0.122812 ± 0.000490 ms |
+
+The need gate is **PASS for all three families**: every one-thread generic
+median exceeds 1.0 ms and is at least 22x its rank-one control. The cases and
+gates are now frozen. Pin update, candidate timing, local verification, and
+final review remain pending.
