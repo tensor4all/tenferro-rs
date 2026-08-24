@@ -67,8 +67,11 @@ Predeclared candidate gates for each family that passes need:
 - no rank-one control median regresses by more than 10%;
 - public results exactly match known values and focused CPU indexing tests pass.
 
-The same complete probe and cases run before and after only the pin change. No
-case or gate changes after baseline.
+The same complete probe and cases run before and after only the pin change. The
+fixed arm order is rank-4 gather, dynamic slice, dynamic update, then their
+rank-one controls; run the complete one-thread arm before the complete
+four-thread arm for both baseline and candidate. No case or gate changes after
+baseline.
 
 ## Verification and review
 
@@ -82,5 +85,14 @@ case or gate changes after baseline.
 
 ## Gate status
 
-Design review, baseline, pin update, candidate timing, local verification, and
-final review are pending.
+`reviewer-flash` reviewed exact design commit `d4ff55b` with high thinking and
+a read-only boundary. Verdict: **Correct-to-merge**; baseline and pin work may
+proceed. Before baseline, repository evidence confirmed:
+
+- `git merge-base --is-ancestor acdeea3f 75fb0f70`: pass, so the target includes
+  both #242 and #244;
+- target `Cargo.toml` declares workspace version 0.4.0 and all four pinned
+  packages at 0.4.0.
+
+The fixed probe arm order is recorded above. Baseline, pin update, candidate
+timing, local verification, and final review remain pending.
