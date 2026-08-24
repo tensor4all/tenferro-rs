@@ -238,9 +238,10 @@ mod identity_tests {
             return;
         }
 
-        let first = WebGpuBackend::new(0).expect("WebGPU backend should initialize");
+        let first = WebGpuBackend::new_default().expect("WebGPU backend should initialize");
         let clone = first.clone();
-        let independent = WebGpuBackend::new(0).expect("second WebGPU backend should initialize");
+        let independent =
+            WebGpuBackend::new_default().expect("second WebGPU backend should initialize");
 
         assert_eq!(first.runtime_identity(), clone.runtime_identity());
         assert_ne!(first.runtime_identity(), independent.runtime_identity());

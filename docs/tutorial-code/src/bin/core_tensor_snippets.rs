@@ -714,8 +714,12 @@ for node in backend.topology().nodes() {
     println!("OS node {}: {:?}", node.id(), node.cpus().as_usize_vec());
 }
 
-let all = backend.for_placement(CpuPlacement::AllAllowed)?;
-println!("{:?}", all.execution_info());
+if backend.supports_placement(CpuPlacement::AllAllowed) {
+    let all = backend.for_placement(CpuPlacement::AllAllowed)?;
+    println!("{:?}", all.execution_info());
+} else {
+    println!("{:?}", backend.execution_info());
+}
         // snippet-end:cpu_execution_28
         Ok(())
     }

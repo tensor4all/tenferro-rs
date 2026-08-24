@@ -6519,9 +6519,9 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match self.buffer() {
-            StorageBuffer::Host(_) => None,
-            StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
+        match self.group.backend_buffer::<T>() {
+            Some(StorageBuffer::Backend(buffer)) => Some(buffer.as_ref()),
+            Some(StorageBuffer::Host(_)) | None => None,
         }
     }
 

@@ -7,8 +7,8 @@ use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuBackendKind, CpuExecSession, CpuExecutionContext};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
-    MemoryKind, SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorElementwise, TensorRead,
-    TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorElementwise, TensorRead, TensorScalar,
+    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 trait FreshLinalgOutput {
@@ -733,15 +733,7 @@ fn solve_shape_direct_eligible(a_shape: &[usize], b_shape: &[usize]) -> bool {
 }
 
 fn tensor_uses_backend_storage(input: &Tensor) -> bool {
-    match input {
-        Tensor::F32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::F64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::I32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::I64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::Bool(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::C32(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-        Tensor::C64(input) => matches!(input.buffer(), StorageBuffer::Backend(_)),
-    }
+    input.is_backend_buffer()
 }
 
 fn managed_cholesky(
@@ -851,19 +843,15 @@ where
     T: ManagedCholeskyScalar,
 {
     let n = validate_managed_cholesky_input(input, domain.id())?;
-    let StorageBuffer::Backend(buffer) = input.buffer() else {
-        return Err(tenferro_tensor::Error::host_access(
-            "cholesky",
-            HostAccessError::Unsupported { backend: "host" },
-        ));
-    };
     let values = if n == 0 {
         Vec::new()
-    } else {
+    } else if let Some(buffer) = input.backend_buffer() {
         let read = buffer
             .map_read()
             .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))?;
         T::factor(context, buffers, &read, n, provider)?
+    } else {
+        input.with_host_read(|read| T::factor(context, buffers, read, n, provider))??
     };
     let mut typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
     write_managed_cholesky_output(&mut typed, domain.id(), &values)?;
@@ -897,20 +885,29 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + TensorScalar + 'stati
             "managed rank-2 Cholesky requires compact column-major full-allocation storage",
         ));
     }
-    let expected_len = rows.checked_mul(cols).ok_or_else(|| {
+    rows.checked_mul(cols).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument(
             "cholesky",
             "input shape",
             "matrix element count overflows usize",
         )
     })?;
-    let StorageBuffer::Backend(buffer) = input.buffer() else {
+    if input.placement().memory_kind != MemoryKind::Managed {
         return Err(tenferro_tensor::Error::host_access(
             "cholesky",
-            HostAccessError::Unsupported { backend: "host" },
+            HostAccessError::Unsupported {
+                backend: if matches!(
+                    input.placement().memory_kind,
+                    MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+                ) {
+                    "host"
+                } else {
+                    "backend"
+                },
+            },
         ));
-    };
-    match buffer.allocation_domain() {
+    }
+    match input.allocation_domain() {
         Some(actual) if actual == expected_domain => {}
         Some(actual) => {
             return Err(tenferro_tensor::Error::host_access(
@@ -924,24 +921,14 @@ fn validate_managed_cholesky_input<T: Copy + Send + Sync + TensorScalar + 'stati
         None => {
             return Err(tenferro_tensor::Error::host_access(
                 "cholesky",
-                HostAccessError::Unsupported {
-                    backend: buffer.backend_family(),
-                },
+                HostAccessError::Unsupported { backend: "backend" },
             ));
         }
-    }
-    if input.placement().memory_kind != MemoryKind::Managed || buffer.len() != expected_len {
-        return Err(tenferro_tensor::Error::host_access(
-            "cholesky",
-            HostAccessError::Unsupported {
-                backend: buffer.backend_family(),
-            },
-        ));
     }
     Ok(rows)
 }
 
-fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
+fn write_managed_cholesky_output<T: TensorScalar + Copy + Send + Sync + 'static>(
     output: &mut TypedTensor<T>,
     expected_domain: AllocationDomainId,
     values: &[T],
@@ -954,18 +941,24 @@ fn write_managed_cholesky_output<T: Copy + Send + Sync + 'static>(
             "shared allocation owner returned an output outside its managed domain",
         ));
     }
-    let Some(buffer) = output.backend_buffer_mut() else {
-        return Err(tenferro_tensor::Error::runtime_state(
-            "cholesky",
-            "shared allocation owner returned a host output",
-        ));
-    };
-    let mut write = buffer
-        .map_write()
-        .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))?;
-    write
-        .copy_from_slice(values)
-        .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))
+    if let Some(buffer) = output.backend_buffer_mut() {
+        let mut write = buffer
+            .map_write()
+            .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source))?;
+        return write
+            .copy_from_slice(values)
+            .map_err(|source| tenferro_tensor::Error::host_access("cholesky", source));
+    }
+    output.with_host_write(|write| {
+        if write.len() != values.len() {
+            return Err(tenferro_tensor::Error::runtime_state(
+                "cholesky",
+                "shared allocation owner returned an output with the wrong length",
+            ));
+        }
+        write.copy_from_slice(values);
+        Ok(())
+    })?
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

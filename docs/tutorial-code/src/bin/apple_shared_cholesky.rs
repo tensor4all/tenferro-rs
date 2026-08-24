@@ -5,7 +5,7 @@ use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_linalg::LinalgBackend;
 #[cfg(target_os = "macos")]
-use tenferro_tensor::{StorageBuffer, Tensor};
+use tenferro_tensor::Tensor;
 
 #[cfg(target_os = "macos")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,16 +33,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     assert_eq!(factor.allocation_domain(), Some(context.domain_id()));
     assert_ne!(factor.allocation_id(), Some(input_allocation));
-    let StorageBuffer::Backend(buffer) = factor.buffer() else {
-        panic!("expected Apple managed output")
-    };
-    let l = buffer.map_read()?;
-    let reconstructed = [
-        l[0] * l[0] + l[2] * l[2],
-        l[1] * l[0] + l[3] * l[2],
-        l[0] * l[1] + l[2] * l[3],
-        l[1] * l[1] + l[3] * l[3],
-    ];
+    let reconstructed = factor.with_host_read(|l| {
+        [
+            l[0] * l[0] + l[2] * l[2],
+            l[1] * l[0] + l[3] * l[2],
+            l[0] * l[1] + l[2] * l[3],
+            l[1] * l[1] + l[3] * l[3],
+        ]
+    })?;
     let expected = [4.0_f32, 2.0, 2.0, 3.0];
     let residual = reconstructed
         .iter()
