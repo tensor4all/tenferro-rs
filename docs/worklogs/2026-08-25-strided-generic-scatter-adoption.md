@@ -55,3 +55,10 @@ Candidate gates when need passes:
    auto-merge, and final `origin/main` pin verification.
 
 Coverage is metadata-only: no tenferro executable source changes.
+
+## Design gate
+
+Read-only `reviewer-flash` with high thinking reviewed exact design `a9d35674`
+and returned **Correct-to-merge**. Before pin edits, explicit ancestry and
+version checks passed: `53ecd771` is an ancestor of `b40cd2f6`, and the target
+workspace remains version 0.4.0.
